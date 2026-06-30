@@ -247,6 +247,8 @@ theorem detach_does_not_cancel_child
       rw [h_req]
     | call_step _ h_req _ _ _ =>
       rw [h_req]
+    | tool_spawn _ _ _ h_req _ _ _ _ _ _ =>
+      rw [h_req]
     | tool_step _ _ _ h_req _ _ _ _ _ =>
       rw [h_req]
   | bridge_spawn h_parent_proc _ _ _ _ _ h_post_child _ h_request_eq _ _ =>

@@ -73,6 +73,8 @@ theorem foreground_blocks_parent_advance
       constructor <;> rw [h_req]
     | call_step _ h_req _ _ _ =>
       constructor <;> rw [h_req]
+    | tool_spawn _ _ _ h_req _ _ _ _ _ _ =>
+      constructor <;> rw [h_req]
   | child_step _ h_parent_eq _ _ _ =>
     constructor <;> rw [h_parent_eq]
   | bridge_spawn _ _ _ _ _ _ _ _ h_request_eq _ _ =>

@@ -76,10 +76,6 @@ theorem initial_allToolsCoherent : initial.AllToolsCoherent := by
   intro _ h_in
   simp [initial] at h_in
 
-/-- The empty initial tool list is linked to the initial request. -/
-theorem initial_allToolsLinked : initial.AllToolsLinked :=
-  allToolsLinked_of_allToolsCoherent initial_allToolsCoherent
-
 /-- The initial state has no pre-processing tools. -/
 theorem initial_noToolsBeforeProcessing : initial.NoToolsBeforeProcessing := by
   intro _ h_in
@@ -148,6 +144,19 @@ theorem allToolsCoherent_preserved
       rw [h_tools] at h_in_post
       exact h_in_post
     exact coherent_of_request_eq (h_coherent tool h_in_pre) h_request h_requestId
+  | @tool_spawn newTool h_processing _ h_tools h_request _ _ h_requestId
+      h_new_coherent _ _ =>
+    have h_in_append : tool ∈ pre.tools ++ [newTool] := by
+      rw [h_tools] at h_in_post
+      exact h_in_post
+    have h_cases : tool ∈ pre.tools ∨ tool = newTool := by
+      simpa using (List.mem_append.mp h_in_append)
+    cases h_cases with
+    | inl h_in_pre =>
+      exact coherent_of_request_eq (h_coherent tool h_in_pre) h_request h_requestId
+    | inr h_eq =>
+      subst h_eq
+      exact h_new_coherent
   | @tool_step idx toolPre toolPost h_idx _ h_tools h_request _ _ h_requestId
       _ h_post_coherent _ =>
     have h_in_set : tool ∈ pre.tools.set idx toolPost := by
@@ -159,16 +168,6 @@ theorem allToolsCoherent_preserved
       exact h_post_coherent
     | inr h_in_pre =>
       exact coherent_of_request_eq (h_coherent tool h_in_pre) h_request h_requestId
-
-/-- List-level linkage is preserved because list-level coherence is preserved. -/
-theorem allToolsLinked_preserved
-    {pre post : ComposedState}
-    (h_coherent : pre.AllToolsCoherent)
-    (h_no_early_tools : pre.NoToolsBeforeProcessing)
-    (h_step : Transition pre post) :
-    post.AllToolsLinked :=
-  allToolsLinked_of_allToolsCoherent
-    (allToolsCoherent_preserved h_coherent h_no_early_tools h_step)
 
 /-- The no-tools-before-processing invariant is preserved by every composed
     transition. -/
@@ -270,6 +269,32 @@ theorem noToolsBeforeProcessing_preserved
       exact h_not_pending (by simpa [h_request] using h_pending)
     · intro h_claimed
       exact h_not_claimed (by simpa [h_request] using h_claimed)
+  | @tool_spawn newTool h_processing _ h_tools h_request _ _ _ _ _ _ =>
+    have h_in_append : tool ∈ pre.tools ++ [newTool] := by
+      rw [h_tools] at h_in_post
+      exact h_in_post
+    have h_cases : tool ∈ pre.tools ∨ tool = newTool := by
+      simpa using (List.mem_append.mp h_in_append)
+    cases h_cases with
+    | inl h_in_pre =>
+      obtain ⟨h_not_pending, h_not_claimed⟩ :=
+        h_no_early_tools tool h_in_pre
+      refine ⟨?_, ?_⟩
+      · intro h_pending
+        exact h_not_pending (by simpa [h_request] using h_pending)
+      · intro h_claimed
+        exact h_not_claimed (by simpa [h_request] using h_claimed)
+    | inr h_eq =>
+      subst h_eq
+      have h_post_state : post.request.state = .processing := by
+        simpa [h_request] using h_processing
+      refine ⟨?_, ?_⟩
+      · intro h_pending
+        rw [h_post_state] at h_pending
+        cases h_pending
+      · intro h_claimed
+        rw [h_post_state] at h_claimed
+        cases h_claimed
   | @tool_step idx toolPre _ h_idx _ _ h_request _ _ _ _ _ _ =>
     have h_toolPre_in : toolPre ∈ pre.tools :=
       List.mem_iff_getElem?.mpr ⟨idx, h_idx⟩
@@ -284,15 +309,21 @@ theorem noToolsBeforeProcessing_preserved
 /-- The global composed-state well-formedness invariant. -/
 structure WellFormed (s : ComposedState) : Prop where
   allToolsCoherent : s.AllToolsCoherent
-  allToolsLinked : s.AllToolsLinked
   uniqueCallIds : s.UniqueCallIds
   noToolsBeforeProcessing : s.NoToolsBeforeProcessing
   noDuplicateForegroundLive : s.invFG
 
+/-- Request-id linkage is derivable from the coherence component of
+    well-formedness, so it is not duplicated as stored proof data. -/
+theorem WellFormed.allToolsLinked
+    {s : ComposedState}
+    (h_wf : s.WellFormed) :
+    s.AllToolsLinked :=
+  allToolsLinked_of_allToolsCoherent h_wf.allToolsCoherent
+
 /-- The initial composed state is globally well-formed. -/
 theorem initial_wellFormed : initial.WellFormed where
   allToolsCoherent := initial_allToolsCoherent
-  allToolsLinked := initial_allToolsLinked
   uniqueCallIds := initial_uniqueCallIds
   noToolsBeforeProcessing := initial_noToolsBeforeProcessing
   noDuplicateForegroundLive := initial_invFG
@@ -309,7 +340,6 @@ theorem wellFormed_preserved
       h_wf.allToolsCoherent h_wf.noToolsBeforeProcessing h_step
   exact
     { allToolsCoherent := h_post_coherent
-      allToolsLinked := allToolsLinked_of_allToolsCoherent h_post_coherent
       uniqueCallIds := uniqueCallIds_preserved h_wf.uniqueCallIds h_step
       noToolsBeforeProcessing :=
         noToolsBeforeProcessing_preserved h_wf.noToolsBeforeProcessing h_step

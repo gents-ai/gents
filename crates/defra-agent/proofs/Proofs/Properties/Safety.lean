@@ -193,6 +193,11 @@ theorem recovery_blocks_claims
     have : s'.request.state = s.request.state := congrArg RequestContext.state h_req_eq
     rw [this]
     exact h_pending
+  | tool_spawn _ _ _ h_req_eq _ _ _ _ _ _ =>
+    left
+    have : s'.request.state = s.request.state := congrArg RequestContext.state h_req_eq
+    rw [this]
+    exact h_pending
   | tool_step _ _ _ h_req_eq _ _ _ _ _ =>
     left
     have : s'.request.state = s.request.state := congrArg RequestContext.state h_req_eq

@@ -42,6 +42,7 @@ private theorem composed_subagentDepth_preserved
     exact request_subagentDepth_preserved h_inner
   | persistence_step _ _ _ h_req _ _ _ _ => rw [h_req]
   | call_step _ h_req _ _ _ => rw [h_req]
+  | tool_spawn _ _ _ h_req _ _ _ _ _ _ => rw [h_req]
   | tool_step _ _ _ h_req _ _ _ _ _ => rw [h_req]
 
 /-- Any ComposedState transition preserves the request's `causedByParentRequestId`. -/
@@ -55,6 +56,7 @@ private theorem composed_causedByParentRequestId_preserved
     exact request_causedByParentRequestId_preserved h_inner
   | persistence_step _ _ _ h_req _ _ _ _ => rw [h_req]
   | call_step _ h_req _ _ _ => rw [h_req]
+  | tool_spawn _ _ _ h_req _ _ _ _ _ _ => rw [h_req]
   | tool_step _ _ _ h_req _ _ _ _ _ => rw [h_req]
 
 /-- Any ComposedState transition preserves the request's `causedByParentToolCallId`. -/
@@ -68,6 +70,7 @@ private theorem composed_causedByParentToolCallId_preserved
     exact request_causedByParentToolCallId_preserved h_inner
   | persistence_step _ _ _ h_req _ _ _ _ => rw [h_req]
   | call_step _ h_req _ _ _ => rw [h_req]
+  | tool_spawn _ _ _ h_req _ _ _ _ _ _ => rw [h_req]
   | tool_step _ _ _ h_req _ _ _ _ _ => rw [h_req]
 
 /-- Per-step preservation of INV-DEPTH: any single bridge transition preserves

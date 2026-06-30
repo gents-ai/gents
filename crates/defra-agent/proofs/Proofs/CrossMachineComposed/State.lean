@@ -98,6 +98,10 @@ theorem coherent_tool_deadlineExceeded_iff_request_deadlineExceeded
     Each constructor lifts a single-layer transition; the other layers must
     be unchanged across the composed step.
 
+    `tool_spawn` is the list-growth constructor. `tool_step` is deliberately
+    coherence-preserving: standalone tool clock/deadline drift is not a valid
+    composed step unless the parent request snapshot remains synchronized.
+
     NOTE: Adding or modifying constructors here requires updating the `cases`
     patterns in `Proofs/Properties/Safety.lean` (`recovery_blocks_claims`)
     and the call-site at `Proofs/Properties/Liveness.lean`
@@ -143,6 +147,23 @@ inductive Transition : ComposedState → ComposedState → Prop where
       post.process = pre.process →
       post.tools = pre.tools →
       post.requestId = pre.requestId →
+      Transition pre post
+  | tool_spawn {pre post : ComposedState}
+               {newTool : ToolExecution.ToolCallContext} :
+      pre.request.state = .processing →
+      newTool.state = .pending →
+      post.tools = pre.tools ++ [newTool] →
+      post.request = pre.request →
+      post.process = pre.process →
+      post.call = pre.call →
+      post.requestId = pre.requestId →
+      Coherent post newTool →
+      (∀ t ∈ pre.tools, t.callId ≠ newTool.callId) →
+      -- A newly spawned foreground pending tool is live immediately, so it is
+      -- admitted only when no other foreground live tool already exists.
+      (newTool.awaitMode = .foreground →
+        ¬ ∃ t ∈ pre.tools, t.awaitMode = .foreground ∧
+                            ¬ isTerminal t.state) →
       Transition pre post
   | tool_step {pre post : ComposedState} {idx : Nat}
               {toolPre toolPost : ToolExecution.ToolCallContext} :

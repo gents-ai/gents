@@ -104,6 +104,24 @@ theorem interrupted_request_cancels_live_linked_tools
     · have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
       simpa [post, toolPost] using List.mem_set pre.tools idx h_lt toolPost
 
+/-- Reachable-state C2 wrapper: for states reached from `initial`, the global
+    well-formedness hypothesis is recovered from the trace. -/
+theorem interrupted_request_cancels_live_linked_tools_from_initial
+    {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
+    (h_reach        : Trace initial pre)
+    (h_in           : toolPre ∈ pre.tools)
+    (h_interrupted  : pre.request.state = .interrupted)
+    (h_live         : toolPre.cancellable) :
+    ∃ post toolPost,
+      Trace pre post ∧
+      post.request = pre.request ∧
+      post.request.state = .interrupted ∧
+      toolPost ∈ post.tools ∧
+      toolPost.state = .cancelled ∧
+      toolPost.requestId = pre.requestId :=
+  interrupted_request_cancels_live_linked_tools
+    h_in (wellFormed_from_initial h_reach) h_interrupted h_live
+
 
 /-- C1: A request whose deadline is exceeded times out every Running linked
     tool. Multi-flight form: any tool ∈ pre.tools that is running, linked, and
@@ -155,6 +173,23 @@ theorem deadline_exceeded_request_timesOut_running_tools
       (List.getElem?_eq_some_iff.mp h_idx).1
     exact List.mem_set pre.tools idx h_lt toolPost
 
+/-- Reachable-state C1 wrapper: for states reached from `initial`, the global
+    well-formedness hypothesis is recovered from the trace. -/
+theorem deadline_exceeded_request_timesOut_running_tools_from_initial
+    {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
+    (h_reach     : Trace initial pre)
+    (h_in        : toolPre ∈ pre.tools)
+    (h_running   : toolPre.state = .running)
+    (h_deadline  : pre.request.deadlineExceeded) :
+    ∃ post toolPost,
+      Trace pre post ∧
+      toolPost ∈ post.tools ∧
+      post.request = pre.request ∧
+      toolPost.state = .timedOut ∧
+      toolPost.requestId = pre.requestId :=
+  deadline_exceeded_request_timesOut_running_tools
+    h_in (wellFormed_from_initial h_reach) h_running h_deadline
+
 
 /-- C1': A request whose deadline is exceeded cancels every Pending linked
     tool. Companion to C1 — a Pending tool never ran, so it reaches
@@ -200,6 +235,24 @@ theorem deadline_exceeded_request_cancels_pending_tools
     have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
     simpa [post, toolPost] using List.mem_set pre.tools idx h_lt toolPost
 
+/-- Reachable-state C1' wrapper: for states reached from `initial`, the global
+    well-formedness hypothesis is recovered from the trace. -/
+theorem deadline_exceeded_request_cancels_pending_tools_from_initial
+    {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
+    (h_reach     : Trace initial pre)
+    (h_in        : toolPre ∈ pre.tools)
+    (h_pending   : toolPre.state = .pending)
+    (h_deadline  : pre.request.deadlineExceeded) :
+    ∃ post toolPost,
+      Trace pre post ∧
+      post.request = pre.request ∧
+      post.request.deadlineExceeded ∧
+      toolPost ∈ post.tools ∧
+      toolPost.state = .cancelled ∧
+      toolPost.requestId = pre.requestId :=
+  deadline_exceeded_request_cancels_pending_tools
+    h_in (wellFormed_from_initial h_reach) h_pending h_deadline
+
 
 /-- C3: A request whose linked tools are all terminal can resume making progress.
     Multi-flight form: ∀-quantified over `pre.tools`. Semantic complement of
@@ -211,7 +264,6 @@ theorem deadline_exceeded_request_cancels_pending_tools
     progress-unblock witness rather than forcing a cancel cause into C3. -/
 theorem all_tools_terminal_unblocks_request_progress
     {pre : ComposedState}
-    (_h_wf         : pre.WellFormed)
     (h_all_terminal : ∀ t ∈ pre.tools, isTerminal t.state)
     (h_proc         : pre.request.state = .processing)
     (h_admission    : pre.request.admission = .executing) :
