@@ -55,6 +55,7 @@ theorem interrupted_request_cancels_live_linked_tools
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_in           : toolPre ∈ pre.tools)
     (h_wf           : pre.WellFormed)
+    (h_live_kind    : ¬ IsDetached toolPre)
     (h_interrupted  : pre.request.state = .interrupted)
     (h_live         : toolPre.cancellable) :
     ∃ post toolPost,
@@ -65,7 +66,7 @@ theorem interrupted_request_cancels_live_linked_tools
       toolPost.state = .cancelled ∧
       toolPost.requestId = pre.requestId := by
   have h_coherent : Coherent pre toolPre :=
-    h_wf.allToolsCoherent toolPre h_in
+    h_wf.allToolsCoherent toolPre h_in h_live_kind
   obtain ⟨h_linked, h_deadline_eq, h_time_eq⟩ := h_coherent
   obtain ⟨idx, h_idx⟩ := List.mem_iff_getElem?.mp h_in
   -- Case-split on cancellable: pending → cancelBeforeDispatch; running → cancelDuringRun
@@ -84,6 +85,9 @@ theorem interrupted_request_cancels_live_linked_tools
       refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
               ⟨h_linked, h_deadline_eq, h_time_eq⟩
               ⟨h_linked, h_deadline_eq, h_time_eq⟩
+              (fun h_det =>
+                absurd (show IsDetached toolPre by simpa [IsDetached, toolPost] using h_det)
+                  h_live_kind)
               (fun h_bg h_fg => ?_)
       simp [toolPost, h_bg] at h_fg
     · have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
@@ -99,10 +103,33 @@ theorem interrupted_request_cancels_live_linked_tools
       refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
               ⟨h_linked, h_deadline_eq, h_time_eq⟩
               ⟨h_linked, h_deadline_eq, h_time_eq⟩
+              (fun h_det =>
+                absurd (show IsDetached toolPre by simpa [IsDetached, toolPost] using h_det)
+                  h_live_kind)
               (fun h_bg h_fg => ?_)
       simp [toolPost, h_bg] at h_fg
     · have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
       simpa [post, toolPost] using List.mem_set pre.tools idx h_lt toolPost
+
+/-- Reachable-state C2 wrapper: for states reached from `initial`, the global
+    well-formedness hypothesis is recovered from the trace. The C2 reachable
+    domain is inhabited — see `ReachabilityWitness.c2_reachable_domain_nonempty`. -/
+theorem interrupted_request_cancels_live_linked_tools_from_initial
+    {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
+    (h_reach        : Trace initial pre)
+    (h_in           : toolPre ∈ pre.tools)
+    (h_live_kind    : ¬ IsDetached toolPre)
+    (h_interrupted  : pre.request.state = .interrupted)
+    (h_live         : toolPre.cancellable) :
+    ∃ post toolPost,
+      Trace pre post ∧
+      post.request = pre.request ∧
+      post.request.state = .interrupted ∧
+      toolPost ∈ post.tools ∧
+      toolPost.state = .cancelled ∧
+      toolPost.requestId = pre.requestId :=
+  interrupted_request_cancels_live_linked_tools
+    h_in (wellFormed_from_initial h_reach) h_live_kind h_interrupted h_live
 
 /-- C1: A request whose deadline is exceeded times out every Running linked
     tool. Multi-flight form: any tool ∈ pre.tools that is running, linked, and
@@ -112,6 +139,7 @@ theorem deadline_exceeded_request_timesOut_running_tools
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_in        : toolPre ∈ pre.tools)
     (h_wf        : pre.WellFormed)
+    (h_live_kind : ¬ IsDetached toolPre)
     (h_running   : toolPre.state = .running)
     (h_deadline  : pre.request.deadlineExceeded) :
     ∃ post toolPost,
@@ -121,7 +149,7 @@ theorem deadline_exceeded_request_timesOut_running_tools
       toolPost.state = .timedOut ∧
       toolPost.requestId = pre.requestId := by
   have h_coherent : Coherent pre toolPre :=
-    h_wf.allToolsCoherent toolPre h_in
+    h_wf.allToolsCoherent toolPre h_in h_live_kind
   -- Destructure h_coherent into its three component equalities.
   obtain ⟨h_linked, h_deadline_eq, h_time_eq⟩ := h_coherent
   -- Find the index of toolPre in pre.tools.
@@ -146,6 +174,8 @@ theorem deadline_exceeded_request_timesOut_running_tools
     refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
       ⟨h_linked, h_deadline_eq, h_time_eq⟩
       ⟨h_linked, h_deadline_eq, h_time_eq⟩
+      (fun h_det =>
+        absurd (show IsDetached toolPre by simpa [IsDetached, toolPost] using h_det) h_live_kind)
       (fun h_bg h_fg => ?_)
     simp [toolPost, h_bg] at h_fg
   · -- toolPost ∈ post.tools — follows from `pre.tools.set idx toolPost`
@@ -160,6 +190,7 @@ theorem deadline_exceeded_request_timesOut_running_tools_from_initial
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_reach     : Trace initial pre)
     (h_in        : toolPre ∈ pre.tools)
+    (h_live_kind : ¬ IsDetached toolPre)
     (h_running   : toolPre.state = .running)
     (h_deadline  : pre.request.deadlineExceeded) :
     ∃ post toolPost,
@@ -169,7 +200,7 @@ theorem deadline_exceeded_request_timesOut_running_tools_from_initial
       toolPost.state = .timedOut ∧
       toolPost.requestId = pre.requestId :=
   deadline_exceeded_request_timesOut_running_tools
-    h_in (wellFormed_from_initial h_reach) h_running h_deadline
+    h_in (wellFormed_from_initial h_reach) h_live_kind h_running h_deadline
 
 
 /-- C1': A request whose deadline is exceeded cancels every Pending linked
@@ -186,6 +217,7 @@ theorem deadline_exceeded_request_cancels_pending_tools
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_in        : toolPre ∈ pre.tools)
     (h_wf        : pre.WellFormed)
+    (h_live_kind : ¬ IsDetached toolPre)
     (h_pending   : toolPre.state = .pending)
     (h_deadline  : pre.request.deadlineExceeded) :
     ∃ post toolPost,
@@ -196,7 +228,7 @@ theorem deadline_exceeded_request_cancels_pending_tools
       toolPost.state = .cancelled ∧
       toolPost.requestId = pre.requestId := by
   have h_coherent : Coherent pre toolPre :=
-    h_wf.allToolsCoherent toolPre h_in
+    h_wf.allToolsCoherent toolPre h_in h_live_kind
   obtain ⟨h_linked, h_deadline_eq, h_time_eq⟩ := h_coherent
   obtain ⟨idx, h_idx⟩ := List.mem_iff_getElem?.mp h_in
   -- Inner cancelBeforeDispatch transition
@@ -210,6 +242,9 @@ theorem deadline_exceeded_request_cancels_pending_tools
     refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
             ⟨h_linked, h_deadline_eq, h_time_eq⟩
             ⟨h_linked, h_deadline_eq, h_time_eq⟩
+            (fun h_det =>
+              absurd (show IsDetached toolPre by simpa [IsDetached, toolPost] using h_det)
+                h_live_kind)
             (fun h_bg h_fg => ?_)
     simp [toolPost, h_bg] at h_fg
   · -- toolPost ∈ post.tools via List.mem_set
@@ -222,6 +257,7 @@ theorem deadline_exceeded_request_cancels_pending_tools_from_initial
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_reach     : Trace initial pre)
     (h_in        : toolPre ∈ pre.tools)
+    (h_live_kind : ¬ IsDetached toolPre)
     (h_pending   : toolPre.state = .pending)
     (h_deadline  : pre.request.deadlineExceeded) :
     ∃ post toolPost,
@@ -232,7 +268,7 @@ theorem deadline_exceeded_request_cancels_pending_tools_from_initial
       toolPost.state = .cancelled ∧
       toolPost.requestId = pre.requestId :=
   deadline_exceeded_request_cancels_pending_tools
-    h_in (wellFormed_from_initial h_reach) h_pending h_deadline
+    h_in (wellFormed_from_initial h_reach) h_live_kind h_pending h_deadline
 
 
 /-- C3: A request whose linked tools are all terminal can resume making progress.

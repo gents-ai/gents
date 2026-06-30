@@ -99,6 +99,7 @@ pub async fn create_request(
         "completed" => "completed",
         "error" => "failed",
         "superseded" => "superseded",
+        "interrupted" => "interrupted",
         other => panic!("unsupported test request status: {other}"),
     };
     let request_id = escape_graphql_string(request_id);

@@ -109,8 +109,10 @@ theorem step_processing : Transition acquired processing := by
 theorem step_withPendingTool : Transition processing withPendingTool := by
   refine Transition.tool_spawn
     (newTool := pendingTool)
-    rfl rfl rfl rfl rfl rfl rfl ?_ ?_ ?_
+    rfl rfl rfl rfl rfl rfl rfl ?_ ?_ ?_ ?_
   · simp [Coherent, pendingTool, withPendingTool]
+  · intro h_det
+    simp [IsDetached, pendingTool] at h_det
   · intro t h_in
     simp [processing, acquired, claimed, ready, initial] at h_in
   · intro _h_fg h_existing
@@ -121,12 +123,14 @@ theorem step_withRunningTool : Transition withPendingTool withRunningTool := by
     (idx := 0)
     (toolPre := pendingTool)
     (toolPost := runningTool)
-    ?_ ?_ rfl rfl rfl rfl rfl ?_ ?_ ?_
+    ?_ ?_ rfl rfl rfl rfl rfl ?_ ?_ ?_ ?_
   · simp [withPendingTool]
   · exact ToolExecution.ToolCallContext.Transition.dispatch rfl rfl
   · simp [Coherent, pendingTool, withPendingTool]
   · simp [Coherent, pendingTool, runningTool, withRunningTool, withPendingTool,
       processing, acquired, claimed, ready, initial]
+  · intro h_det
+    simp [IsDetached, runningTool, pendingTool] at h_det
   · intro h_bg _h_fg
     simp [pendingTool] at h_bg
 
@@ -189,11 +193,13 @@ theorem c1_prime_reachable_domain_nonempty :
       Trace initial pre ∧
       toolPre ∈ pre.tools ∧
       toolPre.state = .pending ∧
+      ¬ IsDetached toolPre ∧
       pre.request.deadlineExceeded := by
-  refine ⟨withExpiredPendingTool, expiredPendingTool, ?_, ?_, ?_, ?_⟩
+  refine ⟨withExpiredPendingTool, expiredPendingTool, ?_, ?_, ?_, ?_, ?_⟩
   · exact trace_withExpiredPendingTool
   · simp [withExpiredPendingTool]
   · rfl
+  · simp [IsDetached, expiredPendingTool, pendingTool]
   · simp [RequestContext.deadlineExceeded, withExpiredPendingTool, expiredPendingTime,
       withPendingTool, processing, acquired, claimed, ready, initial]
 
@@ -204,13 +210,65 @@ theorem c1_reachable_domain_nonempty :
       Trace initial pre ∧
       toolPre ∈ pre.tools ∧
       toolPre.state = .running ∧
+      ¬ IsDetached toolPre ∧
       pre.request.deadlineExceeded := by
-  refine ⟨withExpiredRunningTool, expiredRunningTool, ?_, ?_, ?_, ?_⟩
+  refine ⟨withExpiredRunningTool, expiredRunningTool, ?_, ?_, ?_, ?_, ?_⟩
   · exact trace_withExpiredRunningTool
   · simp [withExpiredRunningTool]
   · rfl
+  · simp [IsDetached, expiredRunningTool, runningTool, pendingTool]
   · simp [RequestContext.deadlineExceeded, withExpiredRunningTool, expiredRunningTime,
       withRunningTool, withPendingTool, processing, acquired, claimed, ready, initial]
+
+/-- C2 reachable domain: latch a direct interrupt on a processing request that
+    still carries a live pending tool, then drive `interrupt_processing`. -/
+def interruptLatched : ComposedState :=
+  { withPendingTool with
+    request :=
+      { withPendingTool.request with
+        interruptRequestedAt := some withPendingTool.request.currentTime } }
+
+def interruptedWithTool : ComposedState :=
+  { interruptLatched with
+    request :=
+      { interruptLatched.request with state := .interrupted, admission := .released } }
+
+theorem step_interruptLatched : Transition withPendingTool interruptLatched := by
+  exact Transition.request_interrupt withPendingTool.request.currentTime rfl rfl rfl rfl rfl
+
+theorem step_interrupted : Transition interruptLatched interruptedWithTool := by
+  refine Transition.request_step ?_ rfl rfl rfl rfl ?_ ?_
+  · exact RequestContext.Transition.interrupt_processing rfl rfl (by simp [interruptLatched]) rfl
+  · intro h_pending
+    simp [interruptLatched, withPendingTool, processing, acquired, claimed, ready] at h_pending
+  · intro h_advance
+    rcases h_advance with h_progress | ⟨h_claimed, _⟩
+    · simp [interruptedWithTool, interruptLatched, withPendingTool, processing, acquired,
+        claimed, ready] at h_progress
+    · simp [interruptLatched, withPendingTool, processing, acquired, claimed, ready] at h_claimed
+
+theorem trace_interruptedWithTool : Trace initial interruptedWithTool :=
+  Trace.step step_ready (Trace.step step_claimed
+    (Trace.step step_acquired (Trace.step step_processing
+      (Trace.step step_withPendingTool
+        (Trace.step step_interruptLatched
+          (Trace.step step_interrupted Trace.refl))))))
+
+/-- C2 has a concrete reachable domain: an interrupted parent request can still
+    carry a live (cancellable) pending tool. -/
+theorem c2_reachable_domain_nonempty :
+    ∃ pre toolPre,
+      Trace initial pre ∧
+      toolPre ∈ pre.tools ∧
+      pre.request.state = .interrupted ∧
+      ¬ IsDetached toolPre ∧
+      toolPre.cancellable := by
+  refine ⟨interruptedWithTool, pendingTool, ?_, ?_, ?_, ?_, ?_⟩
+  · exact trace_interruptedWithTool
+  · simp [interruptedWithTool, interruptLatched, withPendingTool]
+  · rfl
+  · simp [IsDetached, pendingTool]
+  · exact Or.inl rfl
 
 end ReachabilityWitness
 end ComposedState

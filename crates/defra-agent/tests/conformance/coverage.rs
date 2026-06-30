@@ -176,7 +176,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_transcript_cases().len(), 7);
     assert_eq!(lean_response_interrupt_flow_cases().len(), 1);
     assert_eq!(lean_subagent_delegation_graph_cases().len(), 3);
-    assert_eq!(lean_composed_invariant_witnesses().len(), 2);
+    assert_eq!(lean_composed_invariant_witnesses().len(), 3);
 }
 
 #[tokio::test]

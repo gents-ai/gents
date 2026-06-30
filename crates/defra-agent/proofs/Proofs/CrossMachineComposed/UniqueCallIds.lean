@@ -161,13 +161,15 @@ theorem uniqueCallIds_preserved
     exact uniqueCallIds_of_tools_eq h_inv h_tools
   | slot_acquire _ _ _ _ _ h_tools _ =>
     exact uniqueCallIds_of_tools_eq h_inv h_tools
+  | request_interrupt _ _ _ _ h_tools _ =>
+    exact uniqueCallIds_of_tools_eq h_inv h_tools
   | clock_advance t _ _ _ _ h_tools _ =>
     exact uniqueCallIds_map_currentTime_preserved t h_inv h_tools
   | persistence_step _ _ _ _ _ _ h_tools _ =>
     exact uniqueCallIds_of_tools_eq h_inv h_tools
   | call_step _ _ _ h_tools _ =>
     exact uniqueCallIds_of_tools_eq h_inv h_tools
-  | @tool_spawn newTool _ _ h_tools _ _ _ _ _ h_fresh _ =>
+  | @tool_spawn newTool _ _ h_tools _ _ _ _ _ _ h_fresh _ =>
     exact uniqueCallIds_append_fresh_preserved h_inv h_fresh h_tools
   | @tool_step idx toolPre toolPost h_idx h_t_step h_tools _ _ _ _ _ _ _ =>
     -- post.tools = pre.tools.set idx toolPost. Since

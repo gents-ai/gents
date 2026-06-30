@@ -190,6 +190,12 @@ theorem recovery_blocks_claims
       simp [h_req_eq]
     rw [this]
     exact h_pending
+  | request_interrupt _ h_req_eq _ _ _ _ =>
+    left
+    have : s'.request.state = s.request.state := by
+      simp [h_req_eq]
+    rw [this]
+    exact h_pending
   | persistence_step _ nextPersistence _ h_req_eq _ _ _ _ =>
     left
     have : s'.request.state = ({ s.request with persistence := nextPersistence }).state := by

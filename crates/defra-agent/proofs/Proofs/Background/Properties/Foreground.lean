@@ -71,6 +71,8 @@ theorem foreground_blocks_parent_advance
       constructor <;> rw [h_req]
     | slot_acquire _ _ h_req _ _ _ _ =>
       constructor <;> simp [h_req]
+    | request_interrupt _ h_req _ _ _ _ =>
+      constructor <;> simp [h_req]
     | clock_advance _ _ h_req _ _ _ _ =>
       constructor <;> simp [h_req]
     | persistence_step _ _ _ h_req _ _ _ _ =>

@@ -41,6 +41,7 @@ private theorem composed_subagentDepth_preserved
   | request_step h_inner _ _ _ _ _ _ =>
     exact request_subagentDepth_preserved h_inner
   | slot_acquire _ _ h_req _ _ _ _ => simp [h_req]
+  | request_interrupt _ h_req _ _ _ _ => simp [h_req]
   | clock_advance _ _ h_req _ _ _ _ => simp [h_req]
   | persistence_step _ _ _ h_req _ _ _ _ => rw [h_req]
   | call_step _ h_req _ _ _ => rw [h_req]
@@ -57,6 +58,7 @@ private theorem composed_causedByParentRequestId_preserved
   | request_step h_inner _ _ _ _ _ _ =>
     exact request_causedByParentRequestId_preserved h_inner
   | slot_acquire _ _ h_req _ _ _ _ => simp [h_req]
+  | request_interrupt _ h_req _ _ _ _ => simp [h_req]
   | clock_advance _ _ h_req _ _ _ _ => simp [h_req]
   | persistence_step _ _ _ h_req _ _ _ _ => rw [h_req]
   | call_step _ h_req _ _ _ => rw [h_req]
@@ -73,6 +75,7 @@ private theorem composed_causedByParentToolCallId_preserved
   | request_step h_inner _ _ _ _ _ _ =>
     exact request_causedByParentToolCallId_preserved h_inner
   | slot_acquire _ _ h_req _ _ _ _ => simp [h_req]
+  | request_interrupt _ h_req _ _ _ _ => simp [h_req]
   | clock_advance _ _ h_req _ _ _ _ => simp [h_req]
   | persistence_step _ _ _ h_req _ _ _ _ => rw [h_req]
   | call_step _ h_req _ _ _ => rw [h_req]
