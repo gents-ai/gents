@@ -264,12 +264,16 @@ single template as-is: invite tokens sign one template that `join` writes direct
 
 The trusted-paired-peer path (`subagent_source.rs:510`) currently skips the
 single-creator gate (`:637`, which checks `target_owner_did == local_did`) and
-unconditionally takes local ownership. With `spawn_target_did` now a top-level
-field, add a cheap gate on the trusted path: **only materialize when the spawn's
-resolved target equals `local_did`.** The §2 filter already prevents a bridge
-from reaching the wrong host, so this is belt-and-suspenders — but it closes the
+unconditionally takes local ownership. Add a gate on the trusted path that keys on
+the **top-level `spawn_target_did`** — the field the §2 replicator filter actually
+trusted to route the bridge here, *not* the `SpawnArgs.agent_did` parsed from the
+`args` blob: **only materialize when `spawn_target_did == local_did`**, and
+**reject any bridge whose top-level `spawn_target_did` disagrees with its in-`args`
+target** (an inconsistent/forged bridge). The §2 filter already prevents a bridge
+from reaching the wrong host, so this is defense in depth — but it closes the
 latent multi-peer double-claim where a coordinator paired with two trusted hosts
-could otherwise have a leaked bridge claimed by the wrong one.
+could otherwise have a leaked bridge claimed by the wrong one, and it ensures the
+claim decision is made on the same field replication authorized.
 
 ### 6. Tests
 

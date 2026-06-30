@@ -88,10 +88,9 @@ inductive Scope where
   deriving DecidableEq, Repr
 ```
 
-- [ ] **Step 2: Add the two templates to the Lean catalog.** In the catalog definition (the `List Template` mirrored from Rust), add:
+- [ ] **Step 2: Define the rules, the template values, and a CONCRETE `builtinCatalog`.** The existing model is catalog-*parametric* (`abbrev Catalog := List Template`; `resolveTemplate (cat) (id)` is ∀-quantified over `cat`) — there is no concrete catalog value, so proving facts about the rule constants alone is **vacuous** as a catalog fence. Add a concrete `builtinCatalog` mirroring the Rust `BUILTIN_TEMPLATES`, so Lean fails if a subagent entry is missing or malformed. In `State.lean` (or a new `Catalog.lean` under `ScopeTemplates/`, added to the barrel):
 
 ```lean
--- conversation collection set, reused for subagent-host
 def subagentHostCollections : List String :=
   ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall",
    "AgentToolResult", "AgentSession", "AgentConversation", "CompactionEntry"]
@@ -103,12 +102,25 @@ def subagentCoordinatorRules : List CollectionRule :=
 def subagentHostRules : List CollectionRule :=
   subagentHostCollections.map (fun c => { collection := c, field := "agent_did", source := .localDid })
 
--- appended to the catalog list:
-  , { id := "subagent-coordinator", collections := ["AgentRequest", "AgentToolCall"],
-      scope := .perCollection subagentCoordinatorRules, delivery := .push }
-  , { id := "subagent-host", collections := subagentHostCollections,
-      scope := .perCollection subagentHostRules, delivery := .push }
+def subagentCoordinatorTemplate : Template :=
+  { id := "subagent-coordinator", collections := {"AgentRequest", "AgentToolCall"},
+    scope := .perCollection subagentCoordinatorRules, delivery := .push }
+
+def subagentHostTemplate : Template :=
+  { id := "subagent-host", collections := subagentHostCollections.toFinset,
+    scope := .perCollection subagentHostRules, delivery := .push }
+
+/-- Concrete catalog mirroring Rust `BUILTIN_TEMPLATES` (id + scope + delivery),
+so resolution theorems are non-vacuous. Conversation/agent-config/backup/
+discovery/network-control mirror the existing Rust entries; the two subagent
+templates are the additions. -/
+def builtinCatalog : Catalog :=
+  [ conversationTemplate, agentConfigTemplate, backupTemplate,
+    discoveryTemplate, networkControlTemplate,
+    subagentCoordinatorTemplate, subagentHostTemplate ]
 ```
+
+(Define the five pre-existing `*Template` values to match the Rust catalog if they don't already exist; their `scope`/`delivery` mirror `templates.rs`. The conformance structure-fence keeps Rust and this Lean catalog in parity.)
 
 - [ ] **Step 3: Extend `scopeFilter` in `Derivation.lean` to take `localDid`.** Change the signature and add the `perCollection` arm (the produced set is `CollectionFilterKey`s, matching `PairingReconcile/State.lean`):
 
@@ -142,6 +154,20 @@ theorem subagentHost_filter_eq (peerDid localDid : String) :
 ```
 
 These two ARE the crossing-soundness proof for the template layer: the coordinator leg carries exactly `{AgentRequest@agent_did==local, AgentToolCall@spawn_target_did==peer}` and the host leg exactly `{conversation-set@agent_did==local}` — no other collection, field, or value. Zero `sorry`; follow the proof style already used for `scopeFilter_peerDid` in this file.
+
+- [ ] **Step 4a: Prove catalog resolution (the non-vacuous membership fence).** These make Lean fail if the `builtinCatalog` entry is missing or malformed (`decide`/`rfl` on the concrete catalog):
+
+```lean
+theorem subagentCoordinator_in_catalog :
+    resolveTemplate builtinCatalog "subagent-coordinator" = some subagentCoordinatorTemplate := by
+  decide
+
+theorem subagentHost_in_catalog :
+    resolveTemplate builtinCatalog "subagent-host" = some subagentHostTemplate := by
+  decide
+```
+
+Then the end-to-end fence (resolution → exact filter) is a corollary chaining `subagentCoordinator_in_catalog` with `subagentCoordinator_filter_eq` (both concrete), so a missing/malformed catalog entry OR a wrong derivation breaks the build.
 
 - [ ] **Step 4b: Add the no-third-party lemma as a supporting (secondary) corollary** — it backs the spec §0 "no third-party documents" statement but is not load-bearing on its own:
 
@@ -266,7 +292,7 @@ async fn spawn_target_did_is_immutable() {
 }
 ```
 
-  - Confirm the **upgraded-DB patch path** also enforces immutability. Read `defradb.rs` schema-patch handling to see whether a patch-added field can carry the immutable flag. If the Kind-11 patch cannot mark the field immutable, **that is a blocker for this task** — resolve it before proceeding by one of: (a) extend the patch to set the immutable flag (preferred — find the field-property the SDL path sets and replicate it in the patch JSON), or (b) enforce immutability at the write layer for `spawn_target_did` (reject updates that change a non-empty value). Do not proceed to Phase D until upgraded DBs enforce it; record which mechanism was used in the commit message.
+  - Confirm the **upgraded-DB patch path** also enforces immutability. Read `defradb.rs` schema-patch handling to see whether a patch-added field can carry the immutable flag. If the Kind-11 patch cannot mark the field immutable, **that is a blocker for this task** — resolve it before proceeding by: (a) extend the patch to set the **schema-level** immutable flag (preferred — find the field-property the SDL path sets and replicate it in the patch JSON). Enforcement must be at the **DefraDB/schema layer** (enforced on local write *and* remote merge). A defra-agent helper-path check is **not** acceptable as the fallback — a replication merge from a peer bypasses it, so it would not preserve the §0 soundness guarantee. Do not proceed to Phase D until upgraded DBs enforce it at the schema layer; record the mechanism in the commit message.
 
 - [ ] **Step 4: Build to confirm SDL + patch compile/parse.**
 
@@ -614,13 +640,18 @@ pub(super) fn complement_subagent_template(template: &str) -> String {
 }
 ```
 
-- [ ] **Step 4: Use it at the join write site.** In `join.rs`, before `write_pairing_desired(...)`, map the template:
+- [ ] **Step 4: Use it at the join write site — ONLY for the token-derived template, not an explicit `--template` override.** Current `join` semantics make an explicit `--template` win over the token (`join.rs:66`, `:240`). The complement expresses "the token states the *inviter's* (coordinator's) role; I, the joiner, take the complementary host role." An explicit `--template subagent-host` from the operator is already *their own* role and must NOT be flipped. So apply the complement only on the branch where the template came from the token:
 
 ```rust
-let template = crate::commands::p2p::pairings::complement_subagent_template(&template);
+// token path: token carries the inviter's role; joiner takes the complement
+let template = crate::commands::p2p::pairings::complement_subagent_template(&token.template);
+// explicit --template override path: use as-is (operator stated their own role)
+let template = args.template.clone(); // unchanged — no complement
 ```
 
-(Place it so the joiner writes the complemented template; non-subagent templates are unchanged.)
+(Locate the existing token-vs-override branch at `join.rs:66`/`:240` and apply `complement_subagent_template` only on the token branch.)
+
+- [ ] **Step 4b: Test both branches.** Add join tests: (a) token `subagent-coordinator`, no `--template` → joiner row is `subagent-host`; (b) explicit `--template subagent-host` override → joiner row is `subagent-host` (NOT flipped to coordinator); (c) token `conversation`, no override → `conversation`.
 
 - [ ] **Step 5: Run the helper test; confirm pass. Commit.**
 
@@ -873,8 +904,10 @@ pub(super) async fn cancel_propagation_cases_drive_production_interrupt() {
     let cases = lean_cancel_propagation_cases();
     assert_eq!(cases.len(), 1);
     for case in cases {
-        // boot host agent + coordinator db; write subagent-host / subagent-coordinator
-        // PeerPairingDesired rows on each; let the reconciler install the legs.
+        // write subagent-host / subagent-coordinator PeerPairingDesired rows on each
+        // DefraDB node BEFORE booting that node's DefraAgent runtime (Task 13 Step 1
+        // rationale: the defradb.rs Controlled auth gate rehydrates at boot, #1074),
+        // then boot both runtimes and let the reconciler install the legs.
         // DETERMINISTIC WAIT (no sleeps): before spawning, poll until both legs are
         // applied on both nodes — wait_for_replicator_installed(coord, host_addr) and
         // wait_for_replicator_installed(host, coord_addr) — same helper as Task 13,
@@ -914,16 +947,16 @@ git commit -m "test(#575): cancel propagation across declarative subagent legs"
 **Interfaces:**
 - Consumes: the full stack (templates, reconciler, spawn_target_did, claim gate).
 
-- [ ] **Step 1: Replace hand-wired replication with declarative rows.** In `live_cross_node_subagent_delegation()`, delete the two `install_one_way_replicator(...)` calls. Keep peer connectivity setup, but provision pairing via the templates — write `PeerPairingDesired{ template: "subagent-coordinator" }` on the coordinator (peer = host DID) and `PeerPairingDesired{ template: "subagent-host" }` on the host (peer = coordinator DID), then let the reconciler install the legs. (Reuse the existing `write_pairing` helper, extended to take a `template` argument, or write the rows inline with `upsert_PeerPairingDesired`.)
+- [ ] **Step 1: Replace hand-wired replication with declarative rows written BEFORE agent boot.** In `live_cross_node_subagent_delegation()`, delete the two `install_one_way_replicator(...)` calls. Provision pairing via the templates, **writing the `PeerPairingDesired` rows on each DefraDB node before booting that node's `DefraAgent` runtime** — `{ template: "subagent-coordinator" }` on the coordinator (peer = host DID) and `{ template: "subagent-host" }` on the host (peer = coordinator DID). This ordering is load-bearing: the defradb.rs `Controlled` authorization gate is rehydrated at node **boot** (`load_replicators`/`load_p2p_collections`), and `get_replicators` reports *persisted* state (defradb.rs#1074), so a write-then-reconcile-while-running path can install a replicator whose live auth gate is still stale. Writing the rows before boot mirrors the original test's `write_pairing`-before-boot ordering and sidesteps #1074 in-test. (Reuse `write_pairing`, extended to take a `template`, or write inline with `upsert_PeerPairingDesired`.)
 
-- [ ] **Step 1b: Deterministically wait for the legs to apply before spawning (no sleeps).** The pairing reconciler runs on a 30s periodic sweep plus on-`Update` (`engine.rs:23` `PAIRING_SWEEP_INTERVAL`); a bare write-then-spawn races the reconcile and is flaky. Before submitting the spawn, poll until both outbound legs are actually installed on both nodes — query each node's installed replicators (the `get_replicators`/applied-state path the reconciler uses) and assert the expected leg is present, bounded by a timeout:
+- [ ] **Step 1b: Deterministically confirm the legs are live before spawning (no sleeps).** After boot, still poll until both outbound legs are installed on both nodes before submitting the spawn — the reconciler is sweep-driven (`engine.rs:23` `PAIRING_SWEEP_INTERVAL`) and a bare spawn races first install:
 
 ```rust
 wait_for_replicator_installed(coord.node(), /*to*/ host_addr.as_str()).await; // coordinator -> host
 wait_for_replicator_installed(host.node(), /*to*/ coord_addr.as_str()).await;  // host -> coordinator
 ```
 
-If a direct reconcile-tick entry point exists on the reconciler handle, prefer invoking it explicitly over waiting for the sweep. Add `wait_for_replicator_installed` as a bounded-poll helper in the e2e support module. **Flakes here are defects** — fix the wait, never add a bare sleep.
+Add `wait_for_replicator_installed` as a bounded-poll helper. (This guards reconcile timing; Step 1's before-boot ordering guards the live-auth gate — both are needed.) **Flakes here are defects** — fix the wait, never add a bare sleep. If the test must instead exercise the *runtime* (post-boot) reconcile path, it must explicitly restart the target node after applying the subagent pairing, per #1074.
 
 - [ ] **Step 2: Keep the existing completion assertion** (child runs on host, result projects back to the parent bridge).
 
@@ -959,7 +992,7 @@ git commit -m "test(#575): drive subagent delegation e2e through declarative tem
 
 - **Spec coverage:** §0 Lean → Tasks 1, 11; §1 schema → Task 3; §2 templates → Tasks 1/5; §3 reconciler → Task 6; §4 lifecycle stamping (both producers) → Task 4; §4a provisioning → Tasks 7 (registry exclusion), 8 (join complement); §5 claim hardening → Task 9; §6 tests → Tasks 2, 12, 13; §7 restart stopgap → Task 10; cancel obligation → Tasks 11, 12.
 - **Known investigation point (Task 6, Step 1):** the exact local-DID source in the reconciler loader must be located — the engine comment ("the loader first sanitizes [agent_did] to this node's DID") confirms it exists; wire from there.
-- **Known verification point (Task 3, Step 3):** whether `@immutable` is honored for a patch-added field on upgraded DBs. Functional correctness holds regardless (bridge only creates the field), but record the finding.
+- **Known verification point (Task 3, Step 3):** whether `@immutable` is honored for a patch-added field on upgraded DBs. This is a **gate** (DAG-completeness), not a soft note — "the runtime only writes it once" is NOT sufficient, because immutability must also hold against remote merges and any other writer. The fallback enforcement must be **DefraDB/schema-level** (which DefraDB enforces on local write *and* remote merge), not a defra-agent helper-path check (which a replication merge bypasses). Blocker for Phase D if not enforced.
 - **Spec §4a alignment:** spec and plan now agree — no `--subagent-role` CLI flag (the existing `--template` flag validates `subagent-*` via `resolve_pairing_template` once the catalog has them); provisioning is two explicit `set` calls or the invite/join complement (Task 8). Spec §4a updated to match.
 - **Immutability is a gate (Task 3), not a note:** upgraded DBs must enforce `@immutable` on `spawn_target_did` (filtered-replication DAG-completeness); blocker if the patch path can't, with two listed remedies.
 - **Deterministic reconcile waits (Tasks 12, 13):** tests poll for applied legs on both nodes before exercising behavior; the reconciler is sweep-driven, so write-then-act races. No bare sleeps.
