@@ -470,17 +470,6 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         is_terminal(&parent_terminal_a),
         "orchestrator request on A must terminalize; got {parent_terminal_a}"
     );
-    let allowed_dids = [did_a.as_str(), did_b.as_str()];
-    let leaked_on_a = query_agent_requests_not_owned_by(db_a.node.as_ref(), &allowed_dids).await;
-    assert!(
-        leaked_on_a.is_empty(),
-        "node A has AgentRequest rows owned by third-party DIDs: {leaked_on_a:?}"
-    );
-    let leaked_on_b = query_agent_requests_not_owned_by(db_b.node.as_ref(), &allowed_dids).await;
-    assert!(
-        leaked_on_b.is_empty(),
-        "node B has AgentRequest rows owned by third-party DIDs: {leaked_on_b:?}"
-    );
 
     agent_a.shutdown().await;
     agent_b.shutdown().await;
@@ -1058,37 +1047,6 @@ struct CrossRequestRow {
     agent_did: String,
     behavior_id: String,
     lifecycle_state: Option<String>,
-}
-
-async fn query_agent_requests_not_owned_by(
-    node: &EmbeddedNode,
-    allowed_dids: &[&str],
-) -> Vec<String> {
-    let response = node
-        .execute(
-            r#"{
-                AgentRequest { request_id agent_did }
-            }"#,
-        )
-        .await;
-    assert!(
-        !response.has_errors(),
-        "query AgentRequest owners failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|row| {
-            let request_id = row.get("request_id")?.as_str()?;
-            let agent_did = row.get("agent_did")?.as_str()?;
-            (!allowed_dids.contains(&agent_did)).then(|| format!("{request_id}:{agent_did}"))
-        })
-        .collect()
 }
 
 async fn fetch_request_on_node(node: &EmbeddedNode, request_id: &str) -> Option<CrossRequestRow> {

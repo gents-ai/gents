@@ -538,19 +538,27 @@ impl SubagentSource {
         let trusted_paired_peer = snapshot.paired_peer_dids.contains(&parent_authoring_did);
         let tool_name = non_empty(Some(&row.tool_name)).unwrap_or("spawn_subagent");
         if trusted_paired_peer {
-            if let Some(spawn_target_did) = row_spawn_target_did.as_deref().map(str::trim) {
-                let local_did = snapshot.local_did.trim();
-                if local_did.is_empty() || spawn_target_did != local_did {
-                    tracing::debug!(
-                        parent_request_id = %parent_request_id,
-                        parent_tool_call_id = %parent_tool_call_id,
-                        parent_authoring_did = %parent_authoring_did,
-                        spawn_target_did = %spawn_target_did,
-                        local_did = %local_did,
-                        "subagent source skipping trusted spawn: immutable spawn target is not this host DID",
-                    );
-                    return Ok(None);
-                }
+            let local_did = snapshot.local_did.trim();
+            let Some(spawn_target_did) = row_spawn_target_did.as_deref() else {
+                tracing::debug!(
+                    parent_request_id = %parent_request_id,
+                    parent_tool_call_id = %parent_tool_call_id,
+                    parent_authoring_did = %parent_authoring_did,
+                    local_did = %local_did,
+                    "subagent source skipping trusted spawn: immutable spawn target is missing",
+                );
+                return Ok(None);
+            };
+            if local_did.is_empty() || spawn_target_did != local_did {
+                tracing::debug!(
+                    parent_request_id = %parent_request_id,
+                    parent_tool_call_id = %parent_tool_call_id,
+                    parent_authoring_did = %parent_authoring_did,
+                    spawn_target_did = %spawn_target_did,
+                    local_did = %local_did,
+                    "subagent source skipping trusted spawn: immutable spawn target is not this host DID",
+                );
+                return Ok(None);
             }
             // The trusted-paired-peer branch is a CROSS-DEPLOYMENT spawn (the
             // parent DID is a paired peer, not this node). It bypasses

@@ -1208,6 +1208,68 @@ async fn trusted_path_refuses_spawn_targeting_other_host() {
     .await;
 }
 
+/// Trusted paired-peer materialization requires the immutable routing field
+/// itself. Resolved args alone are not enough, because a null row target cannot
+/// be owner-scoped by the replication filter.
+#[tokio::test]
+async fn trusted_path_refuses_missing_spawn_target_did() {
+    let db = test_db("r3-subagent-source-xdep-missing-target").await;
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("r3-xdep-missing-target"));
+    let local_did = identity.did().to_string();
+    let target_behavior_id = "xdep-target-missing-target";
+    let remote_parent_did = "did:key:zPairedPeerParentMissingTarget";
+
+    upsert_target_behavior_with_cross_deployment(
+        db.node.as_ref(),
+        &local_did,
+        target_behavior_id,
+        true,
+    )
+    .await;
+
+    let parent_request_id = "r3-parent-xdep-missing-target";
+    let parent_session_id = "r3-session-xdep-missing-target";
+    let parent_tool_call_id = "r3-tc-xdep-missing-target";
+    let child_request_id = "r3-child-xdep-missing-target";
+    create_remote_parent_request(
+        db.node.as_ref(),
+        remote_parent_did,
+        parent_request_id,
+        parent_session_id,
+    )
+    .await;
+
+    let mut paired = std::collections::HashSet::new();
+    paired.insert(remote_parent_did.to_string());
+    let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
+        db.node.clone(),
+        &local_did,
+        target_behavior_id,
+        target_behavior_id,
+        paired,
+    );
+    wait_for_subagent_source_subscription().await;
+
+    write_cross_deployment_bridge_with_spawn_target(
+        db.node.as_ref(),
+        parent_request_id,
+        parent_session_id,
+        parent_tool_call_id,
+        child_request_id,
+        target_behavior_id,
+        &local_did,
+        None,
+    )
+    .await;
+
+    assert_no_child_request_for_tool(
+        db.node.as_ref(),
+        parent_tool_call_id,
+        Duration::from_millis(800),
+    )
+    .await;
+}
+
 /// Change 2 (#377): recovery gate. Recovery must REFUSE to materialize a
 /// cross-deployment orphan child when the parent behavior's
 /// `subagent_allow_cross_deployment` flag is off, even when the target is
@@ -1304,6 +1366,60 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
     .await;
     let tool = fetch_tool_call(db.node.as_ref(), parent_session_id, parent_tool_call_id).await;
     assert_tool_call_not_allowed(&tool, "/name", "remote-recovery-target");
+}
+
+/// Recovery is intentionally local-parent scoped, not a trusted-paired-peer
+/// materialization path. A replicated remote-parent bridge that targets this
+/// local DID must wait for the live SubagentSource owner gate instead of being
+/// recovered by this local agent's orphan sweep.
+#[tokio::test]
+async fn recovery_ignores_remote_parent_orphan_even_when_target_is_local() {
+    let db = test_db("r3-subagent-source-orphan-remote-parent").await;
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("r3-orphan-remote-parent"));
+    let local_did = identity.did().to_string();
+    let target_behavior_id = "orphan-remote-parent-target";
+    let remote_parent_did = "did:key:zRemoteParentForRecovery";
+    let parent_request_id = "r3-parent-orphan-remote-parent";
+    let parent_session_id = "r3-session-orphan-remote-parent";
+    let parent_tool_call_id = "r3-tc-orphan-remote-parent";
+    let child_request_id = "child-orphan-remote-parent";
+
+    upsert_target_behavior_with_cross_deployment(
+        db.node.as_ref(),
+        &local_did,
+        target_behavior_id,
+        true,
+    )
+    .await;
+    create_remote_parent_request(
+        db.node.as_ref(),
+        remote_parent_did,
+        parent_request_id,
+        parent_session_id,
+    )
+    .await;
+    create_orphan_cross_deployment_tool_call(
+        db.node.as_ref(),
+        parent_request_id,
+        parent_session_id,
+        parent_tool_call_id,
+        child_request_id,
+        target_behavior_id,
+        &local_did,
+        target_behavior_id,
+    )
+    .await;
+
+    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), &local_did)
+        .await
+        .unwrap();
+    assert_eq!(report.tool_calls_recovered, 0);
+    assert_no_child_request_for_tool(
+        db.node.as_ref(),
+        parent_tool_call_id,
+        Duration::from_millis(0),
+    )
+    .await;
 }
 
 /// Change 3 (#377), real race: drive the cascade (parent interrupt) CONCURRENTLY
@@ -1952,11 +2068,37 @@ async fn write_cross_deployment_bridge(
     target_behavior_id: &str,
     target_agent_did: &str,
 ) {
+    write_cross_deployment_bridge_with_spawn_target(
+        node,
+        parent_request_id,
+        parent_session_id,
+        parent_tool_call_id,
+        child_request_id,
+        target_behavior_id,
+        target_agent_did,
+        Some(target_agent_did),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn write_cross_deployment_bridge_with_spawn_target(
+    node: &EmbeddedNode,
+    parent_request_id: &str,
+    parent_session_id: &str,
+    parent_tool_call_id: &str,
+    child_request_id: &str,
+    target_behavior_id: &str,
+    target_agent_did: &str,
+    spawn_target_did: Option<&str>,
+) {
     let escaped_parent_request_id = escape_graphql_string(parent_request_id);
     let escaped_parent_session_id = escape_graphql_string(parent_session_id);
     let escaped_parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
     let escaped_child_request_id = escape_graphql_string(child_request_id);
-    let escaped_target_agent_did = escape_graphql_string(target_agent_did);
+    let spawn_target_field = spawn_target_did
+        .map(|did| format!(r#"spawn_target_did: "{}","#, escape_graphql_string(did)))
+        .unwrap_or_else(|| "spawn_target_did: null,".to_string());
     let tool_call_key = format!("{escaped_parent_session_id}:{escaped_parent_tool_call_id}");
     let args = serde_json::json!({
         "name": target_behavior_id,
@@ -1984,7 +2126,7 @@ async fn write_cross_deployment_bridge(
                 started_at: "{started_at}",
                 deadline_at: "{deadline_at}",
                 child_request_id: "{escaped_child_request_id}",
-                spawn_target_did: "{escaped_target_agent_did}",
+                {spawn_target_field}
                 await_mode: "background",
                 cancel_policy: "cascade",
                 selected_service_id: null,

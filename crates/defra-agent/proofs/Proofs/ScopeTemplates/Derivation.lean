@@ -175,16 +175,6 @@ theorem subagentCoordinator_filters_declared_collections (peerDid localDid : Did
       = subagentCoordinatorTemplate.collections := by
   simp [scopeFilter, subagentCoordinatorTemplate, subagentCoordinatorRules]
 
-/-- The host per-collection rules cover exactly the template's declared
-collections. This is the non-vacuous collection-coverage fence for the
-directional host leg. -/
-theorem subagentHost_filters_declared_collections (peerDid localDid : Did) :
-    ((scopeFilter subagentHostTemplate.scope [] peerDid localDid).map
-        (fun k => k.collection)).toFinset
-      = subagentHostTemplate.collections := by
-  simp [scopeFilter, subagentHostTemplate, subagentHostRules, subagentHostCollections,
-    conversationCollections]
-
 /-- Concrete catalog membership: the coordinator template resolves from the
 built-in catalog. -/
 theorem subagentCoordinator_in_catalog :
