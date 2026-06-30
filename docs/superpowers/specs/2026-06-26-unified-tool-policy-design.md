@@ -288,10 +288,30 @@ Standard: zero `sorry`s; conformance tests mirror the model per the repo's
 |---|---|---|
 | **SP1 — Unified policy model** | The `Capability` / `BashPolicy` / `EndpointScope` vocabulary (incl. the `context_budget` **on/off gate** — required for "category-complete"); retyped `ToolSelection`; **category-complete operator ceiling** (all 11 categories, not native-only); the **policy schema version + decode + one-time backfill** (the soundness foundation that gates the secure-default flip, §3.4); the **`RuntimeAvailability` input type** with its `ServiceHealthMap`-backed source + republish contract (§3.3); single pure `from_selection_*` resolution seam; the **`ToolSurfaceExplanation` contract** (`requested → ceiling → runtime → effective` + drop reasons); the Lean lattice model + `Effective ⊆ Ceiling` theorem + conformance bridge into the production resolver. The spine. | — |
 | **SP2 — Parity + presets + ergonomics** | Wire every field through `ToolSelectionRow` (add `write_tools`, `subagent_default_await_mode`) and the desktop save path (`enable_defra_query` / `defra_query_collections` / `write_tools` — fixes the `ToolSelectionSaveRequest`/mutation-builder omission and its silent data loss) and the CLI builder API; seed the per-principal `wide-open` preset rows + canonical IDs (§3.2); release-note guidance; desktop/CLI surfacing of the policy version + `ToolSurfaceExplanation`. (The semantic flip + backfill themselves are SP1.) | SP1 |
-| **SP3 — Straggler quotas** | Bring `context_budget` **quota/limits** (the gate is SP1), memory per-agent quota, and session-history limits under the vocabulary as governed values. | SP1 |
+| **SP3 — Straggler quotas** | ~~Bring `context_budget` **quota/limits** (the gate is SP1), memory per-agent quota, and session-history limits under the vocabulary as governed values.~~ **De-scoped 2026-06-30 (see below).** | SP1 |
 
 Each sub-project gets its own spec → plan → implementation cycle. SP1 is specced in
 detail next.
+
+### SP3 — de-scoped (2026-06-30)
+
+The "governed numeric quota" atom was considered and **rejected as YAGNI** after a
+current-state audit. The three candidate consumers did not justify a new operator-ceiling
+primitive:
+
+- **Memory per-agent quota — dropped.** Memory is per-agent unbounded today (only per-entry
+  caps: 256-char key / 32k-char value), but it is a trivial protection unlikely to bind in
+  production. Not worth a new policy atom.
+- **`context_budget` — out of scope.** It is not an operator quota: the real numbers already
+  live on the per-behavior `InferenceProfile` (`context_window` / `max_output_tokens` /
+  `max_turns`) and `compaction_threshold`, and they already drive compaction per conversation
+  (`compaction.rs::needs_compaction`, fed by `behavior.context_window`). The `context_budget`
+  tool already *surfaces* per-session utilization. No change needed; no per-session override.
+- **Session-history limits — reduced to a de-cap.** Replace the hardcoded
+  `MAX_LIMIT` (50→1000) and `REQUEST_SCAN_LIMIT` (500→5000) backstops in
+  `toolset/session_history.rs` with large values so the caller-requested count is honored in
+  practice; no new document fields, no operator ceiling, no Lean. (`REQUEST_SCAN_LIMIT` stays
+  `>= MAX_LIMIT` so the larger cap is reachable.) This is all SP3 ships.
 
 ### SP1-Rust handoff notes
 
