@@ -203,8 +203,8 @@ theorem detach_does_not_cancel_child
   | child_step h_inner _ _ _ _ =>
     -- A child-side ComposedState step. The only inner constructors that can
     -- touch `interruptRequestedAt` are within `request_step` (the request
-    -- layer); other layers (process_step, call_step, tool_step, persistence_step)
-    -- preserve `request` directly. Within `request_step`, every inner
+    -- layer); other layers either preserve `request` directly or update fields
+    -- other than `interruptRequestedAt`. Within `request_step`, every inner
     -- RequestContext.Transition either preserves `interruptRequestedAt`
     -- (most arms only update `state`/`admission`) or has a precondition on
     -- the *current* `interruptRequestedAt` flag — namely `interrupt_*` arms,
@@ -243,6 +243,10 @@ theorem detach_does_not_cancel_child
         rw [h_post]
       | interrupt_processing _ _ _ h_post =>
         rw [h_post]
+    | slot_acquire _ _ h_req _ _ _ _ =>
+      simp [h_req]
+    | clock_advance _ _ h_req _ _ _ _ =>
+      simp [h_req]
     | persistence_step _ _ _ h_req _ _ _ _ =>
       rw [h_req]
     | call_step _ h_req _ _ _ =>

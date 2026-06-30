@@ -181,6 +181,15 @@ theorem recovery_blocks_claims
     have h_accepts := h_guard h_pending
     rw [h_recovering] at h_accepts
     exact absurd h_accepts (fun h => h)
+  | slot_acquire h_claimed _ _ _ _ _ _ =>
+    rw [h_pending] at h_claimed
+    cases h_claimed
+  | clock_advance _ _ h_req_eq _ _ _ _ =>
+    left
+    have : s'.request.state = s.request.state := by
+      simp [h_req_eq]
+    rw [this]
+    exact h_pending
   | persistence_step _ nextPersistence _ h_req_eq _ _ _ _ =>
     left
     have : s'.request.state = ({ s.request with persistence := nextPersistence }).state := by

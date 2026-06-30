@@ -38,6 +38,20 @@ private theorem coherent_of_request_clock_eq
          by simpa [h_deadline] using h_tool_deadline,
          by simpa [h_time] using h_tool_time⟩
 
+/-- A coherent tool remains coherent when the request clock and tool clock
+    advance in lockstep. -/
+private theorem coherent_of_lockstep_clock
+    {pre post : ComposedState} {tool : ToolExecution.ToolCallContext}
+    (t : Time)
+    (h_coherent : Coherent pre tool)
+    (h_request : post.request = { pre.request with currentTime := t })
+    (h_requestId : post.requestId = pre.requestId) :
+    Coherent post { tool with currentTime := t } := by
+  obtain ⟨h_linked, h_tool_deadline, _h_tool_time⟩ := h_coherent
+  exact ⟨by simpa [h_requestId] using h_linked,
+         by simpa [h_request] using h_tool_deadline,
+         by simp [h_request]⟩
+
 /-- Membership in `l.set i a` means either the member is the replacement or it
     was already present in the original list. -/
 private lemma mem_set_eq_or_mem {α : Type _}
@@ -133,6 +147,19 @@ theorem allToolsCoherent_preserved
     | interrupt_processing _ _ _ h_post =>
       exact coherent_of_request_clock_eq (h_coherent tool h_in_pre) h_requestId
         (by simp [h_post]) (by simp [h_post])
+  | slot_acquire _ _ h_request _ _ h_tools h_requestId =>
+    have h_in_pre : tool ∈ pre.tools := by
+      rw [h_tools] at h_in_post
+      exact h_in_post
+    exact coherent_of_request_clock_eq (h_coherent tool h_in_pre) h_requestId
+      (by simp [h_request]) (by simp [h_request])
+  | clock_advance t _ h_request _ _ h_tools h_requestId =>
+    have h_in_map : tool ∈ pre.tools.map (fun tool => { tool with currentTime := t }) := by
+      rw [h_tools] at h_in_post
+      exact h_in_post
+    obtain ⟨toolPre, h_in_pre, h_eq⟩ := List.mem_map.mp h_in_map
+    subst h_eq
+    exact coherent_of_lockstep_clock t (h_coherent toolPre h_in_pre) h_request h_requestId
   | persistence_step _ _ _ h_request _ _ h_tools h_requestId =>
     have h_in_pre : tool ∈ pre.tools := by
       rw [h_tools] at h_in_post
@@ -249,6 +276,27 @@ theorem noToolsBeforeProcessing_preserved
       · intro h_claimed
         rw [h_state_post] at h_claimed
         cases h_claimed
+  | slot_acquire _ _ h_request _ _ h_tools _ =>
+    have h_in_pre : tool ∈ pre.tools := by
+      rw [h_tools] at h_in_post
+      exact h_in_post
+    obtain ⟨h_not_pending, h_not_claimed⟩ := h_no_early_tools tool h_in_pre
+    refine ⟨?_, ?_⟩
+    · intro h_pending
+      exact h_not_pending (by simpa [h_request] using h_pending)
+    · intro h_claimed
+      exact h_not_claimed (by simpa [h_request] using h_claimed)
+  | clock_advance t _ h_request _ _ h_tools _ =>
+    have h_in_map : tool ∈ pre.tools.map (fun tool => { tool with currentTime := t }) := by
+      rw [h_tools] at h_in_post
+      exact h_in_post
+    obtain ⟨toolPre, h_in_pre, h_eq⟩ := List.mem_map.mp h_in_map
+    obtain ⟨h_not_pending, h_not_claimed⟩ := h_no_early_tools toolPre h_in_pre
+    refine ⟨?_, ?_⟩
+    · intro h_pending
+      exact h_not_pending (by simpa [h_request] using h_pending)
+    · intro h_claimed
+      exact h_not_claimed (by simpa [h_request] using h_claimed)
   | persistence_step _ _ _ h_request _ _ h_tools _ =>
     have h_in_pre : tool ∈ pre.tools := by
       rw [h_tools] at h_in_post

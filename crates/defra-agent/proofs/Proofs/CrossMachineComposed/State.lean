@@ -98,6 +98,10 @@ theorem coherent_tool_deadlineExceeded_iff_request_deadlineExceeded
     Each constructor lifts a single-layer transition; the other layers must
     be unchanged across the composed step.
 
+    `slot_acquire` abstracts the external fleet/scheduler grant that moves a
+    claimed request from waiting to acquired inside this composed boundary.
+    `clock_advance` is the synchronized time path: the parent request clock
+    and all carried tool clocks move together, preserving `Coherent`.
     `tool_spawn` is the list-growth constructor. `tool_step` is deliberately
     coherence-preserving: standalone tool clock/deadline drift is not a valid
     composed step unless the parent request snapshot remains synchronized.
@@ -131,6 +135,23 @@ inductive Transition : ComposedState → ComposedState → Prop where
         (pre.request.state = .claimed ∧ post.request.state = .processing) →
         ¬ ∃ t ∈ pre.tools, t.awaitMode = .foreground ∧
                             ¬ isTerminal t.state) →
+      Transition pre post
+  | slot_acquire {pre post : ComposedState} :
+      pre.request.state = .claimed →
+      pre.request.admission = .waiting →
+      post.request = { pre.request with admission := .acquired } →
+      post.process = pre.process →
+      post.call = pre.call →
+      post.tools = pre.tools →
+      post.requestId = pre.requestId →
+      Transition pre post
+  | clock_advance {pre post : ComposedState} (t : Time) :
+      pre.request.currentTime ≤ t →
+      post.request = { pre.request with currentTime := t } →
+      post.process = pre.process →
+      post.call = pre.call →
+      post.tools = pre.tools.map (fun tool => { tool with currentTime := t }) →
+      post.requestId = pre.requestId →
       Transition pre post
   | persistence_step {pre post : ComposedState} (policy : PersistenceState.FailurePolicy)
       (nextPersistence : PersistenceState) :

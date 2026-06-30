@@ -128,6 +128,21 @@ private theorem uniqueCallIds_append_fresh_preserved
       have h_j_eq : j = s.tools.length := by omega
       rw [h_i_eq, h_j_eq]
 
+/-- Mapping all tools to the same new clock preserves call ids, hence
+    `UniqueCallIds`. -/
+private theorem uniqueCallIds_map_currentTime_preserved
+    {pre post : ComposedState} (t : Time)
+    (h_inv : pre.UniqueCallIds)
+    (h_tools : post.tools = pre.tools.map (fun tool => { tool with currentTime := t })) :
+    post.UniqueCallIds := by
+  intro i j h_i h_j h_eq
+  have h_i' : i < pre.tools.length := by
+    simpa [h_tools] using h_i
+  have h_j' : j < pre.tools.length := by
+    simpa [h_tools] using h_j
+  apply h_inv i j h_i' h_j'
+  simpa [h_tools] using h_eq
+
 /-- UniqueCallIds is preserved by every composed transition. The unchanged
     arms simply propagate `pre.tools = post.tools`. The `tool_spawn` arm uses
     callId freshness for the appended tool. The `tool_step` arm uses
@@ -144,6 +159,10 @@ theorem uniqueCallIds_preserved
     exact uniqueCallIds_of_tools_eq h_inv h_tools
   | request_step _ _ _ h_tools _ _ _ =>
     exact uniqueCallIds_of_tools_eq h_inv h_tools
+  | slot_acquire _ _ _ _ _ h_tools _ =>
+    exact uniqueCallIds_of_tools_eq h_inv h_tools
+  | clock_advance t _ _ _ _ h_tools _ =>
+    exact uniqueCallIds_map_currentTime_preserved t h_inv h_tools
   | persistence_step _ _ _ _ _ _ h_tools _ =>
     exact uniqueCallIds_of_tools_eq h_inv h_tools
   | call_step _ _ _ h_tools _ =>

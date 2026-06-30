@@ -9,9 +9,9 @@ namespace BridgedState
 
 The bridged invariants reduce to: `subagentDepth`, `causedByParentRequestId`,
 and `causedByParentToolCallId` are preserved across any inner
-`ComposedState.Transition`. None of the request- or persistence-layer
-constructors touch these fields (they are submitter/spawn-set; the runtime
-treats them read-only after `bridge_spawn`). -/
+`ComposedState.Transition`. None of the request-, admission-, clock-, or
+persistence-layer constructors touch these fields (they are submitter/spawn-set;
+the runtime treats them read-only after `bridge_spawn`). -/
 
 private theorem request_subagentDepth_preserved
     {pre post : RequestContext}
@@ -40,6 +40,8 @@ private theorem composed_subagentDepth_preserved
   | process_step _ h_req _ _ _ => rw [h_req]
   | request_step h_inner _ _ _ _ _ _ =>
     exact request_subagentDepth_preserved h_inner
+  | slot_acquire _ _ h_req _ _ _ _ => simp [h_req]
+  | clock_advance _ _ h_req _ _ _ _ => simp [h_req]
   | persistence_step _ _ _ h_req _ _ _ _ => rw [h_req]
   | call_step _ h_req _ _ _ => rw [h_req]
   | tool_spawn _ _ _ h_req _ _ _ _ _ _ => rw [h_req]
@@ -54,6 +56,8 @@ private theorem composed_causedByParentRequestId_preserved
   | process_step _ h_req _ _ _ => rw [h_req]
   | request_step h_inner _ _ _ _ _ _ =>
     exact request_causedByParentRequestId_preserved h_inner
+  | slot_acquire _ _ h_req _ _ _ _ => simp [h_req]
+  | clock_advance _ _ h_req _ _ _ _ => simp [h_req]
   | persistence_step _ _ _ h_req _ _ _ _ => rw [h_req]
   | call_step _ h_req _ _ _ => rw [h_req]
   | tool_spawn _ _ _ h_req _ _ _ _ _ _ => rw [h_req]
@@ -68,6 +72,8 @@ private theorem composed_causedByParentToolCallId_preserved
   | process_step _ h_req _ _ _ => rw [h_req]
   | request_step h_inner _ _ _ _ _ _ =>
     exact request_causedByParentToolCallId_preserved h_inner
+  | slot_acquire _ _ h_req _ _ _ _ => simp [h_req]
+  | clock_advance _ _ h_req _ _ _ _ => simp [h_req]
   | persistence_step _ _ _ h_req _ _ _ _ => rw [h_req]
   | call_step _ h_req _ _ _ => rw [h_req]
   | tool_spawn _ _ _ h_req _ _ _ _ _ _ => rw [h_req]

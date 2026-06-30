@@ -104,25 +104,6 @@ theorem interrupted_request_cancels_live_linked_tools
     · have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
       simpa [post, toolPost] using List.mem_set pre.tools idx h_lt toolPost
 
-/-- Reachable-state C2 wrapper: for states reached from `initial`, the global
-    well-formedness hypothesis is recovered from the trace. -/
-theorem interrupted_request_cancels_live_linked_tools_from_initial
-    {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
-    (h_reach        : Trace initial pre)
-    (h_in           : toolPre ∈ pre.tools)
-    (h_interrupted  : pre.request.state = .interrupted)
-    (h_live         : toolPre.cancellable) :
-    ∃ post toolPost,
-      Trace pre post ∧
-      post.request = pre.request ∧
-      post.request.state = .interrupted ∧
-      toolPost ∈ post.tools ∧
-      toolPost.state = .cancelled ∧
-      toolPost.requestId = pre.requestId :=
-  interrupted_request_cancels_live_linked_tools
-    h_in (wellFormed_from_initial h_reach) h_interrupted h_live
-
-
 /-- C1: A request whose deadline is exceeded times out every Running linked
     tool. Multi-flight form: any tool ∈ pre.tools that is running, linked, and
     deadline-synced reaches .timedOut. The composition theorem whose absence

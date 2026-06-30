@@ -12,8 +12,9 @@ property: while a foreground tool is in flight, `advance` /
 `begin_inference` cannot fire.
 
 INV-FG is a structural witness; no C-theorem currently consumes it. It is
-preserved across every composed transition. The request/process/persistence/call
-arms are trivial (they don't touch `tools`); `tool_spawn` uses its foreground
+preserved across every composed transition. The request/process/admission/
+persistence/call arms are trivial (they don't touch `tools`); `clock_advance`
+preserves the foreground-live filter, `tool_spawn` uses its foreground
 admission guard, and `tool_step` requires case-analysis on the inner
 `ToolCallContext.Transition`.
 -/
@@ -103,6 +104,29 @@ theorem invFG_preserved
     unfold invFG; rw [h_tools]; exact h_inv
   | request_step _ _ _ h_tools _ _ _ =>
     unfold invFG; rw [h_tools]; exact h_inv
+  | slot_acquire _ _ _ _ _ h_tools _ =>
+    unfold invFG; rw [h_tools]; exact h_inv
+  | clock_advance t _ _ _ _ h_tools _ =>
+    unfold invFG
+    rw [h_tools]
+    set p : ToolExecution.ToolCallContext → Bool :=
+      fun t => decide (t.awaitMode = .foreground) ∧ ¬ isTerminal t.state with hp
+    have h_filter_len :
+        ((pre.tools.map (fun tool => { tool with currentTime := t })).filter p).length =
+          (pre.tools.filter p).length := by
+      induction pre.tools with
+      | nil => simp
+      | cons tool rest ih =>
+        have h_tool :
+            p { tool with currentTime := t } = p tool := by
+          simp [p]
+        simp only [List.map_cons, List.filter_cons]
+        rw [h_tool]
+        by_cases h_keep : p tool = true
+        · rw [if_pos h_keep, if_pos h_keep, List.length_cons, List.length_cons, ih]
+        · rw [if_neg h_keep, if_neg h_keep, ih]
+    rw [h_filter_len]
+    exact h_inv
   | persistence_step _ _ _ _ _ _ h_tools _ =>
     unfold invFG; rw [h_tools]; exact h_inv
   | call_step _ _ _ h_tools _ =>
