@@ -50,6 +50,15 @@ def pendingTool : ToolExecution.ToolCallContext :=
 def withPendingTool : ComposedState :=
   { processing with tools := [pendingTool] }
 
+def detachedTool : ToolExecution.ToolCallContext :=
+  { pendingTool with
+    callId := 2
+    cancelPolicy := .detach
+    childRequestId := some 42 }
+
+def withDetachedTool : ComposedState :=
+  { processing with tools := [detachedTool] }
+
 def runningTool : ToolExecution.ToolCallContext :=
   { pendingTool with state := .running, startedAt := some pendingTool.currentTime }
 
@@ -118,6 +127,18 @@ theorem step_withPendingTool : Transition processing withPendingTool := by
   · intro _h_fg h_existing
     simp [processing, acquired, claimed, ready, initial] at h_existing
 
+theorem step_withDetachedTool : Transition processing withDetachedTool := by
+  refine Transition.tool_spawn
+    (newTool := detachedTool)
+    rfl rfl rfl rfl rfl rfl rfl ?_ ?_ ?_ ?_
+  · simp [Coherent, detachedTool, pendingTool, withDetachedTool]
+  · intro _h_det
+    simp [Persistent, detachedTool, pendingTool, withDetachedTool, processing]
+  · intro t h_in
+    simp [processing, acquired, claimed, ready, initial] at h_in
+  · intro _h_fg h_existing
+    simp [processing, acquired, claimed, ready, initial] at h_existing
+
 theorem step_withRunningTool : Transition withPendingTool withRunningTool := by
   refine Transition.tool_step
     (idx := 0)
@@ -166,6 +187,11 @@ theorem trace_withPendingTool : Trace initial withPendingTool :=
   Trace.step step_ready (Trace.step step_claimed
     (Trace.step step_acquired (Trace.step step_processing
       (Trace.step step_withPendingTool Trace.refl))))
+
+theorem trace_withDetachedTool : Trace initial withDetachedTool :=
+  Trace.step step_ready (Trace.step step_claimed
+    (Trace.step step_acquired (Trace.step step_processing
+      (Trace.step step_withDetachedTool Trace.refl))))
 
 theorem trace_withRunningTool : Trace initial withRunningTool :=
   Trace.step step_ready (Trace.step step_claimed
@@ -219,6 +245,23 @@ theorem c1_reachable_domain_nonempty :
   · simp [IsDetached, expiredRunningTool, runningTool, pendingTool]
   · simp [RequestContext.deadlineExceeded, withExpiredRunningTool, expiredRunningTime,
       withRunningTool, withPendingTool, processing, acquired, claimed, ready, initial]
+
+/-- B4 has a concrete reachable domain: a detached bridged tool can be spawned
+    from a processing request, and the resulting reachable state is globally
+    well-formed while the detached tool satisfies `Persistent`. -/
+theorem detached_reachable_domain_nonempty :
+    ∃ pre toolPre,
+      Trace initial pre ∧
+      pre.WellFormed ∧
+      toolPre ∈ pre.tools ∧
+      IsDetached toolPre ∧
+      Persistent pre toolPre := by
+  refine ⟨withDetachedTool, detachedTool, ?_, ?_, ?_, ?_, ?_⟩
+  · exact trace_withDetachedTool
+  · exact wellFormed_from_initial trace_withDetachedTool
+  · simp [withDetachedTool]
+  · simp [IsDetached, detachedTool, pendingTool]
+  · simp [Persistent, detachedTool, pendingTool, withDetachedTool, processing]
 
 /-- C2 reachable domain: latch a direct interrupt on a processing request that
     still carries a live pending tool, then drive `interrupt_processing`. -/
