@@ -114,6 +114,11 @@ pub(crate) struct ToolSelectionView {
     pub enable_session_history_tool: Option<bool>,
     pub enable_context_budget: Option<bool>,
     pub enable_defra_query: Option<bool>,
+    pub defra_query_collections: Vec<String>,
+    pub write_tools: Vec<String>,
+    pub tool_policy_version: Option<String>,
+    pub subagent_default_await_mode: Option<String>,
+    pub orchestration_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]

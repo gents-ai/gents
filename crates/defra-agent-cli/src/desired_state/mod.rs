@@ -119,6 +119,13 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) selection_id: String,
     pub(crate) agent_did: String,
     pub(crate) display_name: Option<String>,
+    /// Unified tool-policy schema version (e.g. `tool-policy/v1`). Decides
+    /// whether unset/nullable fields decode under legacy-permissive or
+    /// secure-minimal semantics; carried through export/apply so the live row's
+    /// version is not silently dropped (which would force every comparison to
+    /// re-decode `None` and drift the diff forever).
+    #[serde(default)]
+    pub(crate) tool_policy_version: Option<String>,
     pub(crate) enable_file_tools: bool,
     pub(crate) file_tools_mode: String,
     pub(crate) file_tool_root: Option<String>,

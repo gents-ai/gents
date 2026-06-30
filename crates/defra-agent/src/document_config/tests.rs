@@ -1,6 +1,42 @@
 use super::*;
 
 #[test]
+fn wide_open_preset_is_permissive_and_versioned() {
+    let did = "did:defra-agent:amy";
+    let id = wide_open_tool_selection_id_for_agent(did);
+    assert_eq!(id, "did:defra-agent:amy:wide-open");
+
+    let preset = wide_open_tool_selection_document(did);
+    // Canonical, per-principal id (passes the agent_did hydration filter).
+    assert_eq!(preset.selection_id, id);
+    assert_eq!(preset.agent_did, did);
+    // Stamped at the current version so its explicit permissive values are NOT
+    // re-decoded under secure-minimal defaults.
+    assert_eq!(
+        preset.tool_policy_version.as_deref(),
+        Some(crate::tool_surface::TOOL_POLICY_V1)
+    );
+    // Reproduces today's permissive surface against an EXPLICIT expected set, so
+    // a change to the underlying backfill is caught (not a tautology that
+    // recomputes the same call). meta + defra on; everything privilege-bearing
+    // backfills to secure (false).
+    assert_eq!(preset.enable_meta_tools, Some(true));
+    assert_eq!(preset.enable_defra_query, Some(true));
+    // The third legacy default-true capability — must be backfilled too, else the
+    // preset (and the secure-default-flip migration) silently drops it under V1.
+    assert_eq!(preset.enable_context_budget, Some(true));
+    assert_eq!(preset.enable_file_tools, Some(false));
+    assert_eq!(preset.enable_bash, Some(false));
+    assert_eq!(preset.orchestration_enabled, Some(false));
+    assert_eq!(preset.subagent_spawn_enabled, Some(false));
+    assert_eq!(preset.subagent_steering_enabled, Some(false));
+    assert_eq!(preset.subagent_background_enabled, Some(false));
+    assert_eq!(preset.subagent_allow_cross_deployment, Some(false));
+    assert_eq!(preset.enable_memory, Some(false));
+    assert_eq!(preset.enable_session_history_tool, Some(false));
+}
+
+#[test]
 fn tool_selection_document_accepts_empty_string_arrays() {
     let document: ToolSelectionDocument = serde_json::from_value(serde_json::json!({
         "selection_id": "default-tools",
@@ -382,6 +418,7 @@ async fn tool_selection_document_round_trips_defra_query_fields() {
     let doc = ToolSelectionDocument {
         selection_id: "amy-general-tools".to_string(),
         agent_did: "did:key:z-test".to_string(),
+        tool_policy_version: Some(crate::tool_surface::TOOL_POLICY_V1.to_string()),
         enable_session_history_tool: Some(true),
         enable_defra_query: Some(false),
         defra_query_collections: Some(vec![
@@ -398,6 +435,10 @@ async fn tool_selection_document_round_trips_defra_query_fields() {
         .await
         .expect("load should succeed")
         .expect("selection should exist");
+    assert_eq!(
+        loaded.tool_policy_version,
+        Some(crate::tool_surface::TOOL_POLICY_V1.to_string())
+    );
     assert_eq!(loaded.enable_session_history_tool, Some(true));
     assert_eq!(loaded.enable_defra_query, Some(false));
     assert_eq!(

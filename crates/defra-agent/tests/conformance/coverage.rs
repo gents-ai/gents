@@ -517,6 +517,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ApplyReconcileCases".to_string(),
         ));
     }
+    if !snapshot.tool_policy_cases.is_empty() {
+        emitted.insert((
+            "tool_policy_cases".to_string(),
+            "ToolPolicyCases".to_string(),
+        ));
+    }
     if !snapshot.session_recovery_cases.is_empty() {
         emitted.insert((
             "session_recovery_cases".to_string(),
@@ -777,6 +783,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "trigger_cases",
         "runtime_cases",
         "apply_reconcile_cases",
+        "tool_policy_cases",
         "session_recovery_cases",
         "slot_cases",
         "fleet_cases",

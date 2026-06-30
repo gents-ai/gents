@@ -206,6 +206,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.operatorUi]
     , deferred := []
     }
+  , { feature := "tool-policy"
+    , required := [Surface.agentFacing, Surface.operatorUi]
+    , deferred := []
+    }
   , { feature := "recovery"
     , required := [Surface.runtimeInternal]
     , deferred := []
@@ -439,6 +443,11 @@ def caseCoverage : List CoverageEntry :=
       "ApplyReconcileCases"
       "config_import::lean_apply_write_boundary_tests::generated_apply_reconcile_cases_fence_production_apply_write_boundary")
       "apply-reconcile" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "tool_policy_cases"
+      "ToolPolicyCases"
+      "conformance::generated_tool_policy_cases_match_lean_composition")
+      "tool-policy" [Surface.operatorUi, Surface.agentFacing]
   , tagged (consumerCoverage
       "session_recovery_cases"
       "SessionRecoveryCases"

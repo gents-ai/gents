@@ -87,6 +87,11 @@ export type ToolSelectionView = {
   enableSessionHistoryTool?: boolean | null;
   enableContextBudget?: boolean | null;
   enableDefraQuery?: boolean | null;
+  defraQueryCollections: string[];
+  writeTools: string[];
+  toolPolicyVersion?: string | null;
+  subagentDefaultAwaitMode?: string | null;
+  orchestrationEnabled?: boolean | null;
 };
 
 export type ToolServiceRegistryView = {

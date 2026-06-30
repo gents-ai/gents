@@ -2,12 +2,17 @@ mod behavior_config;
 mod build;
 mod explain;
 mod modes;
+mod policy;
 mod runtime_context;
 mod selection;
 
 pub use behavior_config::BehaviorToolConfig;
 pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
+pub use policy::{
+    EndpointScope, RuntimeToolAvailability, ToolPolicyBash, ToolPolicySurface, ToolPolicyVersion,
+    TOOL_POLICY_V1,
+};
 pub use runtime_context::ToolRuntimeContext;
 pub(crate) use selection::{BackgroundToolConfig, OrchestrationToolConfig, SubagentToolConfig};
 pub use selection::{CustomToolFactory, ToolSelection};
@@ -43,11 +48,12 @@ pub struct ToolSurface {
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
     pub(super) enable_memory: bool,
+    pub(super) enable_context_budget_tool: bool,
     pub(super) enable_session_history_tool: bool,
-    pub(super) enable_context_budget: bool,
     pub(super) enable_defra_query: bool,
-    pub(super) defra_query_collections: Vec<String>,
+    pub(super) defra_query_scope: CollectionScope,
     pub(super) write_tools: Vec<WriteToolDecl>,
+    pub(super) enable_skills: bool,
 }
 
 impl ToolSurface {
@@ -57,6 +63,14 @@ impl ToolSurface {
 
     pub fn includes_meta_tools(&self) -> bool {
         self.include_meta_tools
+    }
+
+    /// Whether the behavior's effective policy permits progressive-disclosure
+    /// skills (the `load_skill` tool). Resolved from the `skills` capability of
+    /// the effective surface, so an operator ceiling that denies skills is
+    /// honored — the capability is governed, not assumed-on.
+    pub fn includes_skills(&self) -> bool {
+        self.enable_skills
     }
 
     pub fn allowed_mcp_service_ids(&self) -> &[String] {
@@ -126,7 +140,7 @@ impl ToolSurface {
         if self.enable_memory {
             names.push(MEMORY_TOOL_NAME.to_string());
         }
-        if self.enable_context_budget {
+        if self.enable_context_budget_tool {
             names.push(CONTEXT_BUDGET_TOOL_NAME.to_string());
         }
         if self.enable_session_history_tool {
@@ -174,7 +188,7 @@ impl ToolSurface {
                 runtime.agent_did.clone(),
             ));
         }
-        if self.enable_context_budget {
+        if self.enable_context_budget_tool {
             tools.push(build_context_budget_tool(
                 runtime.node.clone(),
                 runtime.agent_did.clone(),
@@ -189,7 +203,7 @@ impl ToolSurface {
         if self.enable_defra_query {
             tools.push(build_defra_query_tool(
                 runtime.node.clone(),
-                CollectionScope::restricted(self.defra_query_collections.clone()),
+                self.defra_query_scope.clone(),
             ));
         }
         // Apply-time validation rejects write_tools names that collide with the
@@ -242,13 +256,17 @@ impl std::fmt::Debug for ToolSurface {
             )
             .field("enable_memory", &self.enable_memory)
             .field(
+                "enable_context_budget_tool",
+                &self.enable_context_budget_tool,
+            )
+            .field(
                 "enable_session_history_tool",
                 &self.enable_session_history_tool,
             )
-            .field("enable_context_budget", &self.enable_context_budget)
             .field("enable_defra_query", &self.enable_defra_query)
-            .field("defra_query_collections", &self.defra_query_collections)
+            .field("defra_query_scope", &self.defra_query_scope)
             .field("write_tools", &self.write_tools)
+            .field("enable_skills", &self.enable_skills)
             .finish()
     }
 }

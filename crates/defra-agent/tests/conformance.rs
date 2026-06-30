@@ -214,6 +214,11 @@ fn generated_tool_execution_cases_cover_preflight_and_retry_contracts() {
 }
 
 #[test]
+fn generated_tool_policy_cases_match_lean_composition() {
+    tool_policy::generated_tool_policy_cases_match_lean_composition();
+}
+
+#[test]
 fn managed_exec_liveness_cases_pin_native_process_boundary() {
     managed_exec::managed_exec_liveness_cases_pin_native_process_boundary();
 }
@@ -317,5 +322,7 @@ mod subagent_source;
 mod tool_execution;
 #[path = "conformance/tool_execution_subagent.rs"]
 mod tool_execution_subagent;
+#[path = "conformance/tool_policy.rs"]
+mod tool_policy;
 #[path = "conformance/triggers.rs"]
 mod triggers;
