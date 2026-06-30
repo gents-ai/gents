@@ -1073,7 +1073,7 @@ async fn subagent_source_refuses_cross_deployment_child_when_target_flag_off() {
         parent_tool_call_id,
         child_request_id,
         target_behavior_id,
-        remote_parent_did,
+        &local_did,
     )
     .await;
 
@@ -1135,14 +1135,77 @@ async fn subagent_source_materializes_cross_deployment_child_when_target_flag_on
         parent_tool_call_id,
         child_request_id,
         target_behavior_id,
-        remote_parent_did,
+        &local_did,
     )
     .await;
 
     // Flag on -> proceed: child materialized and locally owned.
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
     assert_eq!(child.request_id, child_request_id);
+    assert_eq!(child.agent_did, local_did);
     assert_eq!(child.behavior_id, target_behavior_id);
+}
+
+/// A paired-peer bridge is still owner-scoped: when the immutable
+/// `spawn_target_did` names a different host, this runtime must not materialize
+/// the child even if the target behavior allows cross-deployment spawns.
+#[tokio::test]
+async fn trusted_path_refuses_spawn_targeting_other_host() {
+    let db = test_db("r3-subagent-source-xdep-wrong-host").await;
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("r3-xdep-wrong-host"));
+    let local_did = identity.did().to_string();
+    let other_host_did = "did:key:zDifferentTrustedHost";
+    let target_behavior_id = "xdep-target-wrong-host";
+    let remote_parent_did = "did:key:zPairedPeerParentWrongHost";
+
+    upsert_target_behavior_with_cross_deployment(
+        db.node.as_ref(),
+        &local_did,
+        target_behavior_id,
+        true,
+    )
+    .await;
+
+    let parent_request_id = "r3-parent-xdep-wrong-host";
+    let parent_session_id = "r3-session-xdep-wrong-host";
+    let parent_tool_call_id = "r3-tc-xdep-wrong-host";
+    let child_request_id = "r3-child-xdep-wrong-host";
+    create_remote_parent_request(
+        db.node.as_ref(),
+        remote_parent_did,
+        parent_request_id,
+        parent_session_id,
+    )
+    .await;
+
+    let mut paired = std::collections::HashSet::new();
+    paired.insert(remote_parent_did.to_string());
+    let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
+        db.node.clone(),
+        &local_did,
+        target_behavior_id,
+        target_behavior_id,
+        paired,
+    );
+    wait_for_subagent_source_subscription().await;
+
+    write_cross_deployment_bridge(
+        db.node.as_ref(),
+        parent_request_id,
+        parent_session_id,
+        parent_tool_call_id,
+        child_request_id,
+        target_behavior_id,
+        other_host_did,
+    )
+    .await;
+
+    assert_no_child_request_for_tool(
+        db.node.as_ref(),
+        parent_tool_call_id,
+        Duration::from_millis(800),
+    )
+    .await;
 }
 
 /// Change 2 (#377): recovery gate. Recovery must REFUSE to materialize a

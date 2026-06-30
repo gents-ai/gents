@@ -522,7 +522,7 @@ impl SubagentSource {
                 return Ok(None);
             }
         }
-        let resolved_target_did = row_spawn_target_did.or(args_target_did);
+        let resolved_target_did = row_spawn_target_did.clone().or(args_target_did);
         let await_mode = row
             .await_mode
             .as_deref()
@@ -538,6 +538,20 @@ impl SubagentSource {
         let trusted_paired_peer = snapshot.paired_peer_dids.contains(&parent_authoring_did);
         let tool_name = non_empty(Some(&row.tool_name)).unwrap_or("spawn_subagent");
         if trusted_paired_peer {
+            if let Some(spawn_target_did) = row_spawn_target_did.as_deref().map(str::trim) {
+                let local_did = snapshot.local_did.trim();
+                if local_did.is_empty() || spawn_target_did != local_did {
+                    tracing::debug!(
+                        parent_request_id = %parent_request_id,
+                        parent_tool_call_id = %parent_tool_call_id,
+                        parent_authoring_did = %parent_authoring_did,
+                        spawn_target_did = %spawn_target_did,
+                        local_did = %local_did,
+                        "subagent source skipping trusted spawn: immutable spawn target is not this host DID",
+                    );
+                    return Ok(None);
+                }
+            }
             // The trusted-paired-peer branch is a CROSS-DEPLOYMENT spawn (the
             // parent DID is a paired peer, not this node). It bypasses
             // `subagent_spawn_denial`, so it must gate on the TARGET behavior's
