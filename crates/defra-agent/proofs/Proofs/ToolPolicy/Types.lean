@@ -54,12 +54,23 @@ inductive NetMode where
     `bash_forbidden_union_and_readonly_intersection` exercises the union/
     intersection bounds end-to-end through the real resolver.
 
-    Note: this governs the operator-ceiling MEET of the bash factors. Projecting
-    the meet result back onto the EXECUTABLE `CommandExecutionPolicy` validator
-    (so a narrowed forbidden/read-only set is enforced at command time) remains a
-    separate SP1-Rust item; today the behavior's own `CommandExecutionPolicy`
-    still enforces its forbidden/read-only via the legacy passthrough, so there
-    is no runtime soundness gap. -/
+    The meet result is also projected onto the EXECUTABLE `CommandExecutionPolicy`
+    validator (`tool_surface/build.rs::constrain_command_policy_to_effective_bash`),
+    so a ceiling-narrowed forbidden/allowed/read-only set is enforced at command
+    time — including `Only(∅) → deny-all` via the `deny_all_argv` sentinel
+    (`toolset/shared/command.rs`).
+
+    Availability carve-out: the production `ToolPolicyBash` also has a 7th field,
+    `tool : BashMode` (Off ≤ ReadOnly ≤ Unrestricted), which gates *whether* the
+    bash tool exists at all and at what mode. It is deliberately NOT part of this
+    proven execution product (which models the per-command constraints that apply
+    *given* bash is available). `tool` is an independent ranked Capability: its
+    `Effective ≤ Ceiling` is enforced by `meet_bash_mode` (min) in the surface
+    meet and by `downgrade_bash` at the build site, exactly like the boolean
+    capabilities. The conformance bash view drives `tool` and `mode` from a single
+    `bash_mode` rank (they coincide in every fixture), so they are not fenced
+    independently; a divergent (`tool`, `mode`) conformance case is the one
+    remaining bash modeling refinement. -/
 structure BashPolicy where
   mode : ExecMode
   network : NetMode

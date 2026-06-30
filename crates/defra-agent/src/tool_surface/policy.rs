@@ -124,6 +124,12 @@ where
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolPolicyBash {
+    /// Bash availability/mode gate (`Off ≤ ReadOnly ≤ Unrestricted`): whether the
+    /// bash tool exists and at what mode. A ranked capability with a `min` meet
+    /// (`meet_bash_mode`), `Effective ≤ Ceiling` also enforced by `downgrade_bash`
+    /// at the build site. It sits OUTSIDE the proven Lean `BashPolicy` execution
+    /// product (which models the per-command constraints applied *given* bash is
+    /// available); see the `BashPolicy` carve-out note in `ToolPolicy/Types.lean`.
     pub tool: BashMode,
     pub execution_mode: CommandExecutionMode,
     pub network_mode: CommandNetworkMode,

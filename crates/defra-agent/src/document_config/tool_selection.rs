@@ -321,8 +321,14 @@ impl ToolSelectionDocument {
             return backfilled;
         }
 
+        // The three legacy default-TRUE capabilities (see `ToolSelection::from_document`,
+        // which version-gates exactly these via `default_enabled(true)`): materialize
+        // them as `true` so a backfilled V1 doc reproduces today's permissive surface
+        // bit-for-bit. Omitting `enable_context_budget` here would silently drop the
+        // (always-on) context-budget tool on the secure-default flip.
         backfilled.enable_meta_tools.get_or_insert(true);
         backfilled.enable_defra_query.get_or_insert(true);
+        backfilled.enable_context_budget.get_or_insert(true);
         backfilled.enable_file_tools.get_or_insert(false);
         backfilled.enable_bash.get_or_insert(false);
         backfilled.orchestration_enabled.get_or_insert(false);

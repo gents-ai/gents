@@ -22,6 +22,9 @@ fn wide_open_preset_is_permissive_and_versioned() {
     // backfills to secure (false).
     assert_eq!(preset.enable_meta_tools, Some(true));
     assert_eq!(preset.enable_defra_query, Some(true));
+    // The third legacy default-true capability — must be backfilled too, else the
+    // preset (and the secure-default-flip migration) silently drops it under V1.
+    assert_eq!(preset.enable_context_budget, Some(true));
     assert_eq!(preset.enable_file_tools, Some(false));
     assert_eq!(preset.enable_bash, Some(false));
     assert_eq!(preset.orchestration_enabled, Some(false));
