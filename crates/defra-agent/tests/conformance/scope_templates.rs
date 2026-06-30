@@ -6,7 +6,7 @@
 //! reimpl), so the resolution the reconciler uses is fenced against the spec.
 
 use defra_agent::agent::p2p_reconcile::templates::{
-    builtin_templates, resolve_template, scope_filter, Delivery, Scope,
+    builtin_templates, resolve_template, scope_filter, Delivery, FilterPredicate, Scope,
 };
 
 /// Mirrors Lean `resolveTemplate_isSome_iff` / `resolveTemplate_id_eq`: every
@@ -34,7 +34,7 @@ fn peer_did_scope_resolves_to_per_collection_filter() {
     assert_eq!(t.delivery, Delivery::Push);
     assert!(matches!(t.scope, Scope::PeerDid { field } if field == "agent_did"));
 
-    let filter = scope_filter(&t.scope, t.collections, "did:key:bob");
+    let filter = scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice");
     assert_eq!(filter.len(), t.collections.len());
     for col in t.collections {
         let pred = filter.get(*col).expect("filter for every collection");
@@ -52,8 +52,78 @@ fn unscoped_scope_resolves_to_no_filter() {
         let t = resolve_template(id).expect("template in catalog");
         assert!(matches!(t.scope, Scope::Unscoped));
         assert!(
-            scope_filter(&t.scope, t.collections, "did:key:bob").is_empty(),
+            scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice").is_empty(),
             "{id} must be unfiltered"
+        );
+    }
+}
+
+/// Mirrors Lean `subagentCoordinator_filter_eq` / `subagentHost_filter_eq` and
+/// `subagent_filter_values_local_or_peer`: the built-in subagent templates are
+/// exact directional filters and never admit a third-party DID value.
+#[test]
+fn subagent_templates_resolve_to_exact_directional_filters() {
+    const CONVERSATION: &[&str] = &[
+        "AgentRequest",
+        "AgentResponse",
+        "AgentMessage",
+        "AgentToolCall",
+        "AgentToolResult",
+        "AgentSession",
+        "AgentConversation",
+        "CompactionEntry",
+    ];
+
+    let coord = resolve_template("subagent-coordinator").expect("coordinator template");
+    assert_eq!(coord.delivery, Delivery::Push);
+    assert_eq!(coord.collections, &["AgentRequest", "AgentToolCall"]);
+    let coord_filter = scope_filter(
+        &coord.scope,
+        coord.collections,
+        "did:key:host",
+        "did:key:coord",
+    );
+    assert_eq!(coord_filter.len(), 2);
+    assert_eq!(
+        coord_filter.get("AgentRequest"),
+        Some(&FilterPredicate {
+            field: "agent_did".to_string(),
+            value: "did:key:coord".to_string(),
+        })
+    );
+    assert_eq!(
+        coord_filter.get("AgentToolCall"),
+        Some(&FilterPredicate {
+            field: "spawn_target_did".to_string(),
+            value: "did:key:host".to_string(),
+        })
+    );
+
+    let host = resolve_template("subagent-host").expect("host template");
+    assert_eq!(host.delivery, Delivery::Push);
+    assert_eq!(host.collections, CONVERSATION);
+    let host_filter = scope_filter(
+        &host.scope,
+        host.collections,
+        "did:key:coord",
+        "did:key:host",
+    );
+    assert_eq!(host_filter.len(), CONVERSATION.len());
+    for collection in CONVERSATION {
+        assert_eq!(
+            host_filter.get(*collection),
+            Some(&FilterPredicate {
+                field: "agent_did".to_string(),
+                value: "did:key:host".to_string(),
+            }),
+            "unexpected host filter for {collection}"
+        );
+    }
+
+    for predicate in coord_filter.values().chain(host_filter.values()) {
+        assert!(
+            predicate.value == "did:key:coord" || predicate.value == "did:key:host",
+            "subagent filters must not include third-party DIDs"
         );
     }
 }

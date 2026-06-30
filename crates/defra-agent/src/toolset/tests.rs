@@ -1092,6 +1092,19 @@ fn command_policy_applies_forbidden_and_allowed_prefixes() {
 }
 
 #[test]
+fn deny_all_argv_policy_rejects_every_command() {
+    // An effective `Only(∅)` allowed scope projects to deny_all_argv, which must
+    // reject every command — an EMPTY allowed_argv_prefixes would instead mean
+    // allow-all (the `Only(∅) ≠ All` trap). The allowed list stays empty here, so
+    // this proves the sentinel (not the list) is what enforces deny-all.
+    let policy = CommandExecutionPolicy::write_capable().with_deny_all_argv(true);
+    assert!(policy.allowed_argv_prefixes.is_empty());
+    assert!(validate_command_policy("ls", &[], &policy).is_err());
+    assert!(validate_command_policy("git", &[String::from("status")], &policy).is_err());
+    assert!(validate_command_policy("echo", &[String::from("hi")], &policy).is_err());
+}
+
+#[test]
 fn read_only_policy_allows_operator_configured_diagnostic_prefix() {
     let policy = CommandExecutionPolicy::read_only(default_read_only_commands())
         .with_allowed_argv_prefixes(vec![vec![

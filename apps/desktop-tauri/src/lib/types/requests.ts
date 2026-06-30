@@ -73,6 +73,15 @@ export type ToolSelectionSaveRequest = {
   enableSessionHistoryTool?: boolean | null;
   enableContextBudget?: boolean | null;
   enableDefraQuery?: boolean | null;
+  // Editable query allowlist: omit to preserve the stored value (the bridge
+  // preserves-on-absent); send [] to clear. Mirrors the Rust
+  // `Option<Vec<String>>` preserve-on-None semantics.
+  defraQueryCollections?: string[] | null;
+  subagentDefaultAwaitMode?: string | null;
+  orchestrationEnabled?: boolean | null;
+  // `writeTools` and `toolPolicyVersion` are deliberately NOT part of the save
+  // request — preserve-only (apply-managed / backfill-owned). See the Rust
+  // `ToolSelectionSaveRequest` for the rationale.
 };
 
 export type ToolServiceSaveRequest = {

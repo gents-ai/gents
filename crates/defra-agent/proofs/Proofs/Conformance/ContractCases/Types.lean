@@ -284,6 +284,25 @@ structure R5CrossDeploymentCase where
   unclaimedDeadlineSet : Bool
   deriving Repr
 
+structure CancelPropagationCase where
+  name : String
+  route : String
+  action : String
+  parentDeployment : String
+  childDeployment : String
+  parentRequestId : String
+  parentToolCallId : String
+  childRequestId : String
+  bridgeCollection : String
+  childRequestCollection : String
+  cancelIntentWrittenOnBridge : Bool
+  bridgeCancelReplicatesToHost : Bool
+  hostInterruptsChild : Bool
+  childTerminalReplicatesToCoordinator : Bool
+  cancelAckReturnsToCoordinator : Bool
+  noThirdPartyRows : Bool
+  deriving Repr
+
 /-- Runtime witness row for an operationally-driven Background Properties theorem. -/
 structure BackgroundTheoremWitness where
   theoremName : String

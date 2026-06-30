@@ -362,6 +362,14 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
     fields.extend(
         [
             optional_string_field("display_name", selection.display_name.as_deref()),
+            // Emitted from the loaded/desired value only; the imperative builder
+            // leaves it `None`, so `optional_string_field` omits it and the stored
+            // version is preserved on update (the version is backfill-owned, never
+            // set by an imperative flag).
+            optional_string_field(
+                "tool_policy_version",
+                selection.tool_policy_version.as_deref(),
+            ),
             optional_bool_field("enable_file_tools", selection.enable_file_tools),
             optional_string_field("file_tools_mode", selection.file_tools_mode.as_deref()),
             optional_string_field("file_tool_root", selection.file_tool_root.as_deref()),

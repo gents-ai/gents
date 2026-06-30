@@ -92,8 +92,13 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
     // The parent deliberately has no pairing row for B. Production R5 routing
     // treats the missing local target behavior as a remote bridge write; the
     // installed replicator carries that bridge to B.
-    let (parent_db, hook, parent_session_id, _parent_behavior_id) =
-        setup_parent_hook_on_db(case, false, parent_db).await;
+    let (parent_db, hook, parent_session_id, _parent_behavior_id) = setup_parent_hook_on_db(
+        case,
+        false,
+        Some(child_agent.booted.agent_did.as_str()),
+        parent_db,
+    )
+    .await;
 
     let replicated_parent =
         wait_for_request(child_agent.db.node.as_ref(), &case.parent_request_id).await;
@@ -237,12 +242,13 @@ async fn setup_parent_hook(
     target_is_local: bool,
 ) -> (TestDb, DefraSessionHook, String, String) {
     let db = test_db(&format!("{}-parent", case.name)).await;
-    setup_parent_hook_on_db(case, target_is_local, db).await
+    setup_parent_hook_on_db(case, target_is_local, None, db).await
 }
 
 async fn setup_parent_hook_on_db(
     case: &LeanR5CrossDeploymentCase,
     target_is_local: bool,
+    remote_target_owner_did: Option<&str>,
     db: TestDb,
 ) -> (TestDb, DefraSessionHook, String, String) {
     let parent_behavior_id = format!("{}-parent-behavior", case.name);
@@ -255,8 +261,8 @@ async fn setup_parent_hook_on_db(
     let target_owner_did = if target_is_local {
         PARENT_AGENT_DID.to_string()
     } else {
-        test_identity(&format!("{}-child", case.name))
-            .did()
+        remote_target_owner_did
+            .expect("cross-deployment case must pass the booted child agent DID")
             .to_string()
     };
 
@@ -483,7 +489,7 @@ async fn create_parent_request(
 async fn write_pairing(node: &EmbeddedNode, peer_id: &str, peer_agent_did: &str) {
     let peer_id = escape_graphql_string(peer_id);
     let peer_agent_did = escape_graphql_string(peer_agent_did);
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let mutation = format!(
         r#"mutation {{
             upsert_PeerPairingDesired(
@@ -491,15 +497,17 @@ async fn write_pairing(node: &EmbeddedNode, peer_id: &str, peer_agent_did: &str)
                 add: {{
                     peer_id: "{peer_id}",
                     agent_did: "{peer_agent_did}",
-                    collections: ["AgentRequest", "AgentToolCall"],
-                    replicator_addresses: [],
+                    collections: null,
+                    replicator_addresses: null,
+                    profiles: null,
                     created_at: "{now}",
                     updated_at: "{now}"
                 }},
                 update: {{
                     agent_did: "{peer_agent_did}",
-                    collections: ["AgentRequest", "AgentToolCall"],
-                    replicator_addresses: [],
+                    collections: null,
+                    replicator_addresses: null,
+                    profiles: null,
                     updated_at: "{now}"
                 }}
             ) {{ _docID }}

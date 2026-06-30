@@ -662,6 +662,77 @@ fn memory_tool_defaults_disabled() {
     assert!(!ToolSelection::default().enable_session_history_tool);
 }
 
+#[test]
+fn defra_query_deny_all_collection_scope_gates_tool_off() {
+    use super::policy::{EndpointScope, ToolPolicySurface};
+
+    // Behavior permits collection `a`; ceiling permits only `b`. The disjoint
+    // `Only ∩ Only` meet yields `Only(∅)` — a deny-all the projection must not
+    // collapse into allow-all (the `Only(∅) ≠ All` trap).
+    let mut behavior = ToolPolicySurface::runtime_all();
+    behavior.defra_collections = EndpointScope::<String, ()>::only_units(["a".to_string()]);
+    let mut ceiling = ToolPolicySurface::runtime_all();
+    ceiling.defra_collections = EndpointScope::<String, ()>::only_units(["b".to_string()]);
+
+    let effective = behavior.meet(&ceiling);
+    assert!(
+        effective.defra_collections.is_deny_all(),
+        "disjoint collection scopes must meet to Only(empty) = deny-all"
+    );
+    // The capability bit alone is still on; only the keyed scope is empty.
+    assert!(effective.defra_query);
+    assert!(
+        !effective.include_defra_query(),
+        "deny-all collection scope must gate the defra_query tool off, not surface it as allow-all"
+    );
+    assert!(
+        effective.defra_query_collections_for_runtime().is_empty(),
+        "deny-all and all both project to an empty list; the gate is what distinguishes them"
+    );
+
+    // Sanity: an All ceiling leaves the behavior's own allowlist intact and the
+    // tool surfaced.
+    let mut all_ceiling = ToolPolicySurface::runtime_all();
+    all_ceiling.defra_collections = EndpointScope::all();
+    let permissive = behavior.meet(&all_ceiling);
+    assert!(permissive.include_defra_query());
+    assert_eq!(
+        permissive.defra_query_collections_for_runtime(),
+        vec!["a".to_string()]
+    );
+}
+
+#[test]
+fn tool_policy_version_controls_nullable_default_decode() {
+    let legacy_doc = crate::document_config::ToolSelectionDocument {
+        selection_id: "legacy-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        ..Default::default()
+    };
+    let legacy = ToolSelection::from_document(&legacy_doc).unwrap();
+    assert!(legacy.enable_meta_tools);
+    assert!(legacy.enable_defra_query);
+
+    let backfilled = legacy_doc.with_legacy_policy_defaults_backfilled();
+    assert_eq!(
+        backfilled.tool_policy_version,
+        Some(TOOL_POLICY_V1.to_string())
+    );
+    assert_eq!(backfilled.enable_meta_tools, Some(true));
+    assert_eq!(backfilled.enable_defra_query, Some(true));
+    let decoded_backfill = ToolSelection::from_document(&backfilled).unwrap();
+    assert!(decoded_backfill.enable_meta_tools);
+    assert!(decoded_backfill.enable_defra_query);
+
+    let versioned_doc = crate::document_config::ToolSelectionDocument {
+        tool_policy_version: Some(TOOL_POLICY_V1.to_string()),
+        ..legacy_doc
+    };
+    let versioned = ToolSelection::from_document(&versioned_doc).unwrap();
+    assert!(!versioned.enable_meta_tools);
+    assert!(!versioned.enable_defra_query);
+}
+
 #[tokio::test]
 async fn session_history_tool_requires_selection_opt_in() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
@@ -717,6 +788,7 @@ fn init_like_tool_selection_document(
         selection_id: format!("{package_name}-tools"),
         agent_did: "did:defra-agent:test".to_string(),
         display_name: Some(package_name.to_string()),
+        tool_policy_version: None,
         enable_file_tools: Some(enable_file_tools),
         file_tools_mode: Some(file_tools_mode.to_string()),
         file_tool_root: None,
@@ -968,6 +1040,7 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
         selection_id: "complex-tools".to_string(),
         agent_did: own_agent_did.to_string(),
         display_name: Some("Complex Tools".to_string()),
+        tool_policy_version: None,
         enable_file_tools: Some(true),
         file_tools_mode: Some("ReadOnly".to_string()),
         file_tool_root: None,
@@ -1163,14 +1236,53 @@ fn explain_default_surface_calls_out_builtin_reads_and_defra_query_scope() {
         .warnings
         .iter()
         .any(|warning| warning.code == "defra_query_empty_scope_all"));
-    assert!(explanation
-        .warnings
-        .iter()
-        .any(|warning| warning.code == "host_ceiling_not_global"));
+    assert!(
+        explanation
+            .policy
+            .effective
+            .get("built_in_read")
+            .is_some_and(
+                |names| names.contains(&crate::toolset::CONTEXT_BUDGET_TOOL_NAME.to_string())
+            )
+    );
     assert!(explanation
         .unavailable
         .get("meta_mcp")
         .is_some_and(|names| names.contains(&"discover_tools".to_string())));
+}
+
+#[test]
+fn category_complete_ceiling_clamps_builtin_reads() {
+    let mut ceiling_policy =
+        ToolPolicySurface::legacy_non_host_wide(FileToolMode::Off, BashMode::Off);
+    ceiling_policy.context_budget = false;
+    ceiling_policy.defra_query = false;
+    ceiling_policy.defra_collections = EndpointScope::None;
+
+    let config = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection::default(),
+        &ToolCeiling::meta_only().with_policy(ceiling_policy),
+        Vec::new(),
+    )
+    .unwrap();
+    let explanation = config.explain_with_runtime(
+        false,
+        "did:defra-agent:test",
+        &std::collections::HashSet::new(),
+    );
+
+    assert!(!explanation
+        .tool_names
+        .contains(&crate::toolset::CONTEXT_BUDGET_TOOL_NAME.to_string()));
+    assert!(!explanation
+        .tool_names
+        .contains(&crate::defra_query::DEFRA_QUERY_TOOL_NAME.to_string()));
+    assert!(
+        explanation.excluded.get("built_in_read").is_some_and(
+            |names| names.contains(&crate::toolset::CONTEXT_BUDGET_TOOL_NAME.to_string())
+        )
+    );
 }
 
 #[test]

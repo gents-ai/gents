@@ -70,6 +70,10 @@ const ADD_AGENT_TOOL_CALL_WORKFLOW_PATCH: &str = r#"[
     {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"workflow_role","Kind":11}}
 ]"#;
 
+const ADD_AGENT_TOOL_CALL_SPAWN_TARGET_DID_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"spawn_target_did","Kind":11,"Immutable":true}}
+]"#;
+
 #[allow(dead_code)]
 const ADD_AGENT_TOOL_CALL_COMMAND_DENIAL_PATCH: &str = r#"[
     {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denial_reason","Kind":11}},
@@ -102,6 +106,10 @@ const ADD_TOOL_SELECTION_DEFAULT_AWAIT_MODE_PATCH: &str = r#"[
 
 const ADD_TOOL_SELECTION_ORCHESTRATION_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"orchestration_enabled","Kind":2}}
+]"#;
+
+const ADD_TOOL_SELECTION_POLICY_VERSION_PATCH: &str = r#"[
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"tool_policy_version","Kind":11}}
 ]"#;
 
 const ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH: &str = r#"[
@@ -485,6 +493,35 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
         .get_collection("AgentToolCall")
         .context("reload AgentToolCall collection after R5 patch")?;
     if let Some(ref cv) = active_atc_collection {
+        if collection_has_field(cv, "spawn_target_did") {
+            if !field_is_immutable(cv, "spawn_target_did") {
+                anyhow::bail!(
+                    "AgentToolCall.spawn_target_did exists but is not immutable; \
+                     filtered subagent replication cannot be installed safely"
+                );
+            }
+            tracing::debug!("AgentToolCall already has immutable spawn_target_did; skipping patch");
+        } else {
+            let pre_version_id = cv.version_id.clone();
+            let v5 = node
+                .patch_collection("AgentToolCall", ADD_AGENT_TOOL_CALL_SPAWN_TARGET_DID_PATCH)
+                .await
+                .context("patch_collection AgentToolCall spawn_target_did")?;
+            node.set_active_collection_version(&v5.version_id)
+                .await
+                .context("set_active_collection_version AgentToolCall spawn_target_did")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v5 = %v5.version_id,
+                "AgentToolCall patched with immutable spawn_target_did"
+            );
+        }
+    }
+
+    active_atc_collection = node
+        .get_collection("AgentToolCall")
+        .context("reload AgentToolCall collection after spawn_target_did patch")?;
+    if let Some(ref cv) = active_atc_collection {
         if collection_has_field(cv, "workflow_group_id") {
             tracing::debug!("AgentToolCall already has workflow fields; skipping patch");
         } else {
@@ -659,20 +696,39 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
             active_version = v8;
         }
 
+        if collection_has_field(&active_version, "tool_policy_version") {
+            tracing::debug!("ToolSelection already has tool policy version; skipping patch");
+        } else {
+            let pre_version_id = active_version.version_id.clone();
+            let v9 = node
+                .patch_collection("ToolSelection", ADD_TOOL_SELECTION_POLICY_VERSION_PATCH)
+                .await
+                .context("patch_collection ToolSelection policy version")?;
+            node.set_active_collection_version(&v9.version_id)
+                .await
+                .context("set_active_collection_version ToolSelection policy version")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v9 = %v9.version_id,
+                "ToolSelection patched with policy version"
+            );
+            active_version = v9;
+        }
+
         if collection_has_field(&active_version, "enable_context_budget") {
             tracing::debug!("ToolSelection already has context budget flag; skipping patch");
         } else {
             let pre_version_id = active_version.version_id.clone();
-            let v9 = node
+            let v10 = node
                 .patch_collection("ToolSelection", ADD_TOOL_SELECTION_CONTEXT_BUDGET_PATCH)
                 .await
                 .context("patch_collection ToolSelection context budget flag")?;
-            node.set_active_collection_version(&v9.version_id)
+            node.set_active_collection_version(&v10.version_id)
                 .await
                 .context("set_active_collection_version ToolSelection context budget flag")?;
             tracing::info!(
                 pre = %pre_version_id,
-                v9 = %v9.version_id,
+                v10 = %v10.version_id,
                 "ToolSelection patched with context budget flag"
             );
         }
@@ -1757,6 +1813,7 @@ mod patch_kind_tests {
             ADD_TOOL_SELECTION_BACKGROUND_TOOLS_PATCH,
             ADD_AGENT_TOOL_CALL_R5_PATCH,
             ADD_AGENT_TOOL_CALL_WORKFLOW_PATCH,
+            ADD_AGENT_TOOL_CALL_SPAWN_TARGET_DID_PATCH,
             ADD_AGENT_TOOL_CALL_COMMAND_DENIAL_PATCH,
             ADD_TOOL_SELECTION_R5_PATCH,
             ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH,
@@ -2120,6 +2177,65 @@ mod patch_kind_tests {
             created_at: DateTime @index(direction: DESC)
         }
     "#;
+
+    #[tokio::test]
+    async fn subagent_extension_migration_adds_immutable_spawn_target_did() {
+        let node = test_node().await;
+        node.add_schema(OLD_AGENT_TOOL_CALL_SCHEMA).await.unwrap();
+
+        ensure_subagent_extensions_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_subagent_extensions_migrations(node.clone())
+            .await
+            .unwrap();
+
+        let cv = node
+            .get_collection("AgentToolCall")
+            .unwrap()
+            .expect("AgentToolCall collection");
+        assert!(collection_has_field(&cv, "spawn_target_did"));
+        assert!(
+            field_is_immutable(&cv, "spawn_target_did"),
+            "spawn_target_did must be schema-immutable for filtered replication"
+        );
+
+        let create = node
+            .execute(
+                r#"mutation { create_AgentToolCall(input: {
+                    tool_call_key: "spawn-target-mig:tool-1",
+                    request_id: "spawn-target-mig",
+                    session_id: "spawn-target-session",
+                    tool_name: "spawn_agent",
+                    tool_call_id: "tool-1",
+                    args: "{}",
+                    status: "called",
+                    lifecycle_state: "running",
+                    spawn_target_did: "did:defra-agent:host-a"
+                }) { _docID } }"#,
+            )
+            .await;
+        assert!(
+            !create.has_errors(),
+            "create AgentToolCall with spawn_target_did failed: {:?}",
+            create.errors
+        );
+
+        let rewrite = node
+            .execute(
+                r#"mutation {
+                    update_AgentToolCall(
+                        filter: { tool_call_key: { _eq: "spawn-target-mig:tool-1" } },
+                        input: { spawn_target_did: "did:defra-agent:host-b" }
+                    ) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            rewrite.has_errors(),
+            "rewriting immutable spawn_target_did must be rejected"
+        );
+    }
 
     #[tokio::test]
     async fn conversation_scope_key_migration_makes_agent_did_immutable_on_upgrade() {

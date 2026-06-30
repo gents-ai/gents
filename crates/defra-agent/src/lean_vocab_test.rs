@@ -39,6 +39,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) request_lifecycle_operator_ui_cases: Vec<LeanClientShellCase>,
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
+    #[serde(default)]
+    pub(crate) tool_policy_cases: Vec<LeanToolPolicyCase>,
     pub(crate) session_recovery_cases: Vec<LeanSessionRecoveryCase>,
     pub(crate) inference_slot_accounting_cases: Vec<LeanInferenceSlotAccountingCase>,
     pub(crate) fleet_slot_accounting_cases: Vec<LeanFleetSlotAccountingCase>,
@@ -71,6 +73,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) r5_cross_deployment_cases: Vec<LeanR5CrossDeploymentCase>,
     #[serde(default)]
     pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
+    #[serde(default)]
+    pub(crate) cancel_propagation_cases: Vec<LeanCancelPropagationCase>,
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
     #[serde(default)]
     pub(crate) subagent_delegation_graph_cases: Vec<LeanSubagentDelegationGraphCase>,
@@ -247,6 +251,8 @@ mod composed_invariants;
 mod event_delivery;
 #[path = "lean_vocab_test/slot_persistence_health.rs"]
 mod slot_persistence_health;
+#[path = "lean_vocab_test/tool_policy.rs"]
+mod tool_policy;
 #[path = "lean_vocab_test/triggers_runtime_apply.rs"]
 mod triggers_runtime_apply;
 
@@ -257,6 +263,7 @@ pub(crate) use command_identity_queue::*;
 pub(crate) use composed_invariants::*;
 pub(crate) use event_delivery::*;
 pub(crate) use slot_persistence_health::*;
+pub(crate) use tool_policy::*;
 pub(crate) use triggers_runtime_apply::*;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -335,6 +342,17 @@ pub(crate) fn lean_apply_reconcile_case(name: &str) -> &'static LeanApplyReconci
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean apply-reconcile case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_tool_policy_cases() -> &'static [LeanToolPolicyCase] {
+    &lean_contract_snapshot().tool_policy_cases
+}
+
+pub(crate) fn lean_tool_policy_case(name: &str) -> &'static LeanToolPolicyCase {
+    lean_tool_policy_cases()
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean tool-policy case {name:?} was not emitted"))
 }
 
 pub(crate) fn lean_session_recovery_case(name: &str) -> &'static LeanSessionRecoveryCase {
@@ -510,6 +528,10 @@ pub(crate) fn lean_composed_invariant_witness(
         .unwrap_or_else(|| {
             panic!("Lean composed invariant witness {theorem_name:?} was not emitted")
         })
+}
+
+pub(crate) fn lean_cancel_propagation_cases() -> &'static [LeanCancelPropagationCase] {
+    &lean_contract_snapshot().cancel_propagation_cases
 }
 
 pub(crate) fn lean_r6_background_theorem_witnesses() -> &'static [LeanBackgroundTheoremWitness] {

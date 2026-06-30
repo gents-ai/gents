@@ -85,6 +85,7 @@ struct ToolCallRow {
     await_mode: Option<String>,
     cancel_policy: Option<String>,
     child_request_id: Option<String>,
+    spawn_target_did: Option<String>,
     unclaimed_deadline_at: Option<String>,
     workflow_group_id: Option<String>,
     workflow_role: Option<String>,
@@ -123,6 +124,7 @@ impl ToolCallLifecycle {
                     await_mode
                     cancel_policy
                     child_request_id
+                    spawn_target_did
                     unclaimed_deadline_at
                     workflow_group_id
                     workflow_role
@@ -194,6 +196,7 @@ impl ToolCallLifecycle {
             .unwrap_or(CancelPolicy::Cascade);
 
         let child_request_id = row.child_request_id.filter(|s| !s.is_empty());
+        let spawn_target_did = row.spawn_target_did.filter(|s| !s.is_empty());
         let unclaimed_deadline_at = row
             .unclaimed_deadline_at
             .as_deref()
@@ -218,6 +221,7 @@ impl ToolCallLifecycle {
             await_mode,
             cancel_policy,
             child_request_id,
+            spawn_target_did,
             unclaimed_deadline_at,
             workflow_group_id: row.workflow_group_id.filter(|value| !value.is_empty()),
             workflow_role: row.workflow_role.filter(|value| !value.is_empty()),

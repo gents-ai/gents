@@ -38,6 +38,7 @@ fn scope_str(s: &Scope) -> String {
     match s {
         Scope::PeerDid { field } => field.to_string(),
         Scope::Unscoped => "unscoped".to_string(),
+        Scope::PerCollection(_) => "per-collection".to_string(),
     }
 }
 
@@ -190,6 +191,8 @@ mod tests {
                 "backup",
                 "discovery",
                 "network-control",
+                "subagent-coordinator",
+                "subagent-host",
             ]
         );
     }

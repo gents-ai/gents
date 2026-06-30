@@ -647,9 +647,10 @@ impl DefraSessionHook {
         // deployment never needs to re-resolve the friendly name (it has no
         // access to the parent's target table), which is what removes the
         // resolution seam.
+        let target_agent_did = target.agent_did.clone();
         let bridge_args = serde_json::json!({
             "name": name,
-            "agent_did": target.agent_did,
+            "agent_did": target_agent_did.clone(),
             "behavior_id": target.behavior_id,
             "prompt": parsed.prompt,
             "deadline": parsed.deadline,
@@ -670,6 +671,7 @@ impl DefraSessionHook {
             await_mode,
             CancelPolicy::Cascade,
             child_request_id.clone(),
+            target_agent_did,
         );
         if await_mode == AwaitMode::Background {
             let timeout_secs =

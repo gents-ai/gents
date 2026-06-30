@@ -20,6 +20,7 @@ import Proofs.Triggers
 import Proofs.Client
 import Proofs.ClientShell
 import Proofs.CommandPolicy
+import Proofs.ToolPolicy
 import Proofs.ToolExecution
 import Proofs.ManagedExec
 import Proofs.MCPHealth

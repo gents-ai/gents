@@ -210,6 +210,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.operatorUi]
     , deferred := []
     }
+  , { feature := "tool-policy"
+    , required := [Surface.agentFacing, Surface.operatorUi]
+    , deferred := []
+    }
   , { feature := "recovery"
     , required := [Surface.runtimeInternal]
     , deferred := []
@@ -444,6 +448,11 @@ def caseCoverage : List CoverageEntry :=
       "config_import::lean_apply_write_boundary_tests::generated_apply_reconcile_cases_fence_production_apply_write_boundary")
       "apply-reconcile" [Surface.operatorCli]
   , tagged (consumerCoverage
+      "tool_policy_cases"
+      "ToolPolicyCases"
+      "conformance::generated_tool_policy_cases_match_lean_composition")
+      "tool-policy" [Surface.operatorUi, Surface.agentFacing]
+  , tagged (consumerCoverage
       "session_recovery_cases"
       "SessionRecoveryCases"
       "conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract")
@@ -587,6 +596,11 @@ def caseCoverage : List CoverageEntry :=
       "ComposedInvariantWitnesses"
       "conformance::generated_composed_invariant_witnesses_drive_tool_lifecycle_conformance")
       "composed-invariants" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "cancel_propagation_cases"
+      "CancelPropagationCases"
+      "conformance::cancel_propagation_cases_drive_production_interrupt")
+      "interrupt-and-cancel" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r6_background_theorem_witnesses"
       "BackgroundBudgetBoundedTheoremWitness"

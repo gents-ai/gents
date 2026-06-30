@@ -14,6 +14,8 @@ use crate::toolset::{
     CommandExecutionPolicy, CommandNetworkMode,
 };
 
+use super::policy::ToolPolicyVersion;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SubagentToolConfig {
     pub targets: Vec<SubagentTarget>,
@@ -149,6 +151,7 @@ impl ToolSelection {
     pub(crate) fn from_document(
         selection: &crate::document_config::ToolSelectionDocument,
     ) -> anyhow::Result<Self> {
+        let policy_version = ToolPolicyVersion::parse(selection.tool_policy_version.as_deref())?;
         let bash = if selection.enable_bash.unwrap_or(false) {
             BashMode::parse(selection.bash_mode.as_deref().unwrap_or("ReadOnly"))?
         } else {
@@ -168,7 +171,9 @@ impl ToolSelection {
             bash,
             command_policy: command_policy_from_document(selection, bash)?,
             cli_tool_names: selection.cli_tool_names.clone().unwrap_or_default(),
-            enable_meta_tools: selection.enable_meta_tools.unwrap_or(true),
+            enable_meta_tools: selection
+                .enable_meta_tools
+                .unwrap_or(policy_version.default_enabled(true)),
             allowed_mcp_service_ids: selection
                 .allowed_mcp_service_ids
                 .clone()
@@ -180,8 +185,12 @@ impl ToolSelection {
             orchestration_enabled: selection.orchestration_enabled.unwrap_or(false),
             enable_memory: selection.enable_memory.unwrap_or(false),
             enable_session_history_tool: selection.enable_session_history_tool.unwrap_or(false),
-            enable_context_budget: selection.enable_context_budget.unwrap_or(true),
-            enable_defra_query: selection.enable_defra_query.unwrap_or(true),
+            enable_context_budget: selection
+                .enable_context_budget
+                .unwrap_or(policy_version.default_enabled(true)),
+            enable_defra_query: selection
+                .enable_defra_query
+                .unwrap_or(policy_version.default_enabled(true)),
             defra_query_collections: selection
                 .defra_query_collections
                 .clone()

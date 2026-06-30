@@ -909,6 +909,7 @@ async fn cancelling_cascade_subagent_tool_latches_child_interrupt() {
         crate::tool_call_lifecycle::AwaitMode::Foreground,
         crate::tool_call_lifecycle::CancelPolicy::Cascade,
         child_request_id.to_string(),
+        "did:defra-agent:target".to_string(),
     );
     lifecycle.start_running().await.unwrap();
     hook.in_flight_lifecycles
@@ -972,6 +973,7 @@ async fn cancelling_detached_subagent_tool_does_not_interrupt_child() {
         crate::tool_call_lifecycle::AwaitMode::Foreground,
         crate::tool_call_lifecycle::CancelPolicy::Detach,
         child_request_id.to_string(),
+        "did:defra-agent:target".to_string(),
     );
     lifecycle.start_running().await.unwrap();
     hook.in_flight_lifecycles

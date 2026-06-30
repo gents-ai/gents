@@ -584,6 +584,8 @@ pub struct ToolSelectionRow {
     #[serde(default)]
     pub display_name: Option<String>,
     #[serde(default)]
+    pub tool_policy_version: Option<String>,
+    #[serde(default)]
     pub enable_file_tools: Option<bool>,
     #[serde(default)]
     pub file_tools_mode: Option<String>,
@@ -622,6 +624,13 @@ pub struct ToolSelectionRow {
     pub subagent_steering_enabled: Option<bool>,
     #[serde(default)]
     pub subagent_background_enabled: Option<bool>,
+    /// Default await mode for spawned subagents (`foreground` | `background`).
+    /// Parity field: the runtime `ToolSelectionDocument` and the GraphQL schema
+    /// already carry it; mirroring it on the row makes a lossless round-trip
+    /// possible. Wiring the desktop read query + upsert mutation to actually
+    /// carry it is Phase B (deferred while desktop-core is blocked on #490).
+    #[serde(default)]
+    pub subagent_default_await_mode: Option<String>,
     #[serde(default)]
     pub subagent_allow_cross_deployment: Option<bool>,
     #[serde(default)]
@@ -636,6 +645,12 @@ pub struct ToolSelectionRow {
     pub enable_defra_query: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub defra_query_collections: Vec<String>,
+    /// Each entry is a JSON-serialized `WriteToolDecl` (the same `[String]`
+    /// substrate as `subagent_targets`), keeping `WriteToolDecl` out of the
+    /// protocol crate. The runtime loader is fail-closed: a malformed entry
+    /// fails the whole `ToolSelection` load, so writers must emit valid JSON.
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    pub write_tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -851,6 +866,8 @@ mod tests {
         assert!(row.delegate_to.is_empty());
         assert!(row.backgroundable_tool_names.is_empty());
         assert!(row.subagent_targets.is_empty());
+        assert!(row.write_tools.is_empty());
+        assert_eq!(row.subagent_default_await_mode, None);
     }
 
     #[test]
@@ -881,7 +898,8 @@ mod tests {
             "allowed_mcp_service_ids": "",
             "delegate_to": "",
             "backgroundable_tool_names": "",
-            "subagent_targets": ""
+            "subagent_targets": "",
+            "write_tools": ""
         }"#;
         let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
         assert!(row.cli_tool_names.is_empty());
@@ -889,6 +907,7 @@ mod tests {
         assert!(row.delegate_to.is_empty());
         assert!(row.backgroundable_tool_names.is_empty());
         assert!(row.subagent_targets.is_empty());
+        assert!(row.write_tools.is_empty());
     }
 
     #[test]
@@ -916,6 +935,27 @@ mod tests {
         assert_eq!(row.cross_deployment_spawn_timeout_seconds, Some(45));
         assert_eq!(row.enable_memory, Some(true));
         assert_eq!(row.enable_session_history_tool, Some(true));
+
+        let re: String = serde_json::to_string(&row).expect("serialize");
+        let round: ToolSelectionRow = serde_json::from_str(&re).expect("reparse");
+        assert_eq!(row, round);
+    }
+
+    #[test]
+    fn tool_selection_row_round_trips_write_tools_and_await_mode() {
+        let json = r#"{
+            "selection_id": "sel-5",
+            "agent_did": "did:defra:amy",
+            "subagent_default_await_mode": "foreground",
+            "write_tools": ["{\"tool_name\":\"upsert_note\",\"collection\":\"Note\",\"fields\":[]}"]
+        }"#;
+        let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
+        assert_eq!(
+            row.subagent_default_await_mode.as_deref(),
+            Some("foreground")
+        );
+        assert_eq!(row.write_tools.len(), 1);
+        assert!(row.write_tools[0].contains("\"tool_name\":\"upsert_note\""));
 
         let re: String = serde_json::to_string(&row).expect("serialize");
         let round: ToolSelectionRow = serde_json::from_str(&re).expect("reparse");

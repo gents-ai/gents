@@ -177,6 +177,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_response_interrupt_flow_cases().len(), 1);
     assert_eq!(lean_subagent_delegation_graph_cases().len(), 3);
     assert_eq!(lean_composed_invariant_witnesses().len(), 3);
+    assert_eq!(lean_cancel_propagation_cases().len(), 1);
 }
 
 #[tokio::test]
@@ -215,6 +216,7 @@ async fn agent_tool_call_has_r5_cross_deployment_fields() {
         "cancel_pending_remote_ack",
         "cancel_cause",
         "stuck_since",
+        "spawn_target_did",
     ] {
         assert!(names.contains(field), "AgentToolCall missing field {field}");
     }
@@ -516,6 +518,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ApplyReconcileCases".to_string(),
         ));
     }
+    if !snapshot.tool_policy_cases.is_empty() {
+        emitted.insert((
+            "tool_policy_cases".to_string(),
+            "ToolPolicyCases".to_string(),
+        ));
+    }
     if !snapshot.session_recovery_cases.is_empty() {
         emitted.insert((
             "session_recovery_cases".to_string(),
@@ -748,6 +756,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ComposedInvariantWitnesses".to_string(),
         ));
     }
+    if !lean_cancel_propagation_cases().is_empty() {
+        emitted.insert((
+            "cancel_propagation_cases".to_string(),
+            "CancelPropagationCases".to_string(),
+        ));
+    }
     if !lean_r6_background_theorem_witnesses().is_empty() {
         emitted.insert((
             "r6_background_theorem_witnesses".to_string(),
@@ -776,6 +790,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "trigger_cases",
         "runtime_cases",
         "apply_reconcile_cases",
+        "tool_policy_cases",
         "session_recovery_cases",
         "slot_cases",
         "fleet_cases",
@@ -808,6 +823,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "r6_background_cases",
         "r5_cross_deployment_cases",
         "composed_invariant_witnesses",
+        "cancel_propagation_cases",
         "r6_background_theorem_witnesses",
         "subagent_delegation_graph_cases",
         "follow_up_hook",

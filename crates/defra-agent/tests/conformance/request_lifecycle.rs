@@ -2259,6 +2259,7 @@ async fn create_background_child_bridge(
         AwaitMode::Background,
         CancelPolicy::Cascade,
         child_request_id.clone(),
+        AGENT_DID.to_string(),
     );
     lifecycle.start_running().await.unwrap();
 

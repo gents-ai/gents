@@ -120,6 +120,7 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
             selection_id: selection_id.clone(),
             agent_did: did.clone(),
             display_name: Some("Ops".to_string()),
+            tool_policy_version: None,
             enable_file_tools: Some(true),
             file_tools_mode: Some("ReadWrite".to_string()),
             file_tool_root: None,

@@ -38,15 +38,16 @@ use admission_slot_accounting::{
 use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
-    lean_client_shell_case, lean_codex_shim_projection_case, lean_codex_shim_projection_cases,
-    lean_codex_shim_turn_lifecycle_cases, lean_command_env_case, lean_command_policy_case,
-    lean_command_sandbox_case, lean_compaction_reducer_cases, lean_composed_invariant_witnesses,
-    lean_contract_snapshot, lean_event_delivery_convergence_traces,
-    lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
-    lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case,
-    lean_inference_slot_accounting_cases, lean_managed_exec_liveness_cases, lean_mcp_health_cases,
-    lean_process_transition_cases, lean_queue_deadline_case, lean_queue_deadline_cases,
-    lean_r4c_background_work_case, lean_r4c_background_work_cases, lean_r5_cross_deployment_cases,
+    lean_cancel_propagation_cases, lean_client_shell_case, lean_codex_shim_projection_case,
+    lean_codex_shim_projection_cases, lean_codex_shim_turn_lifecycle_cases, lean_command_env_case,
+    lean_command_policy_case, lean_command_sandbox_case, lean_compaction_reducer_cases,
+    lean_composed_invariant_witnesses, lean_contract_snapshot,
+    lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
+    lean_event_delivery_transition_cases, lean_fleet_slot_accounting_case,
+    lean_inference_slot_accounting_case, lean_inference_slot_accounting_cases,
+    lean_managed_exec_liveness_cases, lean_mcp_health_cases, lean_process_transition_cases,
+    lean_queue_deadline_case, lean_queue_deadline_cases, lean_r4c_background_work_case,
+    lean_r4c_background_work_cases, lean_r5_cross_deployment_cases,
     lean_r6_background_theorem_witness, lean_r6_background_theorem_witnesses,
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_equivalence_cases,
     lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_interrupt_flow_cases,
@@ -73,6 +74,8 @@ use support::{
 
 #[path = "conformance/background.rs"]
 mod background;
+#[path = "conformance/cancel_propagation.rs"]
+mod cancel_propagation;
 #[path = "conformance/client_runtime.rs"]
 mod client_runtime;
 #[path = "conformance/codex_shim.rs"]
@@ -167,6 +170,11 @@ async fn generated_composed_invariant_witnesses_drive_tool_lifecycle_conformance
         .await;
 }
 
+#[tokio::test]
+async fn cancel_propagation_cases_drive_production_interrupt() {
+    cancel_propagation::cancel_propagation_cases_drive_production_interrupt().await;
+}
+
 #[test]
 fn generated_r4c_background_work_cases_pin_observable_shapes() {
     background::generated_r4c_background_work_cases_pin_observable_shapes();
@@ -212,6 +220,11 @@ async fn generated_session_recovery_cases_drive_db_backed_reissue_contract() {
 #[test]
 fn generated_tool_execution_cases_cover_preflight_and_retry_contracts() {
     tool_execution::generated_tool_execution_cases_cover_preflight_and_retry_contracts();
+}
+
+#[test]
+fn generated_tool_policy_cases_match_lean_composition() {
+    tool_policy::generated_tool_policy_cases_match_lean_composition();
 }
 
 #[test]
@@ -318,5 +331,7 @@ mod subagent_source;
 mod tool_execution;
 #[path = "conformance/tool_execution_subagent.rs"]
 mod tool_execution_subagent;
+#[path = "conformance/tool_policy.rs"]
+mod tool_policy;
 #[path = "conformance/triggers.rs"]
 mod triggers;
