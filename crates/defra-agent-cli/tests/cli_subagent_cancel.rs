@@ -201,6 +201,7 @@ async fn subagent_cancel_local_cascades_bridge_lifecycle_dispatch() -> Result<()
             &parent_session_id,
             &parent_tool_call_id,
             &child_request_id,
+            &agent_did,
             AwaitMode::Foreground,
         )
         .await?;
@@ -210,6 +211,7 @@ async fn subagent_cancel_local_cascades_bridge_lifecycle_dispatch() -> Result<()
             &child_session_id,
             &child_tool_call_id,
             &grandchild_request_id,
+            &agent_did,
             AwaitMode::Background,
         )
         .await?;
@@ -398,6 +400,7 @@ async fn create_running_subagent_bridge(
     session_id: &str,
     tool_call_id: &str,
     child_request_id: &str,
+    spawn_target_did: &str,
     await_mode: AwaitMode,
 ) -> Result<()> {
     let mut lifecycle = ToolCallLifecycle::new_subagent(
@@ -413,6 +416,7 @@ async fn create_running_subagent_bridge(
         await_mode,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
+        spawn_target_did.to_string(),
     );
     lifecycle.start_running().await
 }

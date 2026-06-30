@@ -29,6 +29,7 @@ type AgentToolCall @branchable {
     cancel_policy: String
     cancel_cause: String
     child_request_id: String @index
+    spawn_target_did: String @index @immutable
     workflow_group_id: String @index
     workflow_role: String @index
     unclaimed_deadline_at: DateTime

@@ -99,115 +99,104 @@ theorem resolveTemplate_isSome_iff {cat : Catalog} {id : TemplateId} :
 
 /-! ## Scope → filter resolution -/
 
-/-- Resolve a scope against a concrete peer DID into an optional filter key.
-Mirrors Rust `scope_filter`: `PeerDid {field}` → equality on `field == peer_did`;
-`Unscoped` → no filter. -/
-def scopeFilter : Scope → Did → Option ScopeFilterKey
-  | .peerDid f, did => some ⟨f, did⟩
-  | .unscoped, _ => none
-
-/-- Resolve a scope and collection set against a concrete peer DID into
-per-collection filter entries. This is the model shape corresponding to Rust
-`PairingFilters`: a `PeerDid` scope filters every collection on the peer DID,
-while `Unscoped` yields the empty filter map. -/
-noncomputable def scopeFilters (s : Scope) (collections : Finset String) (did : Did) :
-    Finset CollectionScopeFilter :=
-  match s with
-  | .peerDid f =>
-      (collections.toList.map
-        (fun c => ({ collection := c, field := f, value := did } : CollectionScopeFilter))).toFinset
-  | .unscoped => ∅
+/-- Resolve a scope and collection set against a concrete peer/local DID pair.
+Mirrors Rust `scope_filter`: `PeerDid {field}` filters every carried collection
+on `peerDid`; `Unscoped` yields no filters; `PerCollection` applies each
+collection-specific rule with either the local or peer DID as value. -/
+def scopeFilter (scope : Scope) (collections : List String)
+    (peerDid localDid : Did) : List CollectionScopeFilter :=
+  match scope with
+  | .peerDid field =>
+      collections.map
+        (fun c => { collection := c, field := field, value := peerDid })
+  | .unscoped => []
+  | .perCollection rules =>
+      rules.map
+        (fun r =>
+          { collection := r.collection
+          , field := r.field
+          , value :=
+              match r.source with
+              | .localDid => localDid
+              | .peerDid => peerDid })
 
 /-- `scopeFilter` is the spec's case-split, proven by `cases` over `Scope`. -/
-theorem scopeFilter_spec (s : Scope) (did : Did) :
-    scopeFilter s did =
+theorem scopeFilter_spec (s : Scope) (collections : List String)
+    (peerDid localDid : Did) :
+    scopeFilter s collections peerDid localDid =
       match s with
-      | .peerDid f => some ⟨f, did⟩
-      | .unscoped => none := by
+      | .peerDid f =>
+          collections.map
+            (fun c => { collection := c, field := f, value := peerDid })
+      | .unscoped => []
+      | .perCollection rules =>
+          rules.map
+            (fun r =>
+              { collection := r.collection
+              , field := r.field
+              , value :=
+                  match r.source with
+                  | .localDid => localDid
+                  | .peerDid => peerDid }) := by
   cases s <;> rfl
 
-/-- A `PeerDid` scope always yields a filter, keyed on its field and the peer. -/
-theorem scopeFilter_peerDid (f : String) (did : Did) :
-    scopeFilter (.peerDid f) did = some ⟨f, did⟩ := rfl
+/-- A `PeerDid` scope filters every carried collection on the peer DID. -/
+theorem scopeFilter_peerDid (f : String) (collections : List String)
+    (peerDid localDid : Did) :
+    scopeFilter (.peerDid f) collections peerDid localDid =
+      collections.map
+        (fun c => { collection := c, field := f, value := peerDid }) := rfl
 
-/-- An `Unscoped` scope never yields a filter (whole-collection replication). -/
-theorem scopeFilter_unscoped (did : Did) :
-    scopeFilter .unscoped did = none := rfl
+/-- An `Unscoped` scope never yields filters (whole-collection replication). -/
+theorem scopeFilter_unscoped (collections : List String) (peerDid localDid : Did) :
+    scopeFilter .unscoped collections peerDid localDid = [] := rfl
 
-/-- Per-collection form: a `PeerDid` scope creates exactly one filter entry for
-each carried collection. -/
-theorem scopeFilters_peerDid_mem_iff
-    (f : String) (collections : Finset String) (did : Did) (k : CollectionScopeFilter) :
-    k ∈ scopeFilters (.peerDid f) collections did ↔
-      ∃ c ∈ collections, k = ⟨c, f, did⟩ := by
-  simp [scopeFilters]
-  constructor
-  · intro h
-    rcases h with ⟨c, hc, hk⟩
-    exact ⟨c, hc, hk.symm⟩
-  · intro h
-    rcases h with ⟨c, hc, hk⟩
-    exact ⟨c, hc, hk.symm⟩
+/-- The coordinator subagent leg is exactly parent requests by local owner plus
+bridges addressed to the peer host. -/
+theorem subagentCoordinator_filter_eq (peerDid localDid : Did) :
+    scopeFilter (.perCollection subagentCoordinatorRules) [] peerDid localDid
+      = [ { collection := "AgentRequest",  field := "agent_did",        value := localDid }
+        , { collection := "AgentToolCall", field := "spawn_target_did", value := peerDid } ] := by
+  simp [scopeFilter, subagentCoordinatorRules]
 
-/-- Per-collection form: an `Unscoped` scope yields no filters. -/
-theorem scopeFilters_unscoped (collections : Finset String) (did : Did) :
-    scopeFilters .unscoped collections did = ∅ := rfl
+/-- The host subagent leg is exactly the conversation set owned by the local host. -/
+theorem subagentHost_filter_eq (peerDid localDid : Did) :
+    scopeFilter (.perCollection subagentHostRules) [] peerDid localDid
+      = subagentHostCollections.map
+          (fun c => { collection := c, field := "agent_did", value := localDid }) := by
+  simp [scopeFilter, subagentHostRules, subagentHostCollections, conversationCollections]
 
-/-- A scope yields a filter iff it is scoped to a peer DID. Exact, by `cases`. -/
-theorem scopeFilter_isSome_iff (s : Scope) (did : Did) :
-    (scopeFilter s did).isSome ↔ ∃ f, s = .peerDid f := by
-  cases s with
-  | peerDid f => simp [scopeFilter]
-  | unscoped => simp [scopeFilter]
+/-- The coordinator per-collection rules cover exactly the template's declared
+collections. This is the non-vacuous collection-coverage fence for the
+directional coordinator leg. -/
+theorem subagentCoordinator_filters_declared_collections (peerDid localDid : Did) :
+    ((scopeFilter subagentCoordinatorTemplate.scope [] peerDid localDid).map
+        (fun k => k.collection)).toFinset
+      = subagentCoordinatorTemplate.collections := by
+  simp [scopeFilter, subagentCoordinatorTemplate, subagentCoordinatorRules]
 
-/-! ## Push ⇔ scoped (the conversation-template relation)
+/-- Concrete catalog membership: the coordinator template resolves from the
+built-in catalog. -/
+theorem subagentCoordinator_in_catalog :
+    resolveTemplate builtinCatalog "subagent-coordinator" = some subagentCoordinatorTemplate := by
+  decide
 
-The spec invites relating `Push` delivery to a scoped template "if it falls out
-cleanly". We do not bake it into the catalog type (the model permits any
-delivery/scope pairing, matching the Rust types), but we expose it as a
-*definitional predicate* a caller can require of a catalog, plus the leaf fact
-that under such a well-formed template, `Push` delivery resolves to a real
-filter. This keeps the conversation-template invariant checkable without forcing
-it on every template. -/
+/-- Concrete catalog membership: the host template resolves from the built-in
+catalog. -/
+theorem subagentHost_in_catalog :
+    resolveTemplate builtinCatalog "subagent-host" = some subagentHostTemplate := by
+  decide
 
-/-- A template is "scope-coherent" when `Push` delivery is paired with a scoped
-filter (the conversation-template shape: filtered push, no whole-collection
-gossip). `Replicate` is unconstrained (it may be scoped or unscoped). -/
-def scopeCoherent (t : Template) : Prop :=
-  t.delivery = .push → ∃ f, t.scope = .peerDid f
-
-/-- Under a scope-coherent template, a `Push` delivery always resolves to a
-concrete filter key against any peer DID — i.e. push is never silently
-unfiltered. -/
-theorem push_template_has_filter {t : Template} (h : scopeCoherent t)
-    (hpush : t.delivery = .push) (did : Did) :
-    (scopeFilter t.scope did).isSome := by
-  obtain ⟨f, hf⟩ := h hpush
-  rw [hf]
-  rfl
-
-/-- Per-collection version of `push_template_has_filter`: under a scope-coherent
-`Push` template, EVERY one of the template's collections gets a concrete
-peer-DID filter entry — the template→filter derivation never leaves a `Push`
-collection unfiltered.
-
-SCOPE: this is a property of the template→filter DERIVATION (`scopeFilters`)
-ALONE. It does NOT model the Rust merged Layer-1/Layer-2 install (one replicator
-carrying unfiltered control collections alongside peer-DID-filtered conversation
-collections in a single per-collection filter map): that union is assembled at
-install time and is fenced by the `engine.rs` `merge_desired` unit tests
-(`merge_desired_unions_control_and_data_plane_state`,
-`data_plane_only_desired_is_replicator_only`), not by this theorem. What this
-theorem guarantees the merge can rely on is the per-collection-completeness of
-each push template's derived filter set. -/
-theorem push_template_filters_every_collection {t : Template} (h : scopeCoherent t)
-    (hpush : t.delivery = .push) (did : Did) {c : String}
-    (hc : c ∈ t.collections) :
-    ∃ k ∈ scopeFilters t.scope t.collections did,
-      k.collection = c ∧ k.value = did := by
-  obtain ⟨f, hf⟩ := h hpush
-  rw [hf]
-  refine ⟨⟨c, f, did⟩, ?_, rfl, rfl⟩
-  simp [scopeFilters, hc]
+/-- Supporting no-third-party corollary: every per-collection filter value is one
+of the local/peer DIDs. The exact-equality theorems above are the load-bearing
+crossing proof; this only backs the no-third-party value statement. -/
+theorem subagent_filter_values_local_or_peer
+    (rules : List CollectionRule) (peerDid localDid : Did)
+    (k : CollectionScopeFilter)
+    (hk : k ∈ scopeFilter (.perCollection rules) [] peerDid localDid) :
+    k.value = localDid ∨ k.value = peerDid := by
+  simp [scopeFilter] at hk
+  obtain ⟨r, _, hr⟩ := hk
+  cases hsrc : r.source <;> simp [hsrc] at hr <;> subst hr <;> simp
 
 end ScopeTemplates

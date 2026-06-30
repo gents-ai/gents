@@ -239,6 +239,7 @@ async fn local_background_spawn_materializes_child_with_lineage_and_lists() {
         AwaitMode::Background,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
+        running.booted.agent_did.clone(),
     );
     lifecycle.start_running().await.unwrap();
 
@@ -329,6 +330,7 @@ async fn local_foreground_spawn_materializes_child_via_source() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
+        running.booted.agent_did.clone(),
     );
     lifecycle.start_running().await.unwrap();
 

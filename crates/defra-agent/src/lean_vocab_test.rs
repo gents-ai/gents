@@ -69,6 +69,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     #[serde(default)]
     pub(crate) r5_cross_deployment_cases: Vec<LeanR5CrossDeploymentCase>,
+    #[serde(default)]
+    pub(crate) cancel_propagation_cases: Vec<LeanCancelPropagationCase>,
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
     #[serde(default)]
     pub(crate) subagent_delegation_graph_cases: Vec<LeanSubagentDelegationGraphCase>,
@@ -489,6 +491,10 @@ pub(crate) fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6Backgroun
 
 pub(crate) fn lean_r5_cross_deployment_cases() -> &'static [LeanR5CrossDeploymentCase] {
     &lean_contract_snapshot().r5_cross_deployment_cases
+}
+
+pub(crate) fn lean_cancel_propagation_cases() -> &'static [LeanCancelPropagationCase] {
+    &lean_contract_snapshot().cancel_propagation_cases
 }
 
 pub(crate) fn lean_r6_background_theorem_witnesses() -> &'static [LeanBackgroundTheoremWitness] {

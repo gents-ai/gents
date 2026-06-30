@@ -689,9 +689,10 @@ impl DefraSessionHook {
         }
         let child_request_id = uuid::Uuid::new_v4().to_string();
         let tool_call_id = uuid::Uuid::new_v4().to_string();
+        let target_agent_did = spec.agent_did.clone();
         let bridge_args = serde_json::json!({
             "name": spec.target_name,
-            "agent_did": spec.agent_did,
+            "agent_did": target_agent_did.clone(),
             "behavior_id": spec.behavior_id,
             "prompt": spec.prompt,
             "deadline": serde_json::Value::Null,
@@ -711,6 +712,7 @@ impl DefraSessionHook {
             await_mode,
             CancelPolicy::Cascade,
             child_request_id.clone(),
+            target_agent_did,
         );
         lifecycle.set_workflow_group(workflow_group_id, workflow_role);
         // A background (cross-deployment) child that is never CLAIMED by its

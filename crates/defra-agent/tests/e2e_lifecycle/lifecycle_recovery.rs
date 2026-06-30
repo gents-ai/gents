@@ -403,6 +403,7 @@ async fn recover_all_cascades_interrupted_parent_to_subagent_child() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "tool-cascade-child".to_string(),
+        "did:defra-agent:target".to_string(),
     );
     lifecycle.start_running().await.unwrap();
 
@@ -458,6 +459,7 @@ async fn recover_all_leaves_detached_subagent_tool_running() {
         AwaitMode::Background,
         CancelPolicy::Detach,
         "tool-detach-child".to_string(),
+        "did:defra-agent:target".to_string(),
     );
     lifecycle.start_running().await.unwrap();
 

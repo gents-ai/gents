@@ -14,7 +14,9 @@ use crate::graphql::escape_graphql_string;
 use crate::identity::AgentIdentity;
 
 use super::network::{GraphqlNetworkStore, NetworkEndpointEntry, NetworkStore};
-use super::templates::{resolve_template, scope_filter, Delivery, PairingFilters, Scope};
+use super::templates::{
+    resolve_template, scope_filter, Delivery, DidSource, PairingFilters, Scope,
+};
 use super::{
     compute_owned_pairing_diff, DiffOp, EmbeddedRemoteP2pAdmin, PairingActual, PairingApplied,
     PairingDesired, RemoteP2pAdmin,
@@ -295,7 +297,17 @@ async fn apply_op(
             admin
                 .add_replicator(&addresses, &collections, &desired.replicator_filter)
                 .await
-                .with_context(|| format!("install P2P replicator {address}"))
+                .with_context(|| format!("install P2P replicator {address}"))?;
+            if desired.uses_subagent_template() {
+                tracing::warn!(
+                    address = %address,
+                    templates = ?desired.template_ids,
+                    "subagent pairing replicator installed; due to defradb.rs#1074, \
+                     pairing changes may not affect an already-running peer until the target \
+                     node restarts"
+                );
+            }
+            Ok(())
         }
         DiffOp::TeardownReplicator(address) => {
             let id = actual
@@ -423,7 +435,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
         let response = self.node.execute(&query).await;
         ensure_no_errors(&response, "query pairing desired state")?;
         let base = first_row::<PairingStateRow>(&response, "PeerPairingDesired")?
-            .map(desired_from_pairing_row)
+            .map(|row| desired_from_pairing_row(row, self.identity.did()))
             .transpose()?;
         let materialized_entry = self
             .data_plane_materialized_entry(&raw_peer_id)
@@ -587,7 +599,7 @@ struct PeerIdRow {
     peer_id: String,
 }
 
-fn desired_from_pairing_row(row: PairingStateRow) -> Result<PairingDesired> {
+fn desired_from_pairing_row(row: PairingStateRow, local_did: &str) -> Result<PairingDesired> {
     let replicator_addresses = row
         .replicator_addresses
         .unwrap_or_default()
@@ -623,9 +635,9 @@ fn desired_from_pairing_row(row: PairingStateRow) -> Result<PairingDesired> {
     // unscoped replicator. Refuse the row and skip this peer (caught per-peer by
     // the sweep), mirroring the discovery-side skip of blank-DID registry entries.
     let peer_did = row.agent_did.as_deref().map(str::trim).unwrap_or_default();
-    if peer_did.is_empty() && matches!(template.scope, Scope::PeerDid { .. }) {
+    if peer_did.is_empty() && scope_requires_peer_did(&template.scope) {
         anyhow::bail!(
-            "pairing row for peer-DID-scoped template {template_id:?} has a blank \
+            "pairing row for peer-DID-dependent template {template_id:?} has a blank \
              agent_did; refusing to install an unscoped replicator (skipping peer)"
         );
     }
@@ -634,7 +646,8 @@ fn desired_from_pairing_row(row: PairingStateRow) -> Result<PairingDesired> {
         .iter()
         .map(|&c| c.to_string())
         .collect::<BTreeSet<_>>();
-    let replicator_filter = scope_filter(&template.scope, template.collections, peer_did);
+    let replicator_filter =
+        scope_filter(&template.scope, template.collections, peer_did, local_did);
 
     let subscription_collections = match template.delivery {
         // Push: never subscribe — the filtered replicator is the only channel,
@@ -649,6 +662,7 @@ fn desired_from_pairing_row(row: PairingStateRow) -> Result<PairingDesired> {
         replicator_addresses,
         replicator_collections,
         replicator_filter,
+        template_ids: BTreeSet::from([template.id.to_string()]),
     })
 }
 
@@ -698,7 +712,17 @@ fn data_plane_desired_from_pairing_row(
 
     row.agent_did = Some(self_did.to_string());
     row.replicator_addresses = Some(vec![signed_endpoint.address.clone()]);
-    desired_from_pairing_row(row)
+    desired_from_pairing_row(row, self_did)
+}
+
+fn scope_requires_peer_did(scope: &Scope) -> bool {
+    match scope {
+        Scope::PeerDid { .. } => true,
+        Scope::Unscoped => false,
+        Scope::PerCollection(rules) => rules
+            .iter()
+            .any(|rule| matches!(rule.source, DidSource::PeerDid)),
+    }
 }
 
 /// Merge Layer-1 control-plane desired state with optional Layer-2 data-plane
@@ -728,6 +752,7 @@ pub fn merge_layered_desired(
             left.replicator_collections
                 .extend(right.replicator_collections);
             left.replicator_filter.extend(right.replicator_filter);
+            left.template_ids.extend(right.template_ids);
             Some(left)
         }
     }
@@ -829,12 +854,14 @@ mod tests {
             replicator_addresses: set(&["/ip4/1/tcp/1/p2p/peer-a"]),
             replicator_collections: set(&["AgentNetwork", "NetworkMembership"]),
             replicator_filter: PairingFilters::new(),
+            template_ids: BTreeSet::new(),
         };
         let data = PairingDesired {
             collections: set(&["AgentRequest"]),
             replicator_addresses: set(&["/ip4/1/tcp/1/p2p/peer-a"]),
             replicator_collections: set(&["AgentRequest"]),
             replicator_filter: one_filter("AgentRequest", "agent_did", "did:key:a"),
+            template_ids: BTreeSet::new(),
         };
 
         let merged = merge_layered_desired(Some(control), Some(data)).expect("merged desired");
@@ -868,6 +895,7 @@ mod tests {
             replicator_addresses: set(&["/ip4/1/tcp/1/p2p/peer-a"]),
             replicator_collections: set(&["AgentRequest"]),
             replicator_filter: one_filter("AgentRequest", "agent_did", "did:key:a"),
+            template_ids: BTreeSet::new(),
         };
 
         let merged = merge_layered_desired(None, Some(data)).expect("data-plane desired");
@@ -1386,9 +1414,11 @@ mod tests {
     /// (no gossip leak) and a per-peer scope filter over the template set.
     #[test]
     fn push_template_resolves_to_filter_without_subscription() {
-        let desired =
-            desired_from_pairing_row(desired_row(Some("conversation"), Some("did:key:bob")))
-                .expect("template resolves");
+        let desired = desired_from_pairing_row(
+            desired_row(Some("conversation"), Some("did:key:bob")),
+            "did:key:self",
+        )
+        .expect("template resolves");
 
         assert!(
             desired.collections.is_empty(),
@@ -1407,9 +1437,11 @@ mod tests {
     /// and carries an EMPTY (unfiltered) replicator filter.
     #[test]
     fn replicate_template_resolves_to_subscription_without_filter() {
-        let desired =
-            desired_from_pairing_row(desired_row(Some("agent-config"), Some("did:key:bob")))
-                .expect("template resolves");
+        let desired = desired_from_pairing_row(
+            desired_row(Some("agent-config"), Some("did:key:bob")),
+            "did:key:self",
+        )
+        .expect("template resolves");
 
         assert!(desired.collections.contains("AgentBehavior"));
         assert_eq!(desired.collections, desired.replicator_collections);
@@ -1423,14 +1455,17 @@ mod tests {
     /// backfill), and an unknown template also falls back to the default.
     #[test]
     fn missing_and_unknown_template_default_to_conversation() {
-        let missing = desired_from_pairing_row(desired_row(None, Some("did:key:bob")))
-            .expect("default resolves");
+        let missing =
+            desired_from_pairing_row(desired_row(None, Some("did:key:bob")), "did:key:self")
+                .expect("default resolves");
         assert!(missing.collections.is_empty());
         assert!(missing.replicator_filter.contains_key("AgentRequest"));
 
-        let unknown =
-            desired_from_pairing_row(desired_row(Some("not-a-template"), Some("did:key:bob")))
-                .expect("default resolves");
+        let unknown = desired_from_pairing_row(
+            desired_row(Some("not-a-template"), Some("did:key:bob")),
+            "did:key:self",
+        )
+        .expect("default resolves");
         assert_eq!(
             unknown.replicator_collections,
             missing.replicator_collections
@@ -1438,13 +1473,62 @@ mod tests {
         assert!(unknown.replicator_filter.contains_key("AgentRequest"));
     }
 
+    #[test]
+    fn subagent_coordinator_template_filters_parent_and_bridge_directionally() {
+        let desired = desired_from_pairing_row(
+            desired_row(Some("subagent-coordinator"), Some("did:key:host")),
+            "did:key:coord",
+        )
+        .expect("subagent coordinator template resolves");
+
+        assert!(desired.collections.is_empty());
+        assert_eq!(
+            desired.replicator_collections,
+            set(&["AgentRequest", "AgentToolCall"])
+        );
+        assert_eq!(
+            desired
+                .replicator_filter
+                .get("AgentRequest")
+                .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            Some(("agent_did", "did:key:coord"))
+        );
+        assert_eq!(
+            desired
+                .replicator_filter
+                .get("AgentToolCall")
+                .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            Some(("spawn_target_did", "did:key:host"))
+        );
+    }
+
+    #[test]
+    fn subagent_host_template_filters_conversation_to_local_host() {
+        let desired = desired_from_pairing_row(
+            desired_row(Some("subagent-host"), Some("did:key:coord")),
+            "did:key:host",
+        )
+        .expect("subagent host template resolves");
+
+        assert!(desired.collections.is_empty());
+        assert!(desired.replicator_collections.contains("AgentToolCall"));
+        assert_eq!(desired.replicator_filter.len(), 8);
+        for predicate in desired.replicator_filter.values() {
+            assert_eq!(predicate.field, "agent_did");
+            assert_eq!(predicate.value, "did:key:host");
+        }
+    }
+
     /// End-to-end reconcile of a `Push` (conversation) template: a filtered
     /// replicator is installed and NO subscription (`add_p2p_collections`) is.
     #[tokio::test]
     async fn push_template_installs_filtered_replicator_without_subscription() {
         let store = MockStore::with_desired(Some(
-            desired_from_pairing_row(desired_row(Some("conversation"), Some("did:key:bob")))
-                .expect("template resolves"),
+            desired_from_pairing_row(
+                desired_row(Some("conversation"), Some("did:key:bob")),
+                "did:key:self",
+            )
+            .expect("template resolves"),
         ));
         let admin = MockAdmin::default();
 
@@ -1482,8 +1566,11 @@ mod tests {
     #[tokio::test]
     async fn replicate_template_subscribes_and_replicates() {
         let store = MockStore::with_desired(Some(
-            desired_from_pairing_row(desired_row(Some("agent-config"), Some("did:key:bob")))
-                .expect("template resolves"),
+            desired_from_pairing_row(
+                desired_row(Some("agent-config"), Some("did:key:bob")),
+                "did:key:self",
+            )
+            .expect("template resolves"),
         ));
         let admin = MockAdmin::default();
 
@@ -1521,8 +1608,11 @@ mod tests {
     #[tokio::test]
     async fn changing_scoped_did_reinstalls_replicator() {
         let store = MockStore::with_desired(Some(
-            desired_from_pairing_row(desired_row(Some("conversation"), Some("did:key:bob")))
-                .expect("template resolves"),
+            desired_from_pairing_row(
+                desired_row(Some("conversation"), Some("did:key:bob")),
+                "did:key:self",
+            )
+            .expect("template resolves"),
         ));
         // Applied state: addr1 already installed under a DIFFERENT (alice) filter.
         let mut alice_filter = PairingFilters::default();

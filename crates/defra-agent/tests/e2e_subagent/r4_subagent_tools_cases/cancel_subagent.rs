@@ -91,6 +91,7 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
         AwaitMode::Background,
         CancelPolicy::Cascade,
         grandchild_request_id.to_string(),
+        agent_did.clone(),
     );
     descendant_bridge.start_running().await.unwrap();
     let _grandchild_session_id = create_subagent_request_with_request_id(

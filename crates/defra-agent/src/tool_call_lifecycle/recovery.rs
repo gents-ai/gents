@@ -65,6 +65,8 @@ struct RunningToolCallRow {
     #[serde(default)]
     child_request_id: Option<String>,
     #[serde(default)]
+    spawn_target_did: Option<String>,
+    #[serde(default)]
     unclaimed_deadline_at: Option<String>,
 }
 
@@ -296,6 +298,35 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
                 continue;
             }
         };
+        let row_spawn_target_did =
+            non_empty(row.spawn_target_did.as_deref()).map(ToOwned::to_owned);
+        let args_target_did = non_empty(spawn_args.agent_did.as_deref()).map(ToOwned::to_owned);
+        if let (Some(row_did), Some(args_did)) = (&row_spawn_target_did, &args_target_did) {
+            if row_did != args_did {
+                let failed = fail_unauthorized_orphan_subagent_tool_call(
+                    node,
+                    &row,
+                    "/agent_did",
+                    args_did,
+                    "subagent target DID args do not match immutable spawn_target_did",
+                    &[],
+                )
+                .await?;
+                tracing::warn!(
+                    doc_id = %row.doc_id,
+                    request_id = %parent_request_id,
+                    session_id = %row.session_id,
+                    tool_call_id = %row.tool_call_id,
+                    child_request_id = %child_request_id,
+                    spawn_target_did = %row_did,
+                    args_agent_did = %args_did,
+                    failed_tool_call = failed,
+                    "cannot materialize orphan subagent child because target DID fields differ"
+                );
+                continue;
+            }
+        }
+        let resolved_target_did = row_spawn_target_did.or(args_target_did);
 
         let parent_depth = parent
             .subagent_depth
@@ -364,13 +395,7 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
             continue;
         }
 
-        let child_agent_did = spawn_args
-            .agent_did
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
-            .unwrap_or_else(|| parent.agent_did.clone());
+        let child_agent_did = resolved_target_did.unwrap_or_else(|| parent.agent_did.clone());
         if let Err(error) = create_subagent_request_with_request_id(
             node,
             child_request_id.clone(),
@@ -605,6 +630,7 @@ async fn load_running_tool_call_rows_with_filter(
             cancel_policy
             cancel_cause
             child_request_id
+            spawn_target_did
             unclaimed_deadline_at
         }}
     }}"#
@@ -1406,10 +1432,16 @@ async fn recover_tool_call_row(
 }
 
 fn parse_datetime(value: Option<&str>) -> Option<DateTime<Utc>> {
-    value
-        .filter(|value| !value.is_empty())
+    non_empty(value)
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|datetime| datetime.with_timezone(&Utc))
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    })
 }
 
 fn effective_deadline(

@@ -208,6 +208,7 @@ impl DiscoveredEntry {
             .iter()
             .map(|t| t.trim())
             .filter(|t| !t.is_empty())
+            .filter(|t| !t.starts_with("subagent-"))
             .collect();
         if offered.contains(&PREFERRED_DISCOVERY_TEMPLATE) {
             if let Some(t) = resolve_template(PREFERRED_DISCOVERY_TEMPLATE) {
@@ -954,6 +955,18 @@ mod tests {
         let mut e = entry("p", true);
         e.templates = vec!["nope".into(), "agent-config".into()];
         assert_eq!(e.chosen_template().map(|t| t.id), Some("agent-config"));
+    }
+
+    #[test]
+    fn chosen_template_skips_directional_subagent_roles() {
+        let mut e = entry("p", true);
+        e.templates = vec!["subagent-host".into(), "agent-config".into()];
+        assert_eq!(e.chosen_template().map(|t| t.id), Some("agent-config"));
+
+        let mut only_subagent = entry("p", true);
+        only_subagent.templates = vec!["subagent-coordinator".into(), "subagent-host".into()];
+        assert!(only_subagent.chosen_template().is_none());
+        assert!(only_subagent.desired_collections().is_none());
     }
 
     #[test]

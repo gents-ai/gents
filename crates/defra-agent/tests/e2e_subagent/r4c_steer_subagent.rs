@@ -692,6 +692,7 @@ async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
         AwaitMode::Background,
         CancelPolicy::Cascade,
         grandchild_request_id.to_string(),
+        AGENT_DID.to_string(),
     );
     descendant_bridge.start_running().await.unwrap();
     let _grandchild_session_id = create_subagent_request_with_request_id(

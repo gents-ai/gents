@@ -579,6 +579,11 @@ def caseCoverage : List CoverageEntry :=
       "defra_agent_desktop_tauri::bridge::snapshot::tests::subagent_lineage::subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases")
       "subagents-cross-deployment" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "cancel_propagation_cases"
+      "CancelPropagationCases"
+      "conformance::cancel_propagation_cases_drive_production_interrupt")
+      "interrupt-and-cancel" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "r6_background_theorem_witnesses"
       "BackgroundBudgetBoundedTheoremWitness"
       "conformance::generated_r6_background_theorem_witnesses_drive_admission_budget_invariant")

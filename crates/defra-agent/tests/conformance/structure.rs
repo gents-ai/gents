@@ -42,6 +42,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("CommandPolicy", Module("conformance/command_policy.rs")),
         ("Compaction", Module("conformance/streaming_compaction.rs")),
         (
+            "CancelPropagation",
+            Module("conformance/cancel_propagation.rs"),
+        ),
+        (
             "CrossMachineComposed",
             Module("conformance/r5_cross_deployment.rs"),
         ),

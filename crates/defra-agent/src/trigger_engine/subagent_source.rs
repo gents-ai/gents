@@ -75,6 +75,8 @@ struct ToolCallRow {
     cancel_policy: Option<String>,
     #[serde(default)]
     child_request_id: Option<String>,
+    #[serde(default)]
+    spawn_target_did: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -271,6 +273,7 @@ impl SubagentSource {
                     await_mode
                     cancel_policy
                     child_request_id
+                    spawn_target_did
                 }}
             }}"#
         );
@@ -493,6 +496,33 @@ impl SubagentSource {
             None => return Ok(None),
         };
         let spawn_args: SpawnArgs = serde_json::from_str(&row.args)?;
+        let row_spawn_target_did =
+            non_empty(row.spawn_target_did.as_deref()).map(ToOwned::to_owned);
+        let args_target_did = non_empty(spawn_args.agent_did.as_deref()).map(ToOwned::to_owned);
+        if let (Some(row_did), Some(args_did)) = (&row_spawn_target_did, &args_target_did) {
+            if row_did != args_did {
+                let failed = self
+                    .fail_unauthorized_tool_call(
+                        &row,
+                        "/agent_did",
+                        args_did,
+                        "subagent target DID args do not match immutable spawn_target_did",
+                        &[],
+                    )
+                    .await?;
+                self.processed_tool_calls.insert(processed_key);
+                tracing::warn!(
+                    parent_request_id = %parent_request_id,
+                    parent_tool_call_id = %parent_tool_call_id,
+                    spawn_target_did = %row_did,
+                    args_agent_did = %args_did,
+                    failed_tool_call = failed,
+                    "subagent source rejected spawn with mismatched target DID fields",
+                );
+                return Ok(None);
+            }
+        }
+        let resolved_target_did = row_spawn_target_did.clone().or(args_target_did);
         let await_mode = row
             .await_mode
             .as_deref()
@@ -508,6 +538,28 @@ impl SubagentSource {
         let trusted_paired_peer = snapshot.paired_peer_dids.contains(&parent_authoring_did);
         let tool_name = non_empty(Some(&row.tool_name)).unwrap_or("spawn_subagent");
         if trusted_paired_peer {
+            let local_did = snapshot.local_did.trim();
+            let Some(spawn_target_did) = row_spawn_target_did.as_deref() else {
+                tracing::debug!(
+                    parent_request_id = %parent_request_id,
+                    parent_tool_call_id = %parent_tool_call_id,
+                    parent_authoring_did = %parent_authoring_did,
+                    local_did = %local_did,
+                    "subagent source skipping trusted spawn: immutable spawn target is missing",
+                );
+                return Ok(None);
+            };
+            if local_did.is_empty() || spawn_target_did != local_did {
+                tracing::debug!(
+                    parent_request_id = %parent_request_id,
+                    parent_tool_call_id = %parent_tool_call_id,
+                    parent_authoring_did = %parent_authoring_did,
+                    spawn_target_did = %spawn_target_did,
+                    local_did = %local_did,
+                    "subagent source skipping trusted spawn: immutable spawn target is not this host DID",
+                );
+                return Ok(None);
+            }
             // The trusted-paired-peer branch is a CROSS-DEPLOYMENT spawn (the
             // parent DID is a paired peer, not this node). It bypasses
             // `subagent_spawn_denial`, so it must gate on the TARGET behavior's
@@ -617,16 +669,6 @@ impl SubagentSource {
             );
             return Ok(None);
         }
-
-        // The child is owned by the RESOLVED target's `agent_did` carried in the
-        // bridge args (#377). Legacy fixtures that omit `agent_did` fall back to
-        // the parent's DID.
-        let resolved_target_did = spawn_args
-            .agent_did
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string);
 
         // DID-anchored single-creator gate (audit Finding 2). On the non-trusted
         // path a node may ONLY materialize a child addressed to its OWN DID.

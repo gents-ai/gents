@@ -220,6 +220,32 @@ def r5CrossDeploymentCaseJson (witness : R5CrossDeploymentCase) : String :=
     ++ "\"unclaimed_deadline_set\":" ++ boolString witness.unclaimedDeadlineSet
     ++ "}"
 
+def cancelPropagationCaseJson (witness : CancelPropagationCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"route\":" ++ jsonString witness.route ++ ","
+    ++ "\"action\":" ++ jsonString witness.action ++ ","
+    ++ "\"parent_deployment\":" ++ jsonString witness.parentDeployment ++ ","
+    ++ "\"child_deployment\":" ++ jsonString witness.childDeployment ++ ","
+    ++ "\"parent_request_id\":" ++ jsonString witness.parentRequestId ++ ","
+    ++ "\"parent_tool_call_id\":" ++ jsonString witness.parentToolCallId ++ ","
+    ++ "\"child_request_id\":" ++ jsonString witness.childRequestId ++ ","
+    ++ "\"bridge_collection\":" ++ jsonString witness.bridgeCollection ++ ","
+    ++ "\"child_request_collection\":"
+      ++ jsonString witness.childRequestCollection ++ ","
+    ++ "\"cancel_intent_written_on_bridge\":"
+      ++ boolString witness.cancelIntentWrittenOnBridge ++ ","
+    ++ "\"bridge_cancel_replicates_to_host\":"
+      ++ boolString witness.bridgeCancelReplicatesToHost ++ ","
+    ++ "\"host_interrupts_child\":"
+      ++ boolString witness.hostInterruptsChild ++ ","
+    ++ "\"child_terminal_replicates_to_coordinator\":"
+      ++ boolString witness.childTerminalReplicatesToCoordinator ++ ","
+    ++ "\"cancel_ack_returns_to_coordinator\":"
+      ++ boolString witness.cancelAckReturnsToCoordinator ++ ","
+    ++ "\"no_third_party_rows\":" ++ boolString witness.noThirdPartyRows
+    ++ "}"
+
 def backgroundTheoremWitnessJson (witness : BackgroundTheoremWitness) : String :=
   "{"
     ++ "\"theorem_name\":" ++ jsonString witness.theoremName ++ ","

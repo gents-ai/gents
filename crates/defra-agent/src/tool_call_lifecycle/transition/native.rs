@@ -57,6 +57,14 @@ impl ToolCallLifecycle {
                     format!(r#"child_request_id: "{escaped_crid}","#)
                 })
                 .unwrap_or_default();
+            let spawn_target_field = self
+                .spawn_target_did
+                .as_ref()
+                .map(|did| {
+                    let escaped_did = escape_graphql_string(did);
+                    format!(r#"spawn_target_did: "{escaped_did}","#)
+                })
+                .unwrap_or_default();
             let unclaimed_deadline_field = self
                 .unclaimed_deadline_at
                 .map(|deadline| {
@@ -68,6 +76,7 @@ impl ToolCallLifecycle {
                 .unwrap_or_default();
             format!(
                 r#"{child_field}
+                    {spawn_target_field}
                     {unclaimed_deadline_field}
                     await_mode: "{await_mode_str}",
                     cancel_policy: "{cancel_policy_str}","#
