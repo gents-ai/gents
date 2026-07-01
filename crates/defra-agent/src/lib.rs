@@ -206,9 +206,13 @@ pub mod __test_internals {
     pub use crate::agent::principal_assembly::{
         assemble_principal_and_behaviors, BehaviorBuildError,
     };
-    pub use crate::background_tools::handle_list_subagents;
     pub use crate::background_tools::r4c_args::{
-        ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse,
+        ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse, ReadSubagentArgs,
+        ReadSubagentResponse,
+    };
+    pub use crate::background_tools::{
+        handle_list_subagents, handle_read_subagent, load_steer_subagent_target, ChildEdge,
+        SteerSubagentTarget, AWAITING_CHILD_MATERIALIZATION,
     };
     pub use crate::trigger_engine::run_subagent_source_for_test;
 }

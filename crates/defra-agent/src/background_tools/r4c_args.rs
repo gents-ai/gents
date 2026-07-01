@@ -74,7 +74,7 @@ impl ListBackgroundToolsArgs {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct ReadSubagentArgs {
+pub struct ReadSubagentArgs {
     pub(crate) child_request_id: String,
     /// Resume cursor: first transcript sequence to include (default 0 = start).
     #[serde(default)]
@@ -168,6 +168,13 @@ pub struct ListSubagentsEntry {
     pub created_at: DateTime<Utc>,
     pub last_update: DateTime<Utc>,
     pub depth: u32,
+    /// #593: present only on a bridge-level entry whose child `AgentRequest`
+    /// has not materialized (status `awaiting_child_materialization`) or
+    /// whose bridge went terminal without one; explains the bridge state.
+    /// Materialized children never carry it, so the happy-path shape is
+    /// unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -198,24 +205,30 @@ pub(crate) struct ListBackgroundToolsResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct ReadSubagentResponse {
-    pub(crate) child_request_id: String,
-    pub(crate) child_session_id: String,
-    pub(crate) from_sequence: u64,
-    pub(crate) through_sequence: u64,
+pub struct ReadSubagentResponse {
+    pub child_request_id: String,
+    pub child_session_id: String,
+    pub from_sequence: u64,
+    pub through_sequence: u64,
     /// Resume cursor: pass as `since_sequence` on the next read to continue
     /// gap-free from exactly where this page stopped.
-    pub(crate) next_sequence: u64,
+    pub next_sequence: u64,
     /// True when the token budget (or per-page block ceiling) capped this read
     /// and more messages exist at or after `next_sequence`.
-    pub(crate) has_more: bool,
+    pub has_more: bool,
     /// True when the subagent has reached a terminal lifecycle state and will
     /// produce no further transcript output (stop polling once drained).
-    pub(crate) terminal: bool,
+    pub terminal: bool,
     /// The subagent's current lifecycle state (e.g. "running", "completed",
-    /// "failed"), so the model can decide whether to keep polling.
-    pub(crate) lifecycle_state: String,
-    pub(crate) transcript: String,
+    /// "failed"), so the model can decide whether to keep polling. #593: for
+    /// a background bridge whose child has not materialized, this is the
+    /// projected `awaiting_child_materialization` (non-terminal).
+    pub lifecycle_state: String,
+    /// #593: present only when the child `AgentRequest` has not materialized;
+    /// explains the bridge state behind the empty transcript.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
+    pub transcript: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

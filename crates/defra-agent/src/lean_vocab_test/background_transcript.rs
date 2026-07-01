@@ -55,6 +55,20 @@ pub(crate) enum LeanR4cBackgroundWorkCase {
         queued_request_id: String,
         queue_interrupted_request_id: String,
     },
+    #[serde(rename = "r4c.list_subagents.unmaterialized_child_visible")]
+    UnmaterializedChildVisible {
+        caller_request_id: String,
+        bridge_tool_call_id: String,
+        child_request_id: String,
+        child_materialized: bool,
+        bridge_lifecycle_state: String,
+        listed_status: String,
+        listed_under_all_filter: bool,
+        listed_under_running_filter: bool,
+        read_lifecycle_state: String,
+        read_terminal: bool,
+        wait_retryable: bool,
+    },
 }
 
 impl LeanR4cBackgroundWorkCase {
@@ -74,6 +88,9 @@ impl LeanR4cBackgroundWorkCase {
                 "r4c.steer_subagent.append_preserves_lineage"
             }
             Self::SteerInterruptComposes { .. } => "r4c.steer_subagent.interrupt_composes",
+            Self::UnmaterializedChildVisible { .. } => {
+                "r4c.list_subagents.unmaterialized_child_visible"
+            }
         }
     }
 }

@@ -79,6 +79,27 @@ def r4cSteerAppendPreservesLineageJson
     ++ "\"queue_policy\":" ++ jsonString witness.queuePolicy
     ++ "}"
 
+def r4cUnmaterializedChildVisibleJson
+    (witness : R4cWitnesses.UnmaterializedChildVisible) : String :=
+  "{"
+    ++ "\"witness\":"
+      ++ jsonString "r4c.list_subagents.unmaterialized_child_visible" ++ ","
+    ++ "\"caller_request_id\":" ++ jsonString witness.callerRequestId ++ ","
+    ++ "\"bridge_tool_call_id\":" ++ jsonString witness.bridgeToolCallId ++ ","
+    ++ "\"child_request_id\":" ++ jsonString witness.childRequestId ++ ","
+    ++ "\"child_materialized\":" ++ boolString witness.childMaterialized ++ ","
+    ++ "\"bridge_lifecycle_state\":"
+      ++ jsonString witness.bridgeLifecycleState ++ ","
+    ++ "\"listed_status\":" ++ jsonString witness.listedStatus ++ ","
+    ++ "\"listed_under_all_filter\":"
+      ++ boolString witness.listedUnderAllFilter ++ ","
+    ++ "\"listed_under_running_filter\":"
+      ++ boolString witness.listedUnderRunningFilter ++ ","
+    ++ "\"read_lifecycle_state\":" ++ jsonString witness.readLifecycleState ++ ","
+    ++ "\"read_terminal\":" ++ boolString witness.readTerminal ++ ","
+    ++ "\"wait_retryable\":" ++ boolString witness.waitRetryable
+    ++ "}"
+
 def r4cSteerInterruptComposesJson
     (witness : R4cWitnesses.SteerInterruptComposes) : String :=
   "{"
@@ -140,6 +161,26 @@ def r4cReadToolOutputDispatchesByState :
   , terminalPayload := "persisted-completion-stdout"
   }
 
+-- #593 fixed witness: the bridge exists and is `running`, the child row is
+-- absent, and every parent-facing surface stays observable — the list entry
+-- projects `awaiting_child_materialization` (visible under both the `all`
+-- and default `running` filters), the read explains the same projection
+-- without faking a terminal outcome, and the wait payload is retryable.
+def r4cUnmaterializedChildVisible :
+    R4cWitnesses.UnmaterializedChildVisible :=
+  { callerRequestId := "r4c-w7-caller"
+  , bridgeToolCallId := "r4c-w7-bridge-call"
+  , childRequestId := "r4c-w7-child"
+  , childMaterialized := false
+  , bridgeLifecycleState := "running"
+  , listedStatus := "awaiting_child_materialization"
+  , listedUnderAllFilter := true
+  , listedUnderRunningFilter := true
+  , readLifecycleState := "awaiting_child_materialization"
+  , readTerminal := false
+  , waitRetryable := true
+  }
+
 def r4cSteerAppendPreservesLineage :
     R4cWitnesses.SteerAppendPreservesLineage :=
   { callerRequestId := "r4c-w5-caller"
@@ -168,6 +209,7 @@ def r4cBackgroundWorkCasesJson : List String :=
   , r4cReadToolOutputDispatchesByStateJson r4cReadToolOutputDispatchesByState
   , r4cSteerAppendPreservesLineageJson r4cSteerAppendPreservesLineage
   , r4cSteerInterruptComposesJson r4cSteerInterruptComposes
+  , r4cUnmaterializedChildVisibleJson r4cUnmaterializedChildVisible
   ]
 
 def r6BackgroundingCaseJson (witness : R6BackgroundingCase) : String :=

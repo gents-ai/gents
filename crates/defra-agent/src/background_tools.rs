@@ -39,6 +39,16 @@ use self::transcript_render::{
     render_transcript, MessageKindView, MessageRoleView, MessageView, RenderOptions,
 };
 
+/// #593: projected status served by `list_subagents`/`read_subagent` for a
+/// background spawn bridge whose child `AgentRequest` has not materialized
+/// yet (spawn convergence #377 creates the child asynchronously via
+/// `SubagentSource`; a cross-deployment child appears only after the owning
+/// peer claims and replicates it). This is a read-side projection of
+/// (bridge `await_mode = background` ∧ bridge non-terminal ∧ child row
+/// absent) — it is never persisted as a bridge `lifecycle_state`. Pinned by
+/// the Lean witness `r4c.list_subagents.unmaterialized_child_visible`.
+pub const AWAITING_CHILD_MATERIALIZATION: &str = "awaiting_child_materialization";
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct SpawnSubagentArgs {
     /// Friendly, model-facing name of an allowed subagent target. The runtime
@@ -223,7 +233,7 @@ pub(crate) fn subagent_spawn_denial(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ChildEdge {
+pub struct ChildEdge {
     pub parent_tool_call_id: String,
     pub child_request_id: String,
     pub child_session_id: String,
@@ -273,6 +283,7 @@ struct ListSubagentBridgeRow {
     await_mode: Option<String>,
     started_at: Option<String>,
     completed_at: Option<String>,
+    unclaimed_deadline_at: Option<String>,
     /// Raw JSON bridge args — we extract the `name` field here.
     args: Option<String>,
 }
@@ -365,10 +376,17 @@ pub(crate) enum ReadToolOutputOutcome {
     NotBackgrounded,
 }
 
-pub(crate) enum SteerSubagentTarget {
+#[derive(Debug)]
+pub enum SteerSubagentTarget {
     Found(ChildEdge),
     NotAuthorized,
     NotBackgrounded,
+    /// #593: the caller owns a background spawn bridge for this child, but
+    /// the child `AgentRequest` has not materialized yet. The message
+    /// explains the bridge state instead of collapsing into not-authorized.
+    AwaitingMaterialization {
+        message: String,
+    },
     Terminal(String),
 }
 
@@ -396,6 +414,7 @@ pub async fn handle_list_subagents(
                 await_mode
                 started_at
                 completed_at
+                unclaimed_deadline_at
                 args
             }}
         }}"#
@@ -446,50 +465,99 @@ pub async fn handle_list_subagents(
         let Some(child_request_id) = non_empty_string(bridge.child_request_id.as_deref()) else {
             continue;
         };
-        let status = bridge
+        let bridge_status = bridge
             .lifecycle_state
             .as_deref()
             .filter(|state| !state.trim().is_empty())
             .unwrap_or("running");
-        if !list_subagent_status_matches(args.status, status) {
-            continue;
-        }
-        let Some(child) = children_by_request.get(&child_request_id) else {
-            continue;
-        };
-        let created_at = parse_rfc3339(Some(&child.created_at)).ok_or_else(|| {
-            anyhow!("child AgentRequest {child_request_id} has invalid created_at")
-        })?;
-        let last_update = parse_rfc3339(bridge.completed_at.as_deref())
-            .or_else(|| parse_rfc3339(bridge.started_at.as_deref()))
-            .unwrap_or(created_at);
 
-        // Extract the model-facing `name` from the bridge args JSON. The
-        // named-target redesign (#377) always writes `name` into the bridge
-        // args payload; older or malformed records fall back to empty string.
-        let target_name = bridge
+        // Extract the model-facing `name` (and, for a bridge-level entry, the
+        // resolved `behavior_id`) from the bridge args JSON. The named-target
+        // redesign (#377) always writes both into the bridge args payload;
+        // older or malformed records fall back to empty string.
+        let bridge_args = bridge
             .args
             .as_deref()
-            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-            .and_then(|v| {
-                v.get("name")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            })
-            .and_then(|s| non_empty_string(Some(&s)))
-            .unwrap_or_default();
-        entries.push(ListSubagentsEntry {
-            child_request_id,
-            child_session_id: child.session_id.clone(),
-            name: target_name,
-            behavior_id: non_empty_string(child.behavior_id.as_deref()).unwrap_or_default(),
-            deployment_id: local_deployment_id.to_string(),
-            await_mode: "background".to_string(),
-            status: status.to_string(),
-            created_at,
-            last_update,
-            depth: child.subagent_depth.unwrap_or_default(),
-        });
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
+        let bridge_arg = |key: &str| {
+            bridge_args
+                .as_ref()
+                .and_then(|v| v.get(key).and_then(serde_json::Value::as_str))
+                .and_then(|s| non_empty_string(Some(s)))
+                .unwrap_or_default()
+        };
+
+        let entry = match children_by_request.get(&child_request_id) {
+            Some(child) => {
+                if !list_subagent_status_matches(args.status, bridge_status) {
+                    continue;
+                }
+                let created_at = parse_rfc3339(Some(&child.created_at)).ok_or_else(|| {
+                    anyhow!("child AgentRequest {child_request_id} has invalid created_at")
+                })?;
+                let last_update = parse_rfc3339(bridge.completed_at.as_deref())
+                    .or_else(|| parse_rfc3339(bridge.started_at.as_deref()))
+                    .unwrap_or(created_at);
+                ListSubagentsEntry {
+                    child_request_id,
+                    child_session_id: child.session_id.clone(),
+                    name: bridge_arg("name"),
+                    behavior_id: non_empty_string(child.behavior_id.as_deref()).unwrap_or_default(),
+                    deployment_id: local_deployment_id.to_string(),
+                    await_mode: "background".to_string(),
+                    status: bridge_status.to_string(),
+                    created_at,
+                    last_update,
+                    depth: child.subagent_depth.unwrap_or_default(),
+                    diagnostic: None,
+                }
+            }
+            None => {
+                // #593: the child `AgentRequest` has not materialized (it is
+                // created asynchronously by the claiming deployment; a
+                // cross-deployment child appears only after replication). A
+                // returned background child id must never disappear from the
+                // control plane, so surface the bridge-level handle with a
+                // projected status instead of dropping it.
+                let status = if bridge_state_is_terminal(bridge_status) {
+                    bridge_status.to_string()
+                } else {
+                    AWAITING_CHILD_MATERIALIZATION.to_string()
+                };
+                if !list_subagent_status_matches(args.status, &status) {
+                    continue;
+                }
+                let created_at = parse_rfc3339(bridge.started_at.as_deref())
+                    .or_else(|| parse_rfc3339(bridge.completed_at.as_deref()))
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "bridge AgentToolCall {} has invalid started_at",
+                            bridge.tool_call_id
+                        )
+                    })?;
+                let last_update =
+                    parse_rfc3339(bridge.completed_at.as_deref()).unwrap_or(created_at);
+                let diagnostic = unmaterialized_child_diagnostic(
+                    &bridge.tool_call_id,
+                    bridge_status,
+                    bridge.unclaimed_deadline_at.as_deref(),
+                );
+                ListSubagentsEntry {
+                    child_request_id,
+                    child_session_id: String::new(),
+                    name: bridge_arg("name"),
+                    behavior_id: bridge_arg("behavior_id"),
+                    deployment_id: local_deployment_id.to_string(),
+                    await_mode: "background".to_string(),
+                    status,
+                    created_at,
+                    last_update,
+                    depth: 0,
+                    diagnostic: Some(diagnostic),
+                }
+            }
+        };
+        entries.push(entry);
     }
 
     let truncated = entries.len() > limit;
@@ -592,7 +660,7 @@ pub(crate) async fn handle_list_background_tools(
     })
 }
 
-pub(crate) async fn handle_read_subagent(
+pub async fn handle_read_subagent(
     node: &EmbeddedNode,
     caller_request_id: &str,
     args: ReadSubagentArgs,
@@ -601,7 +669,40 @@ pub(crate) async fn handle_read_subagent(
     let Some(edge) =
         load_readable_background_child_edge(node, caller_request_id, child_request_id).await?
     else {
-        return Ok(None);
+        // #593: distinguish "no such child edge for this caller" from "the
+        // caller owns a background spawn bridge whose child has not
+        // materialized". The bridge-level handle stays readable: an empty
+        // transcript with the projected (never faked-terminal) state.
+        let Some(bridge) = load_spawn_bridge_row(node, caller_request_id, child_request_id).await?
+        else {
+            return Ok(None);
+        };
+        if !bridge.is_background() {
+            return Ok(None);
+        }
+        let terminal = bridge.is_terminal();
+        let lifecycle_state = if terminal {
+            bridge.status().to_string()
+        } else {
+            AWAITING_CHILD_MATERIALIZATION.to_string()
+        };
+        let diagnostic = unmaterialized_child_diagnostic(
+            &bridge.tool_call_id,
+            bridge.status(),
+            bridge.unclaimed_deadline_at.as_deref(),
+        );
+        return Ok(Some(ReadSubagentResponse {
+            child_request_id: child_request_id.to_string(),
+            child_session_id: String::new(),
+            from_sequence: 0,
+            through_sequence: 0,
+            next_sequence: 0,
+            has_more: false,
+            terminal,
+            lifecycle_state,
+            diagnostic: Some(diagnostic),
+            transcript: String::new(),
+        }));
     };
 
     // Project the child's terminal status so the model knows whether to keep
@@ -690,6 +791,7 @@ pub(crate) async fn handle_read_subagent(
         has_more: rendered.has_more,
         terminal,
         lifecycle_state,
+        diagnostic: None,
         transcript: rendered.transcript,
     }))
 }
@@ -1028,7 +1130,7 @@ fn read_retained_output_slice(
     }
 }
 
-pub(crate) async fn load_steer_subagent_target(
+pub async fn load_steer_subagent_target(
     node: &EmbeddedNode,
     caller_request_id: &str,
     child_request_id: &str,
@@ -1040,7 +1142,21 @@ pub(crate) async fn load_steer_subagent_target(
     let edge = match load_authorized_child_edge(node, &parent_context, child_request_id).await {
         Ok(edge) => edge,
         Err(error) if authorization_lookup_error(&error, caller_request_id, child_request_id) => {
-            return Ok(SteerSubagentTarget::NotAuthorized);
+            // #593: if the caller owns a spawn bridge for this child, the id
+            // is real — report the bridge state instead of not-authorized.
+            let Some(bridge) =
+                load_spawn_bridge_row(node, caller_request_id, child_request_id).await?
+            else {
+                return Ok(SteerSubagentTarget::NotAuthorized);
+            };
+            if !bridge.is_background() {
+                return Ok(SteerSubagentTarget::NotBackgrounded);
+            }
+            if bridge.is_terminal() {
+                return Ok(SteerSubagentTarget::Terminal(bridge.status().to_string()));
+            }
+            let (message, _retryable) = bridge.unmaterialized_child_explanation(child_request_id);
+            return Ok(SteerSubagentTarget::AwaitingMaterialization { message });
         }
         Err(error) => return Err(error),
     };
@@ -1339,23 +1455,55 @@ fn persisted_stream_body(value: &str) -> String {
 }
 
 fn list_subagent_status_matches(filter: ListStatusFilter, status: &str) -> bool {
-    list_status_matches(filter, status)
+    match filter {
+        // #593: the awaiting-materialization projection is non-terminal, so
+        // the default `running` filter must show the handle.
+        ListStatusFilter::Running => {
+            status == "running" || status == AWAITING_CHILD_MATERIALIZATION
+        }
+        _ => list_status_matches(filter, status),
+    }
 }
 
 fn list_status_matches(filter: ListStatusFilter, status: &str) -> bool {
     match filter {
         ListStatusFilter::Running => status == "running",
-        ListStatusFilter::Terminal => matches!(
-            status,
-            "completed"
-                | "failed"
-                | "timedOut"
-                | "cancelled"
-                | "dead"
-                | "interrupted"
-                | "superseded"
-        ),
+        ListStatusFilter::Terminal => bridge_state_is_terminal(status),
         ListStatusFilter::All => !status.trim().is_empty(),
+    }
+}
+
+fn bridge_state_is_terminal(status: &str) -> bool {
+    matches!(
+        status,
+        "completed" | "failed" | "timedOut" | "cancelled" | "dead" | "interrupted" | "superseded"
+    )
+}
+
+/// #593: parent-facing explanation for a background spawn bridge whose child
+/// `AgentRequest` row is absent.
+fn unmaterialized_child_diagnostic(
+    tool_call_id: &str,
+    bridge_status: &str,
+    unclaimed_deadline_at: Option<&str>,
+) -> String {
+    if bridge_state_is_terminal(bridge_status) {
+        format!(
+            "spawn bridge {tool_call_id} reached terminal state '{bridge_status}' without a \
+             materialized child request (e.g. no paired deployment claimed the spawn)"
+        )
+    } else {
+        let deadline_clause = unclaimed_deadline_at
+            .filter(|value| !value.trim().is_empty())
+            .map(|deadline| {
+                format!("; the spawn fails as no_peer_claimed_spawn if unclaimed by {deadline}")
+            })
+            .unwrap_or_default();
+        format!(
+            "spawn bridge {tool_call_id} is running but the child request has not materialized \
+             yet (it is created asynchronously by the claiming deployment; a cross-deployment \
+             child appears only after peer replication){deadline_clause}"
+        )
     }
 }
 
@@ -1765,6 +1913,61 @@ mod cross_deployment_timeout_tests {
                 .expect("empty local DID must be treated as remote and denied");
         assert!(denial.message.contains("cross-deployment"));
     }
+
+    #[test]
+    fn unmaterialized_explanation_is_retryable_until_bridge_terminal() {
+        let running = SpawnBridgeRow {
+            tool_call_id: "tc-running".to_string(),
+            lifecycle_state: Some("running".to_string()),
+            await_mode: Some("background".to_string()),
+            unclaimed_deadline_at: Some("2026-07-01T00:01:00Z".to_string()),
+        };
+        let (message, retryable) = running.unmaterialized_child_explanation("child-1");
+        assert!(retryable, "non-terminal bridge must be retryable");
+        assert!(message.contains("child-1"));
+        assert!(message.contains("tc-running"));
+        assert!(message.contains("no_peer_claimed_spawn"));
+        assert!(message.contains("2026-07-01T00:01:00Z"));
+
+        let failed = SpawnBridgeRow {
+            tool_call_id: "tc-failed".to_string(),
+            lifecycle_state: Some("failed".to_string()),
+            await_mode: Some("background".to_string()),
+            unclaimed_deadline_at: None,
+        };
+        let (message, retryable) = failed.unmaterialized_child_explanation("child-1");
+        assert!(!retryable, "terminal bridge must not be retryable");
+        assert!(message.contains("'failed'"));
+    }
+
+    #[test]
+    fn awaiting_materialization_is_nonterminal_in_list_filters() {
+        assert!(list_subagent_status_matches(
+            ListStatusFilter::Running,
+            AWAITING_CHILD_MATERIALIZATION
+        ));
+        assert!(list_subagent_status_matches(
+            ListStatusFilter::All,
+            AWAITING_CHILD_MATERIALIZATION
+        ));
+        assert!(!list_subagent_status_matches(
+            ListStatusFilter::Terminal,
+            AWAITING_CHILD_MATERIALIZATION
+        ));
+        // Unchanged: plain running and terminal bridge states.
+        assert!(list_subagent_status_matches(
+            ListStatusFilter::Running,
+            "running"
+        ));
+        assert!(!list_subagent_status_matches(
+            ListStatusFilter::Running,
+            "failed"
+        ));
+        assert!(list_subagent_status_matches(
+            ListStatusFilter::Terminal,
+            "failed"
+        ));
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1807,6 +2010,96 @@ pub(crate) async fn try_load_authorized_child_edge(
         }
         Err(error) => Err(error),
     }
+}
+
+/// #593: the caller-owned spawn bridge pointing at a child request id,
+/// loadable regardless of whether the child `AgentRequest` exists. This is
+/// the durable receipt behind a background spawn: when the child row is
+/// absent, the bridge is what keeps the returned `child_request_id`
+/// observable on the parent control plane.
+#[derive(Debug, Deserialize)]
+pub(crate) struct SpawnBridgeRow {
+    pub(crate) tool_call_id: String,
+    pub(crate) lifecycle_state: Option<String>,
+    pub(crate) await_mode: Option<String>,
+    pub(crate) unclaimed_deadline_at: Option<String>,
+}
+
+impl SpawnBridgeRow {
+    pub(crate) fn status(&self) -> &str {
+        self.lifecycle_state
+            .as_deref()
+            .filter(|state| !state.trim().is_empty())
+            .unwrap_or("running")
+    }
+
+    pub(crate) fn is_terminal(&self) -> bool {
+        bridge_state_is_terminal(self.status())
+    }
+
+    pub(crate) fn is_background(&self) -> bool {
+        self.await_mode.as_deref().map(str::trim) == Some("background")
+    }
+
+    /// Explanation served by `wait_subagent`/`cancel_subagent` for a child
+    /// that has not materialized: `(message, retryable)`. Retryable while the
+    /// bridge is non-terminal (the child may still materialize or the
+    /// unclaimed projection will fail the bridge); not retryable once the
+    /// bridge is terminal.
+    pub(crate) fn unmaterialized_child_explanation(
+        &self,
+        child_request_id: &str,
+    ) -> (String, bool) {
+        let diagnostic = unmaterialized_child_diagnostic(
+            &self.tool_call_id,
+            self.status(),
+            self.unclaimed_deadline_at.as_deref(),
+        );
+        (
+            format!("child request {child_request_id} has no materialized row yet: {diagnostic}"),
+            !self.is_terminal(),
+        )
+    }
+}
+
+/// Load the caller-owned `spawn_subagent` bridge whose `child_request_id`
+/// matches, independent of child materialization. Ownership is enforced by
+/// filtering on the caller's `request_id`, so a caller can never observe a
+/// sibling's bridge through this path.
+pub(crate) async fn load_spawn_bridge_row(
+    node: &EmbeddedNode,
+    caller_request_id: &str,
+    child_request_id: &str,
+) -> Result<Option<SpawnBridgeRow>> {
+    if child_request_id.trim().is_empty() {
+        return Ok(None);
+    }
+    let escaped_caller = escape_graphql_string(caller_request_id);
+    let escaped_child = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    request_id: {{ _eq: "{escaped_caller}" }},
+                    child_request_id: {{ _eq: "{escaped_child}" }}
+                }},
+                limit: 1
+            ) {{
+                tool_call_id
+                lifecycle_state
+                await_mode
+                unclaimed_deadline_at
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query spawn bridge for child {child_request_id} failed: {:?}",
+            response.errors
+        );
+    }
+    Ok(first_row(response.data.as_ref(), "AgentToolCall"))
 }
 
 pub(crate) async fn load_authorized_child_edge(

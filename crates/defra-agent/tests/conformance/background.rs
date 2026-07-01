@@ -923,7 +923,7 @@ pub(super) fn generated_subagent_delegation_graph_cases_pin_gap2_contract() {
 
 pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
     let cases = lean_r4c_background_work_cases();
-    assert_eq!(cases.len(), 6);
+    assert_eq!(cases.len(), 7);
 
     let names = cases
         .iter()
@@ -933,6 +933,7 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
         names,
         [
             "r4c.list_subagents.lineage_rejects",
+            "r4c.list_subagents.unmaterialized_child_visible",
             "r4c.read_subagent_transcript.cursor_advances",
             "r4c.read_subagent_transcript.hides_bridge_rows",
             "r4c.read_tool_output.dispatch_by_state",
@@ -1049,6 +1050,53 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
             assert_eq!(caused_by_parent_request_id, caller_request_id);
             assert_eq!(queue_source, "steering");
             assert_eq!(queue_policy, "append");
+        }
+        other => panic!("unexpected R4c witness variant: {other:?}"),
+    }
+
+    // #593: a returned background child id never disappears from the parent
+    // control plane. The projected status must be the exact string the runtime
+    // serves from `list_subagents`/`read_subagent`, the projection must be
+    // non-terminal (never fake a terminal outcome for an unmaterialized
+    // child), and the wait payload must be retryable.
+    match lean_r4c_background_work_case("r4c.list_subagents.unmaterialized_child_visible") {
+        LeanR4cBackgroundWorkCase::UnmaterializedChildVisible {
+            caller_request_id,
+            bridge_tool_call_id,
+            child_request_id,
+            child_materialized,
+            bridge_lifecycle_state,
+            listed_status,
+            listed_under_all_filter,
+            listed_under_running_filter,
+            read_lifecycle_state,
+            read_terminal,
+            wait_retryable,
+        } => {
+            assert_eq!(caller_request_id, "r4c-w7-caller");
+            assert_eq!(bridge_tool_call_id, "r4c-w7-bridge-call");
+            assert_eq!(child_request_id, "r4c-w7-child");
+            assert!(!*child_materialized);
+            assert_eq!(bridge_lifecycle_state, "running");
+            assert_eq!(
+                listed_status,
+                defra_agent::__test_internals::AWAITING_CHILD_MATERIALIZATION,
+                "Lean witness and runtime must agree on the projected status string"
+            );
+            assert_eq!(read_lifecycle_state, listed_status);
+            assert!(
+                *listed_under_all_filter,
+                "list_subagents(all) must show the unmaterialized handle"
+            );
+            assert!(
+                *listed_under_running_filter,
+                "the projection is non-terminal, so the default running filter shows it"
+            );
+            assert!(
+                !*read_terminal,
+                "an unmaterialized child must never read as terminal"
+            );
+            assert!(*wait_retryable, "wait_subagent must explain-and-retry");
         }
         other => panic!("unexpected R4c witness variant: {other:?}"),
     }
