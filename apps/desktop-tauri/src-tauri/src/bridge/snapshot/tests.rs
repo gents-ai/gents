@@ -11,6 +11,7 @@ use super::build_session_snapshot_from_store;
 use super::build_session_snapshot_from_store_for_agent;
 use super::conversation_task_tag;
 use super::recent_runs_for_task_views;
+use super::request_backed_conversation_summaries;
 use super::retain_latest_conversation_summaries;
 use super::task_run_history;
 

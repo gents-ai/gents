@@ -131,7 +131,21 @@ pub(super) fn handle_request(
             let core = fixture.desktop_core();
             core.set_selected_agent_did(did.clone());
             if let Some(did) = did {
-                runtime.block_on(core.ensure_agent_loaded(&did))?;
+                let loaded_remote = match runtime.block_on(core.refresh_remote_agent(&did)) {
+                    Ok(Some(_version)) => true,
+                    Ok(None) => false,
+                    Err(error) => {
+                        tracing::warn!(
+                            error = %error,
+                            agent_did = %did,
+                            "remote selection refresh failed"
+                        );
+                        false
+                    }
+                };
+                if !loaded_remote {
+                    runtime.block_on(core.ensure_agent_loaded(&did))?;
+                }
             }
             Ok(HttpResponse::json_ok(serde_json::json!({}).to_string()))
         }

@@ -401,6 +401,10 @@ async fn subagent_tool_definitions_register_expected_surface() {
         spawn_def.parameters["properties"]["await_mode"]["enum"],
         serde_json::json!(["foreground"])
     );
+    assert!(
+        spawn_def.parameters["properties"].get("deadline").is_none(),
+        "spawn_subagent should not advertise model-supplied absolute deadlines"
+    );
 }
 
 #[tokio::test]

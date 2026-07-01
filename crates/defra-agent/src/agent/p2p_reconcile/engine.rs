@@ -710,9 +710,52 @@ fn data_plane_desired_from_pairing_row(
         }
     }
 
-    row.agent_did = Some(self_did.to_string());
+    let template_id = row
+        .template
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .unwrap_or(DEFAULT_PAIRING_TEMPLATE);
+    let template = resolve_template(template_id).unwrap_or_else(|| {
+        tracing::warn!(
+            template = template_id,
+            "unknown data-plane pairing scope template; falling back to default \"{DEFAULT_PAIRING_TEMPLATE}\""
+        );
+        resolve_template(DEFAULT_PAIRING_TEMPLATE)
+            .expect("default pairing template is in the catalog")
+    });
+    let peer_did = signed_endpoint.agent_did.trim();
+    if data_plane_scope_requires_signed_peer_did(&template.scope) && peer_did.is_empty() {
+        anyhow::bail!(
+            "DataPlanePairingDesired for peer {} uses template {template_id:?} but the signed \
+             PeerEndpoint has a blank agent_did",
+            signed_endpoint.peer_id
+        );
+    }
+
     row.replicator_addresses = Some(vec![signed_endpoint.address.clone()]);
-    desired_from_pairing_row(row, self_did)
+    let replicator_addresses = row
+        .replicator_addresses
+        .unwrap_or_default()
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>();
+    let replicator_collections = template
+        .collections
+        .iter()
+        .map(|&c| c.to_string())
+        .collect::<BTreeSet<_>>();
+    let replicator_filter =
+        data_plane_scope_filter(&template.scope, template.collections, peer_did, self_did);
+
+    Ok(PairingDesired {
+        collections: BTreeSet::new(),
+        replicator_addresses,
+        replicator_collections,
+        replicator_filter,
+        template_ids: BTreeSet::from([template.id.to_string()]),
+    })
 }
 
 fn scope_requires_peer_did(scope: &Scope) -> bool {
@@ -722,6 +765,54 @@ fn scope_requires_peer_did(scope: &Scope) -> bool {
         Scope::PerCollection(rules) => rules
             .iter()
             .any(|rule| matches!(rule.source, DidSource::PeerDid)),
+    }
+}
+
+fn data_plane_scope_requires_signed_peer_did(scope: &Scope) -> bool {
+    match scope {
+        Scope::PeerDid { .. } | Scope::Unscoped => false,
+        Scope::PerCollection(rules) => rules
+            .iter()
+            .any(|rule| matches!(rule.source, DidSource::PeerDid)),
+    }
+}
+
+fn data_plane_scope_filter(
+    scope: &Scope,
+    collections: &[&str],
+    signed_peer_did: &str,
+    local_did: &str,
+) -> PairingFilters {
+    match scope {
+        Scope::PeerDid { field } => collections
+            .iter()
+            .map(|&col| {
+                (
+                    col.to_string(),
+                    super::templates::FilterPredicate {
+                        field: (*field).to_string(),
+                        value: local_did.to_string(),
+                    },
+                )
+            })
+            .collect(),
+        Scope::Unscoped => BTreeMap::new(),
+        Scope::PerCollection(rules) => rules
+            .iter()
+            .map(|rule| {
+                let value = match rule.source {
+                    DidSource::LocalDid => local_did,
+                    DidSource::PeerDid => signed_peer_did,
+                };
+                (
+                    rule.collection.to_string(),
+                    super::templates::FilterPredicate {
+                        field: rule.field.to_string(),
+                        value: value.to_string(),
+                    },
+                )
+            })
+            .collect(),
     }
 }
 
@@ -938,6 +1029,69 @@ mod tests {
                 .map(|filter| (filter.field.as_str(), filter.value.as_str())),
             Some(("agent_did", "did:key:self"))
         );
+    }
+
+    #[test]
+    fn data_plane_subagent_coordinator_uses_signed_peer_for_targeted_bridge() {
+        let signed_endpoint = NetworkEndpointEntry {
+            peer_id: "peer-b".to_string(),
+            agent_did: "did:key:host".to_string(),
+            address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        };
+        let desired = data_plane_desired_from_pairing_row(
+            PairingStateRow {
+                agent_did: Some("did:key:coord".to_string()),
+                collections: None,
+                replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
+                template: Some("subagent-coordinator".to_string()),
+                replicator_filter: None,
+            },
+            &signed_endpoint,
+            "did:key:coord",
+        )
+        .expect("data-plane coordinator desired");
+
+        assert_eq!(
+            desired
+                .replicator_filter
+                .get("AgentRequest")
+                .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            Some(("agent_did", "did:key:coord"))
+        );
+        assert_eq!(
+            desired
+                .replicator_filter
+                .get("AgentToolCall")
+                .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            Some(("spawn_target_did", "did:key:host"))
+        );
+    }
+
+    #[test]
+    fn data_plane_subagent_host_scopes_child_conversation_to_local_host() {
+        let signed_endpoint = NetworkEndpointEntry {
+            peer_id: "peer-a".to_string(),
+            agent_did: "did:key:coord".to_string(),
+            address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-a".to_string(),
+        };
+        let desired = data_plane_desired_from_pairing_row(
+            PairingStateRow {
+                agent_did: Some("did:key:host".to_string()),
+                collections: None,
+                replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
+                template: Some("subagent-host".to_string()),
+                replicator_filter: None,
+            },
+            &signed_endpoint,
+            "did:key:host",
+        )
+        .expect("data-plane host desired");
+
+        assert_eq!(desired.replicator_filter.len(), 8);
+        for predicate in desired.replicator_filter.values() {
+            assert_eq!(predicate.field, "agent_did");
+            assert_eq!(predicate.value, "did:key:host");
+        }
     }
 
     #[test]
