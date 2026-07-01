@@ -107,6 +107,9 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     }
 
     let p2p_config = resolve_server_p2p_config(&home_dir, &args)?;
+    if p2p_config.is_some() {
+        crate::p2p_relay::log_relay_mode_diagnostics(args.p2p_relay_mode);
+    }
     // The MCP `defra_query` endpoint is opt-in (unauthenticated read surface).
     let mcp_query_scope = if !args.enable_mcp {
         None

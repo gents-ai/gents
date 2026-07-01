@@ -1,8 +1,15 @@
 use std::fs::OpenOptions;
 use std::path::Path;
 
+use defra_agent::log_rate::{RateLimitConfig, RateLimitFilter};
 use defra_agent_desktop_core::client::DesktopPaths;
 use tracing_subscriber::{prelude::*, EnvFilter};
+
+/// Per-callsite log-rate ceiling: no code path may flood the desktop log
+/// file or the host journal, however hot its failure loop (#588).
+fn log_rate_ceiling() -> RateLimitFilter {
+    RateLimitFilter::new(RateLimitConfig::default())
+}
 
 pub(crate) fn init_tracing() {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -27,11 +34,13 @@ pub(crate) fn init_tracing() {
         let file_layer = tracing_subscriber::fmt::layer()
             .with_ansi(false)
             .with_target(true)
-            .with_writer(move || open_log_writer(&file_writer_path));
+            .with_writer(move || open_log_writer(&file_writer_path))
+            .with_filter(log_rate_ceiling());
         let stderr_layer = tracing_subscriber::fmt::layer()
             .with_target(false)
             .compact()
-            .without_time();
+            .without_time()
+            .with_filter(log_rate_ceiling());
         let _ = tracing_subscriber::registry()
             .with(env_filter)
             .with(stderr_layer)
@@ -41,7 +50,8 @@ pub(crate) fn init_tracing() {
         let file_layer = tracing_subscriber::fmt::layer()
             .with_ansi(false)
             .with_target(true)
-            .with_writer(move || open_log_writer(&writer_path));
+            .with_writer(move || open_log_writer(&writer_path))
+            .with_filter(log_rate_ceiling());
         let _ = tracing_subscriber::registry()
             .with(env_filter)
             .with(file_layer)

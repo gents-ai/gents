@@ -35,6 +35,7 @@ defra-agent-protocol.workspace = true
 defra-node.workspace = true
 defra-p2p-adapter.workspace = true
 futures-util = "0.3"
+iroh.workspace = true
 query.workspace = true
 hostname.workspace = true
 opentelemetry.workspace = true
