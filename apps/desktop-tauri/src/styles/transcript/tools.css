@@ -254,4 +254,98 @@
     padding: 0 4px;
     border-radius: 4px;
   }
+
+  /* ---- code-aware tool rendering (diffs + terminal) ---- */
+  .code-tool > summary .code-tool-kind {
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    color: var(--color-text-muted);
+  }
+
+  .code-tool-path,
+  .code-tool-command,
+  .code-tool-prompt {
+    font-size: 0.82rem;
+  }
+
+  .code-tool-prompt {
+    color: rgb(var(--source-green-rgb) / 0.75);
+  }
+
+  .code-diff {
+    margin: 0;
+    padding: var(--space-3) 0;
+    overflow-x: auto;
+    background: var(--color-surface-deep);
+    border-radius: var(--radius-md, 8px);
+    font-size: 0.8rem;
+    line-height: 1.5;
+  }
+
+  .code-diff-line {
+    display: flex;
+    gap: var(--space-3);
+    padding: 0 var(--space-4);
+    white-space: pre;
+  }
+
+  .code-diff-gutter {
+    flex: none;
+    width: 1ch;
+    text-align: center;
+    opacity: 0.7;
+    user-select: none;
+  }
+
+  .code-diff-add {
+    background: rgb(var(--source-green-rgb) / 0.12);
+    color: var(--color-text, inherit);
+  }
+
+  .code-diff-add .code-diff-gutter {
+    color: rgb(var(--source-green-rgb) / 0.9);
+  }
+
+  .code-diff-del {
+    background: rgb(var(--source-orange-rgb) / 0.12);
+  }
+
+  .code-diff-del .code-diff-gutter {
+    color: var(--color-warning-soft, #ffd089);
+  }
+
+  .code-exit {
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
+    padding: 1px 8px;
+    border-radius: var(--radius-pill, 999px);
+  }
+
+  .code-exit-ok {
+    background: rgb(var(--source-green-rgb) / 0.14);
+    color: rgb(var(--source-green-rgb) / 0.95);
+  }
+
+  .code-exit-fail {
+    background: rgb(var(--source-orange-rgb) / 0.18);
+    color: var(--color-warning-soft, #ffd089);
+  }
+
+  .code-command-meta {
+    display: flex;
+    gap: var(--space-4);
+    padding: 0 var(--space-5) var(--space-2);
+  }
+
+  .code-terminal {
+    margin: 0;
+    padding: var(--space-3) var(--space-5);
+    overflow-x: auto;
+    background: var(--color-surface-deep);
+    border-radius: var(--radius-md, 8px);
+    font-size: 0.8rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+  }
 }

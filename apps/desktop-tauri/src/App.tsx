@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { ChatWorkspace } from "./components/ChatWorkspace";
+import { CodeContextHeader } from "./components/code/CodeContextHeader";
 import { ConfigWorkspace } from "./components/ConfigWorkspace";
 import { FleetDashboard } from "./components/fleet/FleetDashboard";
 import { Sidebar } from "./components/Sidebar";
@@ -9,15 +10,22 @@ import "./App.css";
 
 function App() {
   const shell = useDesktopShell();
-  const [workspaceView, setWorkspaceView] = useState<"fleet" | "chat" | "config">(
-    "fleet",
-  );
+  const [workspaceView, setWorkspaceView] = useState<
+    "fleet" | "chat" | "config" | "code"
+  >("fleet");
 
   function openChat(agentDid?: string) {
     if (agentDid) {
       shell.setSelectedAgentDid(agentDid);
     }
     setWorkspaceView("chat");
+  }
+
+  function openCode(agentDid?: string) {
+    if (agentDid) {
+      shell.setSelectedAgentDid(agentDid);
+    }
+    setWorkspaceView("code");
   }
 
   function openConfig(agentDid?: string) {
@@ -51,13 +59,14 @@ function App() {
           onOpenConfig={openConfig}
           onRepairP2P={shell.onRepairP2P}
         />
-      ) : workspaceView === "chat" ? (
+      ) : workspaceView === "chat" || workspaceView === "code" ? (
         <section className="workspace">
           <Sidebar
             behaviorOptions={shell.behaviorOptions}
             conversations={shell.selectedDeployment?.conversations ?? []}
             deployments={shell.deployments}
             onConfigureDeployment={(agentDid) => openConfig(agentDid)}
+            onOpenCode={(agentDid) => openCode(agentDid)}
             onOpenFleet={() => setWorkspaceView("fleet")}
             onSelectBehavior={shell.setSelectedBehaviorId}
             onSelectSession={shell.onSelectSession}
@@ -68,6 +77,13 @@ function App() {
           />
 
           <section className="chat-column">
+            {workspaceView === "code" ? (
+              <CodeContextHeader
+                deployment={shell.selectedDeployment ?? null}
+                selectedBehaviorId={shell.selectedBehaviorId}
+                onBackToChat={() => setWorkspaceView("chat")}
+              />
+            ) : null}
             <ChatWorkspace
               approxSerializedBytes={shell.snapshot?.client?.approxSerializedBytes ?? 0}
               canSend={shell.canSendMessage}

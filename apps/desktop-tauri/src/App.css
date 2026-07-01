@@ -15,6 +15,7 @@
 @import "./styles/sidebar/nav.css";
 @import "./styles/sidebar/conversations.css";
 @import "./styles/chat.css";
+@import "./styles/code-context.css";
 @import "./styles/fleet/layout.css";
 @import "./styles/fleet/table.css";
 @import "./styles/mcp-health.css";

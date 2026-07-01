@@ -6,6 +6,7 @@ export type ConnectedPeerSectionProps = {
   selectedAgentDid: string | null;
   onOpenFleet: () => void;
   onConfigureDeployment: (agentDid: string) => void;
+  onOpenCode?: (agentDid: string) => void;
 };
 
 export function ConnectedPeerSection({
@@ -13,6 +14,7 @@ export function ConnectedPeerSection({
   selectedAgentDid,
   onOpenFleet,
   onConfigureDeployment,
+  onOpenCode,
 }: ConnectedPeerSectionProps) {
   const selectedDeployment =
     deployments.find((deployment) => deployment.agentDid === selectedAgentDid) ?? null;
@@ -55,6 +57,21 @@ export function ConnectedPeerSection({
           >
             Fleet Dashboard
           </button>
+          {onOpenCode ? (
+            <button
+              className="ghost-button connected-peer-action"
+              data-testid="sidebar-open-code"
+              disabled={!selectedDeployment}
+              onClick={() => {
+                if (selectedDeployment) {
+                  onOpenCode(selectedDeployment.agentDid);
+                }
+              }}
+              type="button"
+            >
+              Code
+            </button>
+          ) : null}
           <button
             className="ghost-button connected-peer-action"
             disabled={!selectedDeployment}
