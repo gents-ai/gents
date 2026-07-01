@@ -42,6 +42,19 @@ pub(crate) mod test_support {
     pub(crate) fn first_content<T>(items: &[T]) -> &T {
         items.first().expect("non-empty content")
     }
+
+    /// The #589 production poison, byte-faithful to Amy's persisted
+    /// `AgentToolCall` row `Rrt-HmhWfFSmkh1HSUmHt`: a model tool-call
+    /// `arguments` string contaminated by out-of-channel tokens — a stray CJK
+    /// `房` and a leaked `</think` reasoning boundary inside a key, a nested
+    /// Hermes `<tool_call>`/`<function=...>` fragment as its value, duplicated
+    /// keys, and LITERAL newlines inside the strings (the control characters
+    /// `serde_json` rejects at "line 2 column 0"). The intended call survives
+    /// as the final `tool_name: list_hosts`.
+    pub(crate) const CORRUPT_TOOL_ARGS_589: &str = "{\"raw_schema\": false, \
+         \"service_id\": \"observability-mcp\", \"tool房\n</think\": \"\n<tool_call>\n\
+         <function=describe_tool>\", \"raw_schema\": false, \
+         \"service_id\": \"observability-mcp\", \"tool_name\": \"list_hosts\"}";
 }
 pub mod lifecycle;
 pub mod llm;
