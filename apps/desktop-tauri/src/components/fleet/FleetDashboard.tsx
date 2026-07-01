@@ -87,9 +87,9 @@ export function FleetDashboard({
         <div className="fleet-empty-card panel">
           <BrandLockup />
           <div className="fleet-empty-copy">
-            <h2>Add Agent Connection</h2>
+            <h2>Connect your agent</h2>
             <p className="muted">
-              Connect the desktop to an agent before opening chat or config.
+              Start with the agent on this machine — one click, no configuration.
             </p>
           </div>
           <LocalRuntimeConnect
@@ -98,15 +98,23 @@ export function FleetDashboard({
             error={localRuntimeError}
             onConnect={connectLocalRuntime}
           />
-          <AddPeerForm
-            addingPeer={addingPeer}
-            disabled={starting || loading}
-            localError={peerFormError}
-            peerForm={peerForm}
-            onPeerFormChange={setPeerForm}
-            onFetchPeerStatus={onFetchPeerStatus}
-            onSubmit={submitPeer}
-          />
+          {/* Remote connection needs DIDs/multiaddrs — keep it behind a
+              disclosure so first-run isn't a wall of connection JSON. */}
+          <details
+            className="fleet-remote-disclosure"
+            data-testid="fleet-remote-disclosure"
+          >
+            <summary>Connect a remote agent instead…</summary>
+            <AddPeerForm
+              addingPeer={addingPeer}
+              disabled={starting || loading}
+              localError={peerFormError}
+              peerForm={peerForm}
+              onPeerFormChange={setPeerForm}
+              onFetchPeerStatus={onFetchPeerStatus}
+              onSubmit={submitPeer}
+            />
+          </details>
         </div>
       </section>
     );

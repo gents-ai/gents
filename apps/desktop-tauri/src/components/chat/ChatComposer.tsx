@@ -59,12 +59,14 @@ export function ChatComposer({
       data-testid="composer-form"
       onSubmit={onSend}
     >
-      <div className="composer-toolbar">
+      <div
+        className="composer-toolbar"
+        // Store internals stay discoverable on hover without leaking
+        // "42 rows / 21.0 KB" into the primary chat surface.
+        title={`Local store: ${rowCount} rows / ${formatBytes(approxSerializedBytes)}`}
+      >
         <div className="muted small">
           Selected behavior: {behaviorLabel ?? "default"}
-        </div>
-        <div className="muted small">
-          {rowCount} rows / {formatBytes(approxSerializedBytes)}
         </div>
       </div>
 

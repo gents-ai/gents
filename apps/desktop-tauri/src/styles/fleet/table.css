@@ -146,8 +146,7 @@
     color: var(--color-warning);
   }
 
-  .fleet-tool-icon svg,
-  .fleet-table-action svg {
+  .fleet-tool-icon svg {
     width: 13px;
     height: 13px;
     display: block;
@@ -158,27 +157,65 @@
     stroke-linejoin: round;
   }
 
+  .fleet-table-action svg {
+    width: 16px;
+    height: 16px;
+    display: block;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* The actions column stays pinned while the table scrolls horizontally at
+     narrow widths, so chat/config/repair are always visible — the wrap's
+     overflow:auto remains the reachability mechanism for the other columns. */
+  .fleet-actions-header,
+  .fleet-actions-cell {
+    position: sticky;
+    right: 0;
+    z-index: 1;
+  }
+
   .fleet-actions-header {
-    width: 102px;
+    width: 128px;
+    background: rgb(0 0 0 / 0.88);
   }
 
   .fleet-actions-cell {
-    min-width: 102px;
+    min-width: 128px;
+    background-color: var(--color-surface-row);
+    box-shadow: -10px 0 10px -10px rgb(0 0 0 / 0.7);
+  }
+
+  .fleet-table tbody tr:hover td.fleet-actions-cell {
+    background-color: var(--color-surface-row);
+    background-image: linear-gradient(
+      rgb(var(--source-green-rgb) / 0.07),
+      rgb(var(--source-green-rgb) / 0.07)
+    );
   }
 
   .fleet-row-actions {
     justify-content: flex-start;
-    gap: var(--space-2);
+    gap: var(--space-3);
   }
 
   .fleet-table-action {
-    width: 24px;
-    height: 24px;
-    min-height: 24px;
+    width: 32px;
+    height: 32px;
+    min-height: 32px;
     display: inline-grid;
     place-items: center;
     padding: 0;
-    border-radius: 0;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgb(var(--source-green-rgb) / 0.35);
+  }
+
+  .fleet-table-action:hover:not(:disabled) {
+    border-color: rgb(var(--source-green-rgb) / 0.75);
+    background: rgb(var(--source-green-rgb) / 0.12);
   }
 
   .fleet-table-action:disabled {

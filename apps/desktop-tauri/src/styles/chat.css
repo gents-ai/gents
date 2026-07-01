@@ -28,6 +28,8 @@
     display: grid;
     grid-template-rows: auto auto minmax(0, 1fr);
     overflow: hidden;
+    /* Fully opaque: the transcript must not ghost through the open drawer. */
+    background: rgb(2 8 6);
     box-shadow:
       0 20px 80px rgb(0 0 0 / 0.5),
       inset 0 1px 0 rgb(255 255 255 / 0.025),
@@ -37,7 +39,8 @@
   .operations-rail.is-collapsed {
     top: 50%;
     width: 38px;
-    height: 92px;
+    height: auto;
+    min-height: 92px;
     display: flex;
     align-items: stretch;
     justify-content: center;
