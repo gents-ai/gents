@@ -92,6 +92,31 @@ def composedInvariantWitnesses : List ComposedInvariantWitness :=
     , preToolPersisted := false
     , cancelCause := some (ToolExecution.CancelCause.toDefraDB .interrupted)
     }
+  , { theoremName :=
+        "ComposedState.interrupted_request_cancels_live_linked_tools_from_initial"
+    , witnessKind := "reachable_domain"
+    , scenario := "interrupted_request_cancels_live_running_tool"
+    , rustPath := "ToolCallLifecycle::cancel_during_run"
+    , traceStepCount := 8
+    , transitionPath :=
+        c1BasePath ++
+          ["tool_step.dispatch", "request_interrupt", "request_step.interrupt_processing"]
+    , preRequestState := RequestState.toDefraDB interruptedWithRunningTool.request.state
+    , preRequestAdmission := admissionName interruptedWithRunningTool.request.admission
+    , toolPreState := ToolExecution.ToolCallState.toDefraDB runningTool.state
+    , toolPostState := ToolExecution.ToolCallState.toDefraDB .cancelled
+    , requestId := interruptedWithRunningTool.requestId
+    , toolRequestId := runningTool.requestId
+    , toolCallId := runningTool.callId
+    , requestDeadline := interruptedWithRunningTool.request.deadline
+    , requestCurrentTime := interruptedWithRunningTool.request.currentTime
+    , toolDeadline := runningTool.deadline
+    , toolCurrentTime := runningTool.currentTime
+    , deadlineExceeded := decide interruptedWithRunningTool.request.deadlineExceeded
+    , wellFormedSource := "ComposedState.wellFormed_from_initial"
+    , preToolPersisted := true
+    , cancelCause := some (ToolExecution.CancelCause.toDefraDB .interrupted)
+    }
   ]
 
 end Conformance.ContractCases

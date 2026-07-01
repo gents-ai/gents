@@ -313,5 +313,61 @@ theorem c2_reachable_domain_nonempty :
   · simp [IsDetached, pendingTool]
   · exact Or.inl rfl
 
+/-- C2 running arm: latch a direct interrupt on a processing request that still
+    carries a live *running* tool, then drive `interrupt_processing`. Mirrors the
+    pending chain but reaches `.interrupted` while the tool is running. -/
+def interruptLatchedRunning : ComposedState :=
+  { withRunningTool with
+    request :=
+      { withRunningTool.request with
+        interruptRequestedAt := some withRunningTool.request.currentTime } }
+
+def interruptedWithRunningTool : ComposedState :=
+  { interruptLatchedRunning with
+    request :=
+      { interruptLatchedRunning.request with state := .interrupted, admission := .released } }
+
+theorem step_interruptLatchedRunning : Transition withRunningTool interruptLatchedRunning := by
+  exact Transition.request_interrupt withRunningTool.request.currentTime rfl rfl rfl rfl rfl
+
+theorem step_interruptedRunning :
+    Transition interruptLatchedRunning interruptedWithRunningTool := by
+  refine Transition.request_step ?_ rfl rfl rfl rfl ?_ ?_
+  · exact RequestContext.Transition.interrupt_processing rfl rfl
+      (by simp [interruptLatchedRunning]) rfl
+  · intro h_pending
+    simp [interruptLatchedRunning, withRunningTool, withPendingTool, processing, acquired,
+      claimed, ready] at h_pending
+  · intro h_advance
+    rcases h_advance with h_progress | ⟨h_claimed, _⟩
+    · simp [interruptedWithRunningTool, interruptLatchedRunning, withRunningTool,
+        withPendingTool, processing, acquired, claimed, ready] at h_progress
+    · simp [interruptLatchedRunning, withRunningTool, withPendingTool, processing, acquired,
+        claimed, ready] at h_claimed
+
+theorem trace_interruptedWithRunningTool : Trace initial interruptedWithRunningTool :=
+  Trace.step step_ready (Trace.step step_claimed
+    (Trace.step step_acquired (Trace.step step_processing
+      (Trace.step step_withPendingTool
+        (Trace.step step_withRunningTool
+          (Trace.step step_interruptLatchedRunning
+            (Trace.step step_interruptedRunning Trace.refl)))))))
+
+/-- C2 running arm has a concrete reachable domain: an interrupted parent request
+    can still carry a live *running* tool. -/
+theorem c2_running_reachable_domain_nonempty :
+    ∃ pre toolPre,
+      Trace initial pre ∧
+      toolPre ∈ pre.tools ∧
+      pre.request.state = .interrupted ∧
+      ¬ IsDetached toolPre ∧
+      toolPre.cancellable := by
+  refine ⟨interruptedWithRunningTool, runningTool, ?_, ?_, ?_, ?_, ?_⟩
+  · exact trace_interruptedWithRunningTool
+  · simp [interruptedWithRunningTool, interruptLatchedRunning, withRunningTool]
+  · rfl
+  · simp [IsDetached, runningTool, pendingTool]
+  · exact Or.inr rfl
+
 end ReachabilityWitness
 end ComposedState

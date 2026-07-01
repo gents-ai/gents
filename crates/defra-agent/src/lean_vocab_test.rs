@@ -530,6 +530,21 @@ pub(crate) fn lean_composed_invariant_witness(
         })
 }
 
+/// Look up a composed-invariant witness by its (unique) `scenario`. Needed when
+/// several witnesses share a `theorem_name` — e.g. the C2 theorem's pending and
+/// running arms.
+pub(crate) fn lean_composed_invariant_witness_by_scenario(
+    scenario: &str,
+) -> &'static LeanComposedInvariantWitness {
+    lean_contract_snapshot()
+        .composed_invariant_witnesses
+        .iter()
+        .find(|witness| witness.scenario == scenario)
+        .unwrap_or_else(|| {
+            panic!("Lean composed invariant witness scenario {scenario:?} was not emitted")
+        })
+}
+
 pub(crate) fn lean_cancel_propagation_cases() -> &'static [LeanCancelPropagationCase] {
     &lean_contract_snapshot().cancel_propagation_cases
 }
