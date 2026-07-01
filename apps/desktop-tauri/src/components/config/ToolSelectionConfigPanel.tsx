@@ -148,6 +148,7 @@ export function ToolSelectionConfigEditor({
   const [subagentBackgroundEnabled, setSubagentBackgroundEnabled] = useState(false);
   const [crossDeploymentSpawnTimeoutSeconds, setCrossDeploymentSpawnTimeoutSeconds] =
     useState("");
+  const [defraQueryCollections, setDefraQueryCollections] = useState("");
   const ceiling = normalizeToolCeiling(toolCeiling);
   const fileToolsDisabledByCeiling = ceiling === "MetaOnly";
   const writeToolsDisabledByCeiling = ceiling !== "Readwrite";
@@ -218,6 +219,7 @@ export function ToolSelectionConfigEditor({
         ? String(toolSelection.crossDeploymentSpawnTimeoutSeconds)
         : "",
     );
+    setDefraQueryCollections((toolSelection?.defraQueryCollections ?? []).join("\n"));
   }, [toolSelection, toolServiceIdKey]);
 
   function toggleAllowedMcpService(serviceId: string, checked: boolean) {
@@ -258,6 +260,10 @@ export function ToolSelectionConfigEditor({
         commandForbiddenArgvPrefixes: linesToArray(commandForbiddenArgvPrefixes),
         commandNetworkMode,
         cliToolNames: linesToArray(cliToolNames),
+        // defra_query read-scope allowlist; an empty list clears it (the bridge
+        // emits null). write_tools and tool_policy_version are preserve-only and
+        // are deliberately never sent — see lib/types/requests.ts.
+        defraQueryCollections: linesToArray(defraQueryCollections),
         enableMetaTools,
         allowedMcpServiceIds: linesToArray(allowedMcpServiceIds),
         delegateTo: linesToArray(delegateTo),
@@ -295,6 +301,20 @@ export function ToolSelectionConfigEditor({
         <div>
           <dt>Agent DID</dt>
           <dd className="mono">{agentDid}</dd>
+        </div>
+        <div>
+          <dt>Policy version</dt>
+          <dd className="mono" data-testid="tool-policy-version">
+            {toolSelection?.toolPolicyVersion ?? "legacy (unversioned)"}
+          </dd>
+        </div>
+        <div>
+          <dt>Managed write tools</dt>
+          <dd className="mono" data-testid="tool-write-tools">
+            {toolSelection?.writeTools?.length
+              ? toolSelection.writeTools.map(describeWriteTool).join(", ")
+              : "none"}
+          </dd>
         </div>
       </div>
       <div className="grid-2">
@@ -449,6 +469,16 @@ export function ToolSelectionConfigEditor({
           value={cliToolNames}
         />
       </label>
+      <label className="field">
+        <span>Defra query collections</span>
+        <textarea
+          className="config-small-textarea"
+          data-testid="tool-defra-query-collections"
+          onChange={(event) => setDefraQueryCollections(event.currentTarget.value)}
+          placeholder="One collection per line (empty = all collections)"
+          value={defraQueryCollections}
+        />
+      </label>
       <div className="grid-2">
         <label className="checkbox">
           <input
@@ -577,6 +607,27 @@ export function ToolSelectionConfigEditor({
       </div>
     </form>
   );
+}
+
+// Each `writeTools` entry is a JSON-serialized `WriteToolDecl`
+// ({ tool_name, collection, ... }); render a friendly `name → collection`
+// instead of the raw blob. Falls back to the raw string for legacy/plain decls.
+function describeWriteTool(decl: string): string {
+  try {
+    const parsed = JSON.parse(decl) as {
+      tool_name?: unknown;
+      collection?: unknown;
+    };
+    const name = typeof parsed?.tool_name === "string" ? parsed.tool_name : null;
+    const collection =
+      typeof parsed?.collection === "string" ? parsed.collection : null;
+    if (name) {
+      return collection ? `${name} → ${collection}` : name;
+    }
+  } catch {
+    // Not JSON — a legacy/plain decl; show it verbatim.
+  }
+  return decl;
 }
 
 function normalizeToolCeiling(value?: string | null) {

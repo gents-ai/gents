@@ -541,6 +541,12 @@ export function createDesktopUiHarness(
     },
     async saveToolSelectionConfig(request) {
       const selectionId = request.selectionId.trim() || `tools-${requestSeq}`;
+      const prior = deployment.toolSelections.find(
+        (selection) => selection.selectionId === selectionId,
+      );
+      // Mirror the bridge's preserve-on-absent semantics: overlay the request on
+      // the prior row so display-only fields the panel never sends (writeTools,
+      // toolPolicyVersion) survive a save.
       deployment = {
         ...deployment,
         toolSelections: upsertBy(
@@ -548,6 +554,7 @@ export function createDesktopUiHarness(
           "selectionId",
           selectionId,
           {
+            ...prior,
             ...request,
             selectionId,
             displayName: request.displayName.trim() || selectionId,
@@ -1137,6 +1144,14 @@ function createDeployment(): DeploymentView {
         crossDeploymentSpawnTimeoutSeconds: 30,
         enableMemory: false,
         enableSessionHistoryTool: true,
+        enableDefraQuery: true,
+        defraQueryCollections: ["AgentRequest", "AgentResponse"],
+        // JSON-serialized WriteToolDecl entries, as the real bridge emits.
+        writeTools: [
+          '{"tool_name":"upsert_note","collection":"Note","description":"","fields":[]}',
+          '{"tool_name":"delete_task","collection":"Task","description":"","fields":[]}',
+        ],
+        toolPolicyVersion: "tool-policy/v1",
       },
     ],
     toolServiceRegistries: [
