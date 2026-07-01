@@ -30,7 +30,8 @@ use crate::commands::query::run_defra_query;
 struct McpQueryArgs {
     /// Collection (GraphQL type) to read, e.g. "AgentRequest".
     collection: String,
-    /// Field names to return; at least one is required.
+    /// Field names to return; at least one is required. Pass ["*"] to list the
+    /// collection's queryable fields instead of documents.
     #[serde(default)]
     fields: Vec<String>,
     /// Optional DefraDB filter object, e.g. {"status": {"_eq": "completed"}}.
@@ -61,7 +62,7 @@ impl DefraQueryMcp {
 #[tool_router]
 impl DefraQueryMcp {
     #[tool(
-        description = "Read-only structured query over a DefraDB collection. Provide a collection name, the fields to return, an optional DefraDB filter object (operators _eq/_gt/_in/_and/_or/_not), and an optional limit. Returns JSON {collection, count, results}. Sensitive fields (e.g. inference backend API keys) are always blocked."
+        description = "Read-only structured query over a DefraDB collection. Provide a collection name, the fields to return, an optional DefraDB filter object (operators _eq/_gt/_in/_and/_or/_not), and an optional limit. Returns JSON {collection, count, results}. Call with fields: [\"*\"] to discover a collection's queryable fields (names and types) before guessing; invalid field names fail with a diagnostic listing the allowed fields and close-match suggestions. Sensitive fields (e.g. inference backend API keys) are always blocked."
     )]
     async fn defra_query(
         &self,
