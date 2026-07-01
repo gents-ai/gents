@@ -287,7 +287,10 @@ impl Tool for ListSubagentsTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List this parent request's visible background child subagents."
+            description: "List this parent request's visible background child subagents. \
+A background child spawned by this request stays listed even before its child request \
+materializes: such an entry has status `awaiting_child_materialization` (matched by the \
+`running` and `all` filters) and a `diagnostic` explaining the bridge state."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -331,7 +334,9 @@ impl Tool for ReadSubagentTool {
 Paging is cursor-based and content-honest: pass `since_sequence` to resume, and the response \
 returns `next_sequence` (the exact cursor to pass next), `has_more` (true when the token budget \
 capped the read and more messages remain past `next_sequence`), and `terminal`/`lifecycle_state` \
-(whether the subagent has finished). Output is never SILENTLY dropped: when `has_more` is true, \
+(whether the subagent has finished). If the child request has not materialized yet, the response \
+has an empty transcript, `lifecycle_state = \"awaiting_child_materialization\"`, and a \
+`diagnostic` explaining the bridge state — keep polling. Output is never SILENTLY dropped: when `has_more` is true, \
 read again with `since_sequence = next_sequence` to continue. One case is truncated rather than \
 paged, but always explicitly marked: a single message larger than the entire budget is cut with a \
 `[truncated: showed N of M chars]` marker and the cursor advances past it, so that one message's \

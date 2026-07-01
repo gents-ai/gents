@@ -224,3 +224,69 @@ async fn cancel_subagent_rejects_unlinked_child_without_lifecycle_row() {
         0
     );
 }
+
+/// #593: cancelling a background child whose `AgentRequest` has not
+/// materialized (remote spawn target — the local `SubagentSource` skips it)
+/// must explain the bridge state with a RETRYABLE payload instead of a bare
+/// not-available error.
+#[tokio::test]
+async fn cancel_subagent_explains_unmaterialized_child_bridge() {
+    let fixture = setup_spawn_fixture(
+        "cancel_subagent_unmaterialized",
+        vec![CHILD_BEHAVIOR_ID],
+        0,
+        true,
+    )
+    .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+
+    let child_request_id = "cancel-unmat-child";
+    let bridge_tool_call_id = "cancel-unmat-bridge";
+    let args = json!({
+        "name": "remote-coder",
+        "agent_did": "did:key:z6MkRemoteUnclaimed",
+        "behavior_id": "remote-coder-behavior",
+        "prompt": "cross-deployment work",
+        "await_mode": "background"
+    })
+    .to_string();
+    let mut lifecycle = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        fixture.request_id.clone(),
+        fixture.session_id.clone(),
+        fixture.agent_did.clone(),
+        bridge_tool_call_id.to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        args,
+        fixture.parent_deadline,
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        child_request_id.to_string(),
+        "did:key:z6MkRemoteUnclaimed".to_string(),
+    );
+    lifecycle.start_running().await.unwrap();
+
+    let action = hook
+        .on_tool_call(
+            "cancel_subagent",
+            Some("model-call-cancel-unmat".to_string()),
+            "internal-cancel-unmat",
+            &json!({ "child_request_id": child_request_id }).to_string(),
+        )
+        .await;
+    let error = skip_reason_json(action);
+    assert_eq!(error["ok"], false);
+    assert_eq!(error["failure_class"], "service_unavailable");
+    assert_eq!(error["retryable"], true);
+    let message = error["message"].as_str().expect("message");
+    assert!(
+        message.contains("has no materialized row yet"),
+        "explains materialization: {message}"
+    );
+    assert!(
+        message.contains(bridge_tool_call_id),
+        "names the bridge: {message}"
+    );
+}

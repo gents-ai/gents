@@ -11,15 +11,16 @@ use crate::background_tools::r4c_args::{
     SteerSubagentArgs,
 };
 use crate::background_tools::{
-    active_session_request_id, append_steering_request, child_request_completed,
-    context_allowed_target_names, drain_automated_wakeups_returning_ids,
+    active_session_request_id, append_steering_request, authorization_lookup_error,
+    child_request_completed, context_allowed_target_names, drain_automated_wakeups_returning_ids,
     effective_context_cross_deployment_spawn_timeout_seconds, handle_list_background_tools,
     handle_list_subagents, handle_read_subagent, handle_read_tool_output,
     load_authorized_child_edge, load_child_final_response, load_child_terminal_row,
-    load_parent_subagent_context, load_steer_subagent_target, pending_automated_wakeup_request_ids,
-    project_child_terminal, resolve_context_target, try_load_authorized_child_edge,
-    BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs, ParentSubagentContext,
-    ReadToolOutputOutcome, SpawnSubagentArgs, SteerSubagentTarget, WaitSubagentArgs, WaitToolArgs,
+    load_parent_subagent_context, load_spawn_bridge_row, load_steer_subagent_target,
+    pending_automated_wakeup_request_ids, project_child_terminal, resolve_context_target,
+    try_load_authorized_child_edge, BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs,
+    ParentSubagentContext, ReadToolOutputOutcome, SpawnSubagentArgs, SteerSubagentTarget,
+    WaitSubagentArgs, WaitToolArgs,
 };
 use crate::config::DEFAULT_DEADLINE_DURATION_SECS;
 use crate::document_config::{load_agent_behavior, SubagentTarget};

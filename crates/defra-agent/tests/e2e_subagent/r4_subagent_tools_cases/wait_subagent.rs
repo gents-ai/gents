@@ -278,6 +278,168 @@ async fn wait_subagent_rejects_unlinked_child_without_lifecycle_row() {
     );
 }
 
+/// #593: waiting on a background child whose `AgentRequest` has not
+/// materialized (remote spawn target — the local `SubagentSource` skips it)
+/// must explain the bridge state with a RETRYABLE payload instead of a bare
+/// not-available error.
+#[tokio::test]
+async fn wait_subagent_explains_unmaterialized_child_bridge() {
+    let fixture = setup_spawn_fixture(
+        "wait_subagent_unmaterialized",
+        vec![CHILD_BEHAVIOR_ID],
+        0,
+        true,
+    )
+    .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+
+    let child_request_id = "wait-unmat-child";
+    let bridge_tool_call_id = "wait-unmat-bridge";
+    let args = json!({
+        "name": "remote-coder",
+        "agent_did": "did:key:z6MkRemoteUnclaimed",
+        "behavior_id": "remote-coder-behavior",
+        "prompt": "cross-deployment work",
+        "await_mode": "background"
+    })
+    .to_string();
+    let mut lifecycle = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        fixture.request_id.clone(),
+        fixture.session_id.clone(),
+        fixture.agent_did.clone(),
+        bridge_tool_call_id.to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        args,
+        fixture.parent_deadline,
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        child_request_id.to_string(),
+        "did:key:z6MkRemoteUnclaimed".to_string(),
+    );
+    lifecycle.start_running().await.unwrap();
+
+    let action = hook
+        .on_tool_call(
+            "wait_subagent",
+            Some("model-call-wait-unmat".to_string()),
+            "internal-wait-unmat",
+            &json!({ "child_request_id": child_request_id }).to_string(),
+        )
+        .await;
+    let error = skip_reason_json(action);
+    assert_eq!(error["ok"], false);
+    assert_eq!(error["failure_class"], "service_unavailable");
+    assert_eq!(error["retryable"], true);
+    let message = error["message"].as_str().expect("message");
+    assert!(
+        message.contains("has no materialized row yet"),
+        "explains materialization: {message}"
+    );
+    assert!(
+        message.contains(bridge_tool_call_id),
+        "names the bridge: {message}"
+    );
+}
+
+/// #593 boundary: the bridge fallback is gated on RESOLUTION failures only.
+/// A child row that exists but is corrupt (here: empty `behavior_id`) must
+/// keep the original non-retryable error — never be masked as
+/// materialization lag.
+#[tokio::test]
+async fn wait_subagent_preserves_error_for_corrupt_materialized_child() {
+    let fixture = setup_spawn_fixture(
+        "wait_subagent_corrupt_child",
+        vec![CHILD_BEHAVIOR_ID],
+        0,
+        true,
+    )
+    .await;
+    let db = &fixture.db;
+    let hook = fixture.hook.clone();
+
+    let child_request_id = "wait-corrupt-child";
+    let child_session_id = "wait-corrupt-child-session";
+    let bridge_tool_call_id = "wait-corrupt-bridge";
+    let parent_request_id = escape_graphql_string(&fixture.request_id);
+    let session_id = escape_graphql_string(&fixture.session_id);
+    let agent_did = escape_graphql_string(&fixture.agent_did);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{child_request_id}",
+                agent_did: "{agent_did}",
+                behavior_id: "",
+                session_id: "{child_session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{child_request_id}",
+                superseded_by_request: "",
+                content: "corrupt child",
+                status: "processing",
+                lifecycle_state: "processing",
+                backend_id: "",
+                execution_origin: "interactive",
+                metadata: "",
+                failure_reason: "",
+                created_at: "2026-07-01T00:00:00Z",
+                deadline: "2026-07-01T00:10:00Z",
+                retry_count: 0,
+                max_retries: 3,
+                subagent_depth: 1,
+                caused_by_parent_request_id: "{parent_request_id}",
+                caused_by_parent_tool_call_id: "{bridge_tool_call_id}"
+            }}) {{ _docID }}
+            create_AgentToolCall(input: {{
+                tool_call_key: "{session_id}:{bridge_tool_call_id}",
+                request_id: "{parent_request_id}",
+                session_id: "{session_id}",
+                message_sequence: 1,
+                tool_name: "spawn_subagent",
+                tool_call_id: "{bridge_tool_call_id}",
+                args: "{{}}",
+                result: "",
+                status: "running",
+                lifecycle_state: "running",
+                started_at: "2026-07-01T00:00:00Z",
+                deadline_at: "2026-07-01T00:10:00Z",
+                await_mode: "background",
+                cancel_policy: "cascade",
+                child_request_id: "{child_request_id}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = db.node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create corrupt child edge failed: {:?}",
+        response.errors
+    );
+
+    let action = hook
+        .on_tool_call(
+            "wait_subagent",
+            Some("model-call-wait-corrupt".to_string()),
+            "internal-wait-corrupt",
+            &json!({ "child_request_id": child_request_id }).to_string(),
+        )
+        .await;
+    let error = skip_reason_json(action);
+    assert_eq!(error["ok"], false);
+    assert_eq!(error["failure_class"], "service_unavailable");
+    assert_eq!(error["retryable"], false);
+    let message = error["message"].as_str().expect("message");
+    assert!(
+        message.contains("has no behavior_id"),
+        "preserves the original error: {message}"
+    );
+    assert!(
+        !message.contains("has no materialized row yet"),
+        "must not be masked as materialization lag: {message}"
+    );
+}
+
 #[tokio::test]
 async fn wait_subagent_from_resumed_hook_cascades_parent_interrupt() {
     let fixture = setup_spawn_fixture(
