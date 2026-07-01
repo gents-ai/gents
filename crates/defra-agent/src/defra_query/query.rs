@@ -25,7 +25,7 @@ const RESTRICTED_FIELDS: &[(&str, &str)] = &[
     ("OAuthCredential", "id_token"),
 ];
 
-fn is_restricted_field(collection: &str, field: &str) -> bool {
+pub(crate) fn is_restricted_field(collection: &str, field: &str) -> bool {
     RESTRICTED_FIELDS
         .iter()
         .any(|(c, f)| *c == collection && *f == field)
@@ -35,7 +35,7 @@ fn is_restricted_field(collection: &str, field: &str) -> bool {
 /// object keys that are not operators (operators start with `_`, e.g. `_eq`,
 /// `_and`). Used to block filtering on restricted fields (which would otherwise
 /// allow probing a secret value with boolean/`_like` predicates).
-fn collect_filter_field_keys(value: &Value, out: &mut Vec<String>) {
+pub(crate) fn collect_filter_field_keys(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
             for (key, nested) in map {
@@ -66,6 +66,14 @@ pub struct DefraQueryParams {
     /// Maximum rows to return (defaults to [`DEFAULT_LIMIT`], capped at [`MAX_LIMIT`]).
     #[serde(default)]
     pub limit: Option<u32>,
+}
+
+impl DefraQueryParams {
+    /// True when the caller asked for discovery mode (`fields: ["*"]`): return
+    /// the collection's queryable field inventory instead of documents.
+    pub fn is_discovery(&self) -> bool {
+        self.fields.len() == 1 && self.fields[0] == "*"
+    }
 }
 
 /// Which collections a query surface is permitted to read.
@@ -135,6 +143,12 @@ pub fn build_query(params: &DefraQueryParams, scope: &CollectionScope) -> Result
     if params.fields.is_empty() {
         bail!("`fields` must list at least one field to return");
     }
+    if params.fields.iter().any(|f| f == "*") {
+        bail!(
+            "wildcard field \"*\" must be the only entry: call with fields: [\"*\"] \
+             to list the collection's queryable fields"
+        );
+    }
     for field in &params.fields {
         validate_identifier(field).map_err(|e| anyhow!("invalid field name: {e}"))?;
         if is_restricted_field(&params.collection, field) {
@@ -174,8 +188,30 @@ pub fn build_query(params: &DefraQueryParams, scope: &CollectionScope) -> Result
     ))
 }
 
+/// Introspect a collection's field set. `Ok(None)` means the collection
+/// (GraphQL type) does not exist on the node.
+pub(crate) async fn fetch_collection_schema(
+    node: &EmbeddedNode,
+    collection: &str,
+) -> Result<Option<super::schema::CollectionSchema>> {
+    let query = super::schema::introspection_query(collection)?;
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        bail!(
+            "schema introspection for {collection:?} failed: {:?}",
+            resp.errors
+        );
+    }
+    Ok(super::schema::parse_collection_schema(resp.data.as_ref()))
+}
+
 /// Execute the structured query against `node` and return the result rows
 /// (a JSON array) for the requested collection.
+///
+/// On a GraphQL failure the collection is introspected and the error is
+/// enriched into an agent-usable diagnostic (invalid fields, the allowed
+/// inventory, close-match suggestions); if introspection itself fails, the raw
+/// GraphQL errors are surfaced unchanged.
 pub(crate) async fn execute_query(
     node: &EmbeddedNode,
     params: &DefraQueryParams,
@@ -184,10 +220,14 @@ pub(crate) async fn execute_query(
     let query = build_query(params, scope)?;
     let resp = node.execute(&query).await;
     if resp.has_errors() {
+        let raw = format!("{:?}", resp.errors);
+        let diagnostic = match fetch_collection_schema(node, &params.collection).await {
+            Ok(schema) => super::schema::diagnose_failed_query(params, schema.as_ref(), &raw),
+            Err(_) => raw,
+        };
         bail!(
-            "defra_query against {:?} failed: {:?}",
-            params.collection,
-            resp.errors
+            "defra_query against {:?} failed: {diagnostic}",
+            params.collection
         );
     }
     let rows = resp

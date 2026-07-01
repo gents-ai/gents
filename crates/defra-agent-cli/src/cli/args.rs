@@ -427,12 +427,12 @@ pub(crate) struct InitArgs {
     #[arg(
         long,
         default_value_t = false,
-        help = "Disable the default read-only defra_query tool in the default ToolSelection"
+        help = "Disable the read-only defra_query tool even when the tool package enables it (only the introspection package does; defra_query is otherwise opt-in)"
     )]
     pub(crate) disable_defra_query: bool,
     #[arg(
         long = "defra-query-collection",
-        help = "Restrict init's default defra_query tool to these collections (repeatable); omit for all collections"
+        help = "Restrict the defra_query tool to these collections when a package enables it (repeatable); omit for all collections"
     )]
     pub(crate) defra_query_collections: Vec<String>,
 }

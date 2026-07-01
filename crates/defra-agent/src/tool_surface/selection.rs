@@ -140,7 +140,9 @@ impl Default for ToolSelection {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_context_budget: true,
-            enable_defra_query: true,
+            // defra_query is opt-in (#592): an unscoped read tool dominates the
+            // surface, so only an explicit enable turns it on.
+            enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
         }
@@ -188,9 +190,11 @@ impl ToolSelection {
             enable_context_budget: selection
                 .enable_context_budget
                 .unwrap_or(policy_version.default_enabled(true)),
-            enable_defra_query: selection
-                .enable_defra_query
-                .unwrap_or(policy_version.default_enabled(true)),
+            // defra_query is opt-in for every policy version (#592): legacy
+            // docs are NOT grandfathered — the legacy backfill / wide-open
+            // preset materialize an explicit `true` where the permissive
+            // surface is intended.
+            enable_defra_query: selection.enable_defra_query.unwrap_or(false),
             defra_query_collections: selection
                 .defra_query_collections
                 .clone()

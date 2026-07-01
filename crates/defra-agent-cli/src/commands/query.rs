@@ -7,31 +7,95 @@
 //! so the CLI and MCP surfaces are guaranteed to behave identically.
 
 use anyhow::{Context, Result};
-use defra_agent::defra_query::{build_query, CollectionScope, DefraQueryParams};
+use defra_agent::defra_query::{
+    build_query, diagnose_failed_query, discovery_payload, introspection_query,
+    parse_collection_schema, unknown_collection_message, CollectionSchema, CollectionScope,
+    DefraQueryParams,
+};
 use serde_json::{json, Value};
 
 use crate::cli::args::QueryArgs;
 use crate::{post_graphql, print_json, resolve_graphql_endpoint};
 
-/// Build + execute a structured query over GraphQL-over-HTTP and return the
-/// `{collection, count, results}` envelope. Shared by the CLI command and the
-/// MCP tool so both honor the same secret guard + scope.
-pub(crate) async fn run_defra_query(
+/// Introspect a collection's field set over GraphQL-over-HTTP. `Ok(None)`
+/// means the collection (GraphQL type) does not exist on the node.
+async fn fetch_collection_schema(
     graphql: &str,
-    params: &DefraQueryParams,
-    scope: &CollectionScope,
-) -> Result<Value> {
-    let query = build_query(params, scope)?;
+    collection: &str,
+) -> Result<Option<CollectionSchema>> {
+    let query = introspection_query(collection)?;
     let response = post_graphql(graphql, &query).await?;
     if let Some(errors) = response
         .get("errors")
         .and_then(Value::as_array)
         .filter(|errors| !errors.is_empty())
     {
-        anyhow::bail!(
-            "defra_query against {:?} failed: {errors:?}",
-            params.collection
-        );
+        anyhow::bail!("schema introspection for {collection:?} failed: {errors:?}");
+    }
+    Ok(parse_collection_schema(response.get("data")))
+}
+
+/// Turn a failed query into an agent-usable diagnostic by introspecting the
+/// collection; when introspection itself fails (e.g. the failure was
+/// transport-level), the original error text is preserved unchanged.
+async fn enriched_query_failure(
+    graphql: &str,
+    params: &DefraQueryParams,
+    raw: String,
+) -> anyhow::Error {
+    let diagnostic = match fetch_collection_schema(graphql, &params.collection).await {
+        Ok(schema) => diagnose_failed_query(params, schema.as_ref(), &raw),
+        Err(_) => raw,
+    };
+    anyhow::anyhow!(
+        "defra_query against {:?} failed: {diagnostic}",
+        params.collection
+    )
+}
+
+/// Build + execute a structured query over GraphQL-over-HTTP and return the
+/// `{collection, count, results}` envelope. Shared by the CLI command and the
+/// MCP tool so both honor the same secret guard + scope.
+///
+/// `fields: ["*"]` is discovery mode and returns the collection's queryable
+/// field inventory instead of documents. On a GraphQL failure the collection
+/// is introspected and the error enriched into a field-level diagnostic; if
+/// introspection itself fails, the raw errors are surfaced unchanged.
+pub(crate) async fn run_defra_query(
+    graphql: &str,
+    params: &DefraQueryParams,
+    scope: &CollectionScope,
+) -> Result<Value> {
+    if params.is_discovery() {
+        scope.ensure_allowed(&params.collection)?;
+        let schema = fetch_collection_schema(graphql, &params.collection)
+            .await?
+            .with_context(|| {
+                format!(
+                    "defra_query against {:?} failed: {}",
+                    params.collection,
+                    unknown_collection_message(&params.collection)
+                )
+            })?;
+        return Ok(discovery_payload(&params.collection, &schema));
+    }
+
+    let query = build_query(params, scope)?;
+    // `post_graphql` bails when the response carries GraphQL errors, so the
+    // enrichment hook is its Err path (transport failures fall back to the
+    // original error because introspection then fails too).
+    let response = match post_graphql(graphql, &query).await {
+        Ok(response) => response,
+        Err(error) => {
+            return Err(enriched_query_failure(graphql, params, format!("{error:#}")).await);
+        }
+    };
+    if let Some(errors) = response
+        .get("errors")
+        .and_then(Value::as_array)
+        .filter(|errors| !errors.is_empty())
+    {
+        return Err(enriched_query_failure(graphql, params, format!("{errors:?}")).await);
     }
     let rows = response
         .get("data")

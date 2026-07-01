@@ -666,7 +666,9 @@ fn tool_package_profile(tool_package: ToolPackageArg) -> ToolPackageProfile {
             enable_bash: true,
             bash_mode: "ReadOnly",
             enable_meta_tools: true,
-            enable_defra_query: true,
+            // defra_query is opt-in (#592); the introspection package is the
+            // only one that turns it on by default.
+            enable_defra_query: false,
         },
         ToolPackageArg::Write => ToolPackageProfile {
             display_name: "Standard Write Tools",
@@ -675,7 +677,7 @@ fn tool_package_profile(tool_package: ToolPackageArg) -> ToolPackageProfile {
             enable_bash: true,
             bash_mode: "Unrestricted",
             enable_meta_tools: true,
-            enable_defra_query: true,
+            enable_defra_query: false,
         },
         // Yolo's tool surface IS the write surface; only the execution policy
         // (default_command_execution_policy_for_init) differs.
@@ -967,7 +969,7 @@ mod tests {
                 enable_bash: true,
                 bash_mode: "ReadOnly",
                 enable_meta_tools: true,
-                enable_defra_query: true,
+                enable_defra_query: false,
                 backgroundable_tools: Vec::new(),
             },
             Case {
@@ -979,7 +981,7 @@ mod tests {
                 enable_bash: true,
                 bash_mode: "Unrestricted",
                 enable_meta_tools: true,
-                enable_defra_query: true,
+                enable_defra_query: false,
                 backgroundable_tools: vec!["bash_unrestricted".to_string()],
             },
         ];

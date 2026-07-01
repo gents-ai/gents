@@ -76,8 +76,13 @@ pub(crate) fn truncate_field_strings(value: &mut serde_json::Value) -> bool {
 
 pub(crate) mod query;
 pub(crate) mod render;
+pub(crate) mod schema;
 
 pub use query::{build_query, CollectionScope, DefraQueryParams, DEFAULT_LIMIT, MAX_LIMIT};
+pub use schema::{
+    diagnose_failed_query, discovery_payload, introspection_query, parse_collection_schema,
+    unknown_collection_message, CollectionSchema, SchemaField,
+};
 
 /// The model-facing tool name.
 pub const DEFRA_QUERY_TOOL_NAME: &str = "defra_query";
@@ -139,7 +144,10 @@ impl Tool for DefraQueryTool {
                  object, and an optional limit. Returns JSON: {{collection, count, results}}. \
                  Use this to inspect agent state and traces (e.g. AgentRequest, AgentResponse, \
                  AgentMessage, AgentToolCall, AgentSession) instead of hand-writing GraphQL. \
-                 {scope_note}"
+                 To discover a collection's queryable fields before guessing, call with \
+                 fields: [\"*\"] — this returns the field inventory (names and types) instead \
+                 of documents. Invalid field names fail with a diagnostic listing the allowed \
+                 fields and close-match suggestions. {scope_note}"
             ),
             parameters: json!({
                 "type": "object",
@@ -151,7 +159,7 @@ impl Tool for DefraQueryTool {
                     "fields": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Field names to return, e.g. [\"request_id\", \"status\"]. Required, non-empty."
+                        "description": "Field names to return, e.g. [\"request_id\", \"status\"]. Required, non-empty. Pass [\"*\"] to list the collection's queryable fields instead of documents."
                     },
                     "filter": {
                         "type": "object",
@@ -168,6 +176,22 @@ impl Tool for DefraQueryTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        if args.is_discovery() {
+            self.scope.ensure_allowed(&args.collection)?;
+            let schema = query::fetch_collection_schema(&self.node, &args.collection)
+                .await?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "defra_query against {:?} failed: {}",
+                        args.collection,
+                        schema::unknown_collection_message(&args.collection)
+                    )
+                })?;
+            let payload = schema::discovery_payload(&args.collection, &schema);
+            return serde_json::to_string_pretty(&payload)
+                .map_err(|e| DefraQueryError(anyhow!("failed to serialize field inventory: {e}")));
+        }
+
         let mut rows = query::execute_query(&self.node, &args, &self.scope).await?;
         let count = rows.as_array().map(|a| a.len()).unwrap_or(0);
 
