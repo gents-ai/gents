@@ -187,11 +187,6 @@ impl Tool for SpawnSubagentTool {
                         "enum": await_modes,
                         "default": self.config.default_await_mode.as_str(),
                         "description": "Use foreground to wait for the child result. Use background only when the schema exposes it."
-                    },
-                    "deadline": {
-                        "type": "string",
-                        "format": "date-time",
-                        "description": "Optional RFC3339 deadline for the child, bounded by the parent request deadline."
                     }
                 },
                 "required": ["name", "prompt"]

@@ -603,6 +603,24 @@ impl DefraSessionHook {
         }
 
         if let Some(child_deadline) = parsed.deadline.as_ref() {
+            if *child_deadline <= chrono::Utc::now() {
+                return self
+                    .fail_spawn_subagent_tool_call(
+                        session_id,
+                        request_id,
+                        parent_context.request_deadline_at,
+                        seq,
+                        internal_call_id,
+                        args,
+                        FailureClass::ArgumentInvalid,
+                        invalid_tool_arguments_payload(
+                            SPAWN_SUBAGENT_TOOL_NAME,
+                            "/deadline",
+                            "deadline must be in the future",
+                        ),
+                    )
+                    .await;
+            }
             if *child_deadline > parent_context.request_deadline_at {
                 return self
                     .fail_spawn_subagent_tool_call(

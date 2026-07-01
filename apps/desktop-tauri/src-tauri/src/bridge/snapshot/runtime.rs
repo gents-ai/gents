@@ -9,8 +9,8 @@ use super::super::types::{
     ToolServiceRegistryView,
 };
 use super::runtime_tasks::{
-    conversation_task_tag, recent_runs_for_task_views, retain_latest_conversation_summaries,
-    source_matches_agent, task_run_history,
+    conversation_task_tag, recent_runs_for_task_views, request_backed_conversation_summaries,
+    retain_latest_conversation_summaries, source_matches_agent, task_run_history,
 };
 use super::to_health_view;
 
@@ -410,6 +410,14 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     }
                 })
                 .collect::<Vec<_>>();
+            conversations.extend(request_backed_conversation_summaries(
+                store.as_ref(),
+                &peer.agent_did,
+                require_source_scope,
+                &tasks,
+                &schedules,
+                &event_triggers,
+            ));
             conversations.sort_by(|left, right| {
                 right
                     .updated_at

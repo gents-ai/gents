@@ -45,15 +45,6 @@ type DesktopShellEffectsArgs = {
   onStartClient: () => Promise<void>;
 };
 
-function isTerminalTurnState(turnState?: string | null) {
-  return (
-    turnState === "completed" ||
-    turnState === "failed" ||
-    turnState === "superseded" ||
-    turnState === "interrupted"
-  );
-}
-
 export function useDesktopShellEffects({
   autoRestartInFlight,
   autostartAttempted,
@@ -164,11 +155,9 @@ export function useDesktopShellEffects({
         return;
       }
       if (event.reason === "store" && selectedAgentDid) {
+        await refreshSnapshot();
         if (selectedSessionId) {
-          const nextSession = await refreshSession(selectedSessionId);
-          if (isTerminalTurnState(nextSession?.turnState)) {
-            await refreshSnapshot();
-          }
+          await refreshSession(selectedSessionId);
         }
         return;
       }

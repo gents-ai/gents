@@ -94,8 +94,8 @@ fn read_stored_init_config(agent_home: &std::path::Path) -> Option<StoredInitCon
 mod runtime_tasks;
 #[cfg(test)]
 use runtime_tasks::{
-    conversation_task_tag, recent_runs_for_task_views, retain_latest_conversation_summaries,
-    task_run_history,
+    conversation_task_tag, recent_runs_for_task_views, request_backed_conversation_summaries,
+    retain_latest_conversation_summaries, task_run_history,
 };
 use runtime_tasks::{request_matches_agent, source_matches_agent};
 

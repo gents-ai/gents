@@ -1,11 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use defra_agent_desktop_core::client::{ClientStore, TaskRecentRuns};
 use defra_agent_protocol::row::AgentRequestRow;
 
 use super::super::types::{
-    normalize_optional, ConversationSummary, EventTriggerView, ScheduleView, TaskRecentRunsView,
-    TaskRunSummaryView, TaskView,
+    normalize_optional, turn_state_label, ConversationSummary, EventTriggerView, ScheduleView,
+    TaskRecentRunsView, TaskRunSummaryView, TaskView,
 };
 
 fn recent_runs_view(runs: &TaskRecentRuns) -> TaskRecentRunsView {
@@ -104,6 +104,99 @@ pub(super) fn recent_runs_for_task_views(
 pub(super) fn retain_latest_conversation_summaries(conversations: &mut Vec<ConversationSummary>) {
     let mut seen_sessions = HashSet::new();
     conversations.retain(|conversation| seen_sessions.insert(conversation.session_id.clone()));
+}
+
+pub(super) fn request_backed_conversation_summaries(
+    store: &ClientStore,
+    agent_did: &str,
+    require_source_scope: bool,
+    tasks: &[TaskView],
+    schedules: &[ScheduleView],
+    event_triggers: &[EventTriggerView],
+) -> Vec<ConversationSummary> {
+    let existing_sessions = store
+        .conversation_rows(agent_did)
+        .into_iter()
+        .map(|row| row.session_id.clone())
+        .collect::<HashSet<_>>();
+    let mut latest_requests_by_session: HashMap<String, &AgentRequestRow> = HashMap::new();
+
+    for request in &store.requests {
+        if !request_matches_agent(request, agent_did, require_source_scope) {
+            continue;
+        }
+        let Some(session_id) = normalize_optional(request.session_id.as_deref()) else {
+            continue;
+        };
+        if existing_sessions.contains(&session_id) {
+            continue;
+        }
+
+        let replace = latest_requests_by_session
+            .get(&session_id)
+            .is_none_or(|current| compare_request_freshness(request, current).is_gt());
+        if replace {
+            latest_requests_by_session.insert(session_id, request);
+        }
+    }
+
+    latest_requests_by_session
+        .into_iter()
+        .map(|(session_id, request)| {
+            let transcript = store.transcript_for_agent(&session_id, agent_did);
+            let task_tag = conversation_task_tag(
+                store,
+                agent_did,
+                require_source_scope,
+                &session_id,
+                tasks,
+                schedules,
+                event_triggers,
+            );
+            let latest_request_id = store
+                .latest_request_id_for_session_for_agent(&session_id, agent_did)
+                .unwrap_or_else(|| request.request_id.clone());
+            let latest_response =
+                store.latest_response_for_request_for_agent(&latest_request_id, agent_did);
+            let updated_at = latest_response
+                .and_then(|row| {
+                    normalize_optional(row.completed_at.as_deref())
+                        .or_else(|| normalize_optional(row.created_at.as_deref()))
+                })
+                .or_else(|| normalize_optional(request.created_at.as_deref()));
+
+            ConversationSummary {
+                session_id,
+                title: None,
+                preview_text: normalize_optional(request.content.as_deref()),
+                status: normalize_optional(request.status.as_deref())
+                    .or_else(|| normalize_optional(request.lifecycle_state.as_deref())),
+                behavior_id: normalize_optional(request.behavior_id.as_deref()),
+                latest_request_id: Some(latest_request_id.clone()),
+                task_id: task_tag.as_ref().map(|tag| tag.task_id.clone()),
+                task_name: task_tag.as_ref().and_then(|tag| tag.task_name.clone()),
+                trigger_id: task_tag.as_ref().and_then(|tag| tag.trigger_id.clone()),
+                trigger_kind: task_tag.as_ref().and_then(|tag| tag.trigger_kind.clone()),
+                created_at: normalize_optional(request.created_at.as_deref()),
+                updated_at,
+                turn_state: store
+                    .derive_turn_for_request(&latest_request_id)
+                    .map(turn_state_label)
+                    .map(str::to_owned),
+                message_count: transcript.messages.len(),
+                tool_call_count: transcript.tool_calls.len(),
+            }
+        })
+        .collect()
+}
+
+fn compare_request_freshness(
+    left: &AgentRequestRow,
+    right: &AgentRequestRow,
+) -> std::cmp::Ordering {
+    left.created_at
+        .cmp(&right.created_at)
+        .then_with(|| left.request_id.cmp(&right.request_id))
 }
 
 #[derive(Debug)]
