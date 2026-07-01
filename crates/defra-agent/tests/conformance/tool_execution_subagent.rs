@@ -513,7 +513,8 @@ async fn integration_mode_flips_tolerate_stale_same_target_owner() {
 }
 
 // ---------------------------------------------------------------------------
-// Integration: detach one-way persists cancel_policy
+// Integration: detach one-way persists, and a detached tool is `Persistent`
+// (linked bridged subagent) — runtime fence for `AllToolsPersistent`.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -539,21 +540,54 @@ async fn integration_detach_one_way_persists() {
 
     lc.detach().await.unwrap();
 
-    // Verify cancel_policy is persisted as "detach".
+    // Runtime fence for the composed `ComposedState.Persistent` invariant
+    // (`AllToolsPersistent`), proved reachable-and-well-formed in Lean by
+    // `ReachabilityWitness.detached_reachable_domain_nonempty`:
+    //
+    //   Persistent s t  :=  t.requestId = s.requestId  ∧  t.childRequestId.isSome
+    //
+    // i.e. a detached tool (cancel_policy = detach) is a *linked bridged
+    // subagent* — it stays linked to its parent request AND carries a non-null
+    // child_request_id. We assert both clauses on the persisted row after
+    // detach(), not just that cancel_policy flipped.
     let resp = db
         .node
         .execute(
-            r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-det-1" } }) { cancel_policy } }"#,
+            r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-det-1" } }) {
+                cancel_policy
+                child_request_id
+                request_id
+            } }"#,
         )
         .await;
     assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
     let data = resp.data.expect("data");
     let rows = data["AgentToolCall"].as_array().expect("array");
     assert_eq!(rows.len(), 1, "expected one row");
+    let row = &rows[0];
+
+    // `IsDetached`: cancel_policy is persisted as "detach".
     assert_eq!(
-        rows[0]["cancel_policy"].as_str(),
+        row["cancel_policy"].as_str(),
         Some("detach"),
         "cancel_policy should be persisted as 'detach' after detach()"
+    );
+    // `Persistent` clause 1 (childRequestId.isSome): a detached tool carries a
+    // non-null child_request_id — it is a real bridged subagent, not a native
+    // tool (which would have child_request_id = null).
+    assert_eq!(
+        row["child_request_id"].as_str(),
+        Some("child-req-det-1"),
+        "a detached tool must persist a non-null child_request_id \
+         (Persistent: childRequestId.isSome)"
+    );
+    // `Persistent` clause 2 (requestId linkage): the detached tool remains
+    // linked to its parent request.
+    assert_eq!(
+        row["request_id"].as_str(),
+        Some("req-det-1"),
+        "a detached tool must stay linked to its parent request \
+         (Persistent: requestId = parent request id)"
     );
 
     // detach again errors.
@@ -564,6 +598,69 @@ async fn integration_detach_one_way_persists() {
             Some(IllegalToolCallTransition::PolicyAlreadyDetach)
         ),
         "expected PolicyAlreadyDetach on second detach() call, got: {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Negative: a native (child-less) tool may NOT detach — the implication side of
+// `Persistent` (`AllToolsPersistent`). Brackets integration_detach_one_way_persists:
+// together they fence `IsDetached ⟺ (linked ∧ childRequestId.isSome)` at runtime.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn integration_detach_rejects_native_tool() {
+    let db = test_db("tc-sa-det-native-1").await;
+
+    // A native tool constructed via `new()` carries child_request_id = None.
+    let mut lc = ToolCallLifecycle::new(
+        db.node.clone(),
+        "req-det-native-1".to_string(),
+        "sess-det-native-1".to_string(),
+        "did:defra-agent:test".to_string(),
+        "tc-det-native-1".to_string(),
+        0,
+        "echo".to_string(),
+        "{}".to_string(),
+        test_deadline(),
+    );
+    lc.start_running().await.unwrap();
+
+    // The composed model forbids a detached tool without a child link
+    // (`Persistent: childRequestId.isSome`, enforced by the `tool_step` detach
+    // guard). The runtime must therefore reject detach() on a native tool rather
+    // than persist `cancel_policy=detach ∧ child_request_id=null`, a state
+    // `AllToolsPersistent` rules out.
+    let err = lc.detach().await.unwrap_err();
+    assert!(
+        matches!(
+            err.downcast_ref::<IllegalToolCallTransition>(),
+            Some(IllegalToolCallTransition::DetachRequiresChildLink)
+        ),
+        "expected DetachRequiresChildLink when detaching a native tool, got: {err:?}"
+    );
+
+    // The rejected detach persisted nothing: the row is not detached.
+    let resp = db
+        .node
+        .execute(
+            r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-det-native-1" } }) {
+                cancel_policy
+                child_request_id
+            } }"#,
+        )
+        .await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+    let data = resp.data.expect("data");
+    let rows = data["AgentToolCall"].as_array().expect("array");
+    assert_eq!(rows.len(), 1);
+    assert_ne!(
+        rows[0]["cancel_policy"].as_str(),
+        Some("detach"),
+        "a rejected detach must not persist cancel_policy=detach"
+    );
+    assert!(
+        rows[0]["child_request_id"].is_null(),
+        "native tool must remain child-less after a rejected detach"
     );
 }
 
