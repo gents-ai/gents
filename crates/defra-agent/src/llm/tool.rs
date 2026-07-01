@@ -202,12 +202,23 @@ fn unparseable_args_error(error: &serde_json::Error) -> ToolError {
 
 /// Conservatively repair a tool-call `arguments` string the model emitted in a
 /// shape Rust's `serde_json` rejects, returning the repaired string only if a
-/// repair was applied. The single corruption handled is **lone backslashes**: the
-/// model writes a single backslash that is not a legal JSON escape (`\d`,
-/// `C:\temp`, a bare `\` before a normal char). We walk the string and double any
-/// backslash that does not introduce a valid JSON escape
-/// (`\" \\ \/ \b \f \n \r \t \uXXXX`), turning the raw output into the escaped
-/// form the model should have emitted.
+/// repair was applied. Two corruptions are handled, both escapes:
+///
+/// 1. **Lone backslashes**: the model writes a single backslash that is not a
+///    legal JSON escape (`\d`, `C:\temp`, a bare `\` before a normal char). We
+///    walk the string and double any backslash that does not introduce a valid
+///    JSON escape (`\" \\ \/ \b \f \n \r \t \uXXXX`), turning the raw output
+///    into the escaped form the model should have emitted.
+/// 2. **Literal control characters inside string literals** (#589): the
+///    model's reasoning channel bleeds raw newlines (and other `0x00-0x1f`
+///    bytes) into the middle of a JSON string, which `serde_json` rejects as
+///    "control character found while parsing a string". We escape them
+///    (`\n`, `\r`, `\t`, … `\uXXXX`), preserving the model's intent — a
+///    literal control character inside a string is never legal JSON, so the
+///    transform is identity on valid payloads. Control characters BETWEEN
+///    tokens are legal whitespace and are left untouched. This pass runs
+///    after backslash-doubling so every backslash begins a well-formed escape
+///    and in-string tracking is unambiguous.
 ///
 /// The repair is **escape-only by design**: it never closes a truncated value
 /// (dangling string / unbalanced brackets). Closing a truncation can produce JSON
@@ -216,11 +227,12 @@ fn unparseable_args_error(error: &serde_json::Error) -> ToolError {
 /// By refusing to close, a `finish_reason == "length"` payload simply stays
 /// unparseable and is surfaced as [`ToolError::UnparseableArgs`] instead of run.
 ///
-/// Returns `None` when no lone backslash was found (the caller has already tried
-/// a clean parse, so there is nothing to gain from re-parsing an identical
-/// string).
+/// Returns `None` when neither corruption was found (the caller has already
+/// tried a clean parse, so there is nothing to gain from re-parsing an
+/// identical string).
 pub fn repair_tool_arguments(raw: &str) -> Option<String> {
     let escaped = escape_lone_backslashes(raw);
+    let escaped = escape_control_characters_in_strings(&escaped);
     if escaped == raw {
         None
     } else {
@@ -273,6 +285,126 @@ fn is_valid_unicode_escape(bytes: &[u8], backslash_idx: usize) -> bool {
     bytes
         .get(hex_start..hex_start + 4)
         .is_some_and(|hex| hex.iter().all(u8::is_ascii_hexdigit))
+}
+
+/// Escape literal control characters (`0x00-0x1f`) that appear INSIDE string
+/// literals, leaving inter-token whitespace untouched (#589). Expects its
+/// input to have well-formed backslash escapes (run [`escape_lone_backslashes`]
+/// first), so `\"` inside a string never toggles the in-string state. An
+/// unterminated (truncated) string stays unterminated — this never closes
+/// anything.
+fn escape_control_characters_in_strings(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 8);
+    let mut in_string = false;
+    let mut chars = raw.chars();
+    while let Some(ch) = chars.next() {
+        if !in_string {
+            if ch == '"' {
+                in_string = true;
+            }
+            out.push(ch);
+            continue;
+        }
+        match ch {
+            // A well-formed escape pair: emit verbatim, consume the escaped
+            // char so an escaped quote does not toggle the string state.
+            '\\' => {
+                out.push(ch);
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            }
+            '"' => {
+                in_string = false;
+                out.push(ch);
+            }
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{0008}' => out.push_str("\\b"),
+            '\u{000c}' => out.push_str("\\f"),
+            control if (control as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", control as u32));
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Normalize a tool-call `arguments` value to the provider-valid **object**
+/// shape (Lean `PromptAssembly.normalizeArgs`, issues #589/#590). Providers
+/// render history through templates that iterate `arguments.items()`, so a
+/// non-object value — a raw `Value::String` (the #589 poison), an array, a
+/// scalar, or `null` — deterministically jams every subsequent render of the
+/// session (#590). Applied at both rig-converter seams
+/// ([`crate::llm::rig_compat::from_rig_tool_call`], ingest — nothing
+/// non-object is ever accumulated into durable history — and
+/// [`crate::llm::rig_compat::to_rig_tool_call`], egress — already-poisoned
+/// durable history self-heals at request build).
+///
+/// The policy (each case fenced by conformance vectors mirroring the Lean
+/// theorems N1–N4):
+/// - an object passes through **unchanged** (N2);
+/// - `null` and an empty/whitespace string become `{}` silently (the
+///   absent-args shape providers accept);
+/// - a string that parses — after the tolerant escape-only
+///   [`repair_tool_arguments`] pass — to an object becomes **that object**
+///   (N4: the intended call survives, e.g. the #589 corrupt payload);
+/// - anything else (non-object JSON, unparseable string, array, scalar)
+///   becomes `{}` with a bounded warning so production occurrences are
+///   countable without dumping unbounded payloads.
+///
+/// `seam` labels the boundary ("ingest"/"egress") in the warning so healing
+/// of old poison is distinguishable from newly ingested poison.
+pub fn normalize_tool_call_arguments(
+    seam: &'static str,
+    tool_name: &str,
+    arguments: &serde_json::Value,
+) -> serde_json::Value {
+    use serde_json::Value;
+    match arguments {
+        Value::Object(_) => arguments.clone(),
+        Value::Null => Value::Object(serde_json::Map::new()),
+        Value::String(raw) if raw.trim().is_empty() => Value::Object(serde_json::Map::new()),
+        Value::String(raw) => {
+            let parsed = serde_json::from_str::<Value>(raw).ok().or_else(|| {
+                repair_tool_arguments(raw)
+                    .and_then(|repaired| serde_json::from_str::<Value>(&repaired).ok())
+            });
+            match parsed {
+                Some(Value::Object(map)) => Value::Object(map),
+                _ => {
+                    warn_nonobject_arguments_coerced(seam, tool_name, arguments);
+                    Value::Object(serde_json::Map::new())
+                }
+            }
+        }
+        _ => {
+            warn_nonobject_arguments_coerced(seam, tool_name, arguments);
+            Value::Object(serde_json::Map::new())
+        }
+    }
+}
+
+/// The truncation cap for the coercion warning's payload snippet: enough to
+/// identify the corruption class and build a fixture from real bytes, without
+/// dumping an unbounded model payload into the log stream.
+const COERCION_WARN_SNIPPET_CHARS: usize = 256;
+
+/// One bounded, counted warning per non-object coercion, so production
+/// occurrences of the #589/#590 class are observable (the original incident
+/// left zero log evidence of the offending bytes).
+fn warn_nonobject_arguments_coerced(seam: &str, tool_name: &str, arguments: &serde_json::Value) {
+    let rendered = arguments.to_string();
+    let truncated: String = rendered.chars().take(COERCION_WARN_SNIPPET_CHARS).collect();
+    tracing::warn!(
+        seam,
+        tool = tool_name,
+        payload_bytes = rendered.len(),
+        payload = %truncated,
+        "non-object tool-call arguments coerced to an empty object at the provider boundary"
+    );
 }
 
 #[cfg(test)]
@@ -438,6 +570,152 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    // ===== #589/#590: control-char salvage + object-shape normalization =====
+
+    #[test]
+    fn repair_escapes_control_characters_inside_strings() {
+        // The #589 production class: literal newlines (control characters)
+        // inside JSON strings, from reasoning-channel bleed. Escaping them is
+        // semantics-preserving (the model meant a newline) and lets the
+        // intended object parse; duplicate keys resolve last-wins.
+        let raw = crate::test_support::CORRUPT_TOOL_ARGS_589;
+        let repaired =
+            repair_tool_arguments(raw).expect("control characters in strings must be repaired");
+        let value: serde_json::Value =
+            serde_json::from_str(&repaired).expect("repaired #589 payload must parse");
+        assert!(value.is_object(), "salvage must recover an object");
+        assert_eq!(
+            value["tool_name"], "list_hosts",
+            "the intended call must survive the salvage"
+        );
+    }
+
+    #[test]
+    fn repair_leaves_inter_token_whitespace_untouched() {
+        // Newlines BETWEEN tokens are legal JSON whitespace; a payload that is
+        // already valid must not be "repaired" (None = nothing to re-parse).
+        let raw = "{\n  \"a\": 1\n}";
+        assert!(repair_tool_arguments(raw).is_none());
+    }
+
+    #[test]
+    fn repair_control_chars_still_does_not_close_truncation() {
+        // A payload with an in-string control char AND a truncated tail: the
+        // control char is escaped, but the truncation is never closed — the
+        // reparse still fails Eof and is reported Truncated, never run (#512
+        // guarantee preserved).
+        let raw = "{\"note\":\"line one\nline two that got cut";
+        let error = parse_tool_args::<SingleField>(raw)
+            .expect_err("truncated payload must not run even after control-char repair");
+        assert!(matches!(
+            error,
+            ToolError::UnparseableArgs {
+                kind: UnparseableArgsKind::Truncated,
+                ..
+            }
+        ));
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct DescribeToolArgs {
+        tool_name: String,
+    }
+
+    #[test]
+    fn parse_tool_args_salvages_589_contamination_to_typed_args() {
+        // Dispatch-level salvage: the corrupt payload deserializes into the
+        // tool's typed Args after repair, so the intended call runs instead of
+        // wasting a turn on "re-call the tool with valid JSON".
+        let parsed: DescribeToolArgs = parse_tool_args(crate::test_support::CORRUPT_TOOL_ARGS_589)
+            .expect("the #589 payload must salvage into typed args");
+        assert_eq!(parsed.tool_name, "list_hosts");
+    }
+
+    fn normalize(value: &serde_json::Value) -> serde_json::Value {
+        normalize_tool_call_arguments("test", "echo", value)
+    }
+
+    #[test]
+    fn normalize_passes_object_through_unchanged() {
+        // N2 (object fixpoint): the healthy flow has no regression.
+        let object = serde_json::json!({"city": "NYC", "nested": {"a": [1, 2]}});
+        assert_eq!(normalize(&object), object);
+    }
+
+    #[test]
+    fn normalize_coerces_null_and_empty_string_to_empty_object() {
+        // Empty/absent arguments egress as {} (the 200-control shape).
+        assert_eq!(normalize(&serde_json::Value::Null), serde_json::json!({}));
+        assert_eq!(normalize(&serde_json::json!("")), serde_json::json!({}));
+        assert_eq!(
+            normalize(&serde_json::json!("  \n ")),
+            serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn normalize_parses_stringified_object() {
+        // N4 (salvage): a JSON string holding an object becomes that object.
+        assert_eq!(
+            normalize(&serde_json::json!("{\"city\":\"NYC\"}")),
+            serde_json::json!({"city": "NYC"})
+        );
+    }
+
+    #[test]
+    fn normalize_salvages_589_corrupt_string_payload() {
+        // N4 on the production poison: the persisted Value::String of corrupt
+        // bytes normalizes to the intended object, so a poisoned session
+        // self-heals on next egress.
+        let poison = serde_json::Value::String(crate::test_support::CORRUPT_TOOL_ARGS_589.into());
+        let normalized = normalize(&poison);
+        assert!(normalized.is_object());
+        assert_eq!(normalized["tool_name"], "list_hosts");
+    }
+
+    #[test]
+    fn normalize_coerces_non_object_shapes_to_empty_object() {
+        // N1 (soundness): every non-object, non-salvageable shape becomes {}.
+        // Covers the full #590 reproduction matrix: "[]" (the repro), a JSON
+        // string literal (the production case), scalars, arrays.
+        for poison in [
+            serde_json::json!("[]"),
+            serde_json::json!("[1,2]"),
+            serde_json::json!("123"),
+            serde_json::json!("true"),
+            serde_json::json!("null"),
+            serde_json::json!("\"any string\""),
+            serde_json::json!("not json at all"),
+            serde_json::json!("{\"a\":"), // truncated
+            serde_json::json!([]),
+            serde_json::json!([1, 2]),
+            serde_json::json!(123),
+            serde_json::json!(true),
+        ] {
+            assert_eq!(
+                normalize(&poison),
+                serde_json::json!({}),
+                "non-object arguments {poison:?} must coerce to {{}}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_is_idempotent() {
+        // N3: ingest-then-egress normalization composes without drift.
+        for value in [
+            serde_json::json!({"city": "NYC"}),
+            serde_json::json!("[]"),
+            serde_json::json!("{\"a\": 1}"),
+            serde_json::Value::Null,
+            serde_json::json!([1]),
+            serde_json::Value::String(crate::test_support::CORRUPT_TOOL_ARGS_589.into()),
+        ] {
+            let once = normalize(&value);
+            assert_eq!(normalize(&once), once, "normalize must be idempotent");
+        }
     }
 
     #[test]

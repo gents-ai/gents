@@ -1050,3 +1050,163 @@ async fn post_tool_resumed_resets_response_tail() {
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
+
+/// #589 durable-history fence: a streamed tool call whose `arguments` the wire
+/// parser left as a raw corrupt string (the production poison shape) must
+/// persist OBJECT-shaped into `AgentMessage` — the salvageable payload as its
+/// intended object, never as a `Value::String` that would jam every subsequent
+/// render of the session (#590).
+#[tokio::test]
+async fn corrupt_tool_call_arguments_persist_object_shaped() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-stream-processor-corrupt-args-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:test",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("describe list_hosts"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
+    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
+        .await;
+    let request = AgentRequest {
+        doc_id: request_doc_id,
+        request_id: request_id.clone(),
+        agent_did: "did:defra-agent:test".to_string(),
+        behavior_id: Some("general".to_string()),
+        session_id: session_id.clone(),
+        content: "describe list_hosts".to_string(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
+        execution_origin: None,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        deadline: None,
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
+    };
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        "general",
+        "did:defra-agent:test",
+        request,
+        30,
+        ExecutionOrigin::Interactive,
+        "test-backend",
+    );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let stream_writer = DefraStreamWriter::new(
+        node.clone(),
+        "did:defra-agent:test",
+        Duration::from_millis(0),
+    );
+    let response_doc_id = stream_writer
+        .begin(&session_id, &request_id, "general")
+        .await
+        .unwrap();
+    lifecycle.set_response_doc_id(&response_doc_id);
+    let mut processor =
+        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+
+    // The wire parser could not shape the corrupt bytes, so the streamed rig
+    // ToolCall carries them as a raw Value::String — the exact production shape.
+    let corrupt_call: Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> = Ok(
+        MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
+            tool_call: rig::completion::message::ToolCall {
+                id: "result-1".to_string(),
+                call_id: Some("call-1".to_string()),
+                function: rig::completion::message::ToolFunction {
+                    name: "describe_tool".to_string(),
+                    arguments: serde_json::Value::String(
+                        crate::test_support::CORRUPT_TOOL_ARGS_589.to_string(),
+                    ),
+                },
+                signature: None,
+                additional_params: None,
+            },
+            internal_call_id: "internal-1".to_string(),
+        }),
+    );
+    processor.process_item(corrupt_call).await.unwrap();
+
+    assert!(matches!(
+        hook.on_tool_call(
+            "describe_tool",
+            Some("call-1".to_string()),
+            "internal-1",
+            crate::test_support::CORRUPT_TOOL_ARGS_589,
+        )
+        .await,
+        crate::llm::ToolCallHookAction::Continue
+    ));
+    assert!(matches!(
+        hook.on_tool_result(
+            "describe_tool",
+            Some("call-1".to_string()),
+            "internal-1",
+            crate::test_support::CORRUPT_TOOL_ARGS_589,
+            "described:list_hosts",
+        )
+        .await,
+        HookAction::Continue
+    ));
+
+    processor
+        .process_item(tool_result_item_with_call_id(
+            "result-1",
+            Some("call-1"),
+            "described:list_hosts",
+            "internal-1",
+        ))
+        .await
+        .unwrap();
+
+    // The durable history's assistant turn carries the SALVAGED object — the
+    // intended call — not the raw corrupt string.
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    let arguments = history
+        .iter()
+        .find_map(|message| match message {
+            Message::Assistant { content, .. } => content.iter().find_map(|item| match item {
+                AssistantContent::ToolCall(tool_call) => Some(&tool_call.function.arguments),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("a persisted assistant tool-call message");
+    assert!(
+        arguments.is_object(),
+        "non-object tool-call arguments persisted to durable history: {arguments:?}"
+    );
+    assert_eq!(
+        arguments["tool_name"], "list_hosts",
+        "the salvageable #589 payload must persist its intended object"
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
