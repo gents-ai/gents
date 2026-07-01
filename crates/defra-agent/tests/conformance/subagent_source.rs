@@ -208,6 +208,30 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
     }
 }
 
+/// Bounded wait for the parent-interrupt latch to propagate to a child
+/// request. Propagation is async relative to the caller: the booted daemon's
+/// live cascade, the source's post-create re-check, and recovery all race to
+/// write the latch, so a single post-call snapshot is not a valid observation
+/// (#591). The contract stays exact — the latch must land within the bound.
+async fn wait_for_child_interrupt_latch(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+    failure_message: &str,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if fetch_interrupt_requested_at(node, child_request_id)
+            .await
+            .unwrap()
+            .is_some()
+        {
+            return;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "{failure_message}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 async fn assert_no_child_request_for_tool(
     node: &EmbeddedNode,
     parent_tool_call_id: &str,
@@ -797,13 +821,12 @@ async fn cascade_after_source_spawn_reaches_child_request() {
         .await
         .unwrap();
 
-    let child_interrupt = fetch_interrupt_requested_at(db.node.as_ref(), child_request_id)
-        .await
-        .unwrap();
-    assert!(
-        child_interrupt.is_some(),
-        "cascade recovery should latch child interrupt_requested_at"
-    );
+    wait_for_child_interrupt_latch(
+        db.node.as_ref(),
+        child_request_id,
+        "cascade recovery should latch child interrupt_requested_at",
+    )
+    .await;
 
     running.booted.shutdown().await;
 }
@@ -999,21 +1022,12 @@ async fn subagent_source_interrupts_child_when_parent_already_interrupted() {
 
     // The child gets materialized, then immediately interrupted by the source.
     let _child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if fetch_interrupt_requested_at(db.node.as_ref(), child_request_id)
-            .await
-            .unwrap()
-            .is_some()
-        {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "child was created but never interrupted despite parent cancel-before-materialize",
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    wait_for_child_interrupt_latch(
+        db.node.as_ref(),
+        child_request_id,
+        "child was created but never interrupted despite parent cancel-before-materialize",
+    )
+    .await;
 
     running.booted.shutdown().await;
 }
@@ -1480,21 +1494,12 @@ async fn subagent_source_interrupts_child_on_concurrent_parent_cancel() {
     interrupt_task.await.unwrap();
 
     let _child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if fetch_interrupt_requested_at(db.node.as_ref(), child_request_id)
-            .await
-            .unwrap()
-            .is_some()
-        {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "child created but never interrupted despite concurrent parent cancel",
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    wait_for_child_interrupt_latch(
+        db.node.as_ref(),
+        child_request_id,
+        "child created but never interrupted despite concurrent parent cancel",
+    )
+    .await;
 
     running.booted.shutdown().await;
 }
@@ -1550,21 +1555,12 @@ async fn subagent_source_interrupts_cascade_child_when_parent_reaches_dead_termi
     lifecycle.start_running().await.unwrap();
 
     let _child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if fetch_interrupt_requested_at(db.node.as_ref(), child_request_id)
-            .await
-            .unwrap()
-            .is_some()
-        {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "Cascade child created but never interrupted despite dead (cancel-worthy) parent",
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    wait_for_child_interrupt_latch(
+        db.node.as_ref(),
+        child_request_id,
+        "Cascade child created but never interrupted despite dead (cancel-worthy) parent",
+    )
+    .await;
 
     running.booted.shutdown().await;
 }
