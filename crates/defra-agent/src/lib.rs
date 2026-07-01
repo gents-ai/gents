@@ -45,6 +45,7 @@ pub(crate) mod test_support {
 }
 pub mod lifecycle;
 pub mod llm;
+pub mod log_rate;
 pub(crate) mod managed_exec;
 pub mod mcp_pool;
 pub mod meta_tools;

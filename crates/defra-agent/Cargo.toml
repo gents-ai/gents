@@ -45,6 +45,7 @@ tokio.workspace = true
 toml.workspace = true
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
+tracing-subscriber.workspace = true
 uuid.workspace = true
 rig-core.workspace = true
 reqwest.workspace = true
@@ -72,4 +73,3 @@ proptest = "1"
 agent-tool-call-lifecycle-v1-to-v2-lens = { path = "../defra-agent-lenses/agent_tool_call_lifecycle_v1_to_v2", default-features = false }
 defra-agent-lean-contract.workspace = true
 jsonschema = { version = "0.46.5", default-features = false }
-tracing-subscriber.workspace = true

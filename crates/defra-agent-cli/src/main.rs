@@ -19,6 +19,7 @@ mod desired_state;
 mod graphql_access;
 mod home_state;
 mod http;
+mod p2p_relay;
 mod request_helpers;
 mod resolve_helpers;
 mod shared;
