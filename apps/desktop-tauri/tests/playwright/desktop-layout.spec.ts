@@ -5,6 +5,7 @@ import {
   openChat,
   openConfig,
   openConfigTab,
+  PEER_ID,
   test,
 } from "./desktopTest";
 
@@ -60,5 +61,56 @@ test.describe("desktop responsive layout guardrails", () => {
       ).toBeVisible();
       await expectNoPageHorizontalOverflow(page);
     }
+  });
+
+  test("fleet row action buttons stay reachable at any width", async ({ page }) => {
+    await gotoHarness(page); // default scenario renders peer-bombadil-local
+    await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
+    await expect(page.getByTestId(`fleet-row-${PEER_ID}`)).toBeVisible();
+
+    const chatButton = page.getByTestId(`fleet-chat-${PEER_ID}`);
+    const configButton = page.getByTestId(`fleet-config-${PEER_ID}`);
+    const repairButton = page.getByTestId(`fleet-repair-${PEER_ID}`);
+
+    // All three action buttons exist even when scrolled off-screen at 390px.
+    await expect(chatButton).toBeAttached();
+    await expect(configButton).toBeAttached();
+    await expect(repairButton).toBeAttached();
+
+    // Reachability mechanism: the actions cell lives inside a horizontally
+    // scrollable container (.fleet-table-wrap { overflow: auto }) — NOT an
+    // overflow:hidden clip that would make the buttons permanently unreachable.
+    const scrollableAncestor = await configButton.evaluate((el) => {
+      let node: HTMLElement | null = el.closest("td");
+      while (node) {
+        const overflowX = getComputedStyle(node).overflowX;
+        if (overflowX === "auto" || overflowX === "scroll") {
+          return { className: node.className, overflowX };
+        }
+        node = node.parentElement;
+      }
+      return null;
+    });
+    expect(scrollableAncestor?.className ?? "").toContain("fleet-table-wrap");
+
+    // A real user can reach every action button: scroll it into view, then it is
+    // visible and hit-testable (trial click proves it is not clipped/covered).
+    for (const button of [chatButton, configButton]) {
+      await button.scrollIntoViewIfNeeded();
+      await expect(button).toBeVisible();
+      await button.click({ trial: true });
+    }
+    // Repair is disabled in the default scenario (dialSucceeded=true, no error).
+    await repairButton.scrollIntoViewIfNeeded();
+    await expect(repairButton).toBeVisible();
+    await expect(repairButton).toBeDisabled();
+
+    // Reaching the actions must never introduce page-level horizontal overflow.
+    await expectNoPageHorizontalOverflow(page);
+
+    // The config action actually works once reached (reach + activate contract).
+    await configButton.click();
+    await expect(page.locator(".config-workspace")).toBeVisible();
+    await expectNoPageHorizontalOverflow(page);
   });
 });
