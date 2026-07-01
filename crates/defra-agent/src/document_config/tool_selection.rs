@@ -321,11 +321,16 @@ impl ToolSelectionDocument {
             return backfilled;
         }
 
-        // The three legacy default-TRUE capabilities (see `ToolSelection::from_document`,
-        // which version-gates exactly these via `default_enabled(true)`): materialize
-        // them as `true` so a backfilled V1 doc reproduces today's permissive surface
-        // bit-for-bit. Omitting `enable_context_budget` here would silently drop the
-        // (always-on) context-budget tool on the secure-default flip.
+        // The legacy default-TRUE capabilities: materialize them as `true` so a
+        // backfilled V1 doc reproduces the historical permissive surface
+        // bit-for-bit. `enable_meta_tools` and `enable_context_budget` are still
+        // version-gated in `ToolSelection::from_document` via
+        // `default_enabled(true)`; `enable_defra_query` is opt-in for every
+        // policy version since #592, so this materialized `true` is the ONLY
+        // thing keeping the wide-open preset (and legacy-doc upgrades)
+        // defra_query-enabled. Omitting `enable_context_budget` here would
+        // silently drop the (always-on) context-budget tool on the
+        // secure-default flip.
         backfilled.enable_meta_tools.get_or_insert(true);
         backfilled.enable_defra_query.get_or_insert(true);
         backfilled.enable_context_budget.get_or_insert(true);

@@ -40,6 +40,13 @@ pub struct BehaviorToolConfig {
 
 impl BehaviorToolConfig {
     pub fn meta_only() -> Self {
+        // defra_query is opt-in (#592): the meta-only baseline behavior policy
+        // disables it, while the ceiling stays permissive so an explicit
+        // selection can still enable it.
+        let mut behavior_policy =
+            ToolPolicySurface::legacy_non_host_wide(super::FileToolMode::Off, super::BashMode::Off);
+        behavior_policy.defra_query = false;
+        behavior_policy.defra_collections = EndpointScope::none();
         Self {
             host_tools: ToolSet::meta_only(),
             enable_meta_tools: true,
@@ -51,21 +58,15 @@ impl BehaviorToolConfig {
             enable_memory: false,
             enable_context_budget_tool: true,
             enable_session_history_tool: false,
-            enable_defra_query: true,
+            enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
-            behavior_policy: ToolPolicySurface::legacy_non_host_wide(
-                super::FileToolMode::Off,
-                super::BashMode::Off,
-            ),
+            behavior_policy: behavior_policy.clone(),
             ceiling_policy: ToolPolicySurface::legacy_non_host_wide(
                 super::FileToolMode::Off,
                 super::BashMode::Off,
             ),
-            static_policy: ToolPolicySurface::legacy_non_host_wide(
-                super::FileToolMode::Off,
-                super::BashMode::Off,
-            ),
+            static_policy: behavior_policy,
         }
     }
 

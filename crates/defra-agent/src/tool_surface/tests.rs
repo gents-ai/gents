@@ -711,7 +711,10 @@ fn tool_policy_version_controls_nullable_default_decode() {
     };
     let legacy = ToolSelection::from_document(&legacy_doc).unwrap();
     assert!(legacy.enable_meta_tools);
-    assert!(legacy.enable_defra_query);
+    // defra_query is opt-in for every policy version (#592): legacy docs are
+    // NOT grandfathered; only the backfill's materialized `true` (below)
+    // carries the historical permissive surface forward.
+    assert!(!legacy.enable_defra_query);
 
     let backfilled = legacy_doc.with_legacy_policy_defaults_backfilled();
     assert_eq!(
@@ -922,6 +925,9 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
             ],
             host_ceiling_warning: true,
         },
+        // readonly/write mirror the init packages, which no longer enable
+        // defra_query (#592: opt-in only; introspection is the package that
+        // turns it on).
         Case {
             name: "readonly-online",
             selection: init_like_tool_selection_document(
@@ -932,7 +938,7 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
                 "ReadOnly",
                 true,
                 Vec::new(),
-                true,
+                false,
             ),
             ceiling: ToolCeiling::readonly_at(readonly_root),
             mcp_services_online: true,
@@ -945,10 +951,14 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
                 "discover_tools",
                 "call_tool",
                 "context_budget",
+            ],
+            absent_tool_names: vec![
+                "write_file",
+                "bash_unrestricted",
+                "spawn_process",
                 "defra_query",
             ],
-            absent_tool_names: vec!["write_file", "bash_unrestricted", "spawn_process"],
-            expected_warnings: vec!["mcp_empty_allowlist_all", "defra_query_empty_scope_all"],
+            expected_warnings: vec!["mcp_empty_allowlist_all"],
             host_ceiling_warning: false,
         },
         Case {
@@ -961,7 +971,7 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
                 "Unrestricted",
                 true,
                 vec!["bash_unrestricted".to_string()],
-                true,
+                false,
             ),
             ceiling: ToolCeiling::readwrite(write_root),
             mcp_services_online: true,
@@ -978,10 +988,9 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
                 "spawn_process",
                 "wait_process",
                 "context_budget",
-                "defra_query",
             ],
-            absent_tool_names: vec!["bash", "spawn_subagent"],
-            expected_warnings: vec!["mcp_empty_allowlist_all", "defra_query_empty_scope_all"],
+            absent_tool_names: vec!["bash", "spawn_subagent", "defra_query"],
+            expected_warnings: vec!["mcp_empty_allowlist_all"],
             host_ceiling_warning: false,
         },
     ];
@@ -1229,10 +1238,12 @@ fn explain_default_surface_calls_out_builtin_reads_and_defra_query_scope() {
     assert!(explanation.excluded.get("built_in_read").is_some_and(
         |names| names.contains(&crate::toolset::SESSION_HISTORY_TOOL_NAME.to_string())
     ));
-    assert!(explanation
+    // defra_query is opt-in (#592): the default surface excludes it, and with
+    // the tool off the empty-scope warning has nothing to warn about.
+    assert!(!explanation
         .tool_names
         .contains(&crate::defra_query::DEFRA_QUERY_TOOL_NAME.to_string()));
-    assert!(explanation
+    assert!(!explanation
         .warnings
         .iter()
         .any(|warning| warning.code == "defra_query_empty_scope_all"));
@@ -1355,4 +1366,65 @@ async fn memory_tool_requires_selection_opt_in() {
     assert!(enabled
         .tool_names()
         .contains(&crate::toolset::MEMORY_TOOL_NAME.to_string()));
+}
+
+/// #592: `defra_query` must be OFF unless explicitly enabled. The programmatic
+/// default, the legacy document decode (no `tool_policy_version`), and the
+/// meta-only baseline all exclude it; only an explicit
+/// `enable_defra_query: true` (or the wide-open preset, which materializes one)
+/// surfaces the tool.
+#[tokio::test]
+async fn defra_query_is_off_by_default() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    // Programmatic default surface.
+    let default_surface = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection::default(),
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+    assert!(
+        !default_surface
+            .tool_names()
+            .contains(&"defra_query".to_string()),
+        "default ToolSelection must not surface defra_query: {:?}",
+        default_surface.tool_names()
+    );
+
+    // Legacy documents (no tool_policy_version, field absent) are NOT
+    // grandfathered into defra_query.
+    let legacy = crate::document_config::ToolSelectionDocument::default();
+    assert!(
+        !ToolSelection::from_document(&legacy)
+            .unwrap()
+            .enable_defra_query
+    );
+
+    // Explicit opt-in still decodes to enabled.
+    let explicit = crate::document_config::ToolSelectionDocument {
+        enable_defra_query: Some(true),
+        ..Default::default()
+    };
+    assert!(
+        ToolSelection::from_document(&explicit)
+            .unwrap()
+            .enable_defra_query
+    );
+
+    // The meta-only baseline excludes it too.
+    let meta_only = BehaviorToolConfig::meta_only()
+        .resolve(&node)
+        .await
+        .unwrap();
+    assert!(
+        !meta_only.tool_names().contains(&"defra_query".to_string()),
+        "meta_only baseline must not surface defra_query: {:?}",
+        meta_only.tool_names()
+    );
 }
