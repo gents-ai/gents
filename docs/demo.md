@@ -232,29 +232,22 @@ gossip replication.
 
 ## The presentable local demo
 
-From a checkout, run the scripted two-node demo:
+Straight from the binary, run the interactive demo and type `pair` in its shell:
 
 ```bash
-make demo-p2p-two-node
+defra-agent demo
 ```
 
-It starts two isolated homes under `/tmp`, creates an admin-signed network on
-Amy, grants Coding membership, joins Coding with a v5 `network-control`
-invite, writes the bidirectional conversation data-plane rows, waits for the
-runtime reconcilers to install replicators, then submits one no-wait request on
-Coding and verifies that Amy sees the replicated `AgentRequest` document.
+`pair` brings up a second isolated node (the **Worker**), creates an
+admin-signed network, grants the Worker membership, joins it with a
+`network-control` invite, writes the bidirectional conversation data-plane
+rows, and waits for the runtime reconcilers to install replicators. `delegate`
+then enables cross-node subagent delegation, and `status` shows the fleet. No
+checkout, `make`, or mock is required — the command ships in the binary and
+picks a real backend on first run.
 
-Useful knobs:
-
-```bash
-DEFRA_AGENT_DEMO_KEEP=1 make demo-p2p-two-node
-DEFRA_AGENT_DEMO_INFERENCE_URL=http://127.0.0.1:8080/v1 \
-DEFRA_AGENT_DEMO_MODEL=google/gemma-4-12B-it-qat-q4_0-gguf \
-  make demo-p2p-two-node
-```
-
-`DEFRA_AGENT_DEMO_KEEP=1` leaves both runtimes running and prints the exact
-follow-up commands for manual inspection.
+The rest of this section walks the same documents the command writes for you,
+so you can drive the flow by hand and see exactly what reconciles.
 
 ## The operator/reconciler documents
 
@@ -329,10 +322,11 @@ The network-control edge moves membership and endpoint documents. Conversation
 traffic lives in a separate operator-owned `DataPlanePairingDesired` row so it
 can be filtered by local `agent_did` and gated by the same membership decision.
 
-The demo script writes the two data-plane rows for you. If you are driving the
-flow by hand, use the script with `DEFRA_AGENT_DEMO_KEEP=1` first and inspect
-the generated GraphQL in `scripts/demo-p2p-two-node.sh`; a dedicated CLI sugar
-command for data-plane rows is the next operator-ergonomics step.
+The `defra-agent demo` `pair` command writes the two data-plane rows for you (an
+`upsert_DataPlanePairingDesired` mutation in each direction, carrying the peer
+id, local `agent_did`, the conversation collections, and the replicator
+address). A dedicated CLI sugar command for data-plane rows is the next
+operator-ergonomics step.
 
 ## 4. Watch the runtime reconcile
 
@@ -469,15 +463,10 @@ answer "which application documents should move?" For chat and subagent demos,
 write `DataPlanePairingDesired` rows for the exact pair of agents you want to
 link.
 
-The local demo script does this today:
-
-```bash
-make demo-p2p-two-node
-```
-
-It writes Amy→Coding and Coding→Amy conversation data-plane rows, waits until
-both reconcilers install push replicators, then submits a request on Coding and
-confirms Amy sees the replicated `AgentRequest`.
+The interactive `defra-agent demo` command does this today: its `pair` step
+writes both conversation data-plane rows and waits until both reconcilers
+install push replicators, and `delegate` then runs a cross-node subagent whose
+child request replicates back — the same edge, driven from the binary.
 
 ## 4. Optional registry discovery
 

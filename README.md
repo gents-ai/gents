@@ -28,16 +28,13 @@ verifying the signed binary, building from source, and the fallback `chat`
 REPL. Desktop app, fleet bring-up, and P2P pairing:
 [docs/operations.md](docs/operations.md).
 
-For the local two-node P2P demo from source, run `make demo-p2p-two-node`.
-It starts Amy + Coding, enrolls Coding through a signed `network-control`
-invite, adds the conversation data plane, and proves request plus conversation
-replication.
-To see the same two-node substrate through the native fleet UI, run
-`make demo-desktop-two-node`; it launches the Tauri shell with two runtimes —
-**Orchestrator** and **Worker** — in the Fleet Dashboard, each with a tightened
-tool surface (no `defra_query`). Ask the Orchestrator to use its worker subagent
-and it delegates a child request that runs on the **Worker node** over P2P, with
-the result replicating back.
+For the interactive fleet demo, run `defra-agent demo` — it ships in the binary,
+no checkout, `make`, or mock required. It boots a single curated agent (read-only
+tools + demo skills) on a backend you pick on first run, then drops into a
+`demo>` shell: `chat` with the agent, `pair` a 2nd node (a **Worker**),
+`delegate` a cross-node subagent that runs on the worker over P2P (the result
+replicates back), `desktop` to open the same fleet through the native Fleet
+Dashboard UI, and `reconfigure` to switch backends.
 New chat turns use the configured model backend, reachable on both nodes. Keep
 the local `llama-server` above running, or launch with a hosted preset and
 model, e.g.
