@@ -103,10 +103,15 @@ jobs:
           cargo test -p defra-agent-cli --test cli_server server_startup_with_iroh_p2p_reports_runtime_connectivity -- --nocapture --test-threads=1
           cargo test -p defra-agent-cli --test cli_status -- --nocapture --test-threads=1
           cargo test -p defra-agent-cli --test cli_reconciliation reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
+          cargo test -p defra-agent-desktop-tauri --lib
 
       - name: Run full library and integration tests
         if: github.event_name != 'pull_request'
         run: cargo test -p defra-agent --lib --tests
+
+      - name: Run desktop Tauri crate tests
+        if: github.event_name != 'pull_request'
+        run: cargo test -p defra-agent-desktop-tauri --lib
 
       - name: Run full CLI test suite
         if: github.event_name != 'pull_request'
