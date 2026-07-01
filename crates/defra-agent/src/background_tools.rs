@@ -815,7 +815,12 @@ async fn load_readable_background_child_edge(
     }
 }
 
-fn authorization_lookup_error(
+/// True for the error class where the child edge could not be RESOLVED for
+/// this caller (child row absent or not linked). Deliberately excludes
+/// child-present corruption (e.g. missing `behavior_id`) and query failures,
+/// so callers gating the #593 bridge fallback on this predicate never mask
+/// data/storage problems as materialization lag.
+pub(crate) fn authorization_lookup_error(
     error: &anyhow::Error,
     caller_request_id: &str,
     child_request_id: &str,
@@ -1938,6 +1943,33 @@ mod cross_deployment_timeout_tests {
         let (message, retryable) = failed.unmaterialized_child_explanation("child-1");
         assert!(!retryable, "terminal bridge must not be retryable");
         assert!(message.contains("'failed'"));
+    }
+
+    #[test]
+    fn authorization_lookup_error_excludes_child_present_corruption() {
+        // Resolution failures (child absent / unlinked) are probe-eligible…
+        assert!(authorization_lookup_error(
+            &anyhow!("child AgentRequest c-1 not found"),
+            "p-1",
+            "c-1"
+        ));
+        assert!(authorization_lookup_error(
+            &anyhow!("child AgentRequest c-1 is not linked to parent request p-1"),
+            "p-1",
+            "c-1"
+        ));
+        // …child-present corruption and query failures are NOT: the #593
+        // bridge fallback must never mask them as materialization lag.
+        assert!(!authorization_lookup_error(
+            &anyhow!("child AgentRequest c-1 has no behavior_id"),
+            "p-1",
+            "c-1"
+        ));
+        assert!(!authorization_lookup_error(
+            &anyhow!("query child AgentRequest c-1 failed: storage down"),
+            "p-1",
+            "c-1"
+        ));
     }
 
     #[test]
