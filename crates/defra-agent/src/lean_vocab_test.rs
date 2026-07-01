@@ -72,6 +72,8 @@ pub(crate) struct LeanContractSnapshot {
     #[serde(default)]
     pub(crate) r5_cross_deployment_cases: Vec<LeanR5CrossDeploymentCase>,
     #[serde(default)]
+    pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
+    #[serde(default)]
     pub(crate) cancel_propagation_cases: Vec<LeanCancelPropagationCase>,
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
     #[serde(default)]
@@ -243,6 +245,8 @@ mod client_session;
 mod codex_shim;
 #[path = "lean_vocab_test/command_identity_queue.rs"]
 mod command_identity_queue;
+#[path = "lean_vocab_test/composed_invariants.rs"]
+mod composed_invariants;
 #[path = "lean_vocab_test/event_delivery.rs"]
 mod event_delivery;
 #[path = "lean_vocab_test/slot_persistence_health.rs"]
@@ -256,6 +260,7 @@ pub(crate) use background_transcript::*;
 pub(crate) use client_session::*;
 pub(crate) use codex_shim::*;
 pub(crate) use command_identity_queue::*;
+pub(crate) use composed_invariants::*;
 pub(crate) use event_delivery::*;
 pub(crate) use slot_persistence_health::*;
 pub(crate) use tool_policy::*;
@@ -507,6 +512,37 @@ pub(crate) fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6Backgroun
 
 pub(crate) fn lean_r5_cross_deployment_cases() -> &'static [LeanR5CrossDeploymentCase] {
     &lean_contract_snapshot().r5_cross_deployment_cases
+}
+
+pub(crate) fn lean_composed_invariant_witnesses() -> &'static [LeanComposedInvariantWitness] {
+    &lean_contract_snapshot().composed_invariant_witnesses
+}
+
+pub(crate) fn lean_composed_invariant_witness(
+    theorem_name: &str,
+) -> &'static LeanComposedInvariantWitness {
+    lean_contract_snapshot()
+        .composed_invariant_witnesses
+        .iter()
+        .find(|witness| witness.theorem_name == theorem_name)
+        .unwrap_or_else(|| {
+            panic!("Lean composed invariant witness {theorem_name:?} was not emitted")
+        })
+}
+
+/// Look up a composed-invariant witness by its (unique) `scenario`. Needed when
+/// several witnesses share a `theorem_name` — e.g. the C2 theorem's pending and
+/// running arms.
+pub(crate) fn lean_composed_invariant_witness_by_scenario(
+    scenario: &str,
+) -> &'static LeanComposedInvariantWitness {
+    lean_contract_snapshot()
+        .composed_invariant_witnesses
+        .iter()
+        .find(|witness| witness.scenario == scenario)
+        .unwrap_or_else(|| {
+            panic!("Lean composed invariant witness scenario {scenario:?} was not emitted")
+        })
 }
 
 pub(crate) fn lean_cancel_propagation_cases() -> &'static [LeanCancelPropagationCase] {

@@ -128,6 +128,15 @@ impl ToolCallLifecycle {
         if self.cancel_policy == CancelPolicy::Detach {
             return Err(IllegalToolCallTransition::PolicyAlreadyDetach.into());
         }
+        // Composed-model parity (`ComposedState.AllToolsPersistent`): a detached
+        // tool must be a linked bridged subagent — `Persistent s t` requires
+        // `t.childRequestId.isSome`, and the composed `tool_step` detach guard
+        // (`IsDetached toolPost → Persistent post toolPost`) forbids detaching a
+        // native (child-less) tool. Enforce the same precondition here so the
+        // runtime cannot reach a state the invariant rules out.
+        if !self.is_subagent_bridge() {
+            return Err(IllegalToolCallTransition::DetachRequiresChildLink.into());
+        }
 
         let doc_id = self
             .doc_id

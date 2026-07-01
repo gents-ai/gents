@@ -6,6 +6,7 @@ import Proofs.Conformance.Contracts.Json.CommandPolicy
 import Proofs.Conformance.Contracts.Json.ToolPolicy
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.Contracts.Json.BackgroundWork
+import Proofs.Conformance.Contracts.Json.ComposedInvariants
 import Proofs.Conformance.Contracts.Json.CodexShim
 import Proofs.Conformance.Contracts.Json.Workflow
 import Proofs.Conformance.Triggers.Contracts
@@ -115,6 +116,9 @@ def snapshotJson : String :=
     ++ "\"r5_cross_deployment_cases\":"
       ++ jsonArray
         (r5CrossDeploymentCases.map r5CrossDeploymentCaseJson) ++ ","
+    ++ "\"composed_invariant_witnesses\":"
+      ++ jsonArray
+        (composedInvariantWitnesses.map composedInvariantWitnessJson) ++ ","
     ++ "\"cancel_propagation_cases\":"
       ++ jsonArray
         (cancelPropagationCases.map cancelPropagationCaseJson) ++ ","

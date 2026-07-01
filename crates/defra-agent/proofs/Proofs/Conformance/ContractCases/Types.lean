@@ -312,6 +312,33 @@ structure BackgroundTheoremWitness where
   kindFields : List (String × String)
   deriving Repr
 
+/-- Runtime witness row for CrossMachineComposed reachable-state theorem
+    domains. These rows are finite projections of proved Lean witnesses; Rust
+    consumes them without re-deriving the proof. -/
+structure ComposedInvariantWitness where
+  theoremName : String
+  witnessKind : String
+  scenario : String
+  rustPath : String
+  traceStepCount : Nat
+  transitionPath : List String
+  preRequestState : String
+  preRequestAdmission : String
+  toolPreState : String
+  toolPostState : String
+  requestId : Nat
+  toolRequestId : Nat
+  toolCallId : Nat
+  requestDeadline : Nat
+  requestCurrentTime : Nat
+  toolDeadline : Nat
+  toolCurrentTime : Nat
+  deadlineExceeded : Bool
+  wellFormedSource : String
+  preToolPersisted : Bool
+  cancelCause : Option String
+  deriving Repr
+
 structure SubagentDelegationGraphCase where
   name : String
   theoremName : String
