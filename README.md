@@ -38,11 +38,9 @@ To see the same two-node substrate through the native fleet UI, run
 tool surface (no `defra_query`). Ask the Orchestrator to use its worker subagent
 and it delegates a child request that runs on the **Worker node** over P2P, with
 the result replicating back.
-New chat turns use the configured model backend. For working chat with no
-external model, add `DEFRA_AGENT_DESKTOP_DEMO_MOCK_BACKEND=1` to start a bundled
-OpenAI-compatible mock (canned replies; it even fires the subagent call).
-Otherwise keep the local `llama-server` above running or launch with a hosted
-preset and model, e.g.
+New chat turns use the configured model backend, reachable on both nodes. Keep
+the local `llama-server` above running, or launch with a hosted preset and
+model, e.g.
 `DEFRA_AGENT_DEMO_BACKEND_PRESET=openai DEFRA_AGENT_DEMO_MODEL=gpt-4.1-mini`.
 
 ## Why this exists

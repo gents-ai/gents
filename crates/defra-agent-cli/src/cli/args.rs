@@ -156,6 +156,45 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SubagentCommand,
     },
+    #[command(about = "Interactive, self-contained fleet demo (single node -> paired fleet)")]
+    Demo(DemoArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct DemoArgs {
+    #[arg(
+        long,
+        help = "Demo state directory. Defaults to ~/.defra-agent-demo (persists)"
+    )]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Wipe the demo home and start fresh"
+    )]
+    pub(crate) reset: bool,
+    #[arg(
+        long,
+        help = "Inference backend base URL, e.g. http://127.0.0.1:8080/v1"
+    )]
+    pub(crate) inference_url: Option<String>,
+    #[arg(
+        long,
+        help = "Backend preset (openai, openrouter, ollama, llama-cpp, vllm)"
+    )]
+    pub(crate) backend_preset: Option<String>,
+    #[arg(
+        long,
+        help = "Model name to bind. Defaults to the detected/preset model"
+    )]
+    pub(crate) model: Option<String>,
+    #[arg(
+        long,
+        help = "API key (stored in the backend document). Prefer OPENAI_API_KEY"
+    )]
+    pub(crate) api_key: Option<String>,
+    #[arg(long, default_value_t = 19501, help = "HTTP port for the first node")]
+    pub(crate) http_port: u16,
 }
 
 #[derive(clap::Args)]

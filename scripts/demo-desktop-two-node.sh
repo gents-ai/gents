@@ -25,11 +25,6 @@ Environment:
   DEFRA_AGENT_DESKTOP_DEMO_ALLOW_UNAVAILABLE_BACKEND=1
                                      Launch even when the configured model
                                      backend cannot be checked locally.
-  DEFRA_AGENT_DESKTOP_DEMO_MOCK_BACKEND=1
-                                     Start a bundled zero-dependency mock
-                                     OpenAI-compatible backend so chat works
-                                     end-to-end with no external model. Canned
-                                     replies; overrides any backend preset.
   DEFRA_AGENT_DEMO_BACKEND_PRESET    Passed through to the two-node demo.
                                      Use openai with OPENAI_API_KEY for hosted chat.
   DEFRA_AGENT_DEMO_INFERENCE_URL     Passed through to the two-node demo.
@@ -86,8 +81,6 @@ DEFAULT_LOCAL_MODEL_NAME="google/gemma-4-12B-it-qat-q4_0-gguf"
 MODEL_NAME="${DEFRA_AGENT_DEMO_MODEL:-}"
 BACKEND_PRESET="${DEFRA_AGENT_DEMO_BACKEND_PRESET:-}"
 ALLOW_UNAVAILABLE_BACKEND="${DEFRA_AGENT_DESKTOP_DEMO_ALLOW_UNAVAILABLE_BACKEND:-0}"
-MOCK_BACKEND="${DEFRA_AGENT_DESKTOP_DEMO_MOCK_BACKEND:-0}"
-MOCK_PID=""
 if [[ -z "$BACKEND_PRESET" && -z "$MODEL_NAME" ]]; then
   MODEL_NAME="$DEFAULT_LOCAL_MODEL_NAME"
 fi
@@ -150,13 +143,11 @@ cleanup() {
     echo "  $ROOT"
     echo "Stop P2P runtimes manually with:"
     jq -r '.pids[]? | "  kill \(.)"' "$STATE_FILE"
-    [[ -n "${MOCK_PID:-}" ]] && echo "  kill ${MOCK_PID}  # bundled mock inference backend"
     return
   fi
 
   echo
   echo "Cleaning up desktop demo"
-  [[ -n "${MOCK_PID:-}" ]] && stop_pid "$MOCK_PID"
   stop_runtimes
   rm -rf "$ROOT"
   echo "  Removed $ROOT"
@@ -354,46 +345,8 @@ EOF
   fi
 }
 
-maybe_start_mock_backend() {
-  truthy "$MOCK_BACKEND" || return 0
-  need python3
-  local mock_model="${DEFRA_AGENT_DEMO_MODEL:-mock-model}"
-  local mock_log="$ROOT/mock-inference.log"
-  mkdir -p "$ROOT"
-  say "Starting bundled mock inference backend"
-  python3 scripts/demo-mock-inference.py --port 0 --model "$mock_model" \
-    >"$mock_log" 2>&1 &
-  MOCK_PID=$!
-  local port=""
-  for _ in $(seq 1 50); do
-    port="$(sed -n 's/.*port=\([0-9]*\).*/\1/p' "$mock_log" 2>/dev/null | head -1)"
-    [[ -n "$port" ]] && break
-    if ! kill -0 "$MOCK_PID" >/dev/null 2>&1; then
-      echo "mock inference backend exited before binding a port:" >&2
-      cat "$mock_log" >&2
-      exit 1
-    fi
-    sleep 0.1
-  done
-  if [[ -z "$port" ]]; then
-    echo "mock inference backend did not report a listening port" >&2
-    exit 1
-  fi
-  # Make the mock authoritative over any preset/hosted configuration.
-  MODEL_URL="http://127.0.0.1:${port}/v1"
-  MODEL_NAME="$mock_model"
-  BACKEND_PRESET=""
-  unset DEFRA_AGENT_DEMO_BACKEND_PRESET DEFRA_AGENT_DEMO_API_KEY_ENV_VAR
-  export DEFRA_AGENT_DEMO_INFERENCE_URL="$MODEL_URL"
-  export DEFRA_AGENT_DEMO_MODEL="$mock_model"
-  # The runtime must use the chat-completions route the mock serves.
-  export DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS=1
-  echo "  Mock backend ready: $MODEL_URL (model $mock_model, pid $MOCK_PID)"
-  echo "  Replies are canned; attach OpenAI or llama-server for real responses."
-}
 
 # Fail fast on configuration before doing any slow work (build, node bring-up).
-maybe_start_mock_backend
 ensure_live_chat_backend_ready
 say "Checking demo HTTP ports are free"
 ensure_ports_available
@@ -516,9 +469,8 @@ printf '  worker:       '
   | jq -r '.behaviors[0].surface.tool_names | join(", ")' 2>/dev/null || echo "(unavailable)"
 
 # Pre-seed a delegation conversation so the Fleet UI has one to inspect. Best
-# effort: it only completes once a tool-calling backend is reachable (the
-# bundled mock fires spawn_subagent in background mode; a real model decides on
-# its own — see the suggested prompts below).
+# effort: it only completes once a tool-calling backend is reachable; a real
+# model decides whether to delegate (see the suggested prompts below).
 SUBAGENT_SEED="$("$AGENT_BIN" request submit --graphql "$ORCH_GRAPHQL" --agent-did "$ORCH_DID" \
   --content "Delegate to the worker subagent: ask it to describe the worker node, then summarize its reply." --no-wait 2>/dev/null || true)"
 SUBAGENT_SESSION_ID="$(jq -r '.session_id // empty' <<<"$SUBAGENT_SEED" 2>/dev/null)"
