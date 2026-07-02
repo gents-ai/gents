@@ -9,6 +9,7 @@ use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use tokio::process::{Child, Command};
 
+use defra_agent::agent::p2p_reconcile::resolve_template;
 use defra_agent::graphql::escape_graphql_string;
 
 use crate::graphql_access::post_graphql;
@@ -31,6 +32,7 @@ pub(super) struct Fleet {
 }
 
 pub(super) struct NodeB {
+    pub(super) home: PathBuf,
     pub(super) graphql: String,
     pub(super) did: String,
     pub(super) server: Child,
@@ -188,14 +190,22 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
     .await?;
 
     println!("  installing the conversation data plane…");
-    upsert_data_plane(&fleet.graphql_a, &peer_b, &fleet.did_a, &addr_b).await?;
-    upsert_data_plane(&graphql_b, &peer_a, &did_b, &addr_a).await?;
+    upsert_data_plane(
+        &fleet.graphql_a,
+        &peer_b,
+        &fleet.did_a,
+        &addr_b,
+        "conversation",
+    )
+    .await?;
+    upsert_data_plane(&graphql_b, &peer_a, &did_b, &addr_a, "conversation").await?;
 
     println!("  waiting for replicators…");
     wait_replicator(&graphql_b, &peer_a).await?;
     wait_replicator(&fleet.graphql_a, &peer_b).await?;
 
     fleet.node_b = Some(NodeB {
+        home: home_b,
         graphql: graphql_b,
         did: did_b,
         server: server_b,
@@ -221,30 +231,42 @@ async fn p2p_identity(bin: &Path, home: &Path) -> Result<(String, String)> {
     Ok((peer, addr))
 }
 
-const DATA_PLANE_COLLECTIONS: &str = r#"["AgentRequest","AgentResponse","AgentMessage","AgentToolCall","AgentToolResult","AgentSession","AgentConversation","CompactionEntry"]"#;
-
 async fn upsert_data_plane(
     graphql: &str,
     peer_id: &str,
     local_did: &str,
     address: &str,
+    template: &str,
 ) -> Result<()> {
     let peer = escape_graphql_string(peer_id);
     let did = escape_graphql_string(local_did);
     let addr = escape_graphql_string(address);
+    let cols = data_plane_collections_literal(template)?;
+    let template = escape_graphql_string(template);
     let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let cols = DATA_PLANE_COLLECTIONS;
     let mutation = format!(
         r#"mutation {{
   upsert_DataPlanePairingDesired(
     filter: {{ peer_id: {{ _eq: "{peer}" }} }},
-    add: {{ peer_id: "{peer}", agent_did: "{did}", collections: {cols}, replicator_addresses: ["{addr}"], template: "conversation", created_at: "{now}", updated_at: "{now}" }},
-    update: {{ agent_did: "{did}", collections: {cols}, replicator_addresses: ["{addr}"], template: "conversation", updated_at: "{now}" }}
+    add: {{ peer_id: "{peer}", agent_did: "{did}", collections: {cols}, replicator_addresses: ["{addr}"], template: "{template}", created_at: "{now}", updated_at: "{now}" }},
+    update: {{ agent_did: "{did}", collections: {cols}, replicator_addresses: ["{addr}"], template: "{template}", updated_at: "{now}" }}
   ) {{ _docID }}
 }}"#
     );
     post_graphql(graphql, &mutation).await?;
     Ok(())
+}
+
+fn data_plane_collections_literal(template: &str) -> Result<String> {
+    let template = resolve_template(template)
+        .with_context(|| format!("unknown data-plane template {template:?}"))?;
+    let collections = template
+        .collections
+        .iter()
+        .map(|collection| format!(r#""{}""#, escape_graphql_string(collection)))
+        .collect::<Vec<_>>()
+        .join(",");
+    Ok(format!("[{collections}]"))
 }
 
 async fn wait_replicator(graphql: &str, peer_id: &str) -> Result<()> {
@@ -268,6 +290,31 @@ async fn wait_replicator(graphql: &str, peer_id: &str) -> Result<()> {
     bail!("timed out waiting for the replicator for peer {peer_id}")
 }
 
+async fn wait_replicator_filter(graphql: &str, peer_id: &str, needles: &[String]) -> Result<()> {
+    let query = format!(
+        r#"{{ PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{}" }} }}, limit: 1) {{ replicator_addresses replicator_filter }} }}"#,
+        escape_graphql_string(peer_id)
+    );
+    for _ in 0..240 {
+        if let Ok(resp) = post_graphql(graphql, &query).await {
+            let armed = resp
+                .pointer("/data/PeerPairingApplied/0/replicator_addresses")
+                .and_then(Value::as_array)
+                .map(|addresses| !addresses.is_empty())
+                .unwrap_or(false);
+            let filter = resp
+                .pointer("/data/PeerPairingApplied/0/replicator_filter")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if armed && needles.iter().all(|needle| filter.contains(needle)) {
+                return Ok(());
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    bail!("timed out waiting for the data-plane filter for peer {peer_id}")
+}
+
 // ---- delegate (cross-node subagent) -----------------------------------------
 
 pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
@@ -275,6 +322,43 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
         bail!("not paired — run `pair` first");
     };
     println!("  configuring cross-node delegation…");
+    let (peer_a, addr_a) = p2p_identity(&fleet.bin, &fleet.home_a).await?;
+    let (peer_b, addr_b) = p2p_identity(&fleet.bin, &worker.home).await?;
+
+    println!("  switching the data plane to subagent delegation templates…");
+    upsert_data_plane(
+        &fleet.graphql_a,
+        &peer_b,
+        &fleet.did_a,
+        &addr_b,
+        "subagent-coordinator",
+    )
+    .await?;
+    upsert_data_plane(
+        &worker.graphql,
+        &peer_a,
+        &worker.did,
+        &addr_a,
+        "subagent-host",
+    )
+    .await?;
+    wait_replicator_filter(
+        &fleet.graphql_a,
+        &peer_b,
+        &[
+            "AgentToolCall".to_string(),
+            "spawn_target_did".to_string(),
+            worker.did.clone(),
+        ],
+    )
+    .await?;
+    wait_replicator_filter(
+        &worker.graphql,
+        &peer_a,
+        &["AgentRequest".to_string(), worker.did.clone()],
+    )
+    .await?;
+
     // Worker (node B) must accept cross-deployment spawns from the orchestrator.
     config_tools(
         &fleet.bin,

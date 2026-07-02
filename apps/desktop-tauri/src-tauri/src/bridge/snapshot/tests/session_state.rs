@@ -494,7 +494,7 @@ fn session_snapshot_transcript_rendering_consumes_generated_transcript_cases() {
     let cases = lean_transcript_cases();
     assert_eq!(
         cases.len(),
-        6,
+        7,
         "desktop transcript rendering should consume every generated Lean transcript case"
     );
 
@@ -908,6 +908,8 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
             status: Some("cancelled".to_string()),
             lifecycle_state: Some("cancelled".to_string()),
             cancel_policy: None,
+            workflow_group_id: None,
+            workflow_role: None,
             started_at: Some("2026-05-20T10:31:00Z".to_string()),
             deadline_at: None,
             completed_at: Some("2026-05-20T10:32:16Z".to_string()),
@@ -1063,6 +1065,8 @@ fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_pol
             status: Some("cancelled".to_string()),
             lifecycle_state: Some("cancelled".to_string()),
             cancel_policy: Some("cascade".to_string()),
+            workflow_group_id: None,
+            workflow_role: None,
             started_at: Some("2026-05-20T10:31:00Z".to_string()),
             deadline_at: None,
             completed_at: Some("2026-05-20T10:32:16Z".to_string()),
@@ -1206,6 +1210,37 @@ fn transcript_contract_messages(case: &LeanTranscriptCase) -> Vec<AgentMessageRo
             transcript_assistant_tool_call_message_json("result-drain"),
         )],
         "drop_abandon_not_strong_drain" => Vec::new(),
+        // Three parallel tool calls accumulate in ONE assistant turn (sequence 2),
+        // then each streamed result appends its own user row (sequences 3..5).
+        "parallel_results_share_assistant_turn" => {
+            let result_ids = transcript_contract_result_ids(case);
+            let mut rows = vec![
+                transcript_message_row(
+                    "msg-user",
+                    1,
+                    "user",
+                    user_message_json(&format!("{} prompt", case.name)),
+                ),
+                transcript_message_row(
+                    "msg-assistant-parallel-tools",
+                    case.assistant_sequence,
+                    "assistant",
+                    transcript_assistant_parallel_tool_call_message_json(&result_ids),
+                ),
+            ];
+            for (index, result_id) in result_ids.iter().enumerate() {
+                rows.push(transcript_message_row(
+                    &format!("msg-tool-result-{index}"),
+                    case.result_sequence + index,
+                    "user",
+                    transcript_tool_result_message_json(
+                        result_id,
+                        &format!("payload-{}", case.payload_hash),
+                    ),
+                ));
+            }
+            rows
+        }
         other => panic!("unsupported Lean transcript case {other:?}"),
     }
 }
@@ -1216,6 +1251,7 @@ fn transcript_contract_request_content(case: &LeanTranscriptCase) -> Option<Stri
         "ordering_user_assistant_tool_result"
             | "dedupe_duplicate_reuses_sequence"
             | "completed_tool_pair_closed"
+            | "parallel_results_share_assistant_turn"
     )
     .then(|| format!("{} prompt", case.name))
 }
@@ -1224,6 +1260,7 @@ fn transcript_contract_tool_calls(
     case: &LeanTranscriptCase,
 ) -> Vec<defra_agent_protocol::row::AgentToolCallRow> {
     let lifecycle_state = transcript_contract_tool_lifecycle(case);
+    let result_ids = transcript_contract_result_ids(case);
     (0..case.post_tool_call_count)
         .map(|index| defra_agent_protocol::row::AgentToolCallRow {
             tool_call_key: format!("tool-{}-{index}", case.name),
@@ -1231,13 +1268,15 @@ fn transcript_contract_tool_calls(
             request_id: Some("req-1".to_string()),
             message_sequence: transcript_contract_tool_group_sequence(case),
             tool_name: Some("read".to_string()),
-            tool_call_id: Some(transcript_contract_result_id(case)),
+            tool_call_id: Some(result_ids[index].clone()),
             args: Some(r#"{"file_path":"/tmp/transcript-contract.txt"}"#.to_string()),
             result: (lifecycle_state == "completed")
                 .then(|| format!("payload-{}", case.payload_hash)),
             status: Some(lifecycle_state.to_string()),
             lifecycle_state: Some(lifecycle_state.to_string()),
             cancel_policy: None,
+            workflow_group_id: None,
+            workflow_role: None,
             started_at: Some("2026-04-21T12:00:01Z".to_string()),
             deadline_at: None,
             completed_at: (lifecycle_state != "running")
@@ -1293,6 +1332,28 @@ fn transcript_assistant_tool_call_message_json(model_call_id: &str) -> String {
     .expect("serialize assistant tool-call message")
 }
 
+fn transcript_assistant_parallel_tool_call_message_json(call_ids: &[String]) -> String {
+    serde_json::to_string(&Message::Assistant {
+        id: None,
+        content: call_ids
+            .iter()
+            .map(|call_id| {
+                AssistantContent::ToolCall(ToolCall {
+                    id: call_id.clone(),
+                    call_id: Some(call_id.clone()),
+                    function: ToolFunction {
+                        name: "read".to_string(),
+                        arguments: json!({ "file_path": "/tmp/transcript-contract.txt" }),
+                    },
+                    signature: None,
+                    additional_params: None,
+                })
+            })
+            .collect(),
+    })
+    .expect("serialize parallel assistant tool-call message")
+}
+
 fn transcript_tool_result_message_json(result_id: &str, text: &str) -> String {
     serde_json::to_string(&Message::User {
         content: vec![UserContent::ToolResult(ToolResult {
@@ -1314,6 +1375,18 @@ fn transcript_contract_result_id(case: &LeanTranscriptCase) -> String {
     }
 }
 
+/// Result ids for a case's tool calls. Single-result cases reuse the one logical
+/// result id; the parallel case derives its siblings by offset from the first
+/// (`logical_result_id`, `+1`, `+2`), matching the Lean driver's parallel turn.
+fn transcript_contract_result_ids(case: &LeanTranscriptCase) -> Vec<String> {
+    if case.post_tool_call_count <= 1 {
+        return vec![transcript_contract_result_id(case)];
+    }
+    (0..case.post_tool_call_count)
+        .map(|index| format!("result-{}", case.logical_result_id as usize + index))
+        .collect()
+}
+
 fn transcript_contract_tool_lifecycle(case: &LeanTranscriptCase) -> &'static str {
     match case.action.as_str() {
         "cancel_fail_or_timeout_in_flight" => "cancelled",
@@ -1333,6 +1406,7 @@ fn transcript_contract_tool_result_rows(case: &LeanTranscriptCase) -> usize {
         | "dedupe_duplicate_reuses_sequence"
         | "completed_tool_pair_closed" => 1,
         "distinct_result_ids_append_distinct_rows" => 2,
+        "parallel_results_share_assistant_turn" => 3,
         "explicit_drain_terminalizes_ownership" | "drop_abandon_not_strong_drain" => 0,
         other => panic!("unsupported Lean transcript case {other:?}"),
     }
@@ -1342,7 +1416,8 @@ fn transcript_contract_rendered_kinds(case: &LeanTranscriptCase) -> Vec<&'static
     match case.name.as_str() {
         "ordering_user_assistant_tool_result"
         | "dedupe_duplicate_reuses_sequence"
-        | "completed_tool_pair_closed" => vec!["user", "tools"],
+        | "completed_tool_pair_closed"
+        | "parallel_results_share_assistant_turn" => vec!["user", "tools"],
         "distinct_result_ids_append_distinct_rows" => Vec::new(),
         "explicit_drain_terminalizes_ownership" | "drop_abandon_not_strong_drain" => {
             vec!["tools"]

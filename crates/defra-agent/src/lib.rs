@@ -42,9 +42,23 @@ pub(crate) mod test_support {
     pub(crate) fn first_content<T>(items: &[T]) -> &T {
         items.first().expect("non-empty content")
     }
+
+    /// The #589 production poison, byte-faithful to Amy's persisted
+    /// `AgentToolCall` row `Rrt-HmhWfFSmkh1HSUmHt`: a model tool-call
+    /// `arguments` string contaminated by out-of-channel tokens — a stray CJK
+    /// `房` and a leaked `</think` reasoning boundary inside a key, a nested
+    /// Hermes `<tool_call>`/`<function=...>` fragment as its value, duplicated
+    /// keys, and LITERAL newlines inside the strings (the control characters
+    /// `serde_json` rejects at "line 2 column 0"). The intended call survives
+    /// as the final `tool_name: list_hosts`.
+    pub(crate) const CORRUPT_TOOL_ARGS_589: &str = "{\"raw_schema\": false, \
+         \"service_id\": \"observability-mcp\", \"tool房\n</think\": \"\n<tool_call>\n\
+         <function=describe_tool>\", \"raw_schema\": false, \
+         \"service_id\": \"observability-mcp\", \"tool_name\": \"list_hosts\"}";
 }
 pub mod lifecycle;
 pub mod llm;
+pub mod log_rate;
 pub(crate) mod managed_exec;
 pub mod mcp_pool;
 pub mod meta_tools;
@@ -109,6 +123,7 @@ pub use document_config::{
     list_agent_behaviors, list_inference_profile_records, load_agent_behavior,
     load_agent_principal, load_inference_profile, load_tool_selection, subagent_target_entry,
     upsert_agent_behavior, upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
+    wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
     AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, SubagentTarget,
     ToolSelectionDocument, WriteToolDecl, WriteToolField,
 };
@@ -175,7 +190,7 @@ pub use template::{
 pub use tool_control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
 pub use tool_surface::{
     cli_tool, BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, ToolCeiling,
-    ToolRuntimeContext, ToolSelection, ToolSurface,
+    ToolPolicyVersion, ToolRuntimeContext, ToolSelection, ToolSurface, TOOL_POLICY_V1,
 };
 pub use toolset::{
     build_native_tools, CliToolConfig, CommandExecutionMode, CommandExecutionPolicy,
@@ -205,9 +220,13 @@ pub mod __test_internals {
     pub use crate::agent::principal_assembly::{
         assemble_principal_and_behaviors, BehaviorBuildError,
     };
-    pub use crate::background_tools::handle_list_subagents;
     pub use crate::background_tools::r4c_args::{
-        ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse,
+        ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse, ReadSubagentArgs,
+        ReadSubagentResponse,
+    };
+    pub use crate::background_tools::{
+        handle_list_subagents, handle_read_subagent, load_steer_subagent_target, ChildEdge,
+        SteerSubagentTarget, AWAITING_CHILD_MATERIALIZATION,
     };
     pub use crate::trigger_engine::run_subagent_source_for_test;
 }

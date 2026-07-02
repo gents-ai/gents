@@ -272,3 +272,139 @@ fn pairing_identity_uses_call_id_over_item_id() {
     assert_eq!(out, history);
     assert_provider_valid(&out);
 }
+
+// ===== ToolArgs (issues #589/#590): value-granular argument-shape contract =====
+//
+// Mirrors `Proofs/PromptAssembly/ToolArgs.lean` against the Rust normalizer
+// `llm::tool::normalize_tool_call_arguments` (applied at both rig-converter
+// seams). The Lean model is below row granularity — normalization is pointwise
+// per tool call and never changes row shape — so these vectors fence the value
+// contract the row-granular sanitize theorems cannot see.
+
+use defra_agent::llm::tool::normalize_tool_call_arguments;
+
+/// The #589 production poison (Amy's persisted row `Rrt-HmhWfFSmkh1HSUmHt`):
+/// out-of-channel contamination with LITERAL newlines inside strings,
+/// duplicated keys, and the intended call surviving as the final `tool_name`.
+const CORRUPT_TOOL_ARGS_589: &str = "{\"raw_schema\": false, \
+     \"service_id\": \"observability-mcp\", \"tool房\n</think\": \"\n<tool_call>\n\
+     <function=describe_tool>\", \"raw_schema\": false, \
+     \"service_id\": \"observability-mcp\", \"tool_name\": \"list_hosts\"}";
+
+fn normalize_args(value: &serde_json::Value) -> serde_json::Value {
+    normalize_tool_call_arguments("conformance", "echo", value)
+}
+
+/// All non-object shapes a `serde_json::Value` can carry into the seam:
+/// the #590 reproduction matrix (string-encoded and native forms) plus the
+/// #589 corrupt raw string.
+fn nonobject_vectors() -> Vec<serde_json::Value> {
+    vec![
+        serde_json::Value::Null,
+        serde_json::json!(""),
+        serde_json::json!("[]"),
+        serde_json::json!("[1,2]"),
+        serde_json::json!("123"),
+        serde_json::json!("true"),
+        serde_json::json!("null"),
+        serde_json::json!("\"any string\""),
+        serde_json::json!("not json at all"),
+        serde_json::json!([]),
+        serde_json::json!([1, 2]),
+        serde_json::json!(123),
+        serde_json::json!(true),
+        serde_json::Value::String(CORRUPT_TOOL_ARGS_589.to_string()),
+        serde_json::json!("{\"city\":\"NYC\"}"),
+        serde_json::json!({"city": "NYC"}),
+    ]
+}
+
+/// Lean `normalize_isObject` (N1, soundness): normalization always yields an
+/// object, whatever shape came in — no egress path can hand the provider a
+/// non-object `arguments` value.
+#[test]
+fn tool_args_n1_normalize_always_yields_object() {
+    for vector in nonobject_vectors() {
+        let normalized = normalize_args(&vector);
+        assert!(
+            normalized.is_object(),
+            "N1 violated: {vector:?} normalized to non-object {normalized:?}"
+        );
+    }
+}
+
+/// Lean `normalize_fixpoint_of_isObject` (N2, object fixpoint): a well-formed
+/// object passes through byte-identical — the healthy flow has no regression.
+#[test]
+fn tool_args_n2_object_passes_through_unchanged() {
+    let objects = [
+        serde_json::json!({}),
+        serde_json::json!({"city": "NYC"}),
+        serde_json::json!({"nested": {"deep": [1, 2, {"x": null}]}}),
+    ];
+    for object in objects {
+        assert_eq!(
+            normalize_args(&object),
+            object,
+            "N2 violated: object arguments must be unchanged"
+        );
+    }
+}
+
+/// Lean `normalize_idempotent` (N3): the ingest and egress seams compose —
+/// a value persisted normalized re-egresses identical.
+#[test]
+fn tool_args_n3_normalize_is_idempotent() {
+    for vector in nonobject_vectors() {
+        let once = normalize_args(&vector);
+        assert_eq!(
+            normalize_args(&once),
+            once,
+            "N3 violated: double normalization drifted for {vector:?}"
+        );
+    }
+}
+
+/// Lean `normalize_salvages_str` (N4, salvage): a string that (post-repair)
+/// parses to an object recovers THAT object — the intended call survives
+/// rather than collapsing to the empty fallback. Includes the #589 corrupt
+/// production payload.
+#[test]
+fn tool_args_n4_stringified_object_recovers_its_payload() {
+    assert_eq!(
+        normalize_args(&serde_json::json!("{\"city\":\"NYC\"}")),
+        serde_json::json!({"city": "NYC"})
+    );
+
+    let salvaged = normalize_args(&serde_json::Value::String(
+        CORRUPT_TOOL_ARGS_589.to_string(),
+    ));
+    assert!(salvaged.is_object(), "N4: the #589 payload must salvage");
+    assert_eq!(
+        salvaged["tool_name"], "list_hosts",
+        "N4: the intended call must survive the salvage"
+    );
+}
+
+/// Lean `normalize_nonobject_to_empty`: the non-salvageable shapes collapse to
+/// exactly the EMPTY object, pinning the entire coercion table.
+#[test]
+fn tool_args_nonobject_collapses_to_empty_object() {
+    for vector in [
+        serde_json::Value::Null,
+        serde_json::json!(""),
+        serde_json::json!("[]"),
+        serde_json::json!("123"),
+        serde_json::json!("\"any string\""),
+        serde_json::json!("not json at all"),
+        serde_json::json!([]),
+        serde_json::json!(123),
+        serde_json::json!(true),
+    ] {
+        assert_eq!(
+            normalize_args(&vector),
+            serde_json::json!({}),
+            "non-salvageable {vector:?} must collapse to {{}}"
+        );
+    }
+}

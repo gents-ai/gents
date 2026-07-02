@@ -448,6 +448,15 @@ impl ClientCore {
         let Some(record) = record else {
             return Ok(None);
         };
+        if record
+            .graphql
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        {
+            return Ok(None);
+        }
 
         self.refresh_remote_peer_record(&record).await.map(Some)
     }

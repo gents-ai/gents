@@ -23,6 +23,55 @@ fn conversation_summaries_keep_newest_row_per_session() {
 }
 
 #[test]
+fn request_backed_conversation_summaries_include_in_flight_sessions() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        requests: vec![AgentRequestRow {
+            request_id: "req-live".to_string(),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("session-live".to_string()),
+            retry_parent_request: None,
+            retry_root_request: None,
+            superseded_by_request: None,
+            content: Some("inspect your environment".to_string()),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            max_tokens: None,
+            metadata: None,
+            status: Some("pending".to_string()),
+            lifecycle_state: Some("pending".to_string()),
+            backend_id: None,
+            execution_origin: Some("interactive".to_string()),
+            failure_reason: None,
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            claimed_at: None,
+            deadline: None,
+            retry_count: Some(0),
+            max_retries: Some(3),
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            caused_by_parent_request_id: None,
+            interrupt_requested_at: None,
+            valid_until: None,
+        }],
+        ..ClientStoreRows::default()
+    });
+
+    let summaries =
+        request_backed_conversation_summaries(&store, "did:defra:amy", true, &[], &[], &[]);
+
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].session_id, "session-live");
+    assert_eq!(summaries[0].latest_request_id.as_deref(), Some("req-live"));
+    assert_eq!(
+        summaries[0].preview_text.as_deref(),
+        Some("inspect your environment")
+    );
+    assert_eq!(summaries[0].turn_state.as_deref(), Some("waitingForClaim"));
+}
+
+#[test]
 fn conversation_task_tag_uses_latest_schedule_lineage() {
     let store = ClientStore::from_rows(ClientStoreRows {
         requests: vec![

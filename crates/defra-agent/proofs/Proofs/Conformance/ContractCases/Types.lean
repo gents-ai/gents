@@ -312,6 +312,33 @@ structure BackgroundTheoremWitness where
   kindFields : List (String × String)
   deriving Repr
 
+/-- Runtime witness row for CrossMachineComposed reachable-state theorem
+    domains. These rows are finite projections of proved Lean witnesses; Rust
+    consumes them without re-deriving the proof. -/
+structure ComposedInvariantWitness where
+  theoremName : String
+  witnessKind : String
+  scenario : String
+  rustPath : String
+  traceStepCount : Nat
+  transitionPath : List String
+  preRequestState : String
+  preRequestAdmission : String
+  toolPreState : String
+  toolPostState : String
+  requestId : Nat
+  toolRequestId : Nat
+  toolCallId : Nat
+  requestDeadline : Nat
+  requestCurrentTime : Nat
+  toolDeadline : Nat
+  toolCurrentTime : Nat
+  deadlineExceeded : Bool
+  wellFormedSource : String
+  preToolPersisted : Bool
+  cancelCause : Option String
+  deriving Repr
+
 structure SubagentDelegationGraphCase where
   name : String
   theoremName : String
@@ -381,6 +408,40 @@ structure SteerInterruptComposes where
   drainedWakeUpQueueKey : String
   queuedRequestId : String
   queueInterruptedRequestId : String
+  deriving Repr
+
+/-- #593: after a successful BACKGROUND spawn receipt the returned
+`child_request_id` must never disappear from the parent's control plane,
+even while the child `AgentRequest` is not yet materialized (spawn
+convergence #377 materializes it asynchronously via `SubagentSource`, and a
+cross-deployment child may replicate later or never be claimed).
+
+Boundary note: `awaiting_child_materialization` is a read-side PROJECTION of
+(bridge `await_mode = background` ∧ bridge non-terminal ∧ child row absent).
+It is never persisted as a bridge `lifecycle_state` and adds no transition
+to the Background bridge state machine (`Proofs/Background/Transition.lean`);
+once the child materializes, the projection collapses back to the bridge
+lifecycle state and the happy path is unchanged. -/
+structure UnmaterializedChildVisible where
+  callerRequestId : String
+  bridgeToolCallId : String
+  childRequestId : String
+  /-- The child `AgentRequest` row is absent in this scenario. -/
+  childMaterialized : Bool
+  /-- Persisted bridge state stays `running`; the projection never mutates it. -/
+  bridgeLifecycleState : String
+  /-- `list_subagents` entry status projected for the missing child. -/
+  listedStatus : String
+  /-- The handle must be visible under `status="all"`. -/
+  listedUnderAllFilter : Bool
+  /-- The projection is non-terminal, so the default `running` filter shows it. -/
+  listedUnderRunningFilter : Bool
+  /-- `read_subagent` reports the projection instead of not-authorized. -/
+  readLifecycleState : String
+  /-- Never fake a terminal outcome for an unmaterialized child. -/
+  readTerminal : Bool
+  /-- `wait_subagent` explains the bridge state with a retryable payload. -/
+  waitRetryable : Bool
   deriving Repr
 
 end R4cWitnesses

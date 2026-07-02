@@ -119,6 +119,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_apply_reconcile_cases_fence_production_apply_write_boundary",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::generated_tool_policy_cases_match_lean_composition",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_tool_policy_cases_match_lean_composition",
+        },
+        ConformanceConsumer::RustTest {
             id: "cli_mcp_probe::mcp_probe_json_reports_health_snapshot_for_registry_service",
             package: "defra-agent-cli",
             source_path: "crates/defra-agent-cli/tests/cli_mcp_probe.rs",
@@ -404,6 +411,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/defra-agent/tests/conformance.rs",
             module_path: "conformance",
             function: "generated_r5_cross_deployment_cases_drive_production_dispatch",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::generated_composed_invariant_witnesses_drive_tool_lifecycle_conformance",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_composed_invariant_witnesses_drive_tool_lifecycle_conformance",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::cancel_propagation_cases_drive_production_interrupt",

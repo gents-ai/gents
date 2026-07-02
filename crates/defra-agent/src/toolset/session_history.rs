@@ -12,9 +12,18 @@ use crate::graphql::escape_graphql_string;
 
 pub const SESSION_HISTORY_TOOL_NAME: &str = "sessions";
 
+/// Sessions returned when the caller does not request a specific count.
 const DEFAULT_LIMIT: usize = 10;
-const MAX_LIMIT: usize = 50;
-const REQUEST_SCAN_LIMIT: usize = 500;
+/// Upper bound on a caller-requested session count. Deliberately large so the
+/// limit is under the caller's control in practice (SP3 de-cap); the bound only
+/// exists as a backstop against a pathological request triggering an enormous
+/// node scan.
+const MAX_LIMIT: usize = 1000;
+/// How many recent AgentRequest rows to scan to discover distinct session ids.
+/// MUST stay >= MAX_LIMIT: a session spans multiple requests, so surfacing
+/// `MAX_LIMIT` sessions requires scanning at least that many requests (in
+/// practice several times more). Kept comfortably above MAX_LIMIT.
+const REQUEST_SCAN_LIMIT: usize = 5000;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SessionHistoryParams {
@@ -509,6 +518,23 @@ mod tests {
     use crate::llm::tool::Tool;
 
     use super::*;
+
+    #[test]
+    fn clamp_limit_honors_large_requests_up_to_the_backstop() {
+        // Unset → default.
+        assert_eq!(clamp_limit(None), DEFAULT_LIMIT);
+        // Floor: a zero/garbage request is raised to 1, never 0.
+        assert_eq!(clamp_limit(Some(0)), 1);
+        // SP3 de-cap: a large requested count is honored (was clamped at 50).
+        assert_eq!(clamp_limit(Some(750)), 750);
+        // Only the backstop caps it.
+        assert_eq!(clamp_limit(Some(MAX_LIMIT + 5_000)), MAX_LIMIT);
+        // The scan budget must be able to surface MAX_LIMIT distinct sessions.
+        assert!(
+            REQUEST_SCAN_LIMIT >= MAX_LIMIT,
+            "REQUEST_SCAN_LIMIT must stay >= MAX_LIMIT or the cap is unreachable"
+        );
+    }
 
     async fn seeded_node() -> Arc<EmbeddedNode> {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());

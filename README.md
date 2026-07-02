@@ -37,8 +37,8 @@ replicates back), `desktop` to open the same fleet through the native Fleet
 Dashboard UI, and `reconfigure` to switch backends.
 New chat turns use the configured model backend, reachable on both nodes. Keep
 the local `llama-server` above running, or launch with a hosted preset and
-model, e.g.
-`DEFRA_AGENT_DEMO_BACKEND_PRESET=openai DEFRA_AGENT_DEMO_MODEL=gpt-4.1-mini`.
+model, e.g. `OPENAI_API_KEY=... defra-agent demo --backend-preset openai --model
+gpt-4.1-mini`.
 
 ## Why this exists
 

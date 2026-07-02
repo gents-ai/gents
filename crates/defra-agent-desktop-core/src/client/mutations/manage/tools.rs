@@ -131,6 +131,26 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
             "enable_defra_query",
             row.enable_defra_query,
         )),
+        // tool_policy_version is backfill-owned: the save handler carries it from
+        // the loaded row and never sets it from a UI flip (see config.rs), so this
+        // re-emits the stored value (graphql_string_field writes `null` for None,
+        // which keeps an unversioned row unversioned). The version is preserved by
+        // load-then-re-emit, not by omission.
+        Some(graphql_string_field(
+            "tool_policy_version",
+            row.tool_policy_version.as_deref(),
+        )),
+        Some(graphql_string_list_field(
+            "defra_query_collections",
+            &row.defra_query_collections,
+        )),
+        // Each entry is JSON-serialized WriteToolDecl; graphql_string_list_field
+        // escapes every element and emits null (not []) when empty.
+        Some(graphql_string_list_field("write_tools", &row.write_tools)),
+        Some(graphql_string_field(
+            "subagent_default_await_mode",
+            row.subagent_default_await_mode.as_deref(),
+        )),
     ];
     let update_fields = [
         Some(format!(
@@ -230,6 +250,19 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
         Some(graphql_optional_bool_field(
             "enable_defra_query",
             row.enable_defra_query,
+        )),
+        Some(graphql_string_field(
+            "tool_policy_version",
+            row.tool_policy_version.as_deref(),
+        )),
+        Some(graphql_string_list_field(
+            "defra_query_collections",
+            &row.defra_query_collections,
+        )),
+        Some(graphql_string_list_field("write_tools", &row.write_tools)),
+        Some(graphql_string_field(
+            "subagent_default_await_mode",
+            row.subagent_default_await_mode.as_deref(),
         )),
     ];
 

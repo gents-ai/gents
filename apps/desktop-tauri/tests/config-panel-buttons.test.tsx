@@ -256,6 +256,82 @@ describe("config panel action buttons", () => {
     );
   });
 
+  it("edits defra_query_collections and keeps write_tools / policy version read-only", async () => {
+    const onSaveToolSelectionConfig = vi.fn<
+      [(request: ToolSelectionSaveRequest) => Promise<unknown>]
+    >(() => Promise.resolve());
+
+    render(
+      <ToolSelectionConfigEditor
+        agentDid="did:key:z6MkAgent"
+        savedStatus={null}
+        saving={false}
+        toolCeiling="Readwrite"
+        toolRoot="/tmp/work"
+        toolSelection={{
+          ...toolSelection,
+          defraQueryCollections: ["AgentRequest"],
+          writeTools: [
+            '{"tool_name":"upsert_note","collection":"Note","description":"","fields":[]}',
+          ],
+          toolPolicyVersion: "tool-policy/v1",
+        }}
+        toolServiceRegistries={[toolService]}
+        onSaveToolSelectionConfig={onSaveToolSelectionConfig}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    // Editable allowlist round-trips the loaded value; facts render read-only.
+    expect(screen.getByTestId("tool-defra-query-collections")).toHaveValue(
+      "AgentRequest",
+    );
+    expect(screen.getByTestId("tool-policy-version")).toHaveTextContent(
+      "tool-policy/v1",
+    );
+    // The managed write-tools row decodes the WriteToolDecl JSON — a friendly
+    // "name → collection", never the raw JSON blob.
+    const writeToolsRow = screen.getByTestId("tool-write-tools");
+    expect(writeToolsRow).toHaveTextContent("upsert_note → Note");
+    expect(writeToolsRow).not.toHaveTextContent("tool_name");
+
+    fireEvent.change(screen.getByTestId("tool-defra-query-collections"), {
+      target: { value: "AgentRequest\nAgentResponse" },
+    });
+    fireEvent.click(screen.getByTestId("tool-selection-save"));
+
+    await waitFor(() =>
+      expect(onSaveToolSelectionConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          defraQueryCollections: ["AgentRequest", "AgentResponse"],
+        }),
+      ),
+    );
+    // write_tools / tool_policy_version are preserve-only — never sent.
+    const [[request]] = onSaveToolSelectionConfig.mock.calls;
+    expect(request).not.toHaveProperty("writeTools");
+    expect(request).not.toHaveProperty("toolPolicyVersion");
+  });
+
+  it("shows a legacy fallback for an unversioned tool policy", () => {
+    render(
+      <ToolSelectionConfigEditor
+        agentDid="did:key:z6MkAgent"
+        savedStatus={null}
+        saving={false}
+        toolCeiling="Readwrite"
+        toolRoot="/tmp/work"
+        toolSelection={{ ...toolSelection, toolPolicyVersion: null }}
+        toolServiceRegistries={[toolService]}
+        onSaveToolSelectionConfig={vi.fn(() => Promise.resolve())}
+        onSaved={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("tool-policy-version")).toHaveTextContent(
+      "legacy (unversioned)",
+    );
+  });
+
   it("normalizes command policy choices when saving tool selections", async () => {
     const onSaveToolSelectionConfig = vi.fn<
       [(request: ToolSelectionSaveRequest) => Promise<unknown>]

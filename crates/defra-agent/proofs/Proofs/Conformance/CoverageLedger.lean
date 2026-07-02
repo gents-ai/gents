@@ -130,6 +130,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.runtimeInternal]
     , deferred := []
     }
+  , { feature := "composed-invariants"
+    , required := [Surface.runtimeInternal]
+    , deferred := []
+    }
   , { feature := "managed-exec"
     , required := [Surface.agentFacing]
     , deferred := []
@@ -203,6 +207,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := []
     }
   , { feature := "command-policy"
+    , required := [Surface.agentFacing, Surface.operatorUi]
+    , deferred := []
+    }
+  , { feature := "tool-policy"
     , required := [Surface.agentFacing, Surface.operatorUi]
     , deferred := []
     }
@@ -440,6 +448,11 @@ def caseCoverage : List CoverageEntry :=
       "config_import::lean_apply_write_boundary_tests::generated_apply_reconcile_cases_fence_production_apply_write_boundary")
       "apply-reconcile" [Surface.operatorCli]
   , tagged (consumerCoverage
+      "tool_policy_cases"
+      "ToolPolicyCases"
+      "conformance::generated_tool_policy_cases_match_lean_composition")
+      "tool-policy" [Surface.operatorUi, Surface.agentFacing]
+  , tagged (consumerCoverage
       "session_recovery_cases"
       "SessionRecoveryCases"
       "conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract")
@@ -578,6 +591,11 @@ def caseCoverage : List CoverageEntry :=
       "R5CrossDeploymentCases"
       "defra_agent_desktop_tauri::bridge::snapshot::tests::subagent_lineage::subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases")
       "subagents-cross-deployment" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "composed_invariant_witnesses"
+      "ComposedInvariantWitnesses"
+      "conformance::generated_composed_invariant_witnesses_drive_tool_lifecycle_conformance")
+      "composed-invariants" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "cancel_propagation_cases"
       "CancelPropagationCases"

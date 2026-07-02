@@ -1461,6 +1461,55 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
         "expected secret guard to fire: {denied}"
     );
 
+    // Invalid field → agent-usable diagnostic with suggestions + inventory (#592).
+    let diagnostic = run_cli_failure_stderr(
+        &home_dir,
+        &[
+            "query",
+            "--graphql",
+            &graphql,
+            "--collection",
+            "AgentToolCall",
+            "--field",
+            "created_at",
+        ],
+    )?;
+    assert!(diagnostic.contains("created_at"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("started_at") && diagnostic.contains("completed_at"),
+        "suggestions missing: {diagnostic}"
+    );
+    assert!(
+        diagnostic.contains("tool_call_key"),
+        "field inventory missing: {diagnostic}"
+    );
+
+    // Discovery mode: fields ["*"] returns the field inventory, secrets excluded.
+    let inventory = run_cli_json(
+        &home_dir,
+        &[
+            "query",
+            "--graphql",
+            &graphql,
+            "--collection",
+            "InferenceBackend",
+            "--field",
+            "*",
+        ],
+    )?;
+    assert_eq!(inventory["discovery"], Value::Bool(true), "{inventory}");
+    let field_names: Vec<&str> = inventory["fields"]
+        .as_array()
+        .context("discovery fields array")?
+        .iter()
+        .filter_map(|f| f["name"].as_str())
+        .collect();
+    assert!(field_names.contains(&"backend_id"), "{field_names:?}");
+    assert!(
+        !field_names.contains(&"api_key") && !field_names.contains(&"api_key_env_var"),
+        "secret leaked into discovery inventory: {field_names:?}"
+    );
+
     Ok(())
 }
 

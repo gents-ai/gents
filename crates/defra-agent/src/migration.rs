@@ -108,6 +108,10 @@ const ADD_TOOL_SELECTION_ORCHESTRATION_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"orchestration_enabled","Kind":2}}
 ]"#;
 
+const ADD_TOOL_SELECTION_POLICY_VERSION_PATCH: &str = r#"[
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"tool_policy_version","Kind":11}}
+]"#;
+
 const ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"agent_did","Kind":11}}
 ]"#;
@@ -692,20 +696,39 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
             active_version = v8;
         }
 
+        if collection_has_field(&active_version, "tool_policy_version") {
+            tracing::debug!("ToolSelection already has tool policy version; skipping patch");
+        } else {
+            let pre_version_id = active_version.version_id.clone();
+            let v9 = node
+                .patch_collection("ToolSelection", ADD_TOOL_SELECTION_POLICY_VERSION_PATCH)
+                .await
+                .context("patch_collection ToolSelection policy version")?;
+            node.set_active_collection_version(&v9.version_id)
+                .await
+                .context("set_active_collection_version ToolSelection policy version")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v9 = %v9.version_id,
+                "ToolSelection patched with policy version"
+            );
+            active_version = v9;
+        }
+
         if collection_has_field(&active_version, "enable_context_budget") {
             tracing::debug!("ToolSelection already has context budget flag; skipping patch");
         } else {
             let pre_version_id = active_version.version_id.clone();
-            let v9 = node
+            let v10 = node
                 .patch_collection("ToolSelection", ADD_TOOL_SELECTION_CONTEXT_BUDGET_PATCH)
                 .await
                 .context("patch_collection ToolSelection context budget flag")?;
-            node.set_active_collection_version(&v9.version_id)
+            node.set_active_collection_version(&v10.version_id)
                 .await
                 .context("set_active_collection_version ToolSelection context budget flag")?;
             tracing::info!(
                 pre = %pre_version_id,
-                v9 = %v9.version_id,
+                v10 = %v10.version_id,
                 "ToolSelection patched with context budget flag"
             );
         }

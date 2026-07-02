@@ -1397,3 +1397,217 @@ async fn unparseable_tool_args_notify_model_and_terminalize_failed() {
         "the started tool call must terminalize failed/argumentInvalid, got rows: {rows:?}"
     );
 }
+
+/// #589/#590 incident regression, salvageable half: the model emits the exact
+/// production corrupt-arguments payload (leaked `</think`, stray CJK, nested
+/// Hermes fragment, literal newlines, duplicated keys). The escape-only repair
+/// salvages the intended object, so (a) the typed tool RUNS with the intended
+/// `tool_name`, (b) the durable `AgentMessage` history carries object-shaped
+/// arguments — never the raw corrupt string that jammed Amy's session — and
+/// (c) the next provider request sees object-shaped arguments.
+#[tokio::test]
+async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
+    use crate::llm::tool::{Tool, ToolDefinition};
+
+    struct DescribeTool;
+    #[derive(Debug, thiserror::Error)]
+    #[error("describe tool error")]
+    struct DescribeToolError;
+    #[derive(serde::Deserialize)]
+    struct DescribeArgs {
+        tool_name: String,
+    }
+    impl Tool for DescribeTool {
+        const NAME: &'static str = "describe_tool";
+        type Error = DescribeToolError;
+        type Args = DescribeArgs;
+        type Output = String;
+        async fn definition(&self, _prompt: String) -> ToolDefinition {
+            ToolDefinition {
+                name: Self::NAME.to_string(),
+                description: String::new(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+            Ok(format!("described:{}", args.tool_name))
+        }
+    }
+
+    let (node, hook) = test_hook().await;
+    ready_hook_for(&hook).await;
+
+    // The wire parser could not parse the corrupt bytes, so rig carries them as
+    // a raw Value::String — exactly the shape persisted in the production store.
+    let poison = serde_json::Value::String(crate::test_support::CORRUPT_TOOL_ARGS_589.to_string());
+    let model = ScriptedModel::new_turns(vec![
+        vec![
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "call-1".to_string(),
+                "describe_tool".to_string(),
+                poison,
+            )),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+        vec![
+            RawStreamingChoice::Message("done".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(DescribeTool)];
+
+    let stream = run_loop_stream(
+        model.clone(),
+        Some(hook),
+        Message::user("describe list_hosts"),
+        Vec::new(),
+        Arc::new(tools),
+        config(4),
+    );
+    futures::pin_mut!(stream);
+
+    let mut tool_results = Vec::new();
+    while let Some(item) = stream.next().await {
+        if let MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
+            tool_result,
+            ..
+        }) = item.expect("loop item should be Ok")
+        {
+            tool_results.push(
+                tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
+                    &tool_result.content.first(),
+                ))
+                .to_string(),
+            );
+        }
+    }
+
+    // (a) The intended call ran: salvage recovered `tool_name: list_hosts`.
+    assert_eq!(
+        tool_results,
+        vec!["described:list_hosts".to_string()],
+        "the salvageable #589 payload must run the intended call, not waste a turn"
+    );
+
+    // (b) The next provider request carries object-shaped arguments. (The
+    // durable AgentMessage fence lives in the StreamProcessor harness —
+    // `stream_processor::tests::corrupt_tool_call_arguments_persist_object_shaped`
+    // — since the bare generator does not persist assistant turns.)
+    let histories = model.seen_histories().await;
+    assert_eq!(histories.len(), 2);
+    assert_all_history_tool_args_object_shaped(&histories[1]);
+    drop(node);
+}
+
+/// #590 incident regression, non-salvageable half: arguments that are valid
+/// JSON but not an object (the `"[]"` reproduction). The call must fail
+/// `argumentInvalid` with the model notified (never run), and neither the
+/// durable history nor the next provider request may carry the non-object.
+#[tokio::test]
+async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
+    use crate::llm::tool::{Tool, ToolDefinition};
+
+    struct StrictTool;
+    #[derive(Debug, thiserror::Error)]
+    #[error("strict tool error")]
+    struct StrictToolError;
+    #[derive(serde::Deserialize)]
+    struct StrictArgs {
+        #[allow(dead_code)]
+        tool_name: String,
+    }
+    impl Tool for StrictTool {
+        const NAME: &'static str = "describe_tool";
+        type Error = StrictToolError;
+        type Args = StrictArgs;
+        type Output = String;
+        async fn definition(&self, _prompt: String) -> ToolDefinition {
+            ToolDefinition {
+                name: Self::NAME.to_string(),
+                description: String::new(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+            panic!("the tool must not run on non-object arguments");
+        }
+    }
+
+    let (node, hook) = test_hook().await;
+    ready_hook_for(&hook).await;
+
+    let model = ScriptedModel::new_turns(vec![
+        vec![
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "call-1".to_string(),
+                "describe_tool".to_string(),
+                serde_json::json!([]),
+            )),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+        vec![
+            RawStreamingChoice::Message("ok".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StrictTool)];
+
+    let stream = run_loop_stream(
+        model.clone(),
+        Some(hook),
+        Message::user("describe"),
+        Vec::new(),
+        Arc::new(tools),
+        config(4),
+    );
+    futures::pin_mut!(stream);
+    while let Some(item) = stream.next().await {
+        item.expect("loop must not fail; non-object args are notified, not raised");
+    }
+
+    // The started call terminalized failed/argumentInvalid — never a live
+    // completed call carrying poison (#589's persist gate).
+    let resp = node
+        .execute("query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }")
+        .await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        rows.iter().any(|row| {
+            row.get("tool_name").and_then(|v| v.as_str()) == Some("describe_tool")
+                && row.get("lifecycle_state").and_then(|v| v.as_str()) == Some("failed")
+                && row.get("tool_failure_class").and_then(|v| v.as_str()) == Some("argumentInvalid")
+        }),
+        "a non-object-args call must terminalize failed/argumentInvalid, got: {rows:?}"
+    );
+
+    // The next provider request carries object-shaped args — the [] never
+    // re-egresses.
+    let histories = model.seen_histories().await;
+    assert_eq!(histories.len(), 2);
+    assert_all_history_tool_args_object_shaped(&histories[1]);
+}
+
+/// Every tool call inside a (native) history must carry object-shaped
+/// arguments — the provider-render precondition (#590).
+fn assert_all_history_tool_args_object_shaped(history: &[Message]) {
+    for message in history {
+        if let Message::Assistant { content, .. } = message {
+            for item in content {
+                if let AssistantContent::ToolCall(tool_call) = item {
+                    assert!(
+                        tool_call.function.arguments.is_object(),
+                        "non-object tool-call arguments reached the provider: {:?}",
+                        tool_call.function.arguments
+                    );
+                }
+            }
+        }
+    }
+}

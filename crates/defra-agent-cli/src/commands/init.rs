@@ -12,6 +12,7 @@ use defra_agent::{
     default_tool_selection_id_for_behavior, ensure_config_bootstrap_schemas, load_agent_behavior,
     load_agent_principal, load_or_create_macos_keychain_identity,
     load_or_create_macos_secure_enclave_identity, upsert_agent_principal, upsert_inference_profile,
+    wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
     AgentBehaviorDocument, AgentIdentity, InferenceProfile, KeyIdentity, ToolSelectionDocument,
 };
 use serde::Serialize;
@@ -200,6 +201,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         "secure_enclave_label": initialized_identity.secure_enclave_label,
         "default_behavior_id": summary.default_behavior_id,
         "tool_selection_id": summary.tool_selection_id,
+        "wide_open_preset_id": summary.wide_open_preset_id,
         "inference_profile_id": summary.inference_profile_id,
         "tool_package": format_tool_package(summary.tool_package),
         "tool_ceiling": format_tool_ceiling(summary.tool_ceiling),
@@ -507,6 +509,14 @@ async fn initialize_runtime_home(
     );
     write_tool_selection_document(access, &tool_selection).await?;
 
+    // Seed the canonical per-principal `wide-open` preset (design §3.2): a
+    // permissive ToolSelection an operator can point any behavior at to restore
+    // today's permissive surface under the unified policy. Reproduces the
+    // legacy-permissive value-set and is stamped at the current policy version.
+    let wide_open_preset_id = wide_open_tool_selection_id_for_agent(agent_did);
+    let wide_open_preset = wide_open_tool_selection_document(agent_did);
+    write_tool_selection_document(access, &wide_open_preset).await?;
+
     let inference_profile_id = default_inference_profile_id_for_behavior(&default_behavior_id);
     let inference_profile = standard_inference_profile(&inference_profile_id);
     upsert_inference_profile(node, &inference_profile).await?;
@@ -544,6 +554,7 @@ async fn initialize_runtime_home(
         max_queue_depth: args.max_queue_depth,
         default_behavior_id,
         tool_selection_id,
+        wide_open_preset_id,
         inference_profile_id,
         tool_package,
         tool_ceiling,
@@ -569,6 +580,7 @@ fn tool_selection_for_package(
         selection_id: tool_selection_id.to_string(),
         agent_did: agent_did.to_string(),
         display_name: Some(profile.display_name.to_string()),
+        tool_policy_version: None,
         enable_file_tools: Some(profile.enable_file_tools),
         file_tools_mode: Some(profile.file_tools_mode.to_string()),
         file_tool_root: None,
@@ -654,7 +666,9 @@ fn tool_package_profile(tool_package: ToolPackageArg) -> ToolPackageProfile {
             enable_bash: true,
             bash_mode: "ReadOnly",
             enable_meta_tools: true,
-            enable_defra_query: true,
+            // defra_query is opt-in (#592); the introspection package is the
+            // only one that turns it on by default.
+            enable_defra_query: false,
         },
         ToolPackageArg::Write => ToolPackageProfile {
             display_name: "Standard Write Tools",
@@ -663,7 +677,7 @@ fn tool_package_profile(tool_package: ToolPackageArg) -> ToolPackageProfile {
             enable_bash: true,
             bash_mode: "Unrestricted",
             enable_meta_tools: true,
-            enable_defra_query: true,
+            enable_defra_query: false,
         },
         // Yolo's tool surface IS the write surface; only the execution policy
         // (default_command_execution_policy_for_init) differs.
@@ -955,7 +969,7 @@ mod tests {
                 enable_bash: true,
                 bash_mode: "ReadOnly",
                 enable_meta_tools: true,
-                enable_defra_query: true,
+                enable_defra_query: false,
                 backgroundable_tools: Vec::new(),
             },
             Case {
@@ -967,7 +981,7 @@ mod tests {
                 enable_bash: true,
                 bash_mode: "Unrestricted",
                 enable_meta_tools: true,
-                enable_defra_query: true,
+                enable_defra_query: false,
                 backgroundable_tools: vec!["bash_unrestricted".to_string()],
             },
         ];

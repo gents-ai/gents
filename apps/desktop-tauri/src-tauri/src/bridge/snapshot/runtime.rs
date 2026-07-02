@@ -9,8 +9,8 @@ use super::super::types::{
     ToolServiceRegistryView,
 };
 use super::runtime_tasks::{
-    conversation_task_tag, recent_runs_for_task_views, retain_latest_conversation_summaries,
-    source_matches_agent, task_run_history,
+    conversation_task_tag, recent_runs_for_task_views, request_backed_conversation_summaries,
+    retain_latest_conversation_summaries, source_matches_agent, task_run_history,
 };
 use super::to_health_view;
 
@@ -185,6 +185,13 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     enable_session_history_tool: row.enable_session_history_tool,
                     enable_context_budget: row.enable_context_budget,
                     enable_defra_query: row.enable_defra_query,
+                    defra_query_collections: row.defra_query_collections.clone(),
+                    write_tools: row.write_tools.clone(),
+                    tool_policy_version: normalize_optional(row.tool_policy_version.as_deref()),
+                    subagent_default_await_mode: normalize_optional(
+                        row.subagent_default_await_mode.as_deref(),
+                    ),
+                    orchestration_enabled: row.orchestration_enabled,
                 })
                 .collect::<Vec<_>>();
             tool_selections.sort_by(|left, right| left.selection_id.cmp(&right.selection_id));
@@ -403,6 +410,14 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     }
                 })
                 .collect::<Vec<_>>();
+            conversations.extend(request_backed_conversation_summaries(
+                store.as_ref(),
+                &peer.agent_did,
+                require_source_scope,
+                &tasks,
+                &schedules,
+                &event_triggers,
+            ));
             conversations.sort_by(|left, right| {
                 right
                     .updated_at

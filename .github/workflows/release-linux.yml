@@ -39,6 +39,13 @@ jobs:
             # ~228 GB free; ThinLTO links comfortably.
             release_lto: "thin"
             cargo_jobs: "8"
+            # Build inside Debian 12 (glibc 2.36) so the published artifact
+            # runs on the oldest supported x86_64 host (Synology DSM ships
+            # glibc 2.36; newer hosts are forward compatible). Building
+            # natively on the Ubuntu 24.04 runner links glibc 2.38/2.39
+            # symbols and the artifact fails on DSM — see #572.
+            container_image: rust:1-bookworm
+            glibc_baseline: "2.36"
           - target: aarch64-unknown-linux-gnu
             runner_arch: ARM64
             runner_label: spark
@@ -48,11 +55,14 @@ jobs:
             # long-term fix (see the build-flavors epic).
             release_lto: "off"
             cargo_jobs: "2"
+            container_image: ""
+            glibc_baseline: ""
     runs-on:
       - self-hosted
       - Linux
       - ${{ matrix.runner_arch }}
       - ${{ matrix.runner_label }}
+    container: ${{ matrix.container_image }}
 
     env:
       GIT_CONFIG_GLOBAL: /tmp/defra-agent-release-${{ github.run_id }}-${{ matrix.target }}.gitconfig
@@ -85,10 +95,17 @@ jobs:
       - name: Install native build dependencies
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          SUDO="sudo"
+          if [[ "$(id -u)" == "0" ]]; then
+            SUDO=""
+          fi
+          ${SUDO} apt-get update
+          ${SUDO} apt-get install -y --no-install-recommends \
+            binutils \
             build-essential \
             clang \
+            cmake \
+            libclang-dev \
             libssl-dev \
             pkg-config \
             protobuf-compiler
@@ -114,6 +131,21 @@ jobs:
           printf '%s\n' "${version_output}"
           if [[ -z "${version_output}" ]]; then
             echo "::error::defra-agent version produced no output."
+            exit 1
+          fi
+
+      - name: Verify glibc baseline
+        if: matrix.glibc_baseline != ''
+        env:
+          GLIBC_BASELINE: ${{ matrix.glibc_baseline }}
+        run: |
+          set -euo pipefail
+          binary_path="target/release/defra-agent"
+          required="$(objdump -T "${binary_path}" | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' | sed 's/GLIBC_//' | sort -Vu | tail -1)"
+          echo "max required glibc: ${required} (baseline: ${GLIBC_BASELINE})"
+          newest="$(printf '%s\n%s\n' "${GLIBC_BASELINE}" "${required}" | sort -V | tail -1)"
+          if [[ "${newest}" != "${GLIBC_BASELINE}" ]]; then
+            echo "::error::Binary requires glibc ${required}, newer than the ${GLIBC_BASELINE} baseline. It will not run on Synology DSM hosts (#572)."
             exit 1
           fi
 
@@ -144,24 +176,6 @@ jobs:
             ${{ steps.package.outputs.checksum_file }}
           if-no-files-found: error
 
-      - name: Attach artifacts to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARBALL: ${{ steps.package.outputs.tarball }}
-          CHECKSUM_FILE: ${{ steps.package.outputs.checksum_file }}
-        run: |
-          set -euo pipefail
-
-          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release create "${GITHUB_REF_NAME}" \
-              --verify-tag \
-              --title "${GITHUB_REF_NAME}" \
-              --notes "defra-agent release artifacts." \
-              || gh release view "${GITHUB_REF_NAME}" >/dev/null
-          fi
-          gh release upload "${GITHUB_REF_NAME}" "${TARBALL}" "${CHECKSUM_FILE}" --clobber
-
       - name: Cleanup git auth
         if: always()
         env:
@@ -170,3 +184,43 @@ jobs:
           git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
           git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
           rm -f "${GIT_CONFIG_GLOBAL}"
+
+  # Runs on the host (not in the build container) because it needs the gh CLI,
+  # which the rust:1-bookworm build container does not ship.
+  attach-release:
+    name: Attach artifacts to GitHub Release
+    # not `success()`: attach whatever legs produced artifacts even when the
+    # other matrix leg failed, matching the old per-leg attach behavior.
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
+    needs: build-package
+    timeout-minutes: 15
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+      - workstation-1
+
+    steps:
+      - name: Download workflow artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Attach artifacts to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          ls -lh dist
+
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --verify-tag \
+              --title "${GITHUB_REF_NAME}" \
+              --notes "defra-agent release artifacts." \
+              || gh release view "${GITHUB_REF_NAME}" >/dev/null
+          fi
+          gh release upload "${GITHUB_REF_NAME}" dist/*.tar.gz dist/*.tar.gz.sha256 --clobber

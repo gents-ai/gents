@@ -39,6 +39,7 @@ pub(crate) struct InitSummary {
     pub(crate) max_queue_depth: i64,
     pub(crate) default_behavior_id: String,
     pub(crate) tool_selection_id: String,
+    pub(crate) wide_open_preset_id: String,
     pub(crate) inference_profile_id: String,
     pub(crate) tool_package: ToolPackageArg,
     pub(crate) tool_ceiling: ToolCeilingArg,

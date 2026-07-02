@@ -207,7 +207,15 @@ pub(crate) fn to_rig_tool_call(call: &message::ToolCall) -> rig::completion::mes
         call_id: call.call_id.clone(),
         function: rig::completion::message::ToolFunction {
             name: call.function.name.clone(),
-            arguments: call.function.arguments.clone(),
+            // Egress half of the #589/#590 argument-shape boundary: the
+            // durable transcript is permissive, so already-persisted poison
+            // (a non-object `arguments` Value) is normalized here at request
+            // build — a jammed session self-heals on its next turn.
+            arguments: super::tool::normalize_tool_call_arguments(
+                "egress",
+                &call.function.name,
+                &call.function.arguments,
+            ),
         },
         signature: call.signature.clone(),
         additional_params: call.additional_params.clone(),
@@ -383,7 +391,18 @@ pub(crate) fn from_rig_tool_call(call: &rig::completion::message::ToolCall) -> m
         call_id: call.call_id.clone(),
         function: message::ToolFunction {
             name: call.function.name.clone(),
-            arguments: call.function.arguments.clone(),
+            // Ingest half of the #589/#590 argument-shape boundary: a wire
+            // payload the provider parser could not shape into an object (a
+            // raw corrupt string, `[]`, a scalar) is normalized before it can
+            // be accumulated into durable history. Dispatch reads the RAW rig
+            // value separately (`loop_stream`), so an unsalvageable payload
+            // still fails `parse_tool_args` and terminalizes
+            // `failed(ArgumentInvalid)` with the model notified.
+            arguments: super::tool::normalize_tool_call_arguments(
+                "ingest",
+                &call.function.name,
+                &call.function.arguments,
+            ),
         },
         signature: call.signature.clone(),
         additional_params: call.additional_params.clone(),
@@ -709,6 +728,111 @@ mod tests {
             !any_annotations,
             "without normalization the captured body must not carry output_text annotations"
         );
+    }
+
+    // ===== #589/#590: argument-shape normalization at both converter seams =====
+
+    fn native_tool_call(arguments: Value) -> message::ToolCall {
+        message::ToolCall {
+            id: "call-1".to_string(),
+            call_id: Some("call-1".to_string()),
+            function: message::ToolFunction {
+                name: "describe_tool".to_string(),
+                arguments,
+            },
+            signature: None,
+            additional_params: None,
+        }
+    }
+
+    fn rig_tool_call(arguments: Value) -> rig::completion::message::ToolCall {
+        rig::completion::message::ToolCall {
+            id: "call-1".to_string(),
+            call_id: Some("call-1".to_string()),
+            function: rig::completion::message::ToolFunction {
+                name: "describe_tool".to_string(),
+                arguments,
+            },
+            signature: None,
+            additional_params: None,
+        }
+    }
+
+    /// Ingest seam (#589): nothing non-object is ever accumulated into durable
+    /// history. A wire `"[]"` (rig parses it to `Value::Array`) and a raw
+    /// corrupt string both normalize; a healthy object is untouched.
+    #[test]
+    fn from_rig_tool_call_normalizes_arguments_to_object_shape() {
+        let object = json!({"city": "NYC"});
+        assert_eq!(
+            from_rig_tool_call(&rig_tool_call(object.clone()))
+                .function
+                .arguments,
+            object,
+            "object arguments must pass through unchanged"
+        );
+
+        assert_eq!(
+            from_rig_tool_call(&rig_tool_call(json!([])))
+                .function
+                .arguments,
+            json!({}),
+            "a non-object array must never be persisted"
+        );
+
+        let salvaged = from_rig_tool_call(&rig_tool_call(Value::String(
+            crate::test_support::CORRUPT_TOOL_ARGS_589.into(),
+        )))
+        .function
+        .arguments;
+        assert!(
+            salvaged.is_object(),
+            "the #589 corrupt raw string must not reach history as a string"
+        );
+        assert_eq!(salvaged["tool_name"], "list_hosts");
+    }
+
+    /// Egress seam (#590): already-poisoned durable history self-heals at
+    /// request build — the provider can never receive a non-object
+    /// `arguments`, so the deterministic template-render jam clears on the
+    /// next turn without a DB edit.
+    #[test]
+    fn to_rig_tool_call_normalizes_persisted_poison_on_egress() {
+        let object = json!({"city": "NYC"});
+        assert_eq!(
+            to_rig_tool_call(&native_tool_call(object.clone()))
+                .function
+                .arguments,
+            object,
+            "object arguments must pass through unchanged"
+        );
+
+        assert_eq!(
+            to_rig_tool_call(&native_tool_call(json!([])))
+                .function
+                .arguments,
+            json!({}),
+            "a persisted [] must egress as {{}}"
+        );
+        assert_eq!(
+            to_rig_tool_call(&native_tool_call(Value::Null))
+                .function
+                .arguments,
+            json!({}),
+            "persisted null args must egress as {{}}"
+        );
+
+        // Amy's actual poisoned row: a Value::String of corrupt bytes.
+        let healed = to_rig_tool_call(&native_tool_call(Value::String(
+            crate::test_support::CORRUPT_TOOL_ARGS_589.into(),
+        )))
+        .function
+        .arguments;
+        assert!(
+            healed.is_object(),
+            "the persisted #589 poison must egress object-shaped"
+        );
+        assert_eq!(healed["tool_name"], "list_hosts");
     }
 
     #[test]

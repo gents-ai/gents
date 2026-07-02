@@ -12,9 +12,11 @@ property: while a foreground tool is in flight, `advance` /
 `begin_inference` cannot fire.
 
 INV-FG is a structural witness; no C-theorem currently consumes it. It is
-preserved across every composed transition. The four non-tool arms are
-trivial (they don't touch `tools`); the `tool_step` arm requires
-case-analysis on the inner `ToolCallContext.Transition`.
+preserved across every composed transition. The request/process/admission/
+persistence/call arms are trivial (they don't touch `tools`); `clock_advance`
+preserves the foreground-live filter, `tool_spawn` uses its foreground
+admission guard, and `tool_step` requires case-analysis on the inner
+`ToolCallContext.Transition`.
 -/
 
 /-- INV-FG: at most one foreground non-terminal tool per composed state. -/
@@ -102,11 +104,62 @@ theorem invFG_preserved
     unfold invFG; rw [h_tools]; exact h_inv
   | request_step _ _ _ h_tools _ _ _ =>
     unfold invFG; rw [h_tools]; exact h_inv
+  | slot_acquire _ _ _ _ _ h_tools _ =>
+    unfold invFG; rw [h_tools]; exact h_inv
+  | request_interrupt _ _ _ _ h_tools _ =>
+    unfold invFG; rw [h_tools]; exact h_inv
+  | clock_advance t _ _ _ _ h_tools _ =>
+    unfold invFG
+    rw [h_tools]
+    set p : ToolExecution.ToolCallContext → Bool :=
+      fun t => decide (t.awaitMode = .foreground) ∧ ¬ isTerminal t.state with hp
+    have h_filter_len :
+        ((pre.tools.map (fun tool => { tool with currentTime := t })).filter p).length =
+          (pre.tools.filter p).length := by
+      induction pre.tools with
+      | nil => simp
+      | cons tool rest ih =>
+        have h_tool :
+            p { tool with currentTime := t } = p tool := by
+          simp [p]
+        simp only [List.map_cons, List.filter_cons]
+        rw [h_tool]
+        by_cases h_keep : p tool = true
+        · rw [if_pos h_keep, if_pos h_keep, List.length_cons, List.length_cons, ih]
+        · rw [if_neg h_keep, if_neg h_keep, ih]
+    rw [h_filter_len]
+    exact h_inv
   | persistence_step _ _ _ _ _ _ h_tools _ =>
     unfold invFG; rw [h_tools]; exact h_inv
   | call_step _ _ _ h_tools _ =>
     unfold invFG; rw [h_tools]; exact h_inv
-  | @tool_step idx toolPre toolPost h_idx h_t_step h_tools _ _ _ _ _ h_fg_guard =>
+  | @tool_spawn newTool _ _ h_tools _ _ _ _ _ _ _ h_fg_guard =>
+    unfold invFG
+    rw [h_tools]
+    set p : ToolExecution.ToolCallContext → Bool :=
+      fun t => decide (t.awaitMode = .foreground) ∧ ¬ isTerminal t.state with hp
+    by_cases h_new_p : p newTool = true
+    · have h_new_fg : newTool.awaitMode = .foreground := by
+        have h_new_props : newTool.awaitMode = .foreground ∧
+            ¬ isTerminal newTool.state := by
+          simpa [hp] using h_new_p
+        exact h_new_props.1
+      have h_no_other : ¬ ∃ t ∈ pre.tools, t.awaitMode = .foreground ∧
+                            ¬ isTerminal t.state :=
+        h_fg_guard h_new_fg
+      have h_filter_nil : pre.tools.filter p = [] := by
+        rw [List.filter_eq_nil_iff]
+        intro t h_in h_pt
+        apply h_no_other
+        refine ⟨t, h_in, ?_, ?_⟩
+        · simp [hp] at h_pt; exact h_pt.1
+        · simp [hp] at h_pt; exact h_pt.2
+      rw [List.filter_append, h_filter_nil]
+      simp [h_new_p]
+    · rw [List.filter_append]
+      simp [h_new_p]
+      exact h_inv
+  | @tool_step idx toolPre toolPost h_idx h_t_step h_tools _ _ _ _ _ _ _ h_fg_guard =>
     -- A single tool transitions. Case-split on the inner ToolCallContext.Transition.
     -- For all 11 non-`foreground` constructors: `toolPost.awaitMode = toolPre.awaitMode`
     -- AND if toolPost passes the filter (foreground + non-terminal) then so does

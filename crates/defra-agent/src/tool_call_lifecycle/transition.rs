@@ -42,6 +42,8 @@ pub enum IllegalToolCallTransition {
     ModeAlreadyForeground,
     #[error("cancel_policy flip rejected: tool already Detach")]
     PolicyAlreadyDetach,
+    #[error("detach rejected: tool has no child_request_id (only a bridged subagent may detach)")]
+    DetachRequiresChildLink,
     #[error("bridge_complete called on tool without child_request_id")]
     BridgeCompleteRequiresChildLink,
     #[error("bridge_failure called on tool without child_request_id")]

@@ -47,7 +47,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         (
             "CrossMachineComposed",
-            Module("conformance/r5_cross_deployment.rs"),
+            Module("conformance/composed_invariants.rs"),
         ),
         ("EventDelivery", Module("conformance/event_delivery.rs")),
         ("Fleet", Module("conformance/fleet.rs")),
@@ -113,6 +113,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             Module("conformance/streaming_compaction.rs"),
         ),
         ("ToolExecution", Module("conformance/tool_execution.rs")),
+        ("ToolPolicy", Module("conformance/tool_policy.rs")),
         ("Transcript", Module("conformance/transcript.rs")),
         ("Triggers", Module("conformance/triggers.rs")),
         ("Workflow", Module("workflow_conformance.rs")),

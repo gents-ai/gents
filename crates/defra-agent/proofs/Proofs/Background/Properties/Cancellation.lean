@@ -186,14 +186,25 @@ append + a freshness precondition on the new tool's callId).
 
     `h_uniq` is a structural invariant of any reachable composed state
     (proved via `ComposedState.uniqueCallIds_preserved`), so this theorem is
-    a property of any reachable state, not a conditional one. -/
+    a property of any reachable state, not a conditional one.
+
+    Scope: this is the *cascade* guarantee — a detached parent does not
+    auto-latch the child's interrupt. It deliberately excludes a *direct*
+    external interrupt of the child (the composed `request_interrupt` latch),
+    which is orthogonal to detach: detaching the bridge stops the parent from
+    cancelling the child, not the child's own owner. `h_not_direct_interrupt`
+    carries that exclusion. -/
 theorem detach_does_not_cancel_child
     (pre post : BridgedState)
     (h_detach    : ∃ t ∈ pre.parent.tools,
                      t.callId = pre.bridgeCallId ∧ t.cancelPolicy = .detach)
     (h_step      : Transition pre post)
     (h_no_other  : ¬ pre.child.request.interruptRequestedAt.isSome)
-    (h_uniq      : pre.parent.UniqueCallIds) :
+    (h_uniq      : pre.parent.UniqueCallIds)
+    (h_not_direct_interrupt :
+      ∀ t : Time,
+        post.child.request ≠
+          { pre.child.request with interruptRequestedAt := some t }) :
     post.child.request.interruptRequestedAt =
       pre.child.request.interruptRequestedAt := by
   cases h_step with
@@ -203,8 +214,8 @@ theorem detach_does_not_cancel_child
   | child_step h_inner _ _ _ _ =>
     -- A child-side ComposedState step. The only inner constructors that can
     -- touch `interruptRequestedAt` are within `request_step` (the request
-    -- layer); other layers (process_step, call_step, tool_step, persistence_step)
-    -- preserve `request` directly. Within `request_step`, every inner
+    -- layer); other layers either preserve `request` directly or update fields
+    -- other than `interruptRequestedAt`. Within `request_step`, every inner
     -- RequestContext.Transition either preserves `interruptRequestedAt`
     -- (most arms only update `state`/`admission`) or has a precondition on
     -- the *current* `interruptRequestedAt` flag — namely `interrupt_*` arms,
@@ -243,11 +254,21 @@ theorem detach_does_not_cancel_child
         rw [h_post]
       | interrupt_processing _ _ _ h_post =>
         rw [h_post]
+    | slot_acquire _ _ h_req _ _ _ _ =>
+      simp [h_req]
+    | request_interrupt t h_req _ _ _ _ =>
+      -- A direct child-side interrupt latch: explicitly out of scope for the
+      -- detach/cascade guarantee (see `h_not_direct_interrupt`).
+      exact absurd h_req (h_not_direct_interrupt t)
+    | clock_advance _ _ h_req _ _ _ _ =>
+      simp [h_req]
     | persistence_step _ _ _ h_req _ _ _ _ =>
       rw [h_req]
     | call_step _ h_req _ _ _ =>
       rw [h_req]
-    | tool_step _ _ _ h_req _ _ _ _ =>
+    | tool_spawn _ _ _ h_req _ _ _ _ _ _ =>
+      rw [h_req]
+    | tool_step _ _ _ h_req _ _ _ _ _ =>
       rw [h_req]
   | bridge_spawn h_parent_proc _ _ _ _ _ h_post_child _ h_request_eq _ _ =>
     -- bridge_spawn now guarantees post.child.request.interruptRequestedAt = none

@@ -34,6 +34,7 @@ pub(crate) use inference_profile::{
 pub use tool_selection::default_tool_selection_id_for_behavior;
 pub use tool_selection::{
     is_reserved_builtin_tool_name, load_tool_selection, upsert_tool_selection,
+    wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
     ToolSelectionDocument, WriteToolDecl, WriteToolField,
 };
 #[allow(unused_imports)]

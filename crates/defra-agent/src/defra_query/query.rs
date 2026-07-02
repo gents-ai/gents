@@ -25,7 +25,7 @@ const RESTRICTED_FIELDS: &[(&str, &str)] = &[
     ("OAuthCredential", "id_token"),
 ];
 
-fn is_restricted_field(collection: &str, field: &str) -> bool {
+pub(crate) fn is_restricted_field(collection: &str, field: &str) -> bool {
     RESTRICTED_FIELDS
         .iter()
         .any(|(c, f)| *c == collection && *f == field)
@@ -35,7 +35,7 @@ fn is_restricted_field(collection: &str, field: &str) -> bool {
 /// object keys that are not operators (operators start with `_`, e.g. `_eq`,
 /// `_and`). Used to block filtering on restricted fields (which would otherwise
 /// allow probing a secret value with boolean/`_like` predicates).
-fn collect_filter_field_keys(value: &Value, out: &mut Vec<String>) {
+pub(crate) fn collect_filter_field_keys(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
             for (key, nested) in map {
@@ -68,40 +68,65 @@ pub struct DefraQueryParams {
     pub limit: Option<u32>,
 }
 
-/// Which collections a query surface is permitted to read. An empty allowlist
-/// means every collection is readable (trim as needed).
+impl DefraQueryParams {
+    /// True when the caller asked for discovery mode (`fields: ["*"]`): return
+    /// the collection's queryable field inventory instead of documents.
+    pub fn is_discovery(&self) -> bool {
+        self.fields.len() == 1 && self.fields[0] == "*"
+    }
+}
+
+/// Which collections a query surface is permitted to read.
+///
+/// An explicit tristate so the deny-all case cannot be confused with allow-all
+/// at this projection boundary (the `Only(∅) ≠ All` trap): `None` and an empty
+/// `Only` both DENY, only `All` permits everything. `restricted([])` therefore
+/// means deny-all, NOT allow-all — callers wanting allow-all must use `all()`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CollectionScope {
-    allowed: Vec<String>,
+pub enum CollectionScope {
+    /// No collection is readable.
+    #[default]
+    None,
+    /// Only the listed collections are readable. An empty set denies everything.
+    Only(std::collections::BTreeSet<String>),
+    /// Every collection is readable.
+    All,
 }
 
 impl CollectionScope {
     /// Allow every collection.
     pub fn all() -> Self {
-        Self::default()
+        Self::All
     }
 
-    /// Restrict reads to the given collections.
+    /// Deny every collection.
+    pub fn none() -> Self {
+        Self::None
+    }
+
+    /// Restrict reads to the given collections. An EMPTY list denies all (it is
+    /// `Only(∅)`), never allow-all — use [`CollectionScope::all`] for allow-all.
     pub fn restricted(collections: Vec<String>) -> Self {
-        Self {
-            allowed: collections,
-        }
+        Self::Only(collections.into_iter().collect())
     }
 
-    /// True when no allowlist is configured (every collection readable).
+    /// True only when every collection is readable (`All`).
     pub fn is_unrestricted(&self) -> bool {
-        self.allowed.is_empty()
+        matches!(self, Self::All)
     }
 
     /// Error unless `collection` is readable under this scope.
     pub fn ensure_allowed(&self, collection: &str) -> Result<()> {
-        if self.allowed.is_empty() || self.allowed.iter().any(|c| c == collection) {
-            Ok(())
-        } else {
-            bail!(
+        match self {
+            Self::All => Ok(()),
+            Self::Only(allowed) if allowed.contains(collection) => Ok(()),
+            Self::None => bail!(
+                "collection {collection:?} is not within the allowed query scope: [] (deny-all)"
+            ),
+            Self::Only(allowed) => bail!(
                 "collection {collection:?} is not within the allowed query scope: [{}]",
-                self.allowed.join(", ")
-            )
+                allowed.iter().cloned().collect::<Vec<_>>().join(", ")
+            ),
         }
     }
 }
@@ -117,6 +142,12 @@ pub fn build_query(params: &DefraQueryParams, scope: &CollectionScope) -> Result
 
     if params.fields.is_empty() {
         bail!("`fields` must list at least one field to return");
+    }
+    if params.fields.iter().any(|f| f == "*") {
+        bail!(
+            "wildcard field \"*\" must be the only entry: call with fields: [\"*\"] \
+             to list the collection's queryable fields"
+        );
     }
     for field in &params.fields {
         validate_identifier(field).map_err(|e| anyhow!("invalid field name: {e}"))?;
@@ -157,8 +188,30 @@ pub fn build_query(params: &DefraQueryParams, scope: &CollectionScope) -> Result
     ))
 }
 
+/// Introspect a collection's field set. `Ok(None)` means the collection
+/// (GraphQL type) does not exist on the node.
+pub(crate) async fn fetch_collection_schema(
+    node: &EmbeddedNode,
+    collection: &str,
+) -> Result<Option<super::schema::CollectionSchema>> {
+    let query = super::schema::introspection_query(collection)?;
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        bail!(
+            "schema introspection for {collection:?} failed: {:?}",
+            resp.errors
+        );
+    }
+    Ok(super::schema::parse_collection_schema(resp.data.as_ref()))
+}
+
 /// Execute the structured query against `node` and return the result rows
 /// (a JSON array) for the requested collection.
+///
+/// On a GraphQL failure the collection is introspected and the error is
+/// enriched into an agent-usable diagnostic (invalid fields, the allowed
+/// inventory, close-match suggestions); if introspection itself fails, the raw
+/// GraphQL errors are surfaced unchanged.
 pub(crate) async fn execute_query(
     node: &EmbeddedNode,
     params: &DefraQueryParams,
@@ -167,10 +220,14 @@ pub(crate) async fn execute_query(
     let query = build_query(params, scope)?;
     let resp = node.execute(&query).await;
     if resp.has_errors() {
+        let raw = format!("{:?}", resp.errors);
+        let diagnostic = match fetch_collection_schema(node, &params.collection).await {
+            Ok(schema) => super::schema::diagnose_failed_query(params, schema.as_ref(), &raw),
+            Err(_) => raw,
+        };
         bail!(
-            "defra_query against {:?} failed: {:?}",
-            params.collection,
-            resp.errors
+            "defra_query against {:?} failed: {diagnostic}",
+            params.collection
         );
     }
     let rows = resp
@@ -248,6 +305,24 @@ mod tests {
     fn allows_any_collection_when_unrestricted() {
         let scope = CollectionScope::all();
         assert!(build_query(&params("AnythingGoes", &["x"]), &scope).is_ok());
+    }
+
+    #[test]
+    fn deny_all_scopes_reject_every_collection() {
+        // The `Only(∅) ≠ All` trap: an empty allowlist and `None` both DENY,
+        // never allow-all. `restricted([])` must NOT behave like `all()`.
+        for scope in [
+            CollectionScope::none(),
+            CollectionScope::restricted(Vec::new()),
+        ] {
+            assert!(!scope.is_unrestricted());
+            let err = build_query(&params("AnythingGoes", &["x"]), &scope).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("not within the allowed query scope"),
+                "deny-all scope must reject every collection, got: {err}"
+            );
+        }
     }
 
     #[test]

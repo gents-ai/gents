@@ -53,6 +53,16 @@ impl TelemetryGuard {
     }
 }
 
+/// Per-callsite log-rate ceiling on everything the agent writes to stderr.
+///
+/// Guardrail for #588: one hot code path (an iroh relay retry loop) flooded
+/// journald at ~350k WARN lines/sec and wedged the host. Whatever the source,
+/// no single callsite may emit unbounded output; suppression is reported via
+/// bounded summary events, so failures stay visible.
+fn log_rate_ceiling() -> defra_agent::log_rate::RateLimitFilter {
+    defra_agent::log_rate::RateLimitFilter::new(defra_agent::log_rate::RateLimitConfig::default())
+}
+
 pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
     install_trace_context_propagator();
 
@@ -63,7 +73,11 @@ pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
     if !otlp_enabled_from_env() {
         tracing_subscriber::registry()
             .with(env_filter)
-            .with(fmt::layer().with_writer(std::io::stderr))
+            .with(
+                fmt::layer()
+                    .with_writer(std::io::stderr)
+                    .with_filter(log_rate_ceiling()),
+            )
             .try_init()
             .context("initializing tracing subscriber")?;
         return Ok(TelemetryGuard {
@@ -81,7 +95,11 @@ pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
 
     tracing_subscriber::registry()
         .with(env_filter)
-        .with(fmt::layer().with_writer(std::io::stderr))
+        .with(
+            fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_filter(log_rate_ceiling()),
+        )
         .with(tracing_opentelemetry::layer().with_tracer(tracer))
         .try_init()
         .context("initializing tracing subscriber")?;

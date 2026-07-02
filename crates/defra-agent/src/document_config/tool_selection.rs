@@ -9,6 +9,7 @@ use crate::document_config::SubagentTarget;
 use crate::graphql::escape_graphql_string;
 use crate::meta_tools::META_TOOL_NAMES;
 use crate::retry::execute_graphql_with_conflict_retry;
+use crate::tool_surface::TOOL_POLICY_V1;
 use crate::toolset::{
     CANCEL_PROCESS_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CONTEXT_BUDGET_TOOL_NAME,
     LIST_PROCESSES_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME, READ_PROCESS_TOOL_NAME,
@@ -226,6 +227,7 @@ pub struct ToolSelectionDocument {
     #[serde(default)]
     pub agent_did: String,
     pub display_name: Option<String>,
+    pub tool_policy_version: Option<String>,
     pub enable_file_tools: Option<bool>,
     pub file_tools_mode: Option<String>,
     pub file_tool_root: Option<String>,
@@ -284,7 +286,69 @@ pub struct ToolSelectionDocument {
     pub write_tools: Option<Vec<WriteToolDecl>>,
 }
 
+/// Canonical per-principal id for the seeded `wide-open` preset. Prefixed with
+/// the agent DID so it is globally unique AND passes the runtime document view's
+/// `agent_did` hydration filter + cross-agent rejection (a single global preset
+/// row would be invisible to other principals — see design §3.2).
+pub fn wide_open_tool_selection_id_for_agent(agent_did: &str) -> String {
+    format!("{agent_did}:wide-open")
+}
+
+/// The seeded `wide-open` preset for a principal: a `ToolSelection` that
+/// reproduces today's permissive behavior, expressed explicitly and stamped at
+/// the current policy version. Built by running the legacy-permissive backfill
+/// over an empty document, so the preset value-set can never drift from the
+/// backfill the secure-default flip relies on (single source of truth).
+pub fn wide_open_tool_selection_document(agent_did: &str) -> ToolSelectionDocument {
+    ToolSelectionDocument {
+        selection_id: wide_open_tool_selection_id_for_agent(agent_did),
+        agent_did: agent_did.to_string(),
+        display_name: Some("Wide-open (permissive preset)".to_string()),
+        ..Default::default()
+    }
+    .with_legacy_policy_defaults_backfilled()
+}
+
 impl ToolSelectionDocument {
+    pub fn with_legacy_policy_defaults_backfilled(&self) -> Self {
+        let mut backfilled = self.clone();
+        if backfilled
+            .tool_policy_version
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|version| !version.is_empty())
+        {
+            return backfilled;
+        }
+
+        // The legacy default-TRUE capabilities: materialize them as `true` so a
+        // backfilled V1 doc reproduces the historical permissive surface
+        // bit-for-bit. `enable_meta_tools` and `enable_context_budget` are still
+        // version-gated in `ToolSelection::from_document` via
+        // `default_enabled(true)`; `enable_defra_query` is opt-in for every
+        // policy version since #592, so this materialized `true` is the ONLY
+        // thing keeping the wide-open preset (and legacy-doc upgrades)
+        // defra_query-enabled. Omitting `enable_context_budget` here would
+        // silently drop the (always-on) context-budget tool on the
+        // secure-default flip.
+        backfilled.enable_meta_tools.get_or_insert(true);
+        backfilled.enable_defra_query.get_or_insert(true);
+        backfilled.enable_context_budget.get_or_insert(true);
+        backfilled.enable_file_tools.get_or_insert(false);
+        backfilled.enable_bash.get_or_insert(false);
+        backfilled.orchestration_enabled.get_or_insert(false);
+        backfilled.subagent_spawn_enabled.get_or_insert(false);
+        backfilled.subagent_steering_enabled.get_or_insert(false);
+        backfilled.subagent_background_enabled.get_or_insert(false);
+        backfilled
+            .subagent_allow_cross_deployment
+            .get_or_insert(false);
+        backfilled.enable_memory.get_or_insert(false);
+        backfilled.enable_session_history_tool.get_or_insert(false);
+        backfilled.tool_policy_version = Some(TOOL_POLICY_V1.to_string());
+        backfilled
+    }
+
     pub fn validate(&self) -> Result<()> {
         if let Some(targets) = &self.subagent_targets {
             for (i, target) in targets.iter().enumerate() {
@@ -453,6 +517,7 @@ pub(crate) async fn load_tool_selection_record(
                 selection_id
                 agent_did
                 display_name
+                tool_policy_version
                 enable_file_tools
                 file_tools_mode
                 file_tool_root
@@ -510,6 +575,7 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 selection_id
                 agent_did
                 display_name
+                tool_policy_version
                 enable_file_tools
                 file_tools_mode
                 file_tool_root
@@ -567,6 +633,7 @@ pub(crate) async fn list_tool_selection_records(
                 selection_id
                 agent_did
                 display_name
+                tool_policy_version
                 enable_file_tools
                 file_tools_mode
                 file_tool_root
@@ -618,6 +685,7 @@ pub(crate) async fn list_all_tool_selection_records(
                 selection_id
                 agent_did
                 display_name
+                tool_policy_version
                 enable_file_tools
                 file_tools_mode
                 file_tool_root
@@ -670,6 +738,10 @@ pub async fn upsert_tool_selection(
         Some(format!(r#"selection_id: "{escaped_selection_id}""#)),
         Some(format!(r#"agent_did: "{escaped_agent_did}""#)),
         graphql_fields::graphql_string_field("display_name", selection.display_name.as_deref()),
+        graphql_fields::graphql_string_field(
+            "tool_policy_version",
+            selection.tool_policy_version.as_deref(),
+        ),
         graphql_fields::graphql_optional_bool_field(
             "enable_file_tools",
             selection.enable_file_tools,
@@ -774,6 +846,10 @@ pub async fn upsert_tool_selection(
     let update_fields = vec![
         Some(format!(r#"agent_did: "{escaped_agent_did}""#)),
         graphql_fields::graphql_string_field("display_name", selection.display_name.as_deref()),
+        graphql_fields::graphql_string_field(
+            "tool_policy_version",
+            selection.tool_policy_version.as_deref(),
+        ),
         graphql_fields::graphql_optional_bool_field(
             "enable_file_tools",
             selection.enable_file_tools,

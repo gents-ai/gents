@@ -65,13 +65,21 @@ theorem foreground_blocks_parent_advance
         constructor <;> rw [h_post]
       | interrupt_processing _ _ _ h_post =>
         constructor <;> rw [h_post]
-    | tool_step _ _ _ h_req_eq _ _ _ _ =>
+    | tool_step _ _ _ h_req_eq _ _ _ _ _ =>
       constructor <;> rw [h_req_eq]
     | process_step _ h_req _ _ _ =>
       constructor <;> rw [h_req]
+    | slot_acquire _ _ h_req _ _ _ _ =>
+      constructor <;> simp [h_req]
+    | request_interrupt _ h_req _ _ _ _ =>
+      constructor <;> simp [h_req]
+    | clock_advance _ _ h_req _ _ _ _ =>
+      constructor <;> simp [h_req]
     | persistence_step _ _ _ h_req _ _ _ _ =>
       constructor <;> rw [h_req]
     | call_step _ h_req _ _ _ =>
+      constructor <;> rw [h_req]
+    | tool_spawn _ _ _ h_req _ _ _ _ _ _ =>
       constructor <;> rw [h_req]
   | child_step _ h_parent_eq _ _ _ =>
     constructor <;> rw [h_parent_eq]

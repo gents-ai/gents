@@ -232,7 +232,12 @@ fn init_tracing() {
                 .with_writer(std::io::stderr)
                 .with_target(false)
                 .compact()
-                .without_time(),
+                .without_time()
+                // Per-callsite log-rate ceiling: no code path may flood the
+                // host journal, however hot its failure loop (#588).
+                .with_filter(defra_agent::log_rate::RateLimitFilter::new(
+                    defra_agent::log_rate::RateLimitConfig::default(),
+                )),
         )
         .try_init();
 

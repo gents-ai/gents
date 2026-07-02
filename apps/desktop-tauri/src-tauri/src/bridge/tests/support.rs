@@ -6,7 +6,6 @@ use tempfile::TempDir;
 
 /// Minimal projection of an `AgentRequest` row used in interrupt tests.
 pub(crate) struct AgentRequestRowLite {
-    pub request_id: String,
     pub interrupt_requested_at: Option<String>,
 }
 
@@ -381,7 +380,6 @@ pub(crate) async fn fetch_request_row(
                 filter: {{ request_id: {{ _eq: "{escaped}" }} }},
                 limit: 1
             ) {{
-                request_id
                 interrupt_requested_at
             }}
         }}"#
@@ -402,12 +400,6 @@ pub(crate) async fn fetch_request_row(
         .cloned()
         .unwrap_or_else(|| panic!("fetch_request_row: request {request_id} not found"));
 
-    let request_id_out = row
-        .get("request_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
     let interrupt_requested_at = row
         .get("interrupt_requested_at")
         .and_then(|v| v.as_str())
@@ -416,7 +408,6 @@ pub(crate) async fn fetch_request_row(
         .map(ToOwned::to_owned);
 
     AgentRequestRowLite {
-        request_id: request_id_out,
         interrupt_requested_at,
     }
 }
