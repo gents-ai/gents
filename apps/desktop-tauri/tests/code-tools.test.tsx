@@ -130,6 +130,85 @@ describe("toCodeToolView", () => {
     });
   });
 
+  it("splits by exact byte offset when stdout contains a stderr:-lookalike line", () => {
+    // Multibyte content proves the offset math is byte-accurate, not UTF-16.
+    const stdout = "búild log ✓\nstderr:\nnot really stderr\ntail line";
+    const stdoutBytes = new TextEncoder().encode(stdout).length;
+    const meta = JSON.stringify({
+      ok: true,
+      status: "success",
+      command: "grep -r stderr logs/",
+      exit_code: 0,
+      timed_out: false,
+      stdout_truncation: {
+        returned_bytes: stdoutBytes,
+        total_bytes: stdoutBytes,
+        max_bytes: 51200,
+        truncated: false,
+      },
+      stderr_truncation: {
+        returned_bytes: 0,
+        total_bytes: 0,
+        max_bytes: 51200,
+        truncated: false,
+      },
+    });
+    const view = toCodeToolView(
+      toolCall({
+        toolName: "bash",
+        args: detail(JSON.stringify({ command: "grep -r stderr logs/" })),
+        result: detail(`defra_exec: ${meta}\nstdout:\n${stdout}\nstderr:\n(empty)`),
+      }),
+    );
+    expect(view).toMatchObject({
+      kind: "command",
+      stdout,
+      stderr: "",
+    });
+  });
+
+  it("anchors the split from the end when stdout is truncated but stderr is not", () => {
+    // Truncated stdout gains a variable-length "[Showing lines …]" note, so
+    // only the untruncated stderr length is exact — anchored from the end.
+    const renderedStdout =
+      "[Showing lines 5-9 of 9 (900 bytes total)]\n\nfoo\nstderr:\nlookalike";
+    const stderr = "real error";
+    const meta = JSON.stringify({
+      ok: false,
+      status: "exit_nonzero",
+      command: "make build",
+      exit_code: 2,
+      timed_out: false,
+      stdout_truncation: {
+        returned_bytes: 100,
+        total_bytes: 900,
+        max_bytes: 100,
+        truncated: true,
+      },
+      stderr_truncation: {
+        returned_bytes: new TextEncoder().encode(stderr).length,
+        total_bytes: 10,
+        max_bytes: 51200,
+        truncated: false,
+      },
+    });
+    const view = toCodeToolView(
+      toolCall({
+        toolName: "bash",
+        args: detail(JSON.stringify({ command: "make build" })),
+        result: detail(
+          `defra_exec: ${meta}\nstdout:\n${renderedStdout}\nstderr:\n${stderr}`,
+        ),
+      }),
+    );
+    expect(view).toMatchObject({
+      kind: "command",
+      failed: true,
+      stdout: renderedStdout,
+      stderr,
+    });
+  });
+
   it("marks a non-zero exit as failed and keeps stderr separate", () => {
     const view = toCodeToolView(
       toolCall({
