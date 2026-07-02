@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ChatWorkspace } from "./components/ChatWorkspace";
 import { CodeContextHeader } from "./components/code/CodeContextHeader";
@@ -6,10 +6,15 @@ import { ConfigWorkspace } from "./components/ConfigWorkspace";
 import { FleetDashboard } from "./components/fleet/FleetDashboard";
 import { Sidebar } from "./components/Sidebar";
 import { useDesktopShell } from "./hooks/useDesktopShell";
+import { installExternalLinkGuard } from "./lib/externalLinks";
 import "./App.css";
 
 function App() {
   const shell = useDesktopShell();
+
+  // External links (e.g. markdown links in the transcript) must open in the
+  // OS browser — an unguarded anchor click navigates the whole webview away.
+  useEffect(() => installExternalLinkGuard(document), []);
   const [workspaceView, setWorkspaceView] = useState<
     "fleet" | "chat" | "config" | "code"
   >("fleet");
