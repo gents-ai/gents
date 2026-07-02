@@ -55,7 +55,7 @@
     padding: var(--space-5) 0;
     background: transparent;
     color: var(--color-text-soft);
-    font-size: 12px;
+    font-size: var(--text-sm);
     font-weight: 700;
     letter-spacing: 0;
     writing-mode: vertical-rl;
@@ -79,14 +79,14 @@
   }
 
   .operations-rail-header h2 {
-    font-size: 16px;
+    font-size: var(--text-lg);
     line-height: 1.1;
   }
 
   .operations-rail-header p {
     margin-top: var(--space-1);
     color: var(--color-text-muted);
-    font-size: 12px;
+    font-size: var(--text-sm);
   }
 
   .operations-rail-close {
@@ -96,7 +96,7 @@
     padding: 0 var(--space-4);
     background: rgb(1 8 6 / 0.9);
     color: var(--color-text-soft);
-    font-size: 12px;
+    font-size: var(--text-sm);
     font-weight: 600;
   }
 
@@ -123,7 +123,7 @@
     padding: 0 var(--space-5);
     background: transparent;
     color: var(--color-text-muted);
-    font-size: 12px;
+    font-size: var(--text-sm);
     font-weight: 650;
     letter-spacing: 0;
     white-space: nowrap;
@@ -234,7 +234,7 @@
     background: var(--color-surface-strong);
     color: var(--color-text);
     padding: var(--space-4) var(--space-5);
-    font-size: 26px;
+    font-size: var(--text-3xl);
     font-weight: 600;
     line-height: 1.1;
   }

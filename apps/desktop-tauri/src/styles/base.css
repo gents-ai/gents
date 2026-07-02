@@ -47,15 +47,15 @@
   }
 
   h1 {
-    font-size: 32px;
+    font-size: var(--text-4xl);
     line-height: 1.08;
   }
 
   h2 {
-    font-size: 21px;
+    font-size: var(--text-2xl);
   }
 
   h3 {
-    font-size: 15px;
+    font-size: var(--text-lg);
   }
 }

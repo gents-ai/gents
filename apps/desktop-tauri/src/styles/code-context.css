@@ -18,7 +18,7 @@
 
   .code-context-title h2 {
     margin: 0;
-    font-size: 1.1rem;
+    font-size: var(--text-xl);
   }
 
   .code-context-facts {
@@ -29,7 +29,7 @@
   }
 
   .code-context-facts dt {
-    font-size: 0.7rem;
+    font-size: var(--text-xs);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--color-text-muted);
@@ -37,7 +37,7 @@
 
   .code-context-facts dd {
     margin: 2px 0 0;
-    font-size: 0.85rem;
+    font-size: var(--text-base);
     word-break: break-all;
   }
 

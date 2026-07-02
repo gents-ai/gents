@@ -57,6 +57,23 @@ describe("design tokens", () => {
   });
 });
 
+describe("type scale", () => {
+  it("every font-size declaration uses a --text-* token", () => {
+    const raw: string[] = [];
+    for (const [file, css] of sources) {
+      for (const match of css.matchAll(/font-size:\s*([^;]+);/g)) {
+        const value = match[1].trim();
+        if (!/^var\(--text-[\w-]+\)$/.test(value) && value !== "inherit") {
+          // tokens.css defines the scale itself in raw px.
+          if (file.endsWith("tokens.css")) continue;
+          raw.push(`${relative(STYLES_ROOT, file)}: font-size: ${value}`);
+        }
+      }
+    }
+    expect(raw).toEqual([]);
+  });
+});
+
 describe("cascade layers", () => {
   const appCss = sources.get(APP_CSS) ?? "";
   const orderMatch = appCss.match(/@layer\s+([\w\s,-]+);/);

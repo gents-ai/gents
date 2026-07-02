@@ -118,7 +118,7 @@
   }
 
   .chat-header h2 {
-    font-size: 28px;
+    font-size: var(--text-3xl);
     line-height: 1.15;
   }
 
@@ -172,7 +172,7 @@
     }
 
     .chat-header h2 {
-      font-size: 22px;
+      font-size: var(--text-2xl);
     }
 
     .chat-status {

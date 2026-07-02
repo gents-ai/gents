@@ -28,7 +28,7 @@
   }
 
   .background-tools-panel .chip-label {
-    font-size: 12px;
+    font-size: var(--text-sm);
     color: var(--color-text-muted);
     margin-right: 4px;
     min-width: 64px;
@@ -46,7 +46,7 @@
     background: var(--color-surface-muted);
     color: var(--color-text-soft);
     font-family: var(--font-body);
-    font-size: 12px;
+    font-size: var(--text-sm);
     cursor: pointer;
     transition:
       background 120ms ease,
@@ -88,7 +88,7 @@
     align-items: center;
     gap: 6px;
     color: var(--color-text-soft);
-    font-size: 12px;
+    font-size: var(--text-sm);
     cursor: pointer;
     user-select: none;
   }
@@ -109,7 +109,7 @@
 
   .background-tools-panel .panel-summary .live-count {
     font-family: var(--font-mono);
-    font-size: 13px;
+    font-size: var(--text-md);
     color: var(--color-text-warm);
   }
 
@@ -122,7 +122,7 @@
   .background-tools-panel .panel-summary .root {
     color: var(--color-text-muted);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--text-sm);
   }
 
   /* ── Table wrapper ───────────────────────────────────────────────────────── */
@@ -139,7 +139,7 @@
     width: 100%;
     min-width: 520px;
     border-collapse: collapse;
-    font-size: 13px;
+    font-size: var(--text-md);
   }
 
   .background-tools-panel table.tools thead th {
@@ -148,7 +148,7 @@
     background: var(--color-surface-deep);
     color: var(--color-text-muted);
     font-weight: 500;
-    font-size: 11px;
+    font-size: var(--text-xs);
     letter-spacing: 0.08em;
     text-transform: uppercase;
     border-bottom: 1px solid var(--border-default);
@@ -220,7 +220,7 @@
   .background-tools-panel .cell-process {
     font-family: var(--font-mono);
     color: var(--color-text-soft);
-    font-size: 12px;
+    font-size: var(--text-sm);
   }
 
   .background-tools-panel .cell-process.is-empty {
@@ -234,7 +234,7 @@
     align-items: center;
     padding: 1px 8px;
     border-radius: var(--radius-pill);
-    font-size: 11px;
+    font-size: var(--text-xs);
     font-family: var(--font-body);
     font-weight: 500;
     letter-spacing: 0.02em;
@@ -298,7 +298,7 @@
     border: 1px solid var(--border-default);
     color: var(--color-text-soft);
     padding: 3px 9px;
-    font-size: 11px;
+    font-size: var(--text-xs);
     font-family: var(--font-body);
     border-radius: var(--radius-pill);
     cursor: pointer;
@@ -325,11 +325,11 @@
     padding: 28px 12px;
     text-align: center;
     color: var(--color-text-muted);
-    font-size: 13px;
+    font-size: var(--text-md);
   }
 
   .background-tools-panel .empty-state .glyph {
-    font-size: 22px;
+    font-size: var(--text-2xl);
     color: var(--color-accent);
     opacity: 0.6;
     display: block;
