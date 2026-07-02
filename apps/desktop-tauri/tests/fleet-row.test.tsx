@@ -12,11 +12,8 @@ function renderRow(
   const props: FleetRowProps = {
     bootstrap: null,
     deployment: dep,
-    p2pHealth: null,
-    repairingP2P: false,
     onOpenChat: vi.fn(),
     onOpenConfig: vi.fn(),
-    onRepairP2P: vi.fn(async () => undefined),
     ...overrides,
   };
   render(
@@ -30,11 +27,13 @@ function renderRow(
 }
 
 describe("FleetRow", () => {
-  it("renders the three action buttons keyed by peerId", () => {
+  it("renders the chat and config action buttons keyed by peerId", () => {
     renderRow();
     expect(screen.getByTestId("fleet-chat-peer-1")).toBeInTheDocument();
     expect(screen.getByTestId("fleet-config-peer-1")).toBeInTheDocument();
-    expect(screen.getByTestId("fleet-repair-peer-1")).toBeInTheDocument();
+    // P2P repair is a desktop-client-wide action; it must not masquerade as a
+    // per-agent row action (it lives in the fleet header instead).
+    expect(screen.queryByTestId("fleet-repair-peer-1")).not.toBeInTheDocument();
   });
 
   it("calls onOpenChat with the agent DID when the chat button is clicked", () => {
@@ -49,23 +48,41 @@ describe("FleetRow", () => {
     expect(props.onOpenConfig).toHaveBeenCalledWith(deployment.agentDid);
   });
 
-  it("disables repair when the peer dialed successfully with no error", () => {
-    renderRow({}, { ...deployment, dialSucceeded: true, lastError: null });
-    expect(screen.getByTestId("fleet-repair-peer-1")).toBeDisabled();
+  it("shows the deployment's own runtime heartbeat as Last update", () => {
+    renderRow(
+      {},
+      {
+        ...deployment,
+        runtime: { updatedAt: new Date(Date.now() - 5_000).toISOString() },
+      },
+    );
+    expect(
+      screen.getByTitle("Last runtime update reported by this agent"),
+    ).toHaveTextContent(/s ago/);
   });
 
-  it("enables repair and fires onRepairP2P (no args) when the peer has not dialed", () => {
-    const props = renderRow({}, { ...deployment, dialSucceeded: false });
-    const repair = screen.getByTestId("fleet-repair-peer-1");
-    expect(repair).toBeEnabled();
-    fireEvent.click(repair);
-    expect(props.onRepairP2P).toHaveBeenCalledTimes(1);
-    // Repair is fired with NO args (unlike chat/config which pass the DID).
-    expect(props.onRepairP2P).toHaveBeenCalledWith();
+  it("shows unknown when the deployment has no runtime heartbeat", () => {
+    renderRow({}, { ...deployment, runtime: null });
+    expect(
+      screen.getByTitle("Last runtime update reported by this agent"),
+    ).toHaveTextContent("unknown");
   });
 
-  it("enables repair when the peer dialed but reported a last error", () => {
-    renderRow({}, { ...deployment, dialSucceeded: true, lastError: "dial timeout" });
-    expect(screen.getByTestId("fleet-repair-peer-1")).toBeEnabled();
+  it("claims the local init.json tool ceiling only for local-runtime rows", () => {
+    const bootstrap = { initToolCeiling: "readonly" };
+    renderRow(
+      { bootstrap: bootstrap as FleetRowProps["bootstrap"] },
+      { ...deployment, source: "local-standard" },
+    );
+    expect(document.querySelector('[title*="Server ceiling"]')).not.toBeNull();
+  });
+
+  it("omits the local tool ceiling from remote rows", () => {
+    const bootstrap = { initToolCeiling: "readonly" };
+    renderRow(
+      { bootstrap: bootstrap as FleetRowProps["bootstrap"] },
+      { ...deployment, source: "manual" },
+    );
+    expect(document.querySelector('[title*="Server ceiling"]')).toBeNull();
   });
 });

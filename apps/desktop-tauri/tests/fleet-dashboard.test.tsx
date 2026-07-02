@@ -2,7 +2,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { FleetDashboard } from "../src/components/fleet/FleetDashboard";
-import type { BootstrapSummary } from "../src/lib/types";
+import type { BootstrapSummary, DeploymentView } from "../src/lib/types";
+import { deployment } from "./config-panel-wiring/fixtures";
 
 const bootstrap: BootstrapSummary = {
   defaultAgentHome: "/Users/test/.defra-agent",
@@ -182,5 +183,40 @@ describe("FleetDashboard add connection flow", () => {
         graphql: "http://100.73.235.38:9181/api/v0/graphql",
       });
     });
+  });
+});
+
+describe("FleetDashboard fleet-level P2P repair", () => {
+  function renderFleet(deployments: DeploymentView[], onRepairP2P = vi.fn()) {
+    render(
+      <FleetDashboard
+        addingPeer={false}
+        bootstrap={bootstrap}
+        deployments={deployments}
+        loading={false}
+        p2pHealth={null}
+        repairingP2P={false}
+        starting={false}
+        onAddPeer={vi.fn()}
+        onFetchPeerStatus={vi.fn()}
+        onInitLocalRuntime={vi.fn()}
+        onOpenChat={vi.fn()}
+        onOpenConfig={vi.fn()}
+        onRepairP2P={onRepairP2P}
+      />,
+    );
+    return onRepairP2P;
+  }
+
+  it("hides the reconnect control while every connection is healthy", () => {
+    renderFleet([{ ...deployment, dialSucceeded: true, lastError: null }]);
+    expect(screen.queryByTestId("fleet-repair-p2p")).not.toBeInTheDocument();
+  });
+
+  it("shows the reconnect control and fires the repair when a peer is unhealthy", () => {
+    const onRepairP2P = renderFleet([{ ...deployment, dialSucceeded: false }]);
+    const repair = screen.getByTestId("fleet-repair-p2p");
+    fireEvent.click(repair);
+    expect(onRepairP2P).toHaveBeenCalledTimes(1);
   });
 });

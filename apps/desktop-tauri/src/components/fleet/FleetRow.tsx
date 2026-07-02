@@ -1,15 +1,16 @@
 import { isTerminalTurnState } from "../../lib/chat-shell";
-import type { BootstrapSummary, DeploymentView, P2PHealth } from "../../lib/types";
+import type { BootstrapSummary, DeploymentView } from "../../lib/types";
 import {
   displayAgentIdentity,
   displayBehaviorLabel,
   displayGraphqlEndpoint,
 } from "../../lib/types";
-import { ChatIcon, ConfigIcon, RepairIcon, ToolIconGlyph } from "./FleetIcons";
+import { ChatIcon, ConfigIcon, ToolIconGlyph } from "./FleetIcons";
 import {
   deploymentStatus,
   formatRelativeTime,
   inferenceBackendTitle,
+  isLocalRuntimeSource,
   toolCeilingIcons,
   type ToolIcon,
 } from "./fleetMetrics";
@@ -17,21 +18,15 @@ import {
 export type FleetRowProps = {
   bootstrap: BootstrapSummary | null;
   deployment: DeploymentView;
-  p2pHealth: P2PHealth | null;
-  repairingP2P: boolean;
   onOpenChat: (agentDid: string) => void;
   onOpenConfig: (agentDid: string) => void;
-  onRepairP2P: () => Promise<unknown>;
 };
 
 export function FleetRow({
   bootstrap,
   deployment,
-  p2pHealth,
-  repairingP2P,
   onOpenChat,
   onOpenConfig,
-  onRepairP2P,
 }: FleetRowProps) {
   const status = deploymentStatus(deployment);
   const enabledTaskCount = deployment.tasks.filter(
@@ -52,15 +47,16 @@ export function FleetRow({
   const toolIcons = toolCeilingIcons(
     deployment.toolSelections,
     defaultBehavior?.toolSelectionId,
-    bootstrap?.initToolCeiling,
+    isLocalRuntimeSource(deployment.source) ? bootstrap?.initToolCeiling : null,
   );
   const agentIdentity = displayAgentIdentity(deployment.agentDid);
   const graphqlEndpoint = displayGraphqlEndpoint(deployment.graphql);
   const defaultBehaviorLabel = displayBehaviorLabel(
     deployment.defaultBehaviorId ?? deployment.agentPrincipal.defaultBehaviorId,
   );
-  const p2pLastUpdate = p2pHealth?.lastOkAt ?? p2pHealth?.lastFailureAt ?? null;
-  const canRepairP2P = !deployment.dialSucceeded || Boolean(deployment.lastError);
+  // Per-deployment reconciler heartbeat — NOT the desktop client's global
+  // P2P probe, which is identical for every row and lies about dead peers.
+  const runtimeLastUpdate = deployment.runtime?.updatedAt ?? null;
 
   return (
     <tr data-testid={`fleet-row-${deployment.peerId}`}>
@@ -115,7 +111,9 @@ export function FleetRow({
       <td>
         <Metric title="Processing conversations" value={openWorkCount} />
       </td>
-      <td title="Last desktop P2P health probe">{formatRelativeTime(p2pLastUpdate)}</td>
+      <td title="Last runtime update reported by this agent">
+        {formatRelativeTime(runtimeLastUpdate)}
+      </td>
       <td className="fleet-actions-cell">
         <div className="fleet-row-actions">
           <button
@@ -137,21 +135,6 @@ export function FleetRow({
             type="button"
           >
             <ConfigIcon />
-          </button>
-          <button
-            aria-label={
-              canRepairP2P
-                ? `Repair ${deployment.label} P2P`
-                : `${deployment.label} P2P healthy`
-            }
-            className="ghost-button fleet-table-action"
-            data-testid={`fleet-repair-${deployment.peerId}`}
-            disabled={!canRepairP2P || repairingP2P}
-            onClick={() => void onRepairP2P()}
-            title={canRepairP2P ? "Repair P2P" : "P2P healthy"}
-            type="button"
-          >
-            <RepairIcon />
           </button>
         </div>
       </td>
