@@ -122,7 +122,8 @@ export function ScheduleConfigEditor({
     );
     setEnabled(schedule?.enabled ?? true);
     setConcurrency(schedule?.concurrency ?? "serial");
-  }, [schedule, selectedTask?.taskId]);
+    // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
+  }, [schedule?.scheduleId, selectedTask?.taskId]);
 
   useEffect(() => {
     setRunStatus(null);

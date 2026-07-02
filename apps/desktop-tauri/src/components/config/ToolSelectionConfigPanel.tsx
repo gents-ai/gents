@@ -220,7 +220,8 @@ export function ToolSelectionConfigEditor({
         : "",
     );
     setDefraQueryCollections((toolSelection?.defraQueryCollections ?? []).join("\n"));
-  }, [toolSelection, toolServiceIdKey]);
+    // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
+  }, [toolSelection?.selectionId, toolServiceIdKey]);
 
   function toggleAllowedMcpService(serviceId: string, checked: boolean) {
     const values = new Set(linesToArray(allowedMcpServiceIds));

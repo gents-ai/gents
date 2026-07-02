@@ -120,7 +120,8 @@ export function BackendConfigEditor({
       backend?.maxQueueDepth != null ? String(backend.maxQueueDepth) : "",
     );
     setEnabled(backend?.enabled ?? true);
-  }, [backend]);
+    // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
+  }, [backend?.backendId]);
 
   const maxConcurrentValid = isOptionalInt(maxConcurrent, { min: 1 });
   const maxQueueDepthValid = isOptionalInt(maxQueueDepth, { min: 1 });

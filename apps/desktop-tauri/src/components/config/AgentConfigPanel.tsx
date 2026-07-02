@@ -68,7 +68,8 @@ export function AgentConfigEditor({
   useEffect(() => {
     setDisplayName(agent.displayName ?? "");
     setEditingDisplayName(false);
-  }, [agent]);
+    // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
+  }, [agent.agentDid]);
 
   const defaultBehaviorId =
     agent.defaultBehaviorId ??

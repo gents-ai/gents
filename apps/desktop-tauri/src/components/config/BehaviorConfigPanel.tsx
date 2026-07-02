@@ -179,7 +179,9 @@ export function BehaviorConfigEditor({
     setDefaultForAgent(behavior?.isDefault ?? false);
     setSkillRefs(behavior?.skillRefs ?? []);
     setSkillExcludes(behavior?.skillExcludes ?? []);
-  }, [behavior, inferenceProfiles]);
+    // Id-keyed (plus the profile id set for the default-profile fallback):
+    // background snapshot refreshes must not wipe in-progress edits.
+  }, [behavior?.behaviorId, inferenceProfiles.map((p) => p.profileId).join("|")]);
 
   const behaviorScopedSkills = skills.filter((skill) => skill.scope === "behavior");
   const principalScopedSkills = skills.filter((skill) => skill.scope === "principal");

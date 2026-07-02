@@ -121,7 +121,8 @@ export function TaskConfigEditor({
     setPromptTemplate(task?.promptTemplate ?? "");
     setOutputSchemaRef(task?.outputSchemaRef ?? "");
     setEnabled(task?.enabled ?? true);
-  }, [selectedBehavior?.behaviorId, task]);
+    // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
+  }, [selectedBehavior?.behaviorId, task?.taskId]);
 
   useEffect(() => {
     setRunStatus(null);
