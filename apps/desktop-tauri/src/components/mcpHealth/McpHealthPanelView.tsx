@@ -9,6 +9,7 @@ import {
   projectStatus,
   visualState,
   type FilterId,
+  type McpProbeOutcome,
 } from "./mcpHealthModel";
 
 export type McpHealthPanelViewProps = {
@@ -17,6 +18,7 @@ export type McpHealthPanelViewProps = {
   error: string | null;
   lastFetchedAt: string | null;
   probingServiceId: string | null;
+  probeOutcomes?: Record<string, McpProbeOutcome>;
   onProbe: (serviceId: string) => void;
   onRefresh: () => void;
 };
@@ -27,6 +29,7 @@ export function McpHealthPanelView({
   error,
   lastFetchedAt,
   probingServiceId,
+  probeOutcomes,
   onProbe,
   onRefresh,
 }: McpHealthPanelViewProps) {
@@ -139,6 +142,7 @@ export function McpHealthPanelView({
           services={visibleServices}
           expandedId={expandedId}
           probingServiceId={probingServiceId}
+          probeOutcomes={probeOutcomes}
           onToggle={toggleExpand}
           onRowKeyDown={onRowKeyDown}
           onProbe={onProbe}

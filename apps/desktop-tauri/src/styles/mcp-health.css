@@ -381,6 +381,15 @@
     font-size: 11px;
   }
 
+  .mcp-health-probe-result {
+    color: var(--color-accent);
+    font-size: 11px;
+  }
+
+  .mcp-health-probe-result.is-error {
+    color: var(--color-error);
+  }
+
   .mcp-health-last-error {
     font-family: var(--font-mono);
     font-size: 11px;
