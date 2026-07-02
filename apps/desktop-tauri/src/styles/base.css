@@ -29,7 +29,7 @@
 
   code,
   .mono {
-    font-family: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
+    font-family: var(--font-mono);
   }
 
   h1,
