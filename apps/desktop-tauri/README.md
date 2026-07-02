@@ -89,22 +89,15 @@ and logs all resolve under that directory:
 DEFRA_AGENT_DESKTOP_HOME=/tmp/defra-agent-desktop-demo/desktop npm run tauri -- dev
 ```
 
-From the repo root, `make demo-desktop-two-node` starts two runtimes,
-**Orchestrator** and **Worker**, tightens their tool surface (drops
-`defra_query`), and lets the Orchestrator delegate to the Worker on node B via a
-cross-node subagent (the child runs on the Worker and its result replicates
-back). It seeds that isolated desktop home and opens the Fleet Dashboard demo.
-Live chat uses the model backend configured during runtime init, and it must be
-reachable on **both** nodes since the Worker now executes the delegated child.
-Live chat needs a real backend reachable on both nodes — keep `llama-server`
-running on `http://127.0.0.1:8080/v1`, or use a hosted preset:
-
-```bash
-DEFRA_AGENT_DEMO_BACKEND_PRESET=openai \
-DEFRA_AGENT_DEMO_MODEL=gpt-4.1-mini \
-OPENAI_API_KEY=... \
-  make demo-desktop-two-node
-```
+From a release binary, `defra-agent demo` drives the same fleet: `pair` brings up
+two runtimes (**Orchestrator** and **Worker**) with a tightened tool surface (no
+`defra_query`), `delegate` lets the Orchestrator delegate to the Worker on node B
+via a cross-node subagent (the child runs on the Worker and its result replicates
+back), and `desktop` seeds that isolated desktop home and opens the Fleet
+Dashboard. Live chat needs a real backend reachable on both nodes — keep
+`llama-server` running on `http://127.0.0.1:8080/v1`, or use a hosted preset
+(`defra-agent demo --backend-preset openai --model gpt-4.1-mini`, with
+`OPENAI_API_KEY` in the environment).
 
 ## Tests
 

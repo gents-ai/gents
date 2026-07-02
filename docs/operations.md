@@ -67,67 +67,36 @@ defra-agent server \
 
 ## Connected runtime bring-up
 
-For the scripted local version, run:
+The interactive `defra-agent demo` command is the fastest path to a connected
+fleet. It ships in the binary, boots a curated single node, and its `demo>`
+shell escalates to the full topology:
 
 ```bash
-make demo-p2p-two-node
+defra-agent demo
 ```
 
-To run the same two-node substrate and open it in the native desktop fleet UI:
+- `pair` brings up a 2nd node (the **Worker**), creates a signed
+  `network-control` network, enrolls the Worker, installs the conversation data
+  plane, and waits for both reconcilers to arm their replicators.
+- `delegate` enables cross-node delegation: the **Orchestrator** delegates a
+  child request that materializes and runs **on the Worker node** and replicates
+  its result back. This uses background await (foreground remote spawns are
+  rejected) and `subagent_allow_cross_deployment` on both runtimes — a gate that
+  is off by default and appropriate only for a trusted local loopback fleet.
+- `desktop` seeds an isolated desktop peer directory with both runtimes and
+  launches the native app (`DEFRA_AGENT_DESKTOP_HOME` set, remote re-pair off),
+  so the **Fleet Dashboard** shows both deployments and Chat mirrors the CLI.
 
-```bash
-make demo-desktop-two-node
-```
-
-The desktop demo needs a real OpenAI-compatible backend reachable on both
-nodes — e.g. a local inference server at `http://127.0.0.1:8080/v1`, matching the
-getting-started
-`llama-server` command:
+The demo needs a real OpenAI-compatible backend — no mock. Point it at a local
+inference server at `http://127.0.0.1:8080/v1`:
 
 ```bash
 llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
 ```
 
-For hosted inference, select a preset and a provider model before launching:
-
-```bash
-DEFRA_AGENT_DEMO_BACKEND_PRESET=openai \
-DEFRA_AGENT_DEMO_MODEL=gpt-4.1-mini \
-OPENAI_API_KEY=... \
-  make demo-desktop-two-node
-```
-
-That command:
-
-- starts two runtimes, **Orchestrator** and **Worker**, through the two-node
-  P2P script;
-- tightens each agent's tool surface — drops the `defra_query` tool — and
-  enables the Orchestrator to delegate to the **Worker on node B** via a
-  cross-node subagent (it prints the resolved surface via
-  `defra-agent tools explain`);
-- seeds an isolated desktop peer directory with both runtimes;
-- launches the Tauri dev app with `DEFRA_AGENT_DESKTOP_HOME` pointed at the
-  demo desktop home.
-
-In the app, open **Fleet Dashboard** to see both deployments. Open Chat for the
-**Orchestrator** and ask it to use its worker subagent: it calls
-`spawn_subagent` (background await), the runtime materializes a child request
-**on the Worker node** (`agent_did` = the Worker), the Worker runs it, and its
-result replicates back to the Orchestrator over P2P. Open the Worker's Chat to
-watch the delegated child run there. Cross-node delegation uses background await
-(foreground remote spawns are rejected) and is enabled for the trusted local
-loopback fleet via `subagent_allow_cross_deployment` on both runtimes. Set
-`DEFRA_AGENT_DESKTOP_DEMO_LAUNCH=0` to prepare
-the demo without launching the app, or `DEFRA_AGENT_DESKTOP_DEMO_KEEP=1` to keep
-runtimes and data after exit. By default the launcher refuses to open the GUI if
-the local model backend is unreachable; set
-`DEFRA_AGENT_DESKTOP_DEMO_ALLOW_UNAVAILABLE_BACKEND=1` only when you want to
-inspect the seeded fleet UI without sending live chat turns:
-
-```bash
-DEFRA_AGENT_DESKTOP_DEMO_ALLOW_UNAVAILABLE_BACKEND=1 \
-  make demo-desktop-two-node
-```
+or a hosted preset (`defra-agent demo --backend-preset openai --model gpt-4.1-mini`,
+with `OPENAI_API_KEY` in the environment). The first run offers an interactive
+backend picker and remembers the choice.
 
 To bring up two runtimes manually and enroll Coding into Amy's signed network:
 

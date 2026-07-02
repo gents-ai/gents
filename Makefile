@@ -57,10 +57,6 @@ help:
 	@echo "  make live-cli              Run live CLI smoke test"
 	@echo "  make live-agent            Run ignored live runtime tests"
 	@echo "  make live-desktop-smoke    Run live desktop smoke suites"
-	@echo
-	@echo "Demos:"
-	@echo "  make demo-p2p-two-node     Run the local two-node P2P pairing demo"
-	@echo "  make demo-desktop-two-node Run the local two-node demo in the desktop fleet UI"
 
 .PHONY: build build-cli build-cli-headless build-desktop build-desktop-ui
 build:
@@ -196,10 +192,3 @@ live-desktop-smoke:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:live:config
 	$(NPM) --prefix $(DESKTOP_DIR) run test:live:operations
 	$(NPM) --prefix $(DESKTOP_DIR) run test:live:interrupt
-
-.PHONY: demo-p2p-two-node demo-desktop-two-node
-demo-p2p-two-node:
-	scripts/demo-p2p-two-node.sh
-
-demo-desktop-two-node:
-	scripts/demo-desktop-two-node.sh
