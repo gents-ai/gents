@@ -54,7 +54,7 @@
     font: inherit;
     font-size: var(--text-xs);
     cursor: pointer;
-    transition: 120ms ease;
+    transition: var(--motion-fast) ease;
   }
   .subagent-lineage-chip:hover {
     border-color: var(--border-strong);

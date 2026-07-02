@@ -82,7 +82,7 @@
     justify-content: center;
     z-index: 50;
     padding: 64px var(--space-7);
-    animation: fade-in 120ms ease-out;
+    animation: fade-in var(--motion-fast) ease-out;
   }
 
   .dialog-backdrop.open {
@@ -266,9 +266,9 @@
     font-size: var(--text-md);
     font-weight: 500;
     transition:
-      background 120ms ease,
-      border-color 120ms ease,
-      color 120ms ease;
+      background var(--motion-fast) ease,
+      border-color var(--motion-fast) ease,
+      color var(--motion-fast) ease;
     cursor: pointer;
   }
 

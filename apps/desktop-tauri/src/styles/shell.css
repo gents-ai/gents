@@ -88,7 +88,7 @@
     background: transparent;
     color: var(--color-text-muted);
     font-weight: 600;
-    transition: 120ms ease;
+    transition: var(--motion-fast) ease;
   }
 
   .tab-button:last-child {

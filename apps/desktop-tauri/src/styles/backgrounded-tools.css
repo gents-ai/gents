@@ -49,9 +49,9 @@
     font-size: var(--text-sm);
     cursor: pointer;
     transition:
-      background 120ms ease,
-      border-color 120ms ease,
-      color 120ms ease;
+      background var(--motion-fast) ease,
+      border-color var(--motion-fast) ease,
+      color var(--motion-fast) ease;
   }
 
   .background-tools-panel .chip:hover {
@@ -169,7 +169,7 @@
 
   .background-tools-panel table.tools tbody tr {
     border-bottom: 1px solid var(--border-subtle);
-    transition: background 120ms ease;
+    transition: background var(--motion-fast) ease;
   }
 
   .background-tools-panel table.tools tbody tr:last-child {
