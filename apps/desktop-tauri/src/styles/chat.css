@@ -173,7 +173,7 @@
     display: grid;
     align-content: start;
     scroll-behavior: smooth;
-    scroll-padding-bottom: 24px;
+    scroll-padding-bottom: var(--space-10);
     background:
       linear-gradient(180deg, rgb(var(--source-green-rgb) / 0.035), transparent 42%),
       var(--color-surface-strong);

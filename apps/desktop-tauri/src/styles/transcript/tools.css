@@ -213,7 +213,7 @@
     font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
     font-size: var(--text-2xs);
     letter-spacing: 0.04em;
-    padding: 2px 8px;
+    padding: 2px var(--space-3);
     border-radius: var(--radius-pill);
     background: rgb(var(--source-orange-rgb) / 0.16);
     border: 1px solid rgb(var(--source-orange-rgb) / 0.32);
@@ -251,7 +251,7 @@
   .denial-attempt .denied-token {
     background: rgb(var(--source-orange-rgb) / 0.22);
     color: var(--color-warning-soft, #ffd089);
-    padding: 0 4px;
+    padding: 0 var(--space-1);
     border-radius: 4px;
   }
 
@@ -318,7 +318,7 @@
   .code-exit {
     font-size: var(--text-xs);
     letter-spacing: 0.03em;
-    padding: 1px 8px;
+    padding: 1px var(--space-3);
     border-radius: var(--radius-pill, 999px);
   }
 

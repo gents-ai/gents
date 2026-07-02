@@ -50,7 +50,7 @@
     border: 1px solid var(--border-default);
     color: var(--color-text-soft);
     border-radius: var(--radius-pill);
-    padding: 2px 10px;
+    padding: 2px var(--space-4);
     font: inherit;
     font-size: var(--text-xs);
     cursor: pointer;
@@ -128,7 +128,7 @@
   }
   .subagent-lineage-children {
     list-style: none;
-    padding-left: 18px;
+    padding-left: var(--space-8);
     margin: 0;
     position: relative;
   }
@@ -207,7 +207,7 @@
   .subagent-lineage-kind {
     display: inline-flex;
     align-items: center;
-    padding: 1px 8px;
+    padding: 1px var(--space-3);
     border-radius: var(--radius-pill);
     font-size: var(--text-2xs);
     letter-spacing: 0.06em;
@@ -240,8 +240,8 @@
   .subagent-lineage-state {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    padding: 1px 8px;
+    gap: var(--space-1);
+    padding: 1px var(--space-3);
     border-radius: var(--radius-pill);
     font-size: var(--text-2xs);
     font-family: var(--font-heading);

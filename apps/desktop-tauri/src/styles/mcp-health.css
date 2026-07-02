@@ -27,7 +27,7 @@
   }
 
   .mcp-health-refresh {
-    padding: 6px 12px;
+    padding: var(--space-2) var(--space-5);
     background: transparent;
     color: var(--color-text-soft);
     border: 1px solid var(--border-default);
@@ -69,7 +69,7 @@
     display: inline-flex;
     align-items: center;
     gap: var(--space-3);
-    padding: 6px 10px 6px 8px;
+    padding: var(--space-2) var(--space-4) var(--space-2) var(--space-3);
     border: 1px solid var(--border-subtle);
     background: rgb(0 0 0 / 0.45);
     border-radius: var(--radius-pill);
@@ -115,7 +115,7 @@
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
-    padding: 6px 12px;
+    padding: var(--space-2) var(--space-5);
     border: 1px solid var(--border-default);
     background: var(--color-surface-row);
     color: var(--color-text-soft);
@@ -182,7 +182,7 @@
   .mcp-health-table th,
   .mcp-health-table td {
     border-bottom: 1px solid var(--border-default);
-    padding: 11px 12px;
+    padding: 11px var(--space-5);
     text-align: left;
     vertical-align: middle;
   }
@@ -333,7 +333,7 @@
   .mcp-health-k-badge {
     display: inline-flex;
     align-items: center;
-    padding: 2px 6px;
+    padding: 2px var(--space-2);
     border-radius: var(--radius-sm);
     font-size: var(--text-2xs);
     letter-spacing: 0.04em;
@@ -413,7 +413,7 @@
   }
 
   .mcp-health-probe-btn {
-    padding: 6px 12px;
+    padding: var(--space-2) var(--space-5);
     background: transparent;
     color: var(--color-text-soft);
     border: 1px solid var(--border-default);
@@ -440,7 +440,7 @@
 
   .mcp-health-kv {
     display: grid;
-    gap: 4px;
+    gap: var(--space-1);
     margin: 0;
     font-size: var(--text-sm);
   }

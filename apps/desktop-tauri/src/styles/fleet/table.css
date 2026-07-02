@@ -16,7 +16,7 @@
   .fleet-table th,
   .fleet-table td {
     border-bottom: 1px solid var(--border-default);
-    padding: 11px 10px;
+    padding: 11px var(--space-4);
     text-align: left;
     vertical-align: middle;
   }

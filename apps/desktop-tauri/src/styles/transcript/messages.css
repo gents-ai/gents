@@ -76,7 +76,7 @@
 
   .markdown-content ul,
   .markdown-content ol {
-    padding-left: 20px;
+    padding-left: var(--space-9);
   }
 
   .markdown-content li + li {

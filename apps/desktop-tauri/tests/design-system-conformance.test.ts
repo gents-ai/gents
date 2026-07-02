@@ -90,6 +90,39 @@ describe("type scale", () => {
   });
 });
 
+describe("token ratchets", () => {
+  // These counts may only go DOWN. They hold the line on raw values the
+  // per-screen polish passes are still sweeping onto tokens — a new raw
+  // literal fails here; when you tokenize some, lower the ceiling.
+  function countMatches(pattern: RegExp): number {
+    let count = 0;
+    for (const css of sources.values()) {
+      count += [...css.matchAll(pattern)].length;
+    }
+    return count;
+  }
+
+  it("raw px inside spacing declarations does not grow (ceiling 40)", () => {
+    let count = 0;
+    for (const css of sources.values()) {
+      for (const match of css.matchAll(
+        /\b(?:padding|margin|gap|row-gap|column-gap)(?:-(?:top|right|bottom|left|inline|block))?\s*:\s*([^;{}]+)/g,
+      )) {
+        count += (match[1].match(/\d+px\b/g) ?? []).length;
+      }
+    }
+    expect(count).toBeLessThanOrEqual(40);
+  });
+
+  it("raw rgb() literals do not grow (ceiling 90)", () => {
+    expect(countMatches(/rgb\(\d+ \d+ \d+/g)).toBeLessThanOrEqual(90);
+  });
+
+  it("bespoke box-shadows do not grow (ceiling 38)", () => {
+    expect(countMatches(/box-shadow:/g)).toBeLessThanOrEqual(38);
+  });
+});
+
 describe("cascade layers", () => {
   const appCss = sources.get(APP_CSS) ?? "";
   const orderMatch = appCss.match(/@layer\s+([\w\s,-]+);/);
