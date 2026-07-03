@@ -99,6 +99,15 @@ function ServiceRows({
           : "red";
   const k = service.kMax ?? 0;
   const fc = service.failureCount ?? 0;
+  const probeText = probeOutcome
+    ? probeOutcome.error
+      ? `live probe failed: ${probeOutcome.error}`
+      : `live probe (${formatRelative(probeOutcome.at)}): ${
+          probeOutcome.status ?? "unknown"
+        } · ${probeOutcome.latencyMs ?? "?"} ms${
+          probeOutcome.lastError ? ` · ${probeOutcome.lastError}` : ""
+        }`
+    : null;
   return (
     <>
       <tr
@@ -150,21 +159,16 @@ function ServiceRows({
                 {backoff.text}
               </span>
             ) : null}
-            {probeOutcome ? (
+            {probeOutcome && probeText ? (
               <span
                 className={`mcp-health-probe-result${
                   probeOutcome.error || probeOutcome.lastError ? " is-error" : ""
                 }`}
                 role="status"
+                title={probeText}
                 data-testid={`mcp-health-probe-result-${service.serviceId}`}
               >
-                {probeOutcome.error
-                  ? `live probe failed: ${probeOutcome.error}`
-                  : `live probe (${formatRelative(probeOutcome.at)}): ${
-                      probeOutcome.status ?? "unknown"
-                    } · ${probeOutcome.latencyMs ?? "?"} ms${
-                      probeOutcome.lastError ? ` · ${probeOutcome.lastError}` : ""
-                    }`}
+                {probeText}
               </span>
             ) : null}
           </div>

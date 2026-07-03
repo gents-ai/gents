@@ -93,9 +93,11 @@ export function ActiveChatWorkspace({
   // parent request; falls back to the session's latest request.
   const [lineageRootOverride, setLineageRootOverride] = useState<string | null>(null);
 
+  // Reset on deployment switch too: the session id can stay null across a
+  // switch, and the override must not pin another agent's request.
   useEffect(() => {
     setLineageRootOverride(null);
-  }, [selectedSessionId]);
+  }, [selectedSessionId, selectedDeployment.agentDid]);
 
   useEffect(() => {
     if (!interruptResultBanner) return;
