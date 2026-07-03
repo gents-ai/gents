@@ -36,7 +36,8 @@ export type DesktopUiHarnessScenario =
   | "long-content"
   | "operations-rich"
   | "active-turn"
-  | "cascade-turn";
+  | "cascade-turn"
+  | "coding";
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
@@ -103,6 +104,53 @@ export function createDesktopUiHarness(
         sequence: 1,
         content: greeting,
       },
+      ...(scenario === "coding"
+        ? [
+            {
+              kind: "toolGroup" as const,
+              itemKey: "intro-code-tools",
+              messageSequence: 1,
+              tools: [
+                {
+                  itemKey: "intro-edit-file",
+                  toolName: "edit_file",
+                  statusKind: "success",
+                  args: {
+                    rawText: JSON.stringify({
+                      path: "src/parser.rs",
+                      old_text: "fn parse() -> Ast { todo!() }",
+                      new_text: "fn parse() -> Ast { Ast::default() }",
+                    }),
+                    fields: [],
+                  },
+                  result: {
+                    // Mirrors the runtime's edit_file envelope (EditFileMetadata
+                    // + human body line) — see toolset/file_tools.rs.
+                    rawText:
+                      'defra_fs: {"ok":true,"status":"success","tool":"edit_file","path":"src/parser.rs","returned_count":1,"total_count":1,"truncated":false,"replacements_applied":1,"replace_all":false,"bytes_written":36}\nedit_file: edited src/parser.rs (1 replacement)',
+                    fields: [],
+                  },
+                },
+                {
+                  itemKey: "intro-bash",
+                  toolName: "bash",
+                  statusKind: "success",
+                  args: {
+                    rawText: JSON.stringify({ command: "cargo test parser" }),
+                    fields: [],
+                  },
+                  result: {
+                    // Mirrors the runtime's command envelope framing
+                    // (render_command_output in toolset/shared/command.rs).
+                    rawText:
+                      'defra_exec: {"ok":true,"status":"success","command":"cargo test parser","exit_code":0,"timed_out":false,"execution_mode":"read_only","network_mode":"disabled"}\nstdout:\ntest result: ok. 2 passed\nstderr:\n(empty)',
+                    fields: [],
+                  },
+                },
+              ],
+            },
+          ]
+        : []),
     ],
   });
   syncConversations();
@@ -1263,6 +1311,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "operations-rich":
     case "active-turn":
     case "cascade-turn":
+    case "coding":
       return value;
     default:
       return "default";

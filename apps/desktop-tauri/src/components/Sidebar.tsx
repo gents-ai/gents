@@ -14,6 +14,7 @@ export type SidebarProps = {
   selectedSessionId: string | null;
   onOpenFleet: () => void;
   onConfigureDeployment: (agentDid: string) => void;
+  onOpenCode?: (agentDid: string) => void;
   onSelectBehavior: (behaviorId: string) => void;
   onSelectSession: (sessionId: string) => void;
   onStartNewConversation: (behaviorId: string) => void;
@@ -28,6 +29,7 @@ export function Sidebar({
   selectedSessionId,
   onOpenFleet,
   onConfigureDeployment,
+  onOpenCode,
   onSelectBehavior,
   onSelectSession,
   onStartNewConversation,
@@ -38,6 +40,7 @@ export function Sidebar({
         deployments={deployments}
         selectedAgentDid={selectedAgentDid}
         onConfigureDeployment={onConfigureDeployment}
+        onOpenCode={onOpenCode}
         onOpenFleet={onOpenFleet}
       />
 

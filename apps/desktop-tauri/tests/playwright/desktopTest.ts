@@ -10,7 +10,8 @@ export type HarnessScenario =
   | "long-content"
   | "operations-rich"
   | "active-turn"
-  | "cascade-turn";
+  | "cascade-turn"
+  | "coding";
 
 export const PEER_ID = "peer-bombadil-local";
 

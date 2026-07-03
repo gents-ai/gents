@@ -1,0 +1,47 @@
+@layer chat {
+  .code-context {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-5);
+    margin-bottom: var(--space-4);
+    border: 1px solid rgb(var(--source-green-rgb) / 0.14);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface-deep);
+  }
+
+  .code-context-main {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-4);
+  }
+
+  .code-context-title h2 {
+    margin: 0;
+    font-size: 1.1rem;
+  }
+
+  .code-context-facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: var(--space-2) var(--space-5);
+    margin: 0;
+  }
+
+  .code-context-facts dt {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-text-muted);
+  }
+
+  .code-context-facts dd {
+    margin: 2px 0 0;
+    font-size: 0.85rem;
+    word-break: break-all;
+  }
+
+  .code-context-note {
+    margin: 0;
+  }
+}

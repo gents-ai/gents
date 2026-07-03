@@ -9,6 +9,8 @@ import type {
 } from "../lib/types";
 import type { DerivedCancelCauseView } from "../lib/types/operations";
 import { CancelCauseBadge, CancelCauseDetails } from "./cancelUx";
+import { CodeToolItem } from "./codeTools/CodeToolItem";
+import { toCodeToolView } from "./codeTools/codeTools";
 import { CommandDenialToolItem } from "./commandDenial";
 
 function MarkdownContent({ value }: { value: string }) {
@@ -88,6 +90,19 @@ function ToolGroups({ tools }: { tools: RenderedToolCallView[] }) {
           return (
             <CommandDenialToolItem key={tool.itemKey} tool={tool} denial={denial} />
           );
+        }
+        // Code-aware rendering: file edits become diffs, bash becomes a terminal
+        // block. Only completed, uncancelled calls are projected — errored,
+        // running, and cancelled calls keep the generic disclosure (with its
+        // cancel-cause details), so a failed edit never reads as an applied diff.
+        // A completed bash with a non-zero/timeout envelope still projects; the
+        // envelope drives its failed badge.
+        const codeView =
+          (tool.statusKind ?? "").toLowerCase() === "success" && !tool.cancelCause
+            ? toCodeToolView(tool)
+            : null;
+        if (codeView) {
+          return <CodeToolItem key={tool.itemKey} view={codeView} />;
         }
         return (
           <details className="tool-item" key={tool.itemKey}>
