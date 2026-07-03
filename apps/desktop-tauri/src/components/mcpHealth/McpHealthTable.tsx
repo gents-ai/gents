@@ -7,6 +7,7 @@ import {
   projectStatus,
   statusLabel,
   visualState,
+  type McpProbeOutcome,
   type VisualState,
 } from "./mcpHealthModel";
 
@@ -14,6 +15,7 @@ export function McpHealthTable({
   services,
   expandedId,
   probingServiceId,
+  probeOutcomes,
   onToggle,
   onRowKeyDown,
   onProbe,
@@ -21,6 +23,7 @@ export function McpHealthTable({
   services: MCPServiceHealthView[];
   expandedId: string | null;
   probingServiceId: string | null;
+  probeOutcomes?: Record<string, McpProbeOutcome>;
   onToggle: (serviceId: string) => void;
   onRowKeyDown: (event: KeyboardEvent<HTMLTableRowElement>, serviceId: string) => void;
   onProbe: (serviceId: string) => void;
@@ -52,6 +55,7 @@ export function McpHealthTable({
                 expanded={expanded}
                 busy={busy}
                 backoff={backoff}
+                probeOutcome={probeOutcomes?.[service.serviceId] ?? null}
                 onToggle={() => onToggle(service.serviceId)}
                 onKeyDown={(event) => onRowKeyDown(event, service.serviceId)}
                 onProbe={() => onProbe(service.serviceId)}
@@ -70,6 +74,7 @@ function ServiceRows({
   expanded,
   busy,
   backoff,
+  probeOutcome,
   onToggle,
   onKeyDown,
   onProbe,
@@ -79,6 +84,7 @@ function ServiceRows({
   expanded: boolean;
   busy: boolean;
   backoff: { remainingMs: number; text: string } | null;
+  probeOutcome: McpProbeOutcome | null;
   onToggle: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLTableRowElement>) => void;
   onProbe: () => void;
@@ -93,6 +99,15 @@ function ServiceRows({
           : "red";
   const k = service.kMax ?? 0;
   const fc = service.failureCount ?? 0;
+  const probeText = probeOutcome
+    ? probeOutcome.error
+      ? `live probe failed: ${probeOutcome.error}`
+      : `live probe (${formatRelative(probeOutcome.at)}): ${
+          probeOutcome.status ?? "unknown"
+        } · ${probeOutcome.latencyMs ?? "?"} ms${
+          probeOutcome.lastError ? ` · ${probeOutcome.lastError}` : ""
+        }`
+    : null;
   return (
     <>
       <tr
@@ -142,6 +157,18 @@ function ServiceRows({
                 data-testid={`mcp-health-backoff-${service.serviceId}`}
               >
                 {backoff.text}
+              </span>
+            ) : null}
+            {probeOutcome && probeText ? (
+              <span
+                className={`mcp-health-probe-result${
+                  probeOutcome.error || probeOutcome.lastError ? " is-error" : ""
+                }`}
+                role="status"
+                title={probeText}
+                data-testid={`mcp-health-probe-result-${service.serviceId}`}
+              >
+                {probeText}
               </span>
             ) : null}
           </div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 
 import type { DeploymentView, DesktopSessionSnapshot, P2PHealth } from "../lib/types";
 import { displayBehaviorLabel } from "../lib/types";
@@ -84,14 +84,73 @@ export function ActiveChatWorkspace({
       (behavior) => behavior.behaviorId === activeBehaviorId,
     )?.displayName ?? displayBehaviorLabel(activeBehaviorId);
 
+  const [cascade, setCascade] = useState<null | { rootRequestId: string }>(null);
+  const [interruptResultBanner, setInterruptResultBanner] = useState<string | null>(
+    null,
+  );
+  const [operationsOpen, setOperationsOpen] = useState(false);
+  // Set when a background-tools row asks to focus the lineage view on its
+  // parent request; falls back to the session's latest request.
+  const [lineageRootOverride, setLineageRootOverride] = useState<string | null>(null);
+
+  // Reset on deployment switch too: the session id can stay null across a
+  // switch, and the override must not pin another agent's request.
+  useEffect(() => {
+    setLineageRootOverride(null);
+  }, [selectedSessionId, selectedDeployment.agentDid]);
+
+  useEffect(() => {
+    if (!interruptResultBanner) return;
+    const t = setTimeout(() => setInterruptResultBanner(null), 5000);
+    return () => clearTimeout(t);
+  }, [interruptResultBanner]);
+
+  const beginInterrupt = useCallback(
+    async (requestId: string) => {
+      try {
+        const preview = await previewInterruptCascade({
+          requestId,
+          agentDid: selectedDeployment.agentDid,
+          includeTerminal: false,
+        });
+        const childCount =
+          preview.willInterrupt.length +
+          preview.willDetach.length +
+          preview.unknownPolicy.length;
+        if (childCount === 0) {
+          const result = await interruptRequest({
+            requestId,
+            cause: "userCancelled",
+            cascade: false,
+          });
+          if (result.accepted) setInterruptResultBanner("Interrupt accepted");
+          else if (result.alreadyInterrupted)
+            setInterruptResultBanner("Already interrupted by another caller");
+          return;
+        }
+        setCascade({ rootRequestId: requestId });
+      } catch (e) {
+        setInterruptResultBanner(`Interrupt preview failed: ${String(e)}`);
+      }
+    },
+    [selectedDeployment.agentDid],
+  );
+
   const operationsRailTabs = useMemo<OperationsRailTabDescriptor[]>(() => {
-    const rootRequestId = session?.latestRequestId ?? null;
+    const rootRequestId = lineageRootOverride ?? session?.latestRequestId ?? null;
     const lineageAgentDid = selectedDeployment.agentDid;
     return [
       {
         id: "background-tools",
         label: "Background",
-        render: () => <BackgroundedToolsPanel />,
+        render: () => (
+          <BackgroundedToolsPanel
+            onOpenLineage={setLineageRootOverride}
+            onInterruptParent={(requestId) => {
+              void beginInterrupt(requestId);
+            }}
+          />
+        ),
       },
       {
         id: "lineage",
@@ -114,48 +173,17 @@ export function ActiveChatWorkspace({
         render: () => <McpHealthPanel />,
       },
     ];
-  }, [session?.latestRequestId, selectedDeployment.agentDid]);
+  }, [
+    session?.latestRequestId,
+    selectedDeployment.agentDid,
+    lineageRootOverride,
+    beginInterrupt,
+  ]);
 
-  const [cascade, setCascade] = useState<null | { rootRequestId: string }>(null);
-  const [interruptResultBanner, setInterruptResultBanner] = useState<string | null>(
-    null,
-  );
-  const [operationsOpen, setOperationsOpen] = useState(false);
-
-  useEffect(() => {
-    if (!interruptResultBanner) return;
-    const t = setTimeout(() => setInterruptResultBanner(null), 5000);
-    return () => clearTimeout(t);
-  }, [interruptResultBanner]);
-
-  async function onInterruptClick() {
+  function onInterruptClick() {
     const requestId = session?.latestRequestId;
     if (!requestId) return;
-    try {
-      const preview = await previewInterruptCascade({
-        requestId,
-        agentDid: selectedDeployment.agentDid,
-        includeTerminal: false,
-      });
-      const childCount =
-        preview.willInterrupt.length +
-        preview.willDetach.length +
-        preview.unknownPolicy.length;
-      if (childCount === 0) {
-        const result = await interruptRequest({
-          requestId,
-          cause: "userCancelled",
-          cascade: false,
-        });
-        if (result.accepted) setInterruptResultBanner("Interrupt accepted");
-        else if (result.alreadyInterrupted)
-          setInterruptResultBanner("Already interrupted by another caller");
-        return;
-      }
-      setCascade({ rootRequestId: requestId });
-    } catch (e) {
-      setInterruptResultBanner(`Interrupt preview failed: ${String(e)}`);
-    }
+    void beginInterrupt(requestId);
   }
 
   return (

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listMcpServicesWithHealth, probeMcpService } from "../../lib/desktop-api";
 import type { MCPServiceHealthView } from "../../lib/types";
 import { McpHealthPanelView } from "./McpHealthPanelView";
+import type { McpProbeOutcome } from "./mcpHealthModel";
 
 /// Poll the persisted health collection every 10 s. The agent rewrites
 /// every cycle (default 30 s) so 10 s polling gives a 10-40 s update
@@ -16,6 +17,9 @@ export function McpHealthPanel() {
   const [error, setError] = useState<string | null>(null);
   const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null);
   const [probingServiceId, setProbingServiceId] = useState<string | null>(null);
+  const [probeOutcomes, setProbeOutcomes] = useState<Record<string, McpProbeOutcome>>(
+    {},
+  );
   const generationRef = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -53,10 +57,26 @@ export function McpHealthPanel() {
     async (serviceId: string) => {
       setProbingServiceId(serviceId);
       try {
-        await probeMcpService(serviceId);
+        const result = await probeMcpService(serviceId);
+        setProbeOutcomes((prev) => ({
+          ...prev,
+          [serviceId]: {
+            at: new Date().toISOString(),
+            status: result.status,
+            latencyMs: result.latencyMs,
+            lastError: result.lastError ?? null,
+          },
+        }));
         await refresh();
       } catch (caught) {
-        setError(caught instanceof Error ? caught.message : String(caught));
+        // Probe failures belong to the row that asked, not the panel banner.
+        setProbeOutcomes((prev) => ({
+          ...prev,
+          [serviceId]: {
+            at: new Date().toISOString(),
+            error: caught instanceof Error ? caught.message : String(caught),
+          },
+        }));
       } finally {
         setProbingServiceId(null);
       }
@@ -71,6 +91,7 @@ export function McpHealthPanel() {
       error={error}
       lastFetchedAt={lastFetchedAt}
       probingServiceId={probingServiceId}
+      probeOutcomes={probeOutcomes}
       onProbe={(serviceId) => {
         void probe(serviceId);
       }}

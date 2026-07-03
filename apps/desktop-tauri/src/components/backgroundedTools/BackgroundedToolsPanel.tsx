@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useContext, useMemo, useState } from "react";
 
 import type { DesktopOperationsSnapshotRequest } from "../../lib/types/operations";
+import { OperationsRailContext } from "../operations/operationsRailContext";
 import {
   correlateProcess,
   derivedState,
@@ -24,11 +25,20 @@ const MAX_BACKGROUND_SLOTS = 8;
 
 export type BackgroundedToolsPanelProps = {
   rootRequestId?: string | null;
+  /** Focus the lineage view on this row's parent request. */
+  onOpenLineage?: (requestId: string) => void;
+  /** Begin the interrupt (preview + cascade dialog) flow for this row's parent request. */
+  onInterruptParent?: (requestId: string) => void;
 };
 
 export function BackgroundedToolsPanel({
   rootRequestId,
+  onOpenLineage,
+  onInterruptParent,
 }: BackgroundedToolsPanelProps = {}) {
+  // Nullable on purpose: the panel also renders outside the operations rail
+  // (tests, future standalone surfaces), where tab switching is a no-op.
+  const rail = useContext(OperationsRailContext);
   const request: DesktopOperationsSnapshotRequest = useMemo(
     () => ({ rootRequestId: rootRequestId ?? null }),
     [rootRequestId],
@@ -313,16 +323,13 @@ export function BackgroundedToolsPanel({
                     <div className="row-actions">
                       <button
                         type="button"
+                        data-testid={`bg-tool-lineage-${row.toolCallId}`}
                         aria-label={`Open lineage for ${row.toolName} on ${row.requestId}`}
+                        disabled={!onOpenLineage && !rail}
                         onClick={(e) => {
                           e.stopPropagation();
-                          // TODO: bridge wiring lands in #285 (lineage) and #283 (interrupt-parent).
-                          // Until then, log to console so the developer can verify the action surface.
-                          console.log(
-                            "[backgroundedTools] open-lineage",
-                            row.toolCallId,
-                            row.requestId,
-                          );
+                          onOpenLineage?.(row.requestId);
+                          rail?.setActiveTab("lineage");
                         }}
                       >
                         Lineage
@@ -330,15 +337,12 @@ export function BackgroundedToolsPanel({
                       <button
                         type="button"
                         className="danger"
+                        data-testid={`bg-tool-interrupt-${row.toolCallId}`}
                         aria-label={`Interrupt parent request ${row.requestId}`}
+                        disabled={!onInterruptParent}
                         onClick={(e) => {
                           e.stopPropagation();
-                          // TODO: bridge wiring lands in #285 (lineage) and #283 (interrupt-parent).
-                          // Until then, log to console so the developer can verify the action surface.
-                          console.log(
-                            "[backgroundedTools] interrupt-parent",
-                            row.requestId,
-                          );
+                          onInterruptParent?.(row.requestId);
                         }}
                       >
                         Interrupt

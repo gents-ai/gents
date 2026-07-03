@@ -381,6 +381,22 @@
     font-size: 11px;
   }
 
+  .mcp-health-probe-result {
+    color: var(--color-accent);
+    font-size: 11px;
+    /* Clamp like .mcp-health-last-error: bridge error chains can run long. */
+    display: inline-block;
+    max-width: 44ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+  }
+
+  .mcp-health-probe-result.is-error {
+    color: var(--color-error);
+  }
+
   .mcp-health-last-error {
     font-family: var(--font-mono);
     font-size: 11px;

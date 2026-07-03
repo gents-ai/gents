@@ -125,3 +125,15 @@ function formatRemaining(ms: number): string {
   if (totalSec < 5) return "imminent";
   return `${m}:${String(s).padStart(2, "0")}`;
 }
+
+/// Outcome of a one-shot operator-initiated probe. Distinct from the
+/// persisted K-state rows: it never persists and reflects a single live
+/// round-trip, so the panel renders it as its own "live probe" line.
+export type McpProbeOutcome = {
+  at: string;
+  status?: string;
+  latencyMs?: number;
+  lastError?: string | null;
+  /** Set when the probe call itself failed (bridge/transport error). */
+  error?: string;
+};
