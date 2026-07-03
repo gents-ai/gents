@@ -82,7 +82,9 @@ export function AgentConfigEditor({
     try {
       await onSaveAgentConfig({
         agentDid: agent.agentDid,
-        displayName,
+        // Only an in-progress rename may override the live document value —
+        // a save without one must not resurrect a stale hydration.
+        displayName: editingDisplayName ? displayName : (agent.displayName ?? ""),
         defaultBehaviorId,
         enabled: agent.enabled ?? true,
       });
@@ -107,14 +109,19 @@ export function AgentConfigEditor({
                 value={displayName}
               />
             ) : (
-              <h3>{displayName || "Agent"}</h3>
+              // Live document value: remote renames stay visible while no
+              // edit is in progress.
+              <h3>{agent.displayName || "Agent"}</h3>
             )}
             {!editingDisplayName ? (
               <button
                 aria-label="Edit agent display name"
                 className="ghost-button config-icon-button"
                 data-testid="agent-edit-display-name"
-                onClick={() => setEditingDisplayName(true)}
+                onClick={() => {
+                  setDisplayName(agent.displayName ?? "");
+                  setEditingDisplayName(true);
+                }}
                 title="Edit display name"
                 type="button"
               >

@@ -1,8 +1,16 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { BackendConfigPanel, SkillConfigPanel } from "../src/components/config";
-import type { DeploymentView } from "../src/lib/types";
+import {
+  BackendConfigPanel,
+  BehaviorConfigEditor,
+  SkillConfigPanel,
+} from "../src/components/config";
+import type {
+  BehaviorView,
+  DeploymentView,
+  InferenceProfileView,
+} from "../src/lib/types";
 
 // Fence for the background-refresh edit wipe: the Tauri bridge emits
 // client-updated on every store/health change, which re-fetches the snapshot
@@ -119,5 +127,58 @@ describe("config editors preserve in-progress edits across snapshot refreshes", 
 
     rerender(<SkillConfigPanel deployment={makeDeployment()} {...props} />);
     expect(screen.getByTestId("skill-name")).toHaveValue("Edited Name");
+  });
+
+  it("behavior editor keeps typed values when the inference-profile set changes", () => {
+    const behavior = (): BehaviorView => ({
+      behaviorId: "default",
+      displayName: "default",
+      systemPrompt: "original prompt",
+      inferenceProfileId: "profile-a",
+      enabled: true,
+      isDefault: true,
+      skillRefs: [],
+      skillExcludes: [],
+    });
+    const profile = (id: string): InferenceProfileView => ({ profileId: id });
+    const editorProps = {
+      agentDisplayName: "test",
+      agentDid: "did:test:operator",
+      agentEnabled: true,
+      currentDefaultBehaviorId: "default",
+      inferenceBackends: [],
+      skills: [],
+      toolSelections: [],
+      saving: false,
+      savedStatus: null,
+      onCreateBackend: vi.fn(),
+      onCreateProfile: vi.fn(),
+      onCreateToolSelection: vi.fn(),
+      onSaved: vi.fn(),
+      onSaveAgentConfig: vi.fn(),
+      onSaveBehaviorConfig: vi.fn(),
+    };
+    const { rerender } = render(
+      <BehaviorConfigEditor
+        {...editorProps}
+        behavior={behavior()}
+        inferenceProfiles={[profile("profile-a")]}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("behavior-system-prompt"), {
+      target: { value: "edited prompt" },
+    });
+
+    // A remote profile registration must not wipe the in-progress edit; the
+    // valid current profile pick must survive too.
+    rerender(
+      <BehaviorConfigEditor
+        {...editorProps}
+        behavior={behavior()}
+        inferenceProfiles={[profile("profile-a"), profile("profile-b")]}
+      />,
+    );
+    expect(screen.getByTestId("behavior-system-prompt")).toHaveValue("edited prompt");
   });
 });
