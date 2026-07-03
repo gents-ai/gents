@@ -94,6 +94,22 @@
     font-size: 12px;
   }
 
+  .fleet-remote-disclosure > summary {
+    cursor: pointer;
+    color: var(--color-text-muted);
+    font-size: 13px;
+    padding: var(--space-2) 0;
+    width: fit-content;
+  }
+
+  .fleet-remote-disclosure > summary:hover {
+    color: var(--color-accent);
+  }
+
+  .fleet-remote-disclosure[open] > summary {
+    margin-bottom: var(--space-4);
+  }
+
   .fleet-add-panel {
     display: grid;
     gap: var(--space-5);

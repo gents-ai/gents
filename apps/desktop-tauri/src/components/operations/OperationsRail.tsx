@@ -78,7 +78,7 @@ export function OperationsRail({
           onClick={() => onOpenChange?.(true)}
         >
           <span aria-hidden="true">‹</span>
-          <span>Ops</span>
+          <span>Operations</span>
         </button>
       </aside>
     );
