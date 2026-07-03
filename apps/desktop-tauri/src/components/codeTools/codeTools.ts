@@ -8,6 +8,10 @@ import type { RenderedToolCallView } from "../../lib/types";
 // its tool-root/sandbox. Only successful, uncancelled calls are projected —
 // failed/running/cancelled calls keep the generic disclosure (with its denial
 // and cancel-cause rendering) so a failed edit never reads as an applied diff.
+// The same honesty rule covers the result metadata itself: raw_json=true
+// results are rescued from their bare-JSON shape, but a call whose metadata
+// cannot be parsed at all (missing, malformed, or tail-truncated away) keeps
+// the generic disclosure rather than projecting a fabricated ok badge.
 
 export type DiffLineKind = "add" | "del";
 export type DiffLine = { kind: DiffLineKind; text: string };
@@ -58,6 +62,22 @@ function stringField(
 ): string | null {
   const value = record?.[key];
   return typeof value === "string" ? value : null;
+}
+
+/**
+ * Rescue a `raw_json=true` result: the runtime then emits one bare JSON
+ * object with the same metadata fields flattened to the top level
+ * (CommandOutput / WriteFileOutput / EditFileOutput all serde-flatten their
+ * metadata). Returns null unless the whole result parses to an object
+ * carrying the metadata's `ok`/`status` pair.
+ */
+function bareJsonMeta(result: string): Record<string, unknown> | null {
+  const parsed = safeJsonObject(result);
+  return parsed &&
+    typeof parsed["ok"] === "boolean" &&
+    typeof parsed["status"] === "string"
+    ? parsed
+    : null;
 }
 
 /**
@@ -134,10 +154,16 @@ function toFileEditView(tool: RenderedToolCallView, name: string): FileEditView 
   if (!path) {
     return null;
   }
-  const { meta } = splitEnvelope(tool.result?.rawText ?? "", "defra_fs: ");
+  const raw = tool.result?.rawText ?? "";
+  const meta = splitEnvelope(raw, "defra_fs: ").meta ?? bareJsonMeta(raw);
+  // No trustworthy metadata (missing, malformed, or truncated away): keep the
+  // generic disclosure rather than guess at what was applied.
+  if (!meta || meta["ok"] === false) {
+    return null;
+  }
   // Only write_file's metadata carries `created`; edit_file edits by contract.
-  const created = name === "write_file" && meta?.["created"] === true;
-  const replacementsRaw = meta?.["replacements_applied"];
+  const created = name === "write_file" && meta["created"] === true;
+  const replacementsRaw = meta["replacements_applied"];
   const replacementsApplied =
     typeof replacementsRaw === "number" && replacementsRaw > 0 ? replacementsRaw : 1;
   let diff: DiffLine[];
@@ -154,24 +180,40 @@ function toFileEditView(tool: RenderedToolCallView, name: string): FileEditView 
 
 function toCommandRunView(tool: RenderedToolCallView): CommandRunView | null {
   const args = safeJsonObject(tool.args?.rawText);
-  const { meta, body } = splitEnvelope(tool.result?.rawText ?? "", "defra_exec: ");
+  const raw = tool.result?.rawText ?? "";
+  const envelope = splitEnvelope(raw, "defra_exec: ");
+  let meta = envelope.meta;
+  let streams: { stdout: string; stderr: string };
+  if (meta) {
+    streams = splitCommandStreams(envelope.body);
+  } else if ((meta = bareJsonMeta(raw))) {
+    // raw_json=true: the streams are top-level JSON fields, not body framing.
+    streams = {
+      stdout: normalizeStream(stringField(meta, "stdout") ?? ""),
+      stderr: normalizeStream(stringField(meta, "stderr") ?? ""),
+    };
+  } else {
+    // No trustworthy envelope (missing, malformed, or truncated away): keep
+    // the generic disclosure rather than fabricate an ok badge.
+    return null;
+  }
   // The envelope's `command` is the full shell-joined argv; the raw arg may be
   // just the executable when an args array was used.
   const command = stringField(meta, "command") ?? stringField(args, "command");
   if (!command) {
     return null;
   }
-  const exitRaw = meta?.["exit_code"];
+  const exitRaw = meta["exit_code"];
   const exitCode = typeof exitRaw === "number" ? exitRaw : null;
   const status = stringField(meta, "status");
-  const timedOut = meta?.["timed_out"] === true || status === "timeout";
+  const timedOut = meta["timed_out"] === true || status === "timeout";
   const failed =
     (tool.statusKind ?? "").toLowerCase() === "error" ||
-    meta?.["ok"] === false ||
+    meta["ok"] === false ||
     timedOut ||
     status === "exit_nonzero" ||
     (exitCode != null && exitCode !== 0);
-  const { stdout, stderr } = splitCommandStreams(body);
+  const { stdout, stderr } = streams;
   return {
     kind: "command",
     command,

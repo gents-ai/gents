@@ -170,6 +170,125 @@ describe("toCodeToolView", () => {
     });
   });
 
+  it("marks a raw_json non-zero exit as failed (no defra_exec envelope)", () => {
+    // raw_json=true makes render_command_output emit the bare CommandOutput
+    // JSON — flattened metadata plus stdout/stderr fields, no envelope head —
+    // while the call still completes (statusKind success). The failure signal
+    // must be rescued from the bare JSON, never defaulted to ok.
+    const view = toCodeToolView(
+      toolCall({
+        toolName: "bash",
+        statusKind: "success",
+        args: detail(
+          JSON.stringify({ command: "cargo", args: ["build"], raw_json: true }),
+        ),
+        result: detail(
+          JSON.stringify({
+            ok: false,
+            status: "exit_nonzero",
+            command: "cargo build",
+            argv: ["cargo", "build"],
+            cwd: "/work",
+            exit_code: 101,
+            timed_out: false,
+            duration_ms: 4200,
+            timeout_ms: 120000,
+            execution_mode: "read_only",
+            network_mode: "disabled",
+            sandbox: "none",
+            stdout_truncation: {
+              returned_bytes: 0,
+              total_bytes: 0,
+              max_bytes: 16000,
+              truncated: false,
+            },
+            stderr_truncation: {
+              returned_bytes: 12,
+              total_bytes: 12,
+              max_bytes: 16000,
+              truncated: false,
+            },
+            stdout: "",
+            stderr: "error[E0425]",
+          }),
+        ),
+      }),
+    );
+    expect(view).toMatchObject({
+      kind: "command",
+      command: "cargo build",
+      exitCode: 101,
+      failed: true,
+      executionMode: "read_only",
+      networkMode: "disabled",
+      stdout: "",
+      stderr: "error[E0425]",
+    });
+  });
+
+  it("labels a raw_json write_file created from the bare JSON metadata", () => {
+    const view = toCodeToolView(
+      toolCall({
+        toolName: "write_file",
+        args: detail(
+          JSON.stringify({ path: "README.md", content: "hello\n", raw_json: true }),
+        ),
+        result: detail(
+          JSON.stringify({
+            ok: true,
+            status: "success",
+            tool: "write_file",
+            path: "README.md",
+            returned_count: 0,
+            total_count: 0,
+            truncated: false,
+            bytes_written: 6,
+            created: true,
+          }),
+        ),
+      }),
+    );
+    expect(view).toMatchObject({ kind: "fileEdit", created: true });
+  });
+
+  it("keeps the generic disclosure when the envelope was truncated away", () => {
+    // Tail truncation for bash keeps the LAST lines, dropping the defra_exec
+    // head; without trustworthy metadata the call must not project (a nonzero
+    // exit would otherwise badge ok).
+    const view = toCodeToolView(
+      toolCall({
+        toolName: "bash",
+        statusKind: "success",
+        args: detail(JSON.stringify({ command: "cargo test" })),
+        result: detail(
+          "[Showing lines 1001-3000 of 3000 (14000 bytes total)]\n\ntest tail line\ntest result: FAILED. 1 failed",
+        ),
+      }),
+    );
+    expect(view).toBeNull();
+  });
+
+  it("keeps the generic disclosure for a missing or empty result", () => {
+    expect(
+      toCodeToolView(
+        toolCall({
+          toolName: "bash",
+          args: detail(JSON.stringify({ command: "true" })),
+          result: null,
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      toCodeToolView(
+        toolCall({
+          toolName: "write_file",
+          args: detail(JSON.stringify({ path: "a.txt", content: "x" })),
+          result: detail(""),
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it("returns null for a non-code tool", () => {
     expect(
       toCodeToolView(toolCall({ toolName: "web_search", args: detail("{}") })),
