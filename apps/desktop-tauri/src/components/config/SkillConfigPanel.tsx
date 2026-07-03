@@ -7,6 +7,7 @@ import type {
   SkillSaveRequest,
   SkillView,
 } from "../../lib/types";
+import { ConfirmDialog } from "../ConfirmDialog";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
 import { ignoreHandledActionError, linesToArray, optionalString } from "./formUtils";
 
@@ -108,6 +109,7 @@ export function SkillConfigEditor({
   const [toolRefs, setToolRefs] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [enabled, setEnabled] = useState(true);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   useEffect(() => {
     setSkillId(skill?.skillId ?? "");
@@ -141,15 +143,18 @@ export function SkillConfigEditor({
     }
   }
 
-  async function deleteSkill() {
+  function requestDeleteSkill() {
     const nextId = skill?.skillId ?? skillId.trim();
     if (!skill || !nextId) {
       return;
     }
-    const confirmed = window.confirm(
-      `Delete skill "${nextId}" and remove it from behavior bindings?`,
-    );
-    if (!confirmed) {
+    setConfirmingDelete(true);
+  }
+
+  async function deleteSkill() {
+    const nextId = skill?.skillId ?? skillId.trim();
+    setConfirmingDelete(false);
+    if (!skill || !nextId) {
       return;
     }
     try {
@@ -256,12 +261,23 @@ export function SkillConfigEditor({
             className="ghost-button danger-button"
             data-testid="skill-delete"
             disabled={saving}
-            onClick={deleteSkill}
+            onClick={requestDeleteSkill}
             type="button"
           >
             Delete Skill
           </button>
         ) : null}
+        <ConfirmDialog
+          open={confirmingDelete}
+          title="Delete skill"
+          message={`Delete skill "${skill?.skillId ?? skillId.trim()}" and remove it from behavior bindings?`}
+          confirmLabel="Delete Skill"
+          danger
+          onConfirm={() => {
+            void deleteSkill();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
         <button
           className="primary-button"
           data-testid="skill-save"
