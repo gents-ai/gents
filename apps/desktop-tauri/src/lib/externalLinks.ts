@@ -37,7 +37,10 @@ export function handleExternalLinkClick(event: MouseEvent): void {
   const anchor = target?.closest?.("a[href]");
   if (!anchor) return;
   const href = anchor.getAttribute("href");
-  if (!href || href.startsWith("#")) return;
+  if (href === null || href.startsWith("#")) return;
+  // Empty hrefs are suppressed too: markdown sanitizers rewrite hostile
+  // schemes (javascript:, data:) to href="", whose default click action
+  // reloads the whole document.
   event.preventDefault();
   if (isExternalUrl(href)) {
     void openExternalUrl(href);
@@ -46,6 +49,8 @@ export function handleExternalLinkClick(event: MouseEvent): void {
 
 export function installExternalLinkGuard(doc: Document): () => void {
   const listener = (event: MouseEvent) => handleExternalLinkClick(event);
-  doc.addEventListener("click", listener);
-  return () => doc.removeEventListener("click", listener);
+  // Capture phase: a component-level stopPropagation() must not be able to
+  // switch this guard off — it is the navigation boundary for agent output.
+  doc.addEventListener("click", listener, { capture: true });
+  return () => doc.removeEventListener("click", listener, { capture: true });
 }

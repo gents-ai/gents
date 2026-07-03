@@ -68,4 +68,57 @@ describe("external link guard", () => {
     handleExternalLinkClick(handled as unknown as MouseEvent);
     expect(openSpy).not.toHaveBeenCalled();
   });
+
+  it("suppresses hostile schemes and scheme-relative URLs without opening them", () => {
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    const uninstall = installExternalLinkGuard(document);
+
+    for (const href of [
+      "javascript:alert(1)",
+      "data:text/html,<script>1</script>",
+      "file:///etc/passwd",
+      "//evil.example.com/x",
+    ]) {
+      const event = clickAnchor(href);
+      expect(event.defaultPrevented, href).toBe(true);
+    }
+    expect(openSpy).not.toHaveBeenCalled();
+    uninstall();
+  });
+
+  it('suppresses empty hrefs (markdown sanitizers rewrite hostile links to href="")', () => {
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    const uninstall = installExternalLinkGuard(document);
+
+    const event = clickAnchor("");
+
+    // Default action of <a href=""> is a full document reload — must not run.
+    expect(event.defaultPrevented).toBe(true);
+    expect(openSpy).not.toHaveBeenCalled();
+    uninstall();
+  });
+
+  it("is not bypassed by a component-level stopPropagation", () => {
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    const uninstall = installExternalLinkGuard(document);
+
+    const wrapper = document.createElement("div");
+    // Bubble-phase swallow, as React components do (e.g. dialog click guards).
+    wrapper.addEventListener("click", (event) => event.stopPropagation());
+    const anchor = document.createElement("a");
+    anchor.setAttribute("href", "https://example.com/docs");
+    wrapper.appendChild(anchor);
+    document.body.appendChild(wrapper);
+
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+    anchor.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://example.com/docs",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    uninstall();
+  });
 });
