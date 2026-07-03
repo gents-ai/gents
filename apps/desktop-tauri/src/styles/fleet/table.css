@@ -178,23 +178,30 @@
     z-index: 1;
   }
 
+  /* Pinned cells must be opaque: the translucent surfaces are layered over
+     the page background so scrolled data columns can't ghost through. */
   .fleet-actions-header {
     width: 128px;
-    background: rgb(0 0 0 / 0.88);
+    background: linear-gradient(rgb(0 0 0 / 0.88), rgb(0 0 0 / 0.88)) var(--color-bg);
   }
 
   .fleet-actions-cell {
     min-width: 128px;
-    background-color: var(--color-surface-row);
+    background-color: var(--color-bg);
+    background-image: linear-gradient(
+      var(--color-surface-row),
+      var(--color-surface-row)
+    );
     box-shadow: -10px 0 10px -10px rgb(0 0 0 / 0.7);
   }
 
   .fleet-table tbody tr:hover td.fleet-actions-cell {
-    background-color: var(--color-surface-row);
-    background-image: linear-gradient(
-      rgb(var(--source-green-rgb) / 0.07),
-      rgb(var(--source-green-rgb) / 0.07)
-    );
+    background-image:
+      linear-gradient(
+        rgb(var(--source-green-rgb) / 0.07),
+        rgb(var(--source-green-rgb) / 0.07)
+      ),
+      linear-gradient(var(--color-surface-row), var(--color-surface-row));
   }
 
   .fleet-row-actions {
