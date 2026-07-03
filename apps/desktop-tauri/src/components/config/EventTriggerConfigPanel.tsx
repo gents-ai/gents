@@ -112,7 +112,8 @@ export function EventTriggerConfigEditor({
     setFilter(eventTrigger?.filter ?? "");
     setEnabled(eventTrigger?.enabled ?? true);
     setConcurrency(eventTrigger?.concurrency ?? "serial");
-  }, [eventTrigger, selectedTask?.taskId]);
+    // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
+  }, [eventTrigger?.triggerId, selectedTask?.taskId]);
 
   async function submitEventTrigger(event: FormEvent) {
     event.preventDefault();

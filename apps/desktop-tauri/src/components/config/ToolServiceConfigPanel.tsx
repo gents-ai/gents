@@ -129,7 +129,8 @@ export function ToolServiceConfigEditor({
     setStatus(toolService?.status ?? "online");
     setTestResult(null);
     setTestError(null);
-  }, [toolService]);
+    // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
+  }, [toolService?.serviceId]);
 
   const mcpPortValid = isOptionalInt(mcpPort, { min: 1, max: 65535 });
   const serviceAddressPresent = Boolean(

@@ -120,7 +120,8 @@ export function SkillConfigEditor({
     setToolRefs((skill?.toolRefs ?? []).join("\n"));
     setDisplayName(skill?.displayName ?? "");
     setEnabled(skill?.enabled ?? true);
-  }, [skill]);
+    // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
+  }, [skill?.skillId]);
 
   async function submitSkill(event: FormEvent) {
     event.preventDefault();

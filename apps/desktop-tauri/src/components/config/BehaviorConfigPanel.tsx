@@ -155,19 +155,17 @@ export function BehaviorConfigEditor({
   const [skillRefs, setSkillRefs] = useState<string[]>([]);
   const [skillExcludes, setSkillExcludes] = useState<string[]>([]);
 
+  // Sorted like toolServiceIdKey: the joined key must not depend on row order.
+  const profileIdKey = inferenceProfiles
+    .map((p) => p.profileId)
+    .sort()
+    .join("|");
+
   useEffect(() => {
-    const selectedProfileId = behavior?.inferenceProfileId ?? null;
-    let nextProfileId = inferenceProfiles[0]?.profileId ?? "";
-    if (
-      selectedProfileId &&
-      inferenceProfiles.some((profile) => profile.profileId === selectedProfileId)
-    ) {
-      nextProfileId = selectedProfileId;
-    }
     setBehaviorId(behavior?.behaviorId ?? "");
     setSystemPrompt(behavior?.systemPrompt ?? "");
     setBackendId(behavior?.backendId ?? "");
-    setProfileId(nextProfileId);
+    setProfileId(behavior?.inferenceProfileId ?? "");
     setToolSelectionId(behavior?.toolSelectionId ?? "");
     setCompactionStrategy(behavior?.compactionStrategy ?? DEFAULT_COMPACTION_STRATEGY);
     setCompactionThreshold(
@@ -179,7 +177,25 @@ export function BehaviorConfigEditor({
     setDefaultForAgent(behavior?.isDefault ?? false);
     setSkillRefs(behavior?.skillRefs ?? []);
     setSkillExcludes(behavior?.skillExcludes ?? []);
-  }, [behavior, inferenceProfiles]);
+    // Id-keyed only: background snapshot refreshes (including profile-list
+    // churn) must not wipe in-progress edits.
+  }, [behavior?.behaviorId]);
+
+  // Default-profile fallback in its own effect so profile-set churn never
+  // resets the rest of the form: keep the current pick while it exists,
+  // otherwise fall back to the document's selection, then the first profile.
+  useEffect(() => {
+    setProfileId((current) => {
+      if (current && inferenceProfiles.some((p) => p.profileId === current)) {
+        return current;
+      }
+      const selected = behavior?.inferenceProfileId;
+      if (selected && inferenceProfiles.some((p) => p.profileId === selected)) {
+        return selected;
+      }
+      return inferenceProfiles[0]?.profileId ?? "";
+    });
+  }, [behavior?.behaviorId, profileIdKey]);
 
   const behaviorScopedSkills = skills.filter((skill) => skill.scope === "behavior");
   const principalScopedSkills = skills.filter((skill) => skill.scope === "principal");

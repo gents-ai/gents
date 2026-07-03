@@ -128,7 +128,8 @@ export function InferenceProfileConfigEditor({
     setDeadlineSecs(
       profile?.deadlineDurationSecs != null ? String(profile.deadlineDurationSecs) : "",
     );
-  }, [profile]);
+    // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
+  }, [profile?.profileId]);
 
   const contextWindowValid = isOptionalInt(contextWindow, { min: 1 });
   const maxOutputTokensValid = isOptionalInt(maxOutputTokens, { min: 1 });
