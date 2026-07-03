@@ -200,9 +200,9 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
     .await?;
     upsert_data_plane(&graphql_b, &peer_a, &did_b, &addr_a, "conversation").await?;
 
-    println!("  waiting for replicators…");
-    wait_replicator(&graphql_b, &peer_a).await?;
-    wait_replicator(&fleet.graphql_a, &peer_b).await?;
+    println!("  waiting for conversation data-plane replicators…");
+    wait_conversation_replicator(&graphql_b, &peer_a, &did_b).await?;
+    wait_conversation_replicator(&fleet.graphql_a, &peer_b, &fleet.did_a).await?;
 
     fleet.node_b = Some(NodeB {
         home: home_b,
@@ -269,25 +269,59 @@ fn data_plane_collections_literal(template: &str) -> Result<String> {
     Ok(format!("[{collections}]"))
 }
 
-async fn wait_replicator(graphql: &str, peer_id: &str) -> Result<()> {
+async fn wait_conversation_replicator(graphql: &str, peer_id: &str, local_did: &str) -> Result<()> {
     let query = format!(
-        r#"{{ PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{}" }} }}, limit: 1) {{ replicator_addresses replicator_filter }} }}"#,
+        r#"{{
+            PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                peer_id
+                collections
+                replicator_addresses
+                replicator_filter
+            }}
+            DataPlanePairingDesired(filter: {{ peer_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                peer_id
+                agent_did
+                template
+                replicator_addresses
+            }}
+        }}"#,
+        escape_graphql_string(peer_id),
         escape_graphql_string(peer_id)
     );
+    let mut last = Value::Null;
     for _ in 0..240 {
         if let Ok(resp) = post_graphql(graphql, &query).await {
+            last = resp.get("data").cloned().unwrap_or(Value::Null);
             let armed = resp
                 .pointer("/data/PeerPairingApplied/0/replicator_addresses")
                 .and_then(Value::as_array)
                 .map(|addresses| !addresses.is_empty())
                 .unwrap_or(false);
-            if armed {
+            let filtered = resp
+                .pointer("/data/PeerPairingApplied/0/replicator_filter")
+                .and_then(Value::as_str)
+                .is_some_and(|filter| filter_mentions_agent_request(filter, local_did));
+            if armed && filtered {
                 return Ok(());
             }
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    bail!("timed out waiting for the replicator for peer {peer_id}")
+    bail!(
+        "timed out waiting for the conversation data-plane replicator for peer {peer_id}; \
+         last pairing rows: {last}"
+    )
+}
+
+fn filter_mentions_agent_request(filter: &str, local_did: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(filter) else {
+        return false;
+    };
+    value
+        .get("AgentRequest")
+        .and_then(|entry| entry.get("value"))
+        .and_then(Value::as_str)
+        == Some(local_did)
 }
 
 async fn wait_replicator_filter(graphql: &str, peer_id: &str, needles: &[String]) -> Result<()> {
