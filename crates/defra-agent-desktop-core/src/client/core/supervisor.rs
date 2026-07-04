@@ -733,6 +733,7 @@ mod pairing_reconcile_tests {
                 .into_iter()
                 .filter_map(|replicator| replicator.address)
                 .collect(),
+            ..Default::default()
         }
     }
 

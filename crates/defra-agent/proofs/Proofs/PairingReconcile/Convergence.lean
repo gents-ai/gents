@@ -100,8 +100,8 @@ theorem reconcile_idempotent_on_converged
       refine ⟨?_, ?_, ?_, ?_, h_connected⟩
       · exact fun c hc => h_desired_collections hc
       · exact fun c _hc_actual hc_applied => h_applied_collections hc_applied
-      · exact fun r f hr => h_desired_replicators hr
-      · exact fun r f _hr_actual hr_applied => h_applied_replicators hr_applied
+      · exact fun r f cs hr => h_desired_replicators hr
+      · exact fun r f cs _hr_actual hr_applied => h_applied_replicators hr_applied
 
 /-- A one-step transition from a converged state cannot flap managed wiring. -/
 theorem no_flap_on_converged_step
@@ -155,42 +155,68 @@ theorem no_flap_on_converged_step
       subst h_post
       simp [managedWiringUnchanged]
 
-/-! ## Filter change forces reinstall
+/-! ## Identity change forces reinstall
 
-A replicator's filter is part of its identity (`(address, filter)`), so changing
-the filter on an existing address is NOT an in-place mutate: it is a teardown of
-the old `(a, f1)` identity and an install of the new `(a, f2)` identity. We prove
-that from a state where desired carries `(a, f2)` but actual still carries the
-old `(a, f1)`:
+A replicator's filter AND its carried collection set are part of its identity
+(`(address, filter, collections)`), so changing either on an existing address is
+NOT an in-place mutate: it is a teardown of the old identity and an install of
+the new one. We prove that from a state where desired carries the new identity
+but actual still carries the old one:
 
   - the diff is genuinely non-empty (`disagreementCount > 0`), so the state is
     not falsely converged;
-  - both `reconcileTeardownReplicator (a, f1)` and `reconcileInstallReplicator
-    (a, f2)` are ENABLED transitions out of the state (their real guards hold);
-  - applying teardown-then-install drives that address's actual replicator from
-    `(a, f1)` to `(a, f2)`.
+  - both the teardown of the old identity and the install of the new one are
+    ENABLED transitions out of the state (their real guards hold);
+  - applying teardown-then-install drives that address's actual replicator to
+    the new identity.
 
-The hypothesis `f1 ≠ f2` is satisfiable (e.g. `∅` vs a singleton
-per-collection filter, or two distinct filter maps), and is what makes
-`(a, f1) ≠ (a, f2)` — the two identities distinct. -/
+The distinctness hypotheses (`f1 ≠ f2`, `cs1 ≠ cs2`) are satisfiable (witnesses
+below), and are what make the two identities distinct. -/
 
-/-- `f1 ≠ f2` makes the two replicator identities on the same address distinct.
-Sanity that the central hypothesis has teeth. -/
+/-- `f1 ≠ f2` makes the two replicator identities on the same address and
+collection set distinct. Sanity that the central hypothesis has teeth. -/
 theorem filter_change_distinct_identity
-    {a : String} {f1 f2 : ReplicatorFilter} (hf : f1 ≠ f2) :
-    ((a, f1) : ReplicatorId) ≠ (a, f2) := by
+    {a : String} {cs : ReplicatorCollections} {f1 f2 : ReplicatorFilter} (hf : f1 ≠ f2) :
+    ((a, f1, cs) : ReplicatorId) ≠ (a, f2, cs) := by
   intro h
-  exact hf (by injection h)
+  have h_rest : (f1, cs) = (f2, cs) := by injection h
+  have h_f : f1 = f2 := by injection h_rest
+  exact hf h_f
+
+/-- `cs1 ≠ cs2` makes the two replicator identities on the same address and
+filter distinct. This is the live demo bug's identity component: a replicator
+that carried only the data-plane collection set is NOT the replicator that
+carries the merged data-plane + control-plane set. -/
+theorem collections_change_distinct_identity
+    {a : String} {f : ReplicatorFilter} {cs1 cs2 : ReplicatorCollections} (hcs : cs1 ≠ cs2) :
+    ((a, f, cs1) : ReplicatorId) ≠ (a, f, cs2) := by
+  intro h
+  have h_rest : (f, cs1) = (f, cs2) := by injection h
+  have h_cs : cs1 = cs2 := by injection h_rest
+  exact hcs h_cs
 
 /-- A concrete witness that the `f1 ≠ f2` hypothesis is satisfiable: an
 unfiltered replicator and a filtered one on the same address are distinct. -/
 theorem filter_change_hypothesis_satisfiable (a : String) (k : CollectionFilterKey) :
-    ((a, (∅ : ReplicatorFilter)) : ReplicatorId) ≠ (a, ({k} : ReplicatorFilter)) := by
+    ((a, (∅ : ReplicatorFilter), (∅ : ReplicatorCollections)) : ReplicatorId)
+      ≠ (a, ({k} : ReplicatorFilter), (∅ : ReplicatorCollections)) := by
   apply filter_change_distinct_identity
   intro h
   have hk : k ∈ ({k} : ReplicatorFilter) := Finset.mem_singleton_self k
   rw [← h] at hk
   exact Finset.not_mem_empty k hk
+
+/-- A concrete witness that the `cs1 ≠ cs2` hypothesis is satisfiable: the
+data-plane-only collection set and the merged set differing by one
+control-plane collection are distinct. -/
+theorem collections_change_hypothesis_satisfiable (a : String) (c : String) :
+    ((a, (∅ : ReplicatorFilter), (∅ : ReplicatorCollections)) : ReplicatorId)
+      ≠ (a, (∅ : ReplicatorFilter), ({c} : ReplicatorCollections)) := by
+  apply collections_change_distinct_identity
+  intro h
+  have hc : c ∈ ({c} : ReplicatorCollections) := Finset.mem_singleton_self c
+  rw [← h] at hc
+  exact Finset.not_mem_empty c hc
 
 /-- **Filter change forces reinstall.** When desired carries `(a, f2)` and actual
 still carries the managed old identity `(a, f1)` with `f1 ≠ f2`, the diff is
@@ -202,47 +228,97 @@ Every conjunct is quantified over the real transition relation: the two
 guards from the hypotheses, so this is not a vacuous restatement of the goal. -/
 theorem filter_change_forces_reinstall
     {s : ReconcileState} {desired : PairingDesired}
-    {a : String} {f1 f2 : ReplicatorFilter}
+    {a : String} {cs : ReplicatorCollections} {f1 f2 : ReplicatorFilter}
     (h_desired : s.desired = some desired)
     (hf : f1 ≠ f2)
-    (h_new_desired : ((a, f2) : ReplicatorId) ∈ desired.replicators)
-    (h_old_not_desired : ((a, f1) : ReplicatorId) ∉ desired.replicators)
-    (h_old_actual : ((a, f1) : ReplicatorId) ∈ s.actual.replicators)
-    (h_old_applied : ((a, f1) : ReplicatorId) ∈ s.applied.replicators)
-    (h_new_not_actual : ((a, f2) : ReplicatorId) ∉ s.actual.replicators)
+    (h_new_desired : ((a, f2, cs) : ReplicatorId) ∈ desired.replicators)
+    (h_old_not_desired : ((a, f1, cs) : ReplicatorId) ∉ desired.replicators)
+    (h_old_actual : ((a, f1, cs) : ReplicatorId) ∈ s.actual.replicators)
+    (h_old_applied : ((a, f1, cs) : ReplicatorId) ∈ s.applied.replicators)
+    (h_new_not_actual : ((a, f2, cs) : ReplicatorId) ∉ s.actual.replicators)
     (h_connected : s.actual.connected = true) :
     -- (1) the state is genuinely diverged
     0 < disagreementCount s ∧
     -- (2) tearing down the OLD identity is an enabled transition
-    Transition s (teardownReplicatorState s (a, f1)) ∧
+    Transition s (teardownReplicatorState s (a, f1, cs)) ∧
     -- (3) installing the NEW identity is an enabled transition
-    Transition s (installReplicatorState s (a, f2)) ∧
+    Transition s (installReplicatorState s (a, f2, cs)) ∧
     -- (4) teardown-then-install lands the address on the new identity
-    ( ((a, f2) : ReplicatorId) ∈
-        (installReplicatorState (teardownReplicatorState s (a, f1)) (a, f2)).actual.replicators ∧
-      ((a, f1) : ReplicatorId) ∉
-        (installReplicatorState (teardownReplicatorState s (a, f1)) (a, f2)).actual.replicators ) := by
+    ( ((a, f2, cs) : ReplicatorId) ∈
+        (installReplicatorState (teardownReplicatorState s (a, f1, cs)) (a, f2, cs)).actual.replicators ∧
+      ((a, f1, cs) : ReplicatorId) ∉
+        (installReplicatorState (teardownReplicatorState s (a, f1, cs)) (a, f2, cs)).actual.replicators ) := by
   refine ⟨?_, ?_, ?_, ?_, ?_⟩
-  · -- non-empty diff: (a, f2) is desired but not actual, so it sits in the
+  · -- non-empty diff: (a, f2, cs) is desired but not actual, so it sits in the
     -- desired \ actual symmetric-difference summand.
-    have h_mem : ((a, f2) : ReplicatorId) ∈ desired.replicators \ s.actual.replicators :=
+    have h_mem : ((a, f2, cs) : ReplicatorId) ∈ desired.replicators \ s.actual.replicators :=
       Finset.mem_sdiff.mpr ⟨h_new_desired, h_new_not_actual⟩
     have h_card_pos : 0 < (desired.replicators \ s.actual.replicators).card :=
       Finset.card_pos.mpr ⟨_, h_mem⟩
     simp only [disagreementCount, h_desired]
     omega
-  · exact Transition.reconcileTeardownReplicator desired (a, f1)
+  · exact Transition.reconcileTeardownReplicator desired (a, f1, cs)
       h_desired h_old_actual h_old_not_desired h_old_applied rfl
-  · exact Transition.reconcileInstallReplicator desired (a, f2)
+  · exact Transition.reconcileInstallReplicator desired (a, f2, cs)
       h_desired h_new_desired h_new_not_actual h_connected rfl
-  · -- install inserts (a, f2)
+  · -- install inserts (a, f2, cs)
     exact Finset.mem_insert_self _ _
-  · -- after teardown of (a, f1) then install of (a, f2), (a, f1) is gone:
-    -- it is not (a, f2) (distinct identities) and was erased.
+  · -- after teardown of (a, f1, cs) then install of (a, f2, cs), the old
+    -- identity is gone: it is not (a, f2, cs) (distinct) and was erased.
     simp only [installReplicatorState, teardownReplicatorState]
     rw [Finset.mem_insert]
     push_neg
     exact ⟨filter_change_distinct_identity hf, Finset.not_mem_erase _ _⟩
+
+/-- **Collection-set change forces reinstall.** The live demo bug, as a theorem.
+A replicator installed while only the data-plane layer was visible carries only
+that layer's collection set `cs1`; when the control-plane layer merges in,
+desired carries the SAME address and filter but the larger merged set `cs2`.
+The collection set is part of the identity, so this is a teardown of the old
+identity and an install of the new one — NOT a silent no-op. (The pre-fix Rust
+diff keyed replicators on address alone, converged falsely, and never pushed
+the control-plane collections to the peer — the demo `pair` step-8 hang.)
+
+Same conjunct structure as `filter_change_forces_reinstall`; every conjunct is
+quantified over the real transition relation. -/
+theorem collections_change_forces_reinstall
+    {s : ReconcileState} {desired : PairingDesired}
+    {a : String} {f : ReplicatorFilter} {cs1 cs2 : ReplicatorCollections}
+    (h_desired : s.desired = some desired)
+    (hcs : cs1 ≠ cs2)
+    (h_new_desired : ((a, f, cs2) : ReplicatorId) ∈ desired.replicators)
+    (h_old_not_desired : ((a, f, cs1) : ReplicatorId) ∉ desired.replicators)
+    (h_old_actual : ((a, f, cs1) : ReplicatorId) ∈ s.actual.replicators)
+    (h_old_applied : ((a, f, cs1) : ReplicatorId) ∈ s.applied.replicators)
+    (h_new_not_actual : ((a, f, cs2) : ReplicatorId) ∉ s.actual.replicators)
+    (h_connected : s.actual.connected = true) :
+    -- (1) the state is genuinely diverged
+    0 < disagreementCount s ∧
+    -- (2) tearing down the OLD identity is an enabled transition
+    Transition s (teardownReplicatorState s (a, f, cs1)) ∧
+    -- (3) installing the NEW identity is an enabled transition
+    Transition s (installReplicatorState s (a, f, cs2)) ∧
+    -- (4) teardown-then-install lands the address on the new identity
+    ( ((a, f, cs2) : ReplicatorId) ∈
+        (installReplicatorState (teardownReplicatorState s (a, f, cs1)) (a, f, cs2)).actual.replicators ∧
+      ((a, f, cs1) : ReplicatorId) ∉
+        (installReplicatorState (teardownReplicatorState s (a, f, cs1)) (a, f, cs2)).actual.replicators ) := by
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  · have h_mem : ((a, f, cs2) : ReplicatorId) ∈ desired.replicators \ s.actual.replicators :=
+      Finset.mem_sdiff.mpr ⟨h_new_desired, h_new_not_actual⟩
+    have h_card_pos : 0 < (desired.replicators \ s.actual.replicators).card :=
+      Finset.card_pos.mpr ⟨_, h_mem⟩
+    simp only [disagreementCount, h_desired]
+    omega
+  · exact Transition.reconcileTeardownReplicator desired (a, f, cs1)
+      h_desired h_old_actual h_old_not_desired h_old_applied rfl
+  · exact Transition.reconcileInstallReplicator desired (a, f, cs2)
+      h_desired h_new_desired h_new_not_actual h_connected rfl
+  · exact Finset.mem_insert_self _ _
+  · simp only [installReplicatorState, teardownReplicatorState]
+    rw [Finset.mem_insert]
+    push_neg
+    exact ⟨collections_change_distinct_identity hcs, Finset.not_mem_erase _ _⟩
 
 /-- Stable converged desired state cannot flap managed wiring. -/
 theorem no_flap_on_converged_stable_desired

@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use defra_node::{EmbeddedNode, EventName, QueryResponse};
+use p2p::iroh::parse_public_peer_addr;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
@@ -74,15 +75,28 @@ pub async fn reconcile_peer_tick(
     };
     let desired_state = desired.clone().unwrap_or_default();
     if desired_state.has_wiring() && !desired_state.replicator_addresses.is_empty() {
-        let addresses = desired_state
-            .replicator_addresses
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
-        admin
-            .connect(&addresses)
-            .await
-            .context("connect pairing peer")?;
+        // Dial only when the peer is not already connected — the Lean
+        // `PairingReconcile.Transition.dial`/`dialFailed` premises both require
+        // `connected = false`; a connected peer proceeds straight to the
+        // reconcile ops. A redundant redial is not merely wasted work: on Linux
+        // it can time out even though the connection is healthy, and a dial
+        // failure aborts this tick before the diff below runs — leaving an
+        // already-paired peer permanently unable to pick up new desired state
+        // (e.g. the filtered conversation data-plane replicator on top of an
+        // applied control-plane pairing).
+        if peer_already_active(admin, peer_id).await {
+            tracing::debug!(peer_id, "pairing peer already connected; skipping redial");
+        } else {
+            let addresses = desired_state
+                .replicator_addresses
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            admin
+                .connect(&addresses)
+                .await
+                .context("connect pairing peer")?;
+        }
     }
     let mut applied = store.load_applied(peer_id).await?;
     let actual = read_actual(admin).await?;
@@ -110,6 +124,32 @@ pub async fn reconcile_peer_tick(
         peer_id: peer_id.to_string(),
         ops_applied,
         desired_read_failed: false,
+    })
+}
+
+/// True when `peer_id` already has a live connection according to
+/// `active_peers`. Entries are either bare peer ids or the dial address
+/// recorded for the peer (the embedded adapter returns whichever it has), so
+/// extract the peer id from each entry rather than comparing verbatim —
+/// mirroring the desktop supervisor's `is_connected_peer`. A failed read
+/// degrades to "not connected": the tick dials exactly as it did before this
+/// check existed.
+async fn peer_already_active(admin: &dyn RemoteP2pAdmin, peer_id: &str) -> bool {
+    let peers = match admin.active_peers().await {
+        Ok(peers) => peers,
+        Err(error) => {
+            tracing::debug!(
+                peer_id,
+                error = %error,
+                "active-peer read failed; assuming peer is not connected"
+            );
+            return false;
+        }
+    };
+    peers.iter().any(|entry| {
+        parse_public_peer_addr(entry)
+            .map(|(parsed, _)| parsed.as_str() == peer_id)
+            .unwrap_or_else(|_| entry.contains(peer_id))
     })
 }
 
@@ -250,10 +290,42 @@ async fn read_actual(admin: &dyn RemoteP2pAdmin) -> Result<ActualSnapshot> {
         .filter_map(|replicator| Some((replicator.address?, replicator.collections)))
         .collect::<BTreeMap<_, _>>();
 
+    // The diff compares the replicator's carried collection set in *name*
+    // space (part of the replicator identity, Lean
+    // `collections_change_forces_reinstall`), but the transport reports it in
+    // id space — reverse-resolve like the subscription set above. An
+    // unresolvable token is kept raw at debug (unlike subscriptions, some
+    // adapters report names here already, so raw is not necessarily wrong).
+    let mut replicator_collections = BTreeMap::new();
+    for (address, ids) in &replicator_collections_by_addr {
+        let mut names = BTreeSet::new();
+        for id in ids {
+            match admin
+                .resolve_collection_name(id)
+                .await
+                .with_context(|| format!("resolve replicator collection name for id {id}"))?
+            {
+                Some(name) => {
+                    names.insert(name);
+                }
+                None => {
+                    tracing::debug!(
+                        collection = %id,
+                        address = %address,
+                        "replicator collection token has no local name; keeping it raw"
+                    );
+                    names.insert(id.clone());
+                }
+            }
+        }
+        replicator_collections.insert(address.clone(), names);
+    }
+
     Ok(ActualSnapshot {
         state: PairingActual {
             collections,
             replicator_addresses,
+            replicator_collections,
         },
         replicator_ids_by_addr,
         replicator_collections_by_addr,
@@ -284,16 +356,13 @@ async fn apply_op(
             // independent of the subscription set (`collections`): a `Push`
             // template subscribes to nothing but still replicates the full set.
             // Legacy rows with no explicit replicator set fall back to the
-            // subscription collections.
-            let collections = if desired.replicator_collections.is_empty() {
-                desired.collections.iter().cloned().collect::<Vec<_>>()
-            } else {
-                desired
-                    .replicator_collections
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-            };
+            // subscription collections (the same effective set the diff keys
+            // the replicator identity on).
+            let collections = desired
+                .effective_replicator_collections()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
             admin
                 .add_replicator(&addresses, &collections, &desired.replicator_filter)
                 .await
@@ -920,7 +989,9 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
-    use crate::agent::p2p_reconcile::{RemoteP2pAdminResult, RemoteReplicator};
+    use crate::agent::p2p_reconcile::{
+        RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
+    };
 
     fn set(values: &[&str]) -> BTreeSet<String> {
         values.iter().map(|value| value.to_string()).collect()
@@ -1194,6 +1265,14 @@ mod tests {
         connects: Mutex<Vec<Vec<String>>>,
         /// Filters recorded per `add_replicator` call: (addresses, filters).
         recorded_filters: Mutex<Vec<(Vec<String>, PairingFilters)>>,
+        /// Entries returned by `active_peers` (bare peer ids or dial addresses,
+        /// like the real adapters).
+        active: Mutex<Vec<String>>,
+        /// When set, `active_peers` fails, exercising the degraded-read path.
+        fail_active_peers: bool,
+        /// When set, `connect` fails after recording the call — modeling the
+        /// Linux redial-timeout that motivated the active-peer gate.
+        fail_connect: bool,
     }
 
     #[async_trait]
@@ -1203,11 +1282,17 @@ mod tests {
         }
 
         async fn active_peers(&self) -> RemoteP2pAdminResult<Vec<String>> {
-            Ok(Vec::new())
+            if self.fail_active_peers {
+                return Err(RemoteP2pAdminError::RpcError("active_peers down".into()));
+            }
+            Ok(self.active.lock().unwrap().clone())
         }
 
         async fn connect(&self, addresses: &[String]) -> RemoteP2pAdminResult<()> {
             self.connects.lock().unwrap().push(addresses.to_vec());
+            if self.fail_connect {
+                return Err(RemoteP2pAdminError::RpcTimeout);
+            }
             Ok(())
         }
 
@@ -1226,11 +1311,14 @@ mod tests {
                 .unwrap()
                 .push((addresses.to_vec(), filters.clone()));
             for address in addresses {
+                // Like the real adapter, the transport records the carried
+                // collection set in *id* space; `read_actual` reverse-resolves
+                // it to names for the identity comparison.
                 self.replicators.lock().unwrap().insert(
                     address.clone(),
                     RemoteReplicator {
                         id: Some(format!("id-{address}")),
-                        collections: collections.to_vec(),
+                        collections: collections.iter().map(|c| mock_collection_id(c)).collect(),
                         address: Some(address.clone()),
                     },
                 );
@@ -1403,6 +1491,190 @@ mod tests {
                 ..Default::default()
             }
         );
+    }
+
+    /// Regression for the Linux demo `pair` hang at "waiting for conversation
+    /// data-plane replicators": the tick used to dial the desired replicator
+    /// addresses unconditionally, so a redial of an ALREADY-connected peer that
+    /// timed out aborted the tick before the diff ran — the applied
+    /// control-plane pairing never got upgraded with the filtered conversation
+    /// data-plane replicator (`PeerPairingApplied.replicator_filter` stayed
+    /// null forever). An active peer must skip the redial and still reconcile.
+    #[tokio::test]
+    async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
+        let conversation_filter = one_filter("AgentRequest", "agent_did", "did:key:host");
+        // Desired now includes the conversation data plane: same address, new
+        // collection, and a scoped filter (identity change ⇒ reinstall).
+        let store = MockStore::with_desired(Some(PairingDesired {
+            collections: set(&["AgentNetwork", "AgentRequest"]),
+            replicator_addresses: set(&["addr1"]),
+            replicator_filter: conversation_filter.clone(),
+            ..Default::default()
+        }));
+        // Control-plane pairing already applied: unfiltered replicator on addr1.
+        *store.applied.lock().unwrap() = PairingApplied {
+            collections: set(&["AgentNetwork"]),
+            replicator_addresses: set(&["addr1"]),
+            replicator_filter: PairingFilters::new(),
+        };
+        let admin = MockAdmin {
+            active: Mutex::new(vec!["peer-a".into()]),
+            fail_connect: true,
+            ..Default::default()
+        };
+        *admin.collections.lock().unwrap() = set(&[&mock_collection_id("AgentNetwork")]);
+        admin.replicators.lock().unwrap().insert(
+            "addr1".into(),
+            RemoteReplicator {
+                id: Some("id-addr1".into()),
+                collections: vec!["AgentNetwork".into()],
+                address: Some("addr1".into()),
+            },
+        );
+
+        let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+            .await
+            .expect("tick must reconcile without dialing");
+
+        assert!(
+            admin.connects.lock().unwrap().is_empty(),
+            "already-active peer must not be redialed"
+        );
+        assert_eq!(
+            outcome.ops_applied,
+            vec![
+                DiffOp::InstallCollection("AgentRequest".into()),
+                DiffOp::TeardownReplicator("addr1".into()),
+                DiffOp::InstallReplicator("addr1".into()),
+            ]
+        );
+        // Applied records the conversation filter — this is what surfaces as
+        // `PeerPairingApplied.replicator_filter` and what the demo waits on.
+        assert_eq!(
+            store.applied.lock().unwrap().replicator_filter,
+            conversation_filter
+        );
+        let recorded = admin.recorded_filters.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].1, conversation_filter);
+    }
+
+    /// Regression for the demo layer-order race: the data-plane desired lands
+    /// before the control-plane layer, so the first tick installs the
+    /// replicator carrying only the conversation collections. When the merged
+    /// desired arrives — same address, same filter, LARGER collection set —
+    /// the replicator must be reinstalled with the merged set: the carried
+    /// collection set is part of the replicator identity (Lean
+    /// `collections_change_forces_reinstall`). Pre-fix the diff keyed
+    /// replicators on address alone and converged falsely, so the
+    /// control-plane collections were never pushed to the peer (demo `pair`
+    /// step-8 hang even with a healthy connection).
+    #[tokio::test]
+    async fn grown_replicator_collection_set_reinstalls_replicator() {
+        let conversation_filter = one_filter("AgentRequest", "agent_did", "did:key:host");
+        // Tick 1: only the data-plane layer is visible (Push template shape:
+        // nothing subscribed, the filtered replicator carries the set).
+        let store = MockStore::with_desired(Some(PairingDesired {
+            collections: BTreeSet::new(),
+            replicator_addresses: set(&["addr1"]),
+            replicator_collections: set(&["AgentRequest"]),
+            replicator_filter: conversation_filter.clone(),
+            ..Default::default()
+        }));
+        let admin = MockAdmin {
+            active: Mutex::new(vec!["peer-a".into()]),
+            ..Default::default()
+        };
+
+        let first = reconcile_peer_tick(&admin, &store, "peer-a")
+            .await
+            .expect("first tick");
+        assert_eq!(
+            first.ops_applied,
+            vec![DiffOp::InstallReplicator("addr1".into())]
+        );
+
+        // The control-plane layer merges in: same address, same filter,
+        // larger replicator collection set plus the control subscription.
+        *store.desired.lock().unwrap() = Ok(Some(PairingDesired {
+            collections: set(&["AgentNetwork"]),
+            replicator_addresses: set(&["addr1"]),
+            replicator_collections: set(&["AgentNetwork", "AgentRequest"]),
+            replicator_filter: conversation_filter,
+            ..Default::default()
+        }));
+
+        let second = reconcile_peer_tick(&admin, &store, "peer-a")
+            .await
+            .expect("second tick");
+        assert_eq!(
+            second.ops_applied,
+            vec![
+                DiffOp::InstallCollection("AgentNetwork".into()),
+                DiffOp::TeardownReplicator("addr1".into()),
+                DiffOp::InstallReplicator("addr1".into()),
+            ]
+        );
+        // The reinstalled replicator carries the merged collection set.
+        assert_eq!(
+            admin.replicators.lock().unwrap()["addr1"].collections,
+            vec![
+                mock_collection_id("AgentNetwork"),
+                mock_collection_id("AgentRequest")
+            ]
+        );
+
+        // Tick 3: converged — the collections identity must not churn.
+        let third = reconcile_peer_tick(&admin, &store, "peer-a")
+            .await
+            .expect("third tick");
+        assert!(
+            third.ops_applied.is_empty(),
+            "converged, got: {:?}",
+            third.ops_applied
+        );
+    }
+
+    /// The active-peer gate must fail open: a broken `active_peers` read means
+    /// "assume not connected" and dial as before, never a wedged pairing.
+    #[tokio::test]
+    async fn active_peer_read_failure_still_dials() {
+        let store = MockStore::with_desired(Some(PairingDesired {
+            collections: set(&["c1"]),
+            replicator_addresses: set(&["addr1"]),
+            ..Default::default()
+        }));
+        let admin = MockAdmin {
+            fail_active_peers: true,
+            ..Default::default()
+        };
+
+        reconcile_peer_tick(&admin, &store, "peer-a")
+            .await
+            .expect("tick result");
+
+        assert_eq!(*admin.connects.lock().unwrap(), vec![vec!["addr1"]]);
+    }
+
+    /// A different peer being active is not this peer being active: the tick
+    /// must still dial.
+    #[tokio::test]
+    async fn other_active_peer_does_not_suppress_dial() {
+        let store = MockStore::with_desired(Some(PairingDesired {
+            collections: set(&["c1"]),
+            replicator_addresses: set(&["addr1"]),
+            ..Default::default()
+        }));
+        let admin = MockAdmin {
+            active: Mutex::new(vec!["peer-b".into()]),
+            ..Default::default()
+        };
+
+        reconcile_peer_tick(&admin, &store, "peer-a")
+            .await
+            .expect("tick result");
+
+        assert_eq!(*admin.connects.lock().unwrap(), vec![vec!["addr1"]]);
     }
 
     /// Review Finding #1: the remote subscription set is tracked in *id*-space by
