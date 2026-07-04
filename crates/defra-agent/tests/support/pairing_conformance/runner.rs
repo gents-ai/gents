@@ -310,9 +310,14 @@ async fn apply_desired_state(
         peer.actual_connected = true;
     }
 
+    // The harness does not model which collections each installed replicator
+    // carries; leaving the map empty means "unobservable", which the diff
+    // treats as no collections-identity divergence (matching the documented
+    // `PairingActual.replicator_collections` semantics).
     let actual = RuntimePairingActual {
         collections: peer.actual_collections.clone(),
         replicator_addresses: peer.actual_replicator_addresses.clone(),
+        ..Default::default()
     };
     let mut applied = PairingApplied {
         collections: reconciler.applied_collections.clone(),

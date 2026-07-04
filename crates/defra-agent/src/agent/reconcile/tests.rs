@@ -241,6 +241,7 @@ fn pairing_replicator_teardown_diff_converges() -> bool {
     let actual = PairingActual {
         collections: BTreeSet::new(),
         replicator_addresses: BTreeSet::from(["addr1".to_string()]),
+        ..Default::default()
     };
     let applied = PairingApplied {
         collections: BTreeSet::new(),
@@ -264,6 +265,7 @@ fn operator_delete_yields_teardown_diff() -> bool {
     let actual = PairingActual {
         collections: BTreeSet::new(),
         replicator_addresses: BTreeSet::from(["addr1".to_string()]),
+        ..Default::default()
     };
     let applied = PairingApplied {
         collections: BTreeSet::new(),

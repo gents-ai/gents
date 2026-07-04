@@ -290,10 +290,42 @@ async fn read_actual(admin: &dyn RemoteP2pAdmin) -> Result<ActualSnapshot> {
         .filter_map(|replicator| Some((replicator.address?, replicator.collections)))
         .collect::<BTreeMap<_, _>>();
 
+    // The diff compares the replicator's carried collection set in *name*
+    // space (part of the replicator identity, Lean
+    // `collections_change_forces_reinstall`), but the transport reports it in
+    // id space — reverse-resolve like the subscription set above. An
+    // unresolvable token is kept raw at debug (unlike subscriptions, some
+    // adapters report names here already, so raw is not necessarily wrong).
+    let mut replicator_collections = BTreeMap::new();
+    for (address, ids) in &replicator_collections_by_addr {
+        let mut names = BTreeSet::new();
+        for id in ids {
+            match admin
+                .resolve_collection_name(id)
+                .await
+                .with_context(|| format!("resolve replicator collection name for id {id}"))?
+            {
+                Some(name) => {
+                    names.insert(name);
+                }
+                None => {
+                    tracing::debug!(
+                        collection = %id,
+                        address = %address,
+                        "replicator collection token has no local name; keeping it raw"
+                    );
+                    names.insert(id.clone());
+                }
+            }
+        }
+        replicator_collections.insert(address.clone(), names);
+    }
+
     Ok(ActualSnapshot {
         state: PairingActual {
             collections,
             replicator_addresses,
+            replicator_collections,
         },
         replicator_ids_by_addr,
         replicator_collections_by_addr,
@@ -324,16 +356,13 @@ async fn apply_op(
             // independent of the subscription set (`collections`): a `Push`
             // template subscribes to nothing but still replicates the full set.
             // Legacy rows with no explicit replicator set fall back to the
-            // subscription collections.
-            let collections = if desired.replicator_collections.is_empty() {
-                desired.collections.iter().cloned().collect::<Vec<_>>()
-            } else {
-                desired
-                    .replicator_collections
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-            };
+            // subscription collections (the same effective set the diff keys
+            // the replicator identity on).
+            let collections = desired
+                .effective_replicator_collections()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
             admin
                 .add_replicator(&addresses, &collections, &desired.replicator_filter)
                 .await
@@ -1282,11 +1311,14 @@ mod tests {
                 .unwrap()
                 .push((addresses.to_vec(), filters.clone()));
             for address in addresses {
+                // Like the real adapter, the transport records the carried
+                // collection set in *id* space; `read_actual` reverse-resolves
+                // it to names for the identity comparison.
                 self.replicators.lock().unwrap().insert(
                     address.clone(),
                     RemoteReplicator {
                         id: Some(format!("id-{address}")),
-                        collections: collections.to_vec(),
+                        collections: collections.iter().map(|c| mock_collection_id(c)).collect(),
                         address: Some(address.clone()),
                     },
                 );
@@ -1525,6 +1557,82 @@ mod tests {
         let recorded = admin.recorded_filters.lock().unwrap();
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].1, conversation_filter);
+    }
+
+    /// Regression for the demo layer-order race: the data-plane desired lands
+    /// before the control-plane layer, so the first tick installs the
+    /// replicator carrying only the conversation collections. When the merged
+    /// desired arrives — same address, same filter, LARGER collection set —
+    /// the replicator must be reinstalled with the merged set: the carried
+    /// collection set is part of the replicator identity (Lean
+    /// `collections_change_forces_reinstall`). Pre-fix the diff keyed
+    /// replicators on address alone and converged falsely, so the
+    /// control-plane collections were never pushed to the peer (demo `pair`
+    /// step-8 hang even with a healthy connection).
+    #[tokio::test]
+    async fn grown_replicator_collection_set_reinstalls_replicator() {
+        let conversation_filter = one_filter("AgentRequest", "agent_did", "did:key:host");
+        // Tick 1: only the data-plane layer is visible (Push template shape:
+        // nothing subscribed, the filtered replicator carries the set).
+        let store = MockStore::with_desired(Some(PairingDesired {
+            collections: BTreeSet::new(),
+            replicator_addresses: set(&["addr1"]),
+            replicator_collections: set(&["AgentRequest"]),
+            replicator_filter: conversation_filter.clone(),
+            ..Default::default()
+        }));
+        let admin = MockAdmin {
+            active: Mutex::new(vec!["peer-a".into()]),
+            ..Default::default()
+        };
+
+        let first = reconcile_peer_tick(&admin, &store, "peer-a")
+            .await
+            .expect("first tick");
+        assert_eq!(
+            first.ops_applied,
+            vec![DiffOp::InstallReplicator("addr1".into())]
+        );
+
+        // The control-plane layer merges in: same address, same filter,
+        // larger replicator collection set plus the control subscription.
+        *store.desired.lock().unwrap() = Ok(Some(PairingDesired {
+            collections: set(&["AgentNetwork"]),
+            replicator_addresses: set(&["addr1"]),
+            replicator_collections: set(&["AgentNetwork", "AgentRequest"]),
+            replicator_filter: conversation_filter,
+            ..Default::default()
+        }));
+
+        let second = reconcile_peer_tick(&admin, &store, "peer-a")
+            .await
+            .expect("second tick");
+        assert_eq!(
+            second.ops_applied,
+            vec![
+                DiffOp::InstallCollection("AgentNetwork".into()),
+                DiffOp::TeardownReplicator("addr1".into()),
+                DiffOp::InstallReplicator("addr1".into()),
+            ]
+        );
+        // The reinstalled replicator carries the merged collection set.
+        assert_eq!(
+            admin.replicators.lock().unwrap()["addr1"].collections,
+            vec![
+                mock_collection_id("AgentNetwork"),
+                mock_collection_id("AgentRequest")
+            ]
+        );
+
+        // Tick 3: converged — the collections identity must not churn.
+        let third = reconcile_peer_tick(&admin, &store, "peer-a")
+            .await
+            .expect("third tick");
+        assert!(
+            third.ops_applied.is_empty(),
+            "converged, got: {:?}",
+            third.ops_applied
+        );
     }
 
     /// The active-peer gate must fail open: a broken `active_peers` read means

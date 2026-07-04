@@ -1,6 +1,6 @@
 //! Pure desired-vs-actual diff for pairing reconcile.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +38,18 @@ impl PairingDesired {
         !self.collections.is_empty() || !self.replicator_addresses.is_empty()
     }
 
+    /// The collection set this pairing's replicators carry. Explicit
+    /// `replicator_collections` wins; legacy rows with no explicit set fall
+    /// back to the subscription collections (the same convention `apply_op`
+    /// uses when installing).
+    pub fn effective_replicator_collections(&self) -> &BTreeSet<String> {
+        if self.replicator_collections.is_empty() {
+            &self.collections
+        } else {
+            &self.replicator_collections
+        }
+    }
+
     pub fn uses_subagent_template(&self) -> bool {
         self.template_ids
             .iter()
@@ -48,19 +60,30 @@ impl PairingDesired {
 /// Actual pairing state read from the remote.
 ///
 /// BOUNDARY (Lean `PairingReconcile.PairingActual`): the model keys actual
-/// replicators on the full `ReplicatorId = (address, ReplicatorFilter)`, but
-/// the remote read here observes the transport *address only* — the installed
-/// scope filters are not recoverable from the peer. The `(address, filters)`
-/// identity is therefore fenced on the reconciler-owned side:
+/// replicators on the full `ReplicatorId = (address, ReplicatorFilter,
+/// ReplicatorCollections)`. The remote read here observes the transport
+/// *address* and the *collection set* each replicator carries
+/// (`list_replicators` returns both) — the installed scope filters are not
+/// recoverable from the peer. The filter component of the identity is
+/// therefore fenced on the reconciler-owned side:
 /// `PairingApplied.replicator_filter` records the filter map last installed,
 /// and `compute_owned_pairing_diff` compares desired-vs-applied filters to
-/// force a reinstall on change (Lean `filter_change_forces_reinstall`). Actual
-/// carries no `replicator_filter` by design; do not add one expecting to read it
-/// back from the remote.
+/// force a reinstall on change (Lean `filter_change_forces_reinstall`), while
+/// the collections component compares desired against `replicator_collections`
+/// read back from the remote (Lean `collections_change_forces_reinstall`).
+/// Actual carries no `replicator_filter` by design; do not add one expecting
+/// to read it back from the remote.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingActual {
     pub collections: BTreeSet<String>,
     pub replicator_addresses: BTreeSet<String>,
+    /// Collection set each remote replicator carries, keyed by address, in
+    /// collection-*name* space (reverse-resolved at the read boundary like the
+    /// subscription set). An absent address means the collection set could not
+    /// be observed; the diff then skips the collections-identity comparison
+    /// for that address rather than churn.
+    #[serde(default)]
+    pub replicator_collections: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// Reconciler-owned pairing state persisted after successful operations.
@@ -134,25 +157,36 @@ pub fn compute_owned_pairing_diff(
     {
         ops.push(DiffOp::TeardownCollection(c.clone()));
     }
-    // Replicator identity is (address, filter). A managed replicator whose
-    // desired filter differs from the applied filter is a *distinct* identity
-    // (Lean `filter_change_distinct_identity`): tear down the old identity and
-    // install the new one, even though the address is unchanged.
+    // Replicator identity is (address, filter, collections). A managed
+    // replicator whose desired filter differs from the applied filter, or
+    // whose remotely-observed collection set differs from the desired set, is
+    // a *distinct* identity (Lean `filter_change_distinct_identity`,
+    // `collections_change_distinct_identity`): tear down the old identity and
+    // install the new one, even though the address is unchanged. The
+    // collections comparison fences the layer-order race where a replicator
+    // installed from the data-plane layer alone silently kept its narrow
+    // collection set after the control-plane layer merged in.
     let filter_changed = desired.replicator_filter != applied.replicator_filter;
+    let desired_replicator_collections = desired.effective_replicator_collections();
     for r in desired
         .replicator_addresses
         .difference(&actual.replicator_addresses)
     {
         ops.push(DiffOp::InstallReplicator(r.clone()));
     }
-    if filter_changed {
-        // Reinstall every managed address that survives into the desired set:
-        // its identity changed, so the old filtered replicator must be replaced.
-        for r in actual
-            .replicator_addresses
-            .intersection(&applied.replicator_addresses)
-            .filter(|r| desired.replicator_addresses.contains(*r))
-        {
+    // Reinstall every managed address that survives into the desired set with
+    // a changed identity: the old replicator must be replaced (Lean
+    // `filter_change_forces_reinstall` / `collections_change_forces_reinstall`).
+    for r in actual
+        .replicator_addresses
+        .intersection(&applied.replicator_addresses)
+        .filter(|r| desired.replicator_addresses.contains(*r))
+    {
+        let collections_changed = actual
+            .replicator_collections
+            .get(r)
+            .is_some_and(|carried| carried != desired_replicator_collections);
+        if filter_changed || collections_changed {
             ops.push(DiffOp::TeardownReplicator(r.clone()));
             ops.push(DiffOp::InstallReplicator(r.clone()));
         }
@@ -217,6 +251,7 @@ mod tests {
         let actual = PairingActual {
             collections: s(&["c1"]),
             replicator_addresses: s(&["/ip4/1/p2p/p"]),
+            ..Default::default()
         };
         assert!(compute_pairing_diff(&desired, &actual).is_empty());
     }
@@ -241,6 +276,7 @@ mod tests {
         let actual = PairingActual {
             collections: s(&["manual"]),
             replicator_addresses: s(&["/ip4/manual/p2p/p"]),
+            ..Default::default()
         };
         let applied = PairingApplied::default();
         assert!(compute_owned_pairing_diff(&desired, &actual, &applied).is_empty());
@@ -272,6 +308,7 @@ mod tests {
         let actual = PairingActual {
             collections: BTreeSet::new(),
             replicator_addresses: s(&["addr1"]),
+            ..Default::default()
         };
         let applied = PairingApplied {
             collections: BTreeSet::new(),
@@ -301,11 +338,89 @@ mod tests {
         let actual = PairingActual {
             collections: BTreeSet::new(),
             replicator_addresses: s(&["addr1"]),
+            ..Default::default()
         };
         let applied = PairingApplied {
             collections: BTreeSet::new(),
             replicator_addresses: s(&["addr1"]),
             replicator_filter: f,
+            ..Default::default()
+        };
+        assert!(compute_owned_pairing_diff(&desired, &actual, &applied).is_empty());
+    }
+
+    /// Mirrors Lean `collections_change_forces_reinstall`: a replicator on
+    /// the same address with the same filter whose remotely-observed carried
+    /// collection set differs from the desired effective set is a distinct
+    /// identity, so the diff tears it down and reinstalls it. This is the
+    /// demo layer-order race: the replicator was installed from the
+    /// data-plane layer alone and kept its narrow set after the
+    /// control-plane layer merged in.
+    #[test]
+    fn changed_replicator_collections_reinstall_replicator() {
+        let desired = PairingDesired {
+            collections: s(&["AgentNetwork"]),
+            replicator_addresses: s(&["addr1"]),
+            replicator_collections: s(&["AgentNetwork", "AgentRequest"]),
+            ..Default::default()
+        };
+        let actual = PairingActual {
+            collections: s(&["AgentNetwork"]),
+            replicator_addresses: s(&["addr1"]),
+            replicator_collections: BTreeMap::from([("addr1".to_string(), s(&["AgentRequest"]))]),
+        };
+        let applied = PairingApplied {
+            collections: s(&["AgentNetwork"]),
+            replicator_addresses: s(&["addr1"]),
+            ..Default::default()
+        };
+        assert_eq!(
+            compute_owned_pairing_diff(&desired, &actual, &applied),
+            vec![
+                DiffOp::TeardownReplicator("addr1".into()),
+                DiffOp::InstallReplicator("addr1".into()),
+            ]
+        );
+    }
+
+    /// A carried set that matches the desired effective set yields no churn.
+    #[test]
+    fn matching_replicator_collections_do_not_reinstall() {
+        let desired = PairingDesired {
+            collections: s(&["AgentNetwork"]),
+            replicator_addresses: s(&["addr1"]),
+            ..Default::default()
+        };
+        let actual = PairingActual {
+            collections: s(&["AgentNetwork"]),
+            replicator_addresses: s(&["addr1"]),
+            replicator_collections: BTreeMap::from([("addr1".to_string(), s(&["AgentNetwork"]))]),
+        };
+        let applied = PairingApplied {
+            collections: s(&["AgentNetwork"]),
+            replicator_addresses: s(&["addr1"]),
+            ..Default::default()
+        };
+        assert!(compute_owned_pairing_diff(&desired, &actual, &applied).is_empty());
+    }
+
+    /// An unobservable carried set (no map entry for the address) must not
+    /// churn: absence means "could not be observed", not "empty".
+    #[test]
+    fn unobservable_replicator_collections_do_not_reinstall() {
+        let desired = PairingDesired {
+            collections: s(&["AgentNetwork"]),
+            replicator_addresses: s(&["addr1"]),
+            ..Default::default()
+        };
+        let actual = PairingActual {
+            collections: s(&["AgentNetwork"]),
+            replicator_addresses: s(&["addr1"]),
+            ..Default::default()
+        };
+        let applied = PairingApplied {
+            collections: s(&["AgentNetwork"]),
+            replicator_addresses: s(&["addr1"]),
             ..Default::default()
         };
         assert!(compute_owned_pairing_diff(&desired, &actual, &applied).is_empty());
@@ -317,6 +432,7 @@ mod tests {
         let actual = PairingActual {
             collections: s(&["manual", "managed"]),
             replicator_addresses: s(&["/ip4/manual/p2p/p", "/ip4/managed/p2p/p"]),
+            ..Default::default()
         };
         let applied = PairingApplied {
             collections: s(&["managed"]),

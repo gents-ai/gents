@@ -112,6 +112,7 @@ fn pending_owned_ops(
         &RuntimePairingActual {
             collections: snapshot.actual.collections.clone(),
             replicator_addresses: snapshot.actual.replicator_addresses.clone(),
+            ..Default::default()
         },
         &snapshot.applied,
     )

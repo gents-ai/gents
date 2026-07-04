@@ -35,14 +35,23 @@ replicator; collections absent from the set are unfiltered control-plane
 collections. -/
 abbrev ReplicatorFilter := Finset CollectionFilterKey
 
-/-- A managed replicator's identity: its address plus its filter map identity.
+/-- The collection set a managed replicator carries (collection-name space). -/
+abbrev ReplicatorCollections := Finset String
 
-This is the deliverable of Part A generalized for per-collection filters:
-`(address, filters)` makes "same address, different filter map" two DISTINCT
-replicators, so a filter change is a teardown of the old identity and an install
-of the new one (no in-place mutate). `∅` means an unfiltered replicator
-(`Replicate` delivery). -/
-abbrev ReplicatorId := String × ReplicatorFilter
+/-- A managed replicator's identity: its address, its filter map identity, and
+the collection set it carries.
+
+This is the deliverable of Part A generalized for per-collection filters and
+then for the carried collection set: `(address, filters, collections)` makes
+"same address, different filter map" AND "same address, same filter, different
+collection set" distinct replicators, so either change is a teardown of the old
+identity and an install of the new one (no in-place mutate). The collections
+component fences the live demo bug where a replicator installed from the
+data-plane layer alone silently kept its narrow collection set after the
+control-plane layer merged in — an address-keyed diff converged falsely and the
+network collections were never pushed. `∅` filters means an unfiltered
+replicator (`Replicate` delivery). -/
+abbrev ReplicatorId := String × ReplicatorFilter × ReplicatorCollections
 
 namespace ReplicatorId
 
@@ -50,7 +59,10 @@ namespace ReplicatorId
 def address (r : ReplicatorId) : String := r.1
 
 /-- The replicator's per-collection filter identity (`∅` = unfiltered). -/
-def filter (r : ReplicatorId) : ReplicatorFilter := r.2
+def filter (r : ReplicatorId) : ReplicatorFilter := r.2.1
+
+/-- The collection set the replicator carries. -/
+def collections (r : ReplicatorId) : ReplicatorCollections := r.2.2
 
 end ReplicatorId
 
@@ -79,14 +91,15 @@ end PairingDesired
 /-- Remote-observed actual pairing for one peer.
 
 RUST BOUNDARY: the model keys actual replicators on the full `ReplicatorId =
-(address, ReplicatorFilter)` so the convergence proofs can reason about the
-filter identity uniformly. The Rust `PairingActual` (`p2p_reconcile/diff.rs`)
-observes the transport *address only* — the installed filter map is not
-recoverable from the peer — and recovers the `(address, filters)` identity from
-the reconciler-owned `PairingApplied.replicator_filter` instead. The two are
-equivalent for the diff's safety obligations because a managed replicator's
-filter map is always known on the applied side; this abstraction gap is the
-intended boundary, not a hole. -/
+(address, ReplicatorFilter, ReplicatorCollections)` so the convergence proofs
+can reason about the identity uniformly. The Rust `PairingActual`
+(`p2p_reconcile/diff.rs`) observes the transport *address* and the *collection
+set* each replicator carries (`list_replicators` returns both) — the installed
+filter map is not recoverable from the peer, so the filter component is
+recovered from the reconciler-owned `PairingApplied.replicator_filter` instead.
+The composition is equivalent for the diff's safety obligations because a
+managed replicator's filter map is always known on the applied side; this
+abstraction gap is the intended boundary, not a hole. -/
 structure PairingActual where
   collections : Finset String
   replicators : Finset ReplicatorId
