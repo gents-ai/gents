@@ -56,16 +56,12 @@ describe("FleetRow", () => {
         runtime: { updatedAt: new Date(Date.now() - 5_000).toISOString() },
       },
     );
-    expect(
-      screen.getByTitle("Last runtime update reported by this agent"),
-    ).toHaveTextContent(/s ago/);
+    expect(screen.getByTitle(/Last runtime state change/)).toHaveTextContent(/s ago/);
   });
 
   it("shows unknown when the deployment has no runtime heartbeat", () => {
     renderRow({}, { ...deployment, runtime: null });
-    expect(
-      screen.getByTitle("Last runtime update reported by this agent"),
-    ).toHaveTextContent("unknown");
+    expect(screen.getByTitle(/Last runtime state change/)).toHaveTextContent("unknown");
   });
 
   it("claims the local init.json tool ceiling only for local-runtime rows", () => {
@@ -81,7 +77,7 @@ describe("FleetRow", () => {
     const bootstrap = { initToolCeiling: "readonly" };
     renderRow(
       { bootstrap: bootstrap as FleetRowProps["bootstrap"] },
-      { ...deployment, source: "manual" },
+      { ...deployment, source: "server-status" },
     );
     expect(document.querySelector('[title*="Server ceiling"]')).toBeNull();
   });

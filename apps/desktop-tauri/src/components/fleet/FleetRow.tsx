@@ -111,7 +111,7 @@ export function FleetRow({
       <td>
         <Metric title="Processing conversations" value={openWorkCount} />
       </td>
-      <td title="Last runtime update reported by this agent">
+      <td title="Last runtime state change reported by this agent (agents write this on change, not on a timer — an idle agent ages here without being dead)">
         {formatRelativeTime(runtimeLastUpdate)}
       </td>
       <td className="fleet-actions-cell">

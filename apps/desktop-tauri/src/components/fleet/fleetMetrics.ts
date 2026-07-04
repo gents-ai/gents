@@ -172,9 +172,11 @@ function uniqueValues(values: string[]) {
 /**
  * The init.json tool ceiling describes THIS machine's runtime — only
  * deployments sourced from the local runtime may claim it in their tooltip.
+ * "server-status" is NOT local: the peer directory stamps any graphql-bearing
+ * peer with it, including remote agents added by endpoint.
  */
 export function isLocalRuntimeSource(source?: string | null): boolean {
-  return source === "local-standard" || source === "server-status";
+  return source === "local-standard";
 }
 
 export function formatRelativeTime(value?: string | null) {
