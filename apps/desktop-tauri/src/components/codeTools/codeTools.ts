@@ -98,25 +98,106 @@ function splitEnvelope(
   return { meta: safeJsonObject(head), body };
 }
 
+const STDOUT_PREFIX = "stdout:\n";
+const STDERR_MARKER = "\nstderr:\n";
+const EMPTY_PLACEHOLDER = "(empty)";
+
+type StreamTruncation = { returnedBytes: number; truncated: boolean };
+
+function streamTruncation(
+  meta: Record<string, unknown> | null,
+  key: string,
+): StreamTruncation | null {
+  const raw = meta?.[key];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const returnedBytes = record["returned_bytes"];
+  if (typeof returnedBytes !== "number") {
+    return null;
+  }
+  return { returnedBytes, truncated: record["truncated"] === true };
+}
+
 /**
  * Parse the runtime's command body framing:
  * `stdout:\n<stdout-or-(empty)>\nstderr:\n<stderr-or-(empty)>`
- * (see render_command_output in toolset/shared/command.rs). Falls back to
- * treating the whole body as stdout when the framing is absent.
+ * (see render_command_output in toolset/shared/command.rs).
+ *
+ * The marker is appended after RAW stdout, so any stdout that itself contains
+ * a bare "stderr:" line is ambiguous to a text search. The envelope's
+ * `{stdout,stderr}_truncation.returned_bytes` gives an exact byte offset for
+ * an untruncated stream (a truncated stream gains a variable-length
+ * `[Showing lines …]` note, so its rendered length is not recoverable): try
+ * the exact split anchored at stdout's end, then anchored at stderr's start
+ * from the end of the body, each verified against the marker bytes. Fall back
+ * to the first-occurrence text search only for legacy rows without metadata.
  */
-function splitCommandStreams(body: string): { stdout: string; stderr: string } {
-  const stdoutPrefix = "stdout:\n";
-  const stderrMarker = "\nstderr:\n";
-  if (!body.startsWith(stdoutPrefix)) {
+function splitCommandStreams(
+  body: string,
+  stdoutTrunc: StreamTruncation | null,
+  stderrTrunc: StreamTruncation | null,
+): { stdout: string; stderr: string } {
+  if (!body.startsWith(STDOUT_PREFIX)) {
     return { stdout: normalizeStream(body), stderr: "" };
   }
-  const stderrAt = body.indexOf(stderrMarker);
+  const bytes = new TextEncoder().encode(body);
+  if (stdoutTrunc && !stdoutTrunc.truncated) {
+    const length =
+      stdoutTrunc.returnedBytes > 0
+        ? stdoutTrunc.returnedBytes
+        : EMPTY_PLACEHOLDER.length;
+    const split = splitAtMarker(bytes, STDOUT_PREFIX.length + length);
+    if (split) {
+      return split;
+    }
+  }
+  if (stderrTrunc && !stderrTrunc.truncated) {
+    const length =
+      stderrTrunc.returnedBytes > 0
+        ? stderrTrunc.returnedBytes
+        : EMPTY_PLACEHOLDER.length;
+    const split = splitAtMarker(bytes, bytes.length - length - STDERR_MARKER.length);
+    if (split) {
+      return split;
+    }
+  }
+  const stderrAt = body.indexOf(STDERR_MARKER);
   if (stderrAt === -1) {
-    return { stdout: normalizeStream(body.slice(stdoutPrefix.length)), stderr: "" };
+    return { stdout: normalizeStream(body.slice(STDOUT_PREFIX.length)), stderr: "" };
   }
   return {
-    stdout: normalizeStream(body.slice(stdoutPrefix.length, stderrAt)),
-    stderr: normalizeStream(body.slice(stderrAt + stderrMarker.length)),
+    stdout: normalizeStream(body.slice(STDOUT_PREFIX.length, stderrAt)),
+    stderr: normalizeStream(body.slice(stderrAt + STDERR_MARKER.length)),
+  };
+}
+
+/** Split at a byte offset, verified against the literal marker bytes. */
+function splitAtMarker(
+  bytes: Uint8Array,
+  markerStart: number,
+): { stdout: string; stderr: string } | null {
+  if (
+    markerStart < STDOUT_PREFIX.length ||
+    markerStart + STDERR_MARKER.length > bytes.length
+  ) {
+    return null;
+  }
+  const decoder = new TextDecoder();
+  const marker = decoder.decode(
+    bytes.subarray(markerStart, markerStart + STDERR_MARKER.length),
+  );
+  if (marker !== STDERR_MARKER) {
+    return null;
+  }
+  return {
+    stdout: normalizeStream(
+      decoder.decode(bytes.subarray(STDOUT_PREFIX.length, markerStart)),
+    ),
+    stderr: normalizeStream(
+      decoder.decode(bytes.subarray(markerStart + STDERR_MARKER.length)),
+    ),
   };
 }
 
@@ -185,7 +266,11 @@ function toCommandRunView(tool: RenderedToolCallView): CommandRunView | null {
   let meta = envelope.meta;
   let streams: { stdout: string; stderr: string };
   if (meta) {
-    streams = splitCommandStreams(envelope.body);
+    streams = splitCommandStreams(
+      envelope.body,
+      streamTruncation(meta, "stdout_truncation"),
+      streamTruncation(meta, "stderr_truncation"),
+    );
   } else if ((meta = bareJsonMeta(raw))) {
     // raw_json=true: the streams are top-level JSON fields, not body framing.
     streams = {
