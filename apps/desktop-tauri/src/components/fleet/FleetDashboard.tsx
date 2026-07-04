@@ -55,6 +55,16 @@ export function FleetDashboard({
   const [peerFormError, setPeerFormError] = useState<string | null>(null);
   const [localRuntimeError, setLocalRuntimeError] = useState<string | null>(null);
   const hasDeployments = deployments.length > 0;
+  // The repair command re-dials the desktop client's P2P connections as a
+  // whole, so it lives here at fleet level — a per-row placement would lie
+  // about its scope. Shown only when something actually needs repairing.
+  const needsP2PRepair =
+    deployments.some(
+      (deployment) => !deployment.dialSucceeded || Boolean(deployment.lastError),
+    ) ||
+    (p2pHealth
+      ? p2pHealth.consecutiveFailures > 0 || Boolean(p2pHealth.lastError)
+      : false);
 
   async function submitPeer(request: PeerAddRequest) {
     setPeerFormError(null);
@@ -125,6 +135,18 @@ export function FleetDashboard({
       <header className="fleet-header">
         <BrandLockup />
         <div className="fleet-header-actions">
+          {needsP2PRepair ? (
+            <button
+              className="ghost-button"
+              data-testid="fleet-repair-p2p"
+              disabled={repairingP2P}
+              onClick={() => void onRepairP2P()}
+              title="Re-dial saved peers and refresh the desktop client's P2P connections"
+              type="button"
+            >
+              {repairingP2P ? "Reconnecting…" : "Reconnect P2P"}
+            </button>
+          ) : null}
           <button
             className="primary-button"
             onClick={() => setShowAddPeer((value) => !value)}
@@ -175,11 +197,8 @@ export function FleetDashboard({
                 bootstrap={bootstrap}
                 deployment={deployment}
                 key={deployment.peerId}
-                p2pHealth={p2pHealth}
-                repairingP2P={repairingP2P}
                 onOpenChat={onOpenChat}
                 onOpenConfig={onOpenConfig}
-                onRepairP2P={onRepairP2P}
               />
             ))}
           </tbody>

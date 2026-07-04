@@ -61,7 +61,11 @@ export function toolCeilingIcons(
         );
   const source = activeSelections.length ? activeSelections : selections;
   const icons: ToolIcon[] = [];
-  const ceilingLabel = displayToolCeiling(serverCeiling);
+  // Only claim a server ceiling when the caller could actually know it —
+  // init.json is a fact about the local machine, not remote peers.
+  const ceilingSuffix = serverCeiling
+    ? ` Server ceiling: ${displayToolCeiling(serverCeiling)}.`
+    : "";
   const bestFileMode = strongestMode(
     source
       .filter((selection) => selection.enableFileTools)
@@ -89,7 +93,7 @@ export function toolCeilingIcons(
       tone: bestFileMode === "readwrite" ? "readwrite" : "readonly",
       title: `Files (${modeTitle(bestFileMode)}): inspect${
         bestFileMode === "readwrite" ? " and edit" : ""
-      } workspace files. Server ceiling: ${ceilingLabel}.`,
+      } workspace files.${ceilingSuffix}`,
     });
   }
   if (bestBashMode) {
@@ -98,7 +102,7 @@ export function toolCeilingIcons(
       tone: bestBashMode === "readwrite" ? "readwrite" : "readonly",
       title: `Shell (${modeTitle(bestBashMode)}): run terminal commands for diagnostics${
         bestBashMode === "readwrite" ? " and changes" : ""
-      }. Server ceiling: ${ceilingLabel}.`,
+      }.${ceilingSuffix}`,
     });
   }
   if (allowedMetaServices.length || unrestrictedMetaServices) {
@@ -163,6 +167,16 @@ function uniqueValues(values: string[]) {
   return Array.from(
     new Set(values.map((value) => value.trim()).filter(Boolean)),
   ).sort();
+}
+
+/**
+ * The init.json tool ceiling describes THIS machine's runtime — only
+ * deployments sourced from the local runtime may claim it in their tooltip.
+ * "server-status" is NOT local: the peer directory stamps any graphql-bearing
+ * peer with it, including remote agents added by endpoint.
+ */
+export function isLocalRuntimeSource(source?: string | null): boolean {
+  return source === "local-standard";
 }
 
 export function formatRelativeTime(value?: string | null) {

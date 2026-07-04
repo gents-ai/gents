@@ -70,12 +70,10 @@ test.describe("desktop responsive layout guardrails", () => {
 
     const chatButton = page.getByTestId(`fleet-chat-${PEER_ID}`);
     const configButton = page.getByTestId(`fleet-config-${PEER_ID}`);
-    const repairButton = page.getByTestId(`fleet-repair-${PEER_ID}`);
 
-    // All three action buttons exist even when scrolled off-screen at 390px.
+    // Both action buttons exist even when scrolled off-screen at 390px.
     await expect(chatButton).toBeAttached();
     await expect(configButton).toBeAttached();
-    await expect(repairButton).toBeAttached();
 
     // Reachability mechanism: the actions cell lives inside a horizontally
     // scrollable container (.fleet-table-wrap { overflow: auto }) — NOT an
@@ -100,10 +98,6 @@ test.describe("desktop responsive layout guardrails", () => {
       await expect(button).toBeVisible();
       await button.click({ trial: true });
     }
-    // Repair is disabled in the default scenario (dialSucceeded=true, no error).
-    await repairButton.scrollIntoViewIfNeeded();
-    await expect(repairButton).toBeVisible();
-    await expect(repairButton).toBeDisabled();
 
     // Reaching the actions must never introduce page-level horizontal overflow.
     await expectNoPageHorizontalOverflow(page);

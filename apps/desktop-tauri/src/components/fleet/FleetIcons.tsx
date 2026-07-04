@@ -21,17 +21,6 @@ export function ConfigIcon() {
   );
 }
 
-export function RepairIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M20 7h-6v6" />
-      <path d="M20 7l-7 7" />
-      <path d="M4 17h6v-6" />
-      <path d="M4 17l7-7" />
-    </svg>
-  );
-}
-
 export function ToolIconGlyph({ kind }: { kind: ToolIconKind }) {
   if (kind === "file") {
     return (
