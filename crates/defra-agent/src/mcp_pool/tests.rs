@@ -169,6 +169,7 @@ async fn list_tools_transport_failure_retries_generated_safe_read_case() {
                     endpoint,
                     agent_did_header,
                     trace_context_headers: trace_headers,
+                    last_used: super::fresh_last_used(),
                     list_tools_fn: Box::new(move || {
                         let list_calls = Arc::clone(&list_calls);
                         Box::pin(async move {
@@ -224,6 +225,7 @@ async fn assert_call_tool_transport_no_retry(case: &LeanToolRetryCase) {
                 endpoint: endpoint.to_string(),
                 agent_did_header: None,
                 trace_context_headers: HashMap::new(),
+                last_used: super::fresh_last_used(),
                 list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
                 call_tool_fn: Box::new(move |_params| {
                     let calls = Arc::clone(&calls_for_fn);
@@ -345,6 +347,152 @@ async fn mcp_pool_reconnects_when_trace_context_changes() {
     );
 }
 
+/// Replacing a pooled connection (trace-context churn happens every task run)
+/// must terminate the old streamable-HTTP session on the server — otherwise
+/// every run leaks a zombie session server-side. Zombie accumulation is what
+/// fed the 2026-07-01 fleet-wide resume storm against observability-mcp.
+#[tokio::test]
+async fn replacing_connection_terminates_old_streamable_http_session() {
+    let sequence = Arc::new(AtomicUsize::new(0));
+    let sequence_for_headers = Arc::clone(&sequence);
+    let (endpoint, http_log) = spawn_session_tracking_mcp_server().await;
+    let pool = McpPool::new().with_trace_context_headers(move || {
+        let sequence = sequence_for_headers.fetch_add(1, Ordering::SeqCst) + 1;
+        HashMap::from([(
+            "traceparent".to_string(),
+            format!("00-{sequence:032x}-00f067aa0ba902b7-01"),
+        )])
+    });
+
+    pool.list_tools("session-service", &endpoint)
+        .await
+        .expect("first mock MCP list_tools should succeed");
+    // Trace context changed → pool replaces the cached connection.
+    pool.list_tools("session-service", &endpoint)
+        .await
+        .expect("second mock MCP list_tools should succeed");
+
+    // The replaced connection's worker sends the session DELETE asynchronously;
+    // poll briefly instead of asserting instantly.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        {
+            let log = http_log.lock().expect("http log lock");
+            let deleted_sessions: Vec<&str> = log
+                .iter()
+                .filter(|entry| entry.http_method == "DELETE")
+                .filter_map(|entry| entry.session_id.as_deref())
+                .collect();
+            if deleted_sessions.contains(&"session-1") {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "expected a DELETE for the replaced connection's session-1; \
+                     without it every reconnect leaks a server-side session. log: {log:?}"
+                );
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// Evicting a dead connection (the list_tools transport-failure retry path)
+/// must also terminate the old session rather than orphan it.
+#[tokio::test]
+async fn evicting_connection_terminates_streamable_http_session() {
+    let (endpoint, http_log) = spawn_session_tracking_mcp_server().await;
+    let pool = McpPool::new();
+
+    pool.list_tools("evict-service", &endpoint)
+        .await
+        .expect("mock MCP list_tools should succeed");
+    pool.remove("evict-service").await;
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        {
+            let log = http_log.lock().expect("http log lock");
+            if log.iter().any(|entry| entry.http_method == "DELETE") {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "expected a session DELETE after McpPool::remove; \
+                     evicted connections must not orphan server-side sessions. log: {log:?}"
+                );
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// A pooled connection idle past the TTL must be replaced (and its session
+/// terminated) on next use instead of reused forever. Long-lived idle
+/// connections are the ones that got stuck in the rmcp dead-session resume
+/// loop during the 2026-07-01 fleet incident.
+#[tokio::test]
+async fn idle_connection_past_ttl_is_replaced_on_next_use() {
+    let (endpoint, http_log) = spawn_session_tracking_mcp_server().await;
+    let pool = McpPool::new().with_idle_ttl(std::time::Duration::from_millis(50));
+
+    pool.list_tools("ttl-service", &endpoint)
+        .await
+        .expect("first mock MCP list_tools should succeed");
+    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+    pool.list_tools("ttl-service", &endpoint)
+        .await
+        .expect("second mock MCP list_tools should succeed");
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        {
+            let log = http_log.lock().expect("http log lock");
+            let sessions_created = log
+                .iter()
+                .filter(|entry| entry.rpc_method.as_deref() == Some("initialize"))
+                .count();
+            let deleted = log.iter().any(|entry| {
+                entry.http_method == "DELETE" && entry.session_id.as_deref() == Some("session-1")
+            });
+            if sessions_created >= 2 && deleted {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "expected the idle connection to be replaced (2 initializes) and its \
+                     session-1 deleted after the idle TTL elapsed. log: {log:?}"
+                );
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// A connection used again within the TTL must be reused, not churned.
+#[tokio::test]
+async fn connection_within_idle_ttl_is_reused() {
+    let (endpoint, http_log) = spawn_session_tracking_mcp_server().await;
+    let pool = McpPool::new().with_idle_ttl(std::time::Duration::from_secs(600));
+
+    pool.list_tools("fresh-service", &endpoint)
+        .await
+        .expect("first mock MCP list_tools should succeed");
+    pool.list_tools("fresh-service", &endpoint)
+        .await
+        .expect("second mock MCP list_tools should succeed");
+
+    let log = http_log.lock().expect("http log lock");
+    let sessions_created = log
+        .iter()
+        .filter(|entry| entry.rpc_method.as_deref() == Some("initialize"))
+        .count();
+    assert_eq!(
+        sessions_created, 1,
+        "a connection inside its idle TTL must be reused, got {log:?}"
+    );
+}
+
 #[derive(Debug)]
 struct CapturedMcpHttpRequest {
     method: String,
@@ -387,11 +535,96 @@ async fn spawn_header_capture_mcp_server() -> (String, Arc<Mutex<Vec<CapturedMcp
     (format!("http://{addr}/mcp"), requests)
 }
 
+#[derive(Debug)]
+struct SessionHttpLogEntry {
+    http_method: String,
+    session_id: Option<String>,
+    rpc_method: Option<String>,
+}
+
+/// Mock MCP server that issues `Mcp-Session-Id: session-<n>` on each
+/// `initialize` and logs the HTTP method + session header of every request,
+/// so tests can observe session lifecycle (creation, use, DELETE).
+async fn spawn_session_tracking_mcp_server() -> (String, Arc<Mutex<Vec<SessionHttpLogEntry>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock MCP server");
+    let addr = listener.local_addr().expect("mock MCP server address");
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let log_for_server = Arc::clone(&log);
+    let session_counter = Arc::new(AtomicUsize::new(0));
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let log = Arc::clone(&log_for_server);
+            let session_counter = Arc::clone(&session_counter);
+            tokio::spawn(async move {
+                let Ok(request) = read_mcp_http_request(&mut stream).await else {
+                    return;
+                };
+                log.lock()
+                    .expect("http log lock")
+                    .push(SessionHttpLogEntry {
+                        http_method: request.http_method.clone(),
+                        session_id: request.session_id_header.clone(),
+                        rpc_method: (!request.method.is_empty()).then(|| request.method.clone()),
+                    });
+                let response = match request.http_method.as_str() {
+                    "DELETE" => "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .to_string(),
+                    "GET" => {
+                        // No standalone SSE stream in this mock.
+                        "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            .to_string()
+                    }
+                    _ => {
+                        let session_header = if request.method == "initialize" {
+                            let n = session_counter.fetch_add(1, Ordering::SeqCst) + 1;
+                            Some(format!("session-{n}"))
+                        } else {
+                            None
+                        };
+                        mcp_http_response_with_session(
+                            &request.method,
+                            request.id,
+                            session_header.as_deref(),
+                        )
+                    }
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+
+    (format!("http://{addr}/mcp"), log)
+}
+
+fn mcp_http_response_with_session(
+    method: &str,
+    id: Option<serde_json::Value>,
+    session_id: Option<&str>,
+) -> String {
+    let base = mcp_http_response(method, id);
+    match session_id {
+        Some(session_id) => base.replacen(
+            "\r\nContent-Type:",
+            &format!("\r\nMcp-Session-Id: {session_id}\r\nContent-Type:"),
+            1,
+        ),
+        None => base,
+    }
+}
+
 struct ParsedMcpHttpRequest {
     method: String,
     id: Option<serde_json::Value>,
     agent_did_header: Option<String>,
     traceparent_header: Option<String>,
+    http_method: String,
+    session_id_header: Option<String>,
 }
 
 async fn read_mcp_http_request(stream: &mut TcpStream) -> std::io::Result<ParsedMcpHttpRequest> {
@@ -409,6 +642,17 @@ async fn read_mcp_http_request(stream: &mut TcpStream) -> std::io::Result<Parsed
     };
 
     let headers = String::from_utf8_lossy(&buf[..header_end]);
+    let http_method = headers
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().next())
+        .unwrap_or_default()
+        .to_string();
+    let session_id_header = headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("mcp-session-id")
+            .then(|| value.trim().to_string())
+    });
     let content_length = headers
         .lines()
         .find_map(|line| {
@@ -452,6 +696,8 @@ async fn read_mcp_http_request(stream: &mut TcpStream) -> std::io::Result<Parsed
         id,
         agent_did_header,
         traceparent_header,
+        http_method,
+        session_id_header,
     })
 }
 
@@ -556,6 +802,7 @@ async fn hung_connect_does_not_wedge_other_services() {
                 call_tool_fn: Box::new(|_params| {
                     Box::pin(async { anyhow::bail!("call_tool was not expected") })
                 }),
+                last_used: super::fresh_last_used(),
             })
         },
     );

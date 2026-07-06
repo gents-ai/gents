@@ -51,6 +51,21 @@ struct McpConnection {
     trace_context_headers: HashMap<String, String>,
     list_tools_fn: Box<ListToolsFn>,
     call_tool_fn: Box<CallToolFn>,
+    last_used: std::sync::Mutex<std::time::Instant>,
+}
+
+impl McpConnection {
+    fn touch(&self) {
+        *self.last_used.lock().expect("last_used lock") = std::time::Instant::now();
+    }
+
+    fn idle_longer_than(&self, ttl: std::time::Duration) -> bool {
+        self.last_used.lock().expect("last_used lock").elapsed() > ttl
+    }
+}
+
+fn fresh_last_used() -> std::sync::Mutex<std::time::Instant> {
+    std::sync::Mutex::new(std::time::Instant::now())
 }
 
 fn wrap_connection<S>(
@@ -68,6 +83,7 @@ where
         endpoint,
         agent_did_header: None,
         trace_context_headers: HashMap::new(),
+        last_used: fresh_last_used(),
         list_tools_fn: Box::new(move || {
             let c = Arc::clone(&c1);
             Box::pin(async move {
@@ -234,7 +250,15 @@ pub struct McpPool {
     inner: Arc<RwLock<HashMap<String, McpConnection>>>,
     connect_fn: Arc<ConnectFn>,
     trace_context_headers_fn: Arc<TraceContextHeadersFn>,
+    idle_ttl: Option<std::time::Duration>,
 }
+
+/// Default idle TTL for pooled MCP connections.
+///
+/// A connection idle past this is replaced (and its session terminated) on
+/// next use. Bounds how long a wedged transport — e.g. one stuck in the rmcp
+/// dead-session SSE resume loop — can live unattended.
+pub const DEFAULT_MCP_IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 impl McpPool {
     pub fn new() -> Self {
@@ -242,7 +266,15 @@ impl McpPool {
             inner: Arc::new(RwLock::new(HashMap::new())),
             connect_fn: default_connect_fn(),
             trace_context_headers_fn: Arc::new(crate::runtime_trace::current_trace_context_headers),
+            idle_ttl: Some(DEFAULT_MCP_IDLE_TTL),
         }
+    }
+
+    /// Replace connections idle longer than `ttl` on their next use (the old
+    /// session is terminated). Bounds how long a wedged transport can live.
+    pub fn with_idle_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.idle_ttl = Some(ttl);
+        self
     }
 
     #[cfg(test)]
@@ -267,6 +299,7 @@ impl McpPool {
                 },
             ),
             trace_context_headers_fn: Arc::new(crate::runtime_trace::current_trace_context_headers),
+            idle_ttl: None,
         }
     }
 
@@ -296,6 +329,7 @@ impl McpPool {
                         endpoint,
                         agent_did_header,
                         trace_context_headers: trace_headers,
+                        last_used: fresh_last_used(),
                         list_tools_fn: Box::new(move || {
                             let handler = Arc::clone(&handler);
                             let service_id = service_id_for_list.clone();
@@ -482,7 +516,9 @@ impl McpPool {
                 if conn.endpoint == endpoint
                     && conn.agent_did_header == agent_did_header
                     && conn.trace_context_headers == trace_context_headers
+                    && !self.idle_ttl.is_some_and(|ttl| conn.idle_longer_than(ttl))
                 {
+                    conn.touch();
                     return Ok(());
                 }
             }
@@ -497,10 +533,13 @@ impl McpPool {
                 let endpoint_changed = conn.endpoint != endpoint;
                 let agent_did_changed = conn.agent_did_header != agent_did_header;
                 let trace_context_changed = conn.trace_context_headers != trace_context_headers;
+                let idle_ttl_expired = self.idle_ttl.is_some_and(|ttl| conn.idle_longer_than(ttl));
                 if conn.endpoint == endpoint
                     && conn.agent_did_header == agent_did_header
                     && conn.trace_context_headers == trace_context_headers
+                    && !idle_ttl_expired
                 {
+                    conn.touch();
                     return Ok(());
                 }
                 tracing::info!(
@@ -510,6 +549,7 @@ impl McpPool {
                     endpoint_changed,
                     agent_did_changed,
                     trace_context_changed,
+                    idle_ttl_expired,
                     "MCP connection context changed, reconnecting"
                 );
             }
