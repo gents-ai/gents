@@ -30,7 +30,7 @@
 
   .fleet-brand h1 {
     margin: 0;
-    font-size: 28px;
+    font-size: var(--text-3xl);
     line-height: 1.15;
   }
 
@@ -84,20 +84,20 @@
 
   .fleet-local-runtime-copy strong {
     color: var(--color-text);
-    font-size: 15px;
+    font-size: var(--text-lg);
   }
 
   .fleet-local-runtime-error {
     grid-column: 1 / -1;
     margin: 0;
     color: var(--color-error);
-    font-size: 12px;
+    font-size: var(--text-sm);
   }
 
   .fleet-remote-disclosure > summary {
     cursor: pointer;
     color: var(--color-text-muted);
-    font-size: 13px;
+    font-size: var(--text-md);
     padding: var(--space-2) 0;
     width: fit-content;
   }
@@ -146,7 +146,7 @@
   }
 
   .fleet-import-status {
-    font-size: 12px;
+    font-size: var(--text-sm);
   }
 
   .fleet-inline-error {
@@ -192,7 +192,7 @@
 
   .fleet-empty-copy h2 {
     margin: 0;
-    font-size: 22px;
+    font-size: var(--text-2xl);
   }
 
   @media (max-width: 760px) {
@@ -205,7 +205,7 @@
     }
 
     .fleet-brand h1 {
-      font-size: 22px;
+      font-size: var(--text-2xl);
     }
 
     .fleet-local-runtime,

@@ -6,7 +6,7 @@
 
   .field > span {
     color: var(--color-text-soft);
-    font-size: 14px;
+    font-size: var(--text-base);
   }
 
   .field > input,

@@ -23,7 +23,7 @@
   .tool-detail-key,
   .tool-detail-label {
     color: var(--color-text-muted);
-    font-size: 11px;
+    font-size: var(--text-xs);
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
@@ -96,7 +96,7 @@
 
   .tool-item-action {
     color: var(--color-text-muted);
-    font-size: 12px;
+    font-size: var(--text-sm);
     white-space: nowrap;
     opacity: 0.7;
   }
@@ -202,7 +202,7 @@
   }
 
   .denial-category-label {
-    font-size: 10.5px;
+    font-size: var(--text-2xs);
     letter-spacing: 0.09em;
     text-transform: uppercase;
     color: var(--color-warning);
@@ -211,7 +211,7 @@
 
   .denial-rule-id {
     font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
-    font-size: 10.5px;
+    font-size: var(--text-2xs);
     letter-spacing: 0.04em;
     padding: 2px 8px;
     border-radius: var(--radius-pill);
@@ -222,7 +222,7 @@
   }
 
   .denial-reason {
-    font-size: 12.5px;
+    font-size: var(--text-sm);
     color: var(--color-warning-soft, #ffd089);
   }
 
@@ -242,7 +242,7 @@
     background: var(--color-surface-strong);
     border-left: 3px solid rgb(var(--source-orange-rgb) / 0.55);
     font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
-    font-size: 12.5px;
+    font-size: var(--text-sm);
     color: var(--color-text);
     white-space: pre-wrap;
     word-break: break-word;
@@ -258,7 +258,7 @@
   /* ---- code-aware tool rendering (diffs + terminal) ---- */
   .code-tool > summary .code-tool-kind {
     text-transform: uppercase;
-    font-size: 0.72rem;
+    font-size: var(--text-xs);
     letter-spacing: 0.04em;
     color: var(--color-text-muted);
   }
@@ -266,7 +266,7 @@
   .code-tool-path,
   .code-tool-command,
   .code-tool-prompt {
-    font-size: 0.82rem;
+    font-size: var(--text-md);
   }
 
   .code-tool-prompt {
@@ -279,7 +279,7 @@
     overflow-x: auto;
     background: var(--color-surface-deep);
     border-radius: var(--radius-md, 8px);
-    font-size: 0.8rem;
+    font-size: var(--text-md);
     line-height: 1.5;
   }
 
@@ -316,7 +316,7 @@
   }
 
   .code-exit {
-    font-size: 0.72rem;
+    font-size: var(--text-xs);
     letter-spacing: 0.03em;
     padding: 1px 8px;
     border-radius: var(--radius-pill, 999px);
@@ -344,7 +344,7 @@
     overflow-x: auto;
     background: var(--color-surface-deep);
     border-radius: var(--radius-md, 8px);
-    font-size: 0.8rem;
+    font-size: var(--text-md);
     line-height: 1.5;
     white-space: pre-wrap;
   }

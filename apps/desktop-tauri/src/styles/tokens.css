@@ -67,5 +67,17 @@
     --space-8: 18px;
     --space-9: 20px;
     --space-10: 24px;
+    /* Type scale. Steps mirror real usage (dense operator UI lives at
+       10-13px); the conformance fence forbids raw font-size values. */
+    --text-2xs: 10px;
+    --text-xs: 11px;
+    --text-sm: 12px;
+    --text-md: 13px;
+    --text-base: 14px;
+    --text-lg: 16px;
+    --text-xl: 18px;
+    --text-2xl: 22px;
+    --text-3xl: 28px;
+    --text-4xl: 32px;
   }
 }

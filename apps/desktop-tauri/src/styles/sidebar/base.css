@@ -28,7 +28,7 @@
   }
 
   .sidebar .panel-header h2 {
-    font-size: 18px;
+    font-size: var(--text-xl);
     line-height: 1.15;
   }
 
@@ -52,7 +52,7 @@
   .sidebar-utility summary {
     cursor: pointer;
     color: var(--color-text-soft);
-    font-size: 13px;
+    font-size: var(--text-md);
     font-weight: 600;
   }
 

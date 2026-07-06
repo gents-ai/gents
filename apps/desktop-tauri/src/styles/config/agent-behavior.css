@@ -19,7 +19,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 22px;
+    font-size: var(--text-2xl);
     line-height: 1.2;
   }
 
@@ -31,7 +31,7 @@
     background: var(--color-surface-strong);
     color: var(--color-text);
     padding: var(--space-4) var(--space-5);
-    font-size: 18px;
+    font-size: var(--text-xl);
     font-weight: 700;
   }
 
@@ -71,7 +71,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 22px;
+    font-size: var(--text-2xl);
     line-height: 1.2;
   }
 
@@ -83,7 +83,7 @@
     background: var(--color-surface-strong);
     color: var(--color-text);
     padding: var(--space-4) var(--space-5);
-    font-size: 18px;
+    font-size: var(--text-xl);
     font-weight: 700;
   }
 
@@ -113,7 +113,7 @@
     background: var(--color-surface-strong);
     color: var(--color-text);
     padding: var(--space-3) var(--space-4);
-    font-size: 12px;
+    font-size: var(--text-sm);
   }
 
   .behavior-link-control .config-icon-button {
@@ -154,7 +154,7 @@
 
     .agent-name-row h3,
     .behavior-key-row h3 {
-      font-size: 18px;
+      font-size: var(--text-xl);
       white-space: normal;
     }
   }

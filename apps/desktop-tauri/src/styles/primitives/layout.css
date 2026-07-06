@@ -65,7 +65,7 @@
 
   .list-item-meta {
     color: var(--color-text-warm);
-    font-size: 12px;
+    font-size: var(--text-sm);
     text-transform: uppercase;
     letter-spacing: 0.08em;
   }

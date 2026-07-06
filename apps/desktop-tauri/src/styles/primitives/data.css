@@ -15,7 +15,7 @@
   }
 
   .facts dt {
-    font-size: 12px;
+    font-size: var(--text-sm);
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--color-accent-muted);
@@ -64,7 +64,7 @@
 
   .eyebrow {
     margin: 0 0 var(--space-2);
-    font-size: 11px;
+    font-size: var(--text-xs);
     letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--color-accent-muted);

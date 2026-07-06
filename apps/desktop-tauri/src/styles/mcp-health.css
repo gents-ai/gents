@@ -16,12 +16,12 @@
 
   .mcp-health-header h2 {
     margin: 0;
-    font-size: 21px;
+    font-size: var(--text-2xl);
   }
 
   .mcp-health-subtitle {
     color: var(--color-text-muted);
-    font-size: 12px;
+    font-size: var(--text-sm);
     margin-top: var(--space-2);
     max-width: 56ch;
   }
@@ -33,7 +33,7 @@
     border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-sm);
     cursor: pointer;
   }
 
@@ -50,7 +50,7 @@
 
   .mcp-health-meta {
     color: var(--color-text-muted);
-    font-size: 11px;
+    font-size: var(--text-xs);
     min-height: 16px;
   }
 
@@ -73,7 +73,7 @@
     border: 1px solid var(--border-subtle);
     background: rgb(0 0 0 / 0.45);
     border-radius: var(--radius-pill);
-    font-size: 12px;
+    font-size: var(--text-sm);
     color: var(--color-text-soft);
   }
 
@@ -121,7 +121,7 @@
     color: var(--color-text-soft);
     border-radius: var(--radius-pill);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-sm);
     cursor: pointer;
   }
 
@@ -154,14 +154,14 @@
   }
 
   .mcp-health-empty-emoji {
-    font-size: 26px;
+    font-size: var(--text-3xl);
     opacity: 0.5;
     margin-bottom: var(--space-3);
   }
 
   .mcp-health-empty-title {
     color: var(--color-text);
-    font-size: 14px;
+    font-size: var(--text-base);
     margin-bottom: var(--space-2);
   }
 
@@ -176,7 +176,7 @@
   .mcp-health-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 13px;
+    font-size: var(--text-md);
   }
 
   .mcp-health-table th,
@@ -190,7 +190,7 @@
   .mcp-health-table thead th {
     color: var(--color-text-muted);
     background: rgb(0 0 0 / 0.88);
-    font-size: 11px;
+    font-size: var(--text-xs);
     letter-spacing: 0.05em;
     text-transform: uppercase;
     white-space: nowrap;
@@ -233,7 +233,7 @@
   .mcp-health-caret {
     color: var(--color-text-muted);
     transition: transform 120ms ease;
-    font-size: 10px;
+    font-size: var(--text-2xs);
     user-select: none;
   }
 
@@ -248,7 +248,7 @@
 
   .mcp-health-service-endpoint {
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--text-xs);
     color: var(--color-text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -261,7 +261,7 @@
     align-items: center;
     gap: var(--space-3);
     font-weight: 600;
-    font-size: 13px;
+    font-size: var(--text-md);
   }
 
   .mcp-health-status-healthy {
@@ -327,7 +327,7 @@
   .mcp-health-k-cell {
     display: grid;
     gap: 3px;
-    font-size: 12px;
+    font-size: var(--text-sm);
   }
 
   .mcp-health-k-badge {
@@ -335,7 +335,7 @@
     align-items: center;
     padding: 2px 6px;
     border-radius: var(--radius-sm);
-    font-size: 10px;
+    font-size: var(--text-2xs);
     letter-spacing: 0.04em;
     text-transform: uppercase;
     font-weight: 600;
@@ -364,26 +364,26 @@
 
   .mcp-health-k-explainer {
     color: var(--color-text-muted);
-    font-size: 11px;
+    font-size: var(--text-xs);
   }
 
   .mcp-health-last-probe {
     display: grid;
     gap: 3px;
     color: var(--color-text-soft);
-    font-size: 12px;
+    font-size: var(--text-sm);
     font-variant-numeric: tabular-nums;
   }
 
   .mcp-health-backoff {
     color: var(--color-warning);
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--text-xs);
   }
 
   .mcp-health-probe-result {
     color: var(--color-accent);
-    font-size: 11px;
+    font-size: var(--text-xs);
     /* Clamp like .mcp-health-last-error: bridge error chains can run long. */
     display: inline-block;
     max-width: 44ch;
@@ -399,7 +399,7 @@
 
   .mcp-health-last-error {
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--text-xs);
     color: var(--color-error);
     max-width: 28ch;
     overflow: hidden;
@@ -419,7 +419,7 @@
     border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-sm);
     cursor: pointer;
   }
 
@@ -442,7 +442,7 @@
     display: grid;
     gap: 4px;
     margin: 0;
-    font-size: 12px;
+    font-size: var(--text-sm);
   }
 
   .mcp-health-kv > div {
@@ -459,7 +459,7 @@
   .mcp-health-kv dd {
     color: var(--color-text-soft);
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--text-xs);
     margin: 0;
     overflow-wrap: anywhere;
   }
