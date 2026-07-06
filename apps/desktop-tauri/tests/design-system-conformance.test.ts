@@ -106,7 +106,9 @@ describe("token ratchets", () => {
     let count = 0;
     for (const css of sources.values()) {
       for (const match of css.matchAll(
-        /\b(?:padding|margin|gap|row-gap|column-gap)(?:-(?:top|right|bottom|left|inline|block))?\s*:\s*([^;{}]+)/g,
+        // (?<![\w-]) keeps scroll-padding-* out; -start/-end covers the
+        // logical longhands so raw px can't smuggle through them.
+        /(?<![\w-])(?:padding|margin|gap|row-gap|column-gap)(?:-(?:top|right|bottom|left|inline|block))?(?:-(?:start|end))?\s*:\s*([^;{}]+)/g,
       )) {
         count += (match[1].match(/\d+px\b/g) ?? []).length;
       }
@@ -119,7 +121,11 @@ describe("token ratchets", () => {
   });
 
   it("bespoke box-shadows do not grow (ceiling 38)", () => {
-    expect(countMatches(/box-shadow:/g)).toBeLessThanOrEqual(38);
+    // 'none' and pure --shadow-* token values are conformant, not bespoke:
+    // tokenizing shadows must lower this pressure, not preserve it.
+    expect(
+      countMatches(/box-shadow:\s*(?!none[;}\s]|var\(--shadow-)[^;{}]+/gi),
+    ).toBeLessThanOrEqual(38);
   });
 });
 
