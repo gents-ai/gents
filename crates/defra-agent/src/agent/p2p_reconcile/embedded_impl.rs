@@ -296,12 +296,16 @@ fn map_p2p_error(operation: &'static str, error: P2PError) -> RemoteP2pAdminErro
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::net::{IpAddr, Ipv4Addr};
 
     use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
 
     use super::*;
+    use crate::agent::p2p_reconcile::FilterPredicate;
     use crate::defra_node::P2PConfig;
+    use crate::ensure_runtime_schemas;
+    use crate::graphql::escape_graphql_string;
 
     const TEST_SCHEMA: &str = r#"
         type P2pReconcileThing {
@@ -314,7 +318,7 @@ mod tests {
         _tempdir: tempfile::TempDir,
     }
 
-    async fn test_node() -> TestNode {
+    async fn p2p_node() -> TestNode {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let node = Arc::new(
             EmbeddedNode::builder()
@@ -336,11 +340,27 @@ mod tests {
                 .await
                 .expect("embedded p2p node"),
         );
-        node.add_schema(TEST_SCHEMA).await.expect("test schema");
         TestNode {
             node,
             _tempdir: tempdir,
         }
+    }
+
+    async fn test_node() -> TestNode {
+        let test = p2p_node().await;
+        test.node
+            .add_schema(TEST_SCHEMA)
+            .await
+            .expect("test schema");
+        test
+    }
+
+    async fn runtime_test_node() -> TestNode {
+        let test = p2p_node().await;
+        ensure_runtime_schemas(&test.node)
+            .await
+            .expect("runtime schemas");
+        test
     }
 
     async fn wait_for_peer_info(admin: &EmbeddedRemoteP2pAdmin) -> Vec<String> {
@@ -357,11 +377,133 @@ mod tests {
         }
     }
 
-    fn collection_id(node: &EmbeddedNode) -> String {
-        node.get_collection("P2pReconcileThing")
+    fn collection_id(node: &EmbeddedNode, name: &str) -> String {
+        node.get_collection(name)
             .expect("collection lookup")
             .expect("collection")
             .collection_id
+    }
+
+    async fn wait_for_active_peer(admin: &EmbeddedRemoteP2pAdmin) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let peers = admin.active_peers().await.expect("active peers");
+            if !peers.is_empty() {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("node never reported an active P2P peer");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn exec(node: &EmbeddedNode, statement: &str, context: &str) {
+        let response = node.execute(statement).await;
+        assert!(
+            !response.has_errors(),
+            "{context} failed: {:?}\n{statement}",
+            response.errors
+        );
+    }
+
+    async fn seed_agent_request(node: &EmbeddedNode, request_id: &str, agent_did: &str) {
+        let request_id = escape_graphql_string(request_id);
+        let agent_did = escape_graphql_string(agent_did);
+        let session_id = escape_graphql_string(&format!("{request_id}-session"));
+        let behavior_id = escape_graphql_string(&format!("{agent_did}:default"));
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentRequest(input: {{
+                    request_id: "{request_id}",
+                    agent_did: "{agent_did}",
+                    behavior_id: "{behavior_id}",
+                    session_id: "{session_id}",
+                    retry_parent_request: "",
+                    retry_root_request: "{request_id}",
+                    superseded_by_request: "",
+                    content: "issue 604 filtered replay",
+                    status: "processing",
+                    lifecycle_state: "processing",
+                    backend_id: "",
+                    execution_origin: "interactive",
+                    failure_reason: "",
+                    created_at: "2026-07-06T00:00:00Z",
+                    deadline: "2026-07-06T01:00:00Z",
+                    retry_count: 0,
+                    max_retries: 3,
+                    subagent_depth: 0
+                }}) {{ _docID }}
+            }}"#
+        );
+        exec(node, &mutation, "seed AgentRequest").await;
+    }
+
+    async fn seed_agent_tool_call(node: &EmbeddedNode, tool_call_id: &str, spawn_target_did: &str) {
+        let tool_call_id = escape_graphql_string(tool_call_id);
+        let spawn_target_did = escape_graphql_string(spawn_target_did);
+        let tool_call_key = escape_graphql_string(&format!("issue-604-session:{tool_call_id}"));
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "{tool_call_key}",
+                    request_id: "parent-match",
+                    session_id: "issue-604-session",
+                    agent_did: "did:key:coord",
+                    message_sequence: 1,
+                    tool_name: "spawn_subagent",
+                    tool_call_id: "{tool_call_id}",
+                    args: "{{}}",
+                    result: "",
+                    status: "called",
+                    lifecycle_state: "running",
+                    started_at: "2026-07-06T00:00:00Z",
+                    await_mode: "background",
+                    cancel_policy: "cascade",
+                    child_request_id: "child-{tool_call_id}",
+                    spawn_target_did: "{spawn_target_did}"
+                }}) {{ _docID }}
+            }}"#
+        );
+        exec(node, &mutation, "seed AgentToolCall").await;
+    }
+
+    async fn collection_values(
+        node: &EmbeddedNode,
+        collection: &str,
+        field: &str,
+    ) -> BTreeSet<String> {
+        let query = format!("{{ {collection} {{ {field} }} }}");
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "query {collection}.{field} failed: {:?}",
+            response.errors
+        );
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get(collection))
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row.get(field).and_then(serde_json::Value::as_str))
+            .map(ToOwned::to_owned)
+            .collect()
+    }
+
+    async fn wait_for_value(node: &EmbeddedNode, collection: &str, field: &str, expected: &str) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let last = collection_values(node, collection, field).await;
+            if last.contains(expected) {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("timed out waiting for {collection}.{field}={expected}; last={last:?}");
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
     }
 
     #[tokio::test]
@@ -370,7 +512,7 @@ mod tests {
         let node = Arc::clone(&test.node);
         let admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&node));
         let collection_name = "P2pReconcileThing".to_string();
-        let expected_collection_id = collection_id(&node);
+        let expected_collection_id = collection_id(&node, "P2pReconcileThing");
 
         admin
             .add_p2p_collections(std::slice::from_ref(&collection_name))
@@ -396,7 +538,7 @@ mod tests {
         let remote_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&remote));
         let remote_addresses = wait_for_peer_info(&remote_admin).await;
         let collection_name = "P2pReconcileThing".to_string();
-        let expected_collection_id = collection_id(&local);
+        let expected_collection_id = collection_id(&local, "P2pReconcileThing");
 
         local_admin
             .connect(&remote_addresses)
@@ -424,5 +566,85 @@ mod tests {
 
         local.shutdown().await;
         remote.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn embedded_filtered_replicator_replays_existing_matching_documents() {
+        let sender_test = runtime_test_node().await;
+        let receiver_test = runtime_test_node().await;
+        let sender = Arc::clone(&sender_test.node);
+        let receiver = Arc::clone(&receiver_test.node);
+        let sender_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&sender));
+        let receiver_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&receiver));
+        let sender_addresses = wait_for_peer_info(&sender_admin).await;
+        let receiver_addresses = wait_for_peer_info(&receiver_admin).await;
+
+        seed_agent_request(&sender, "parent-match", "did:key:coord").await;
+        seed_agent_request(&sender, "parent-other", "did:key:other").await;
+        seed_agent_tool_call(&sender, "bridge-match", "did:key:host").await;
+        seed_agent_tool_call(&sender, "bridge-other", "did:key:other").await;
+
+        let collections = vec!["AgentRequest".to_string(), "AgentToolCall".to_string()];
+        sender_admin
+            .add_p2p_collections(&collections)
+            .await
+            .expect("add sender p2p collections");
+        receiver_admin
+            .add_p2p_collections(&collections)
+            .await
+            .expect("add receiver p2p collections");
+
+        sender_admin
+            .connect(&receiver_addresses)
+            .await
+            .expect("connect sender to receiver");
+        wait_for_active_peer(&sender_admin).await;
+        wait_for_active_peer(&receiver_admin).await;
+
+        // Receiver-side authorization mirrors the production embedded P2P setup;
+        // the data flow asserted below is still sender -> receiver.
+        receiver_admin
+            .add_replicator(&sender_addresses, &collections, &PairingFilters::default())
+            .await
+            .expect("authorize sender as receiver-side replicator");
+
+        let mut filters = PairingFilters::new();
+        filters.insert(
+            "AgentRequest".to_string(),
+            FilterPredicate {
+                field: "agent_did".to_string(),
+                value: "did:key:coord".to_string(),
+            },
+        );
+        filters.insert(
+            "AgentToolCall".to_string(),
+            FilterPredicate {
+                field: "spawn_target_did".to_string(),
+                value: "did:key:host".to_string(),
+            },
+        );
+        sender_admin
+            .add_replicator(&receiver_addresses, &collections, &filters)
+            .await
+            .expect("install filtered sender to receiver replicator");
+
+        wait_for_value(&receiver, "AgentRequest", "request_id", "parent-match").await;
+        wait_for_value(&receiver, "AgentToolCall", "tool_call_id", "bridge-match").await;
+
+        let request_ids = collection_values(&receiver, "AgentRequest", "request_id").await;
+        let tool_call_ids = collection_values(&receiver, "AgentToolCall", "tool_call_id").await;
+        assert_eq!(
+            request_ids,
+            BTreeSet::from(["parent-match".to_string()]),
+            "filtered request replay should not leak non-matching rows"
+        );
+        assert_eq!(
+            tool_call_ids,
+            BTreeSet::from(["bridge-match".to_string()]),
+            "filtered tool-call replay should not leak non-matching rows"
+        );
+
+        sender.shutdown().await;
+        receiver.shutdown().await;
     }
 }
