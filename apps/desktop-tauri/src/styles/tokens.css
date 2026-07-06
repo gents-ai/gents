@@ -11,7 +11,7 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 
-    /* Bundled via @fontsource-variable (imported in main.tsx); the bare
+    /* Bundled via @fontsource-variable (imported in App.css); the bare
        family names stay as fallbacks for locally-installed copies. */
     --font-heading:
       "Funnel Display Variable", "Funnel Display", "Inter Variable", "Inter",
