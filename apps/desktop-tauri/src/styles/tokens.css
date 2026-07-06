@@ -79,5 +79,10 @@
     --text-2xl: 22px;
     --text-3xl: 28px;
     --text-4xl: 32px;
+    /* Motion. One shared timing vocabulary; the global reduced-motion
+       override lives in base.css. */
+    --motion-fast: 120ms;
+    --motion-medium: 150ms;
+    --motion-pulse: 1.4s;
   }
 }

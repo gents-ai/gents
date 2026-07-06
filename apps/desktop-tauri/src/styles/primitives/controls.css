@@ -20,10 +20,10 @@
       inset 0 1px 0 var(--button-top-line, rgb(255 255 255 / 0.05)),
       inset var(--button-rail-width, 0) 0 0 var(--button-rail, transparent);
     transition:
-      background-color 120ms ease,
-      border-color 120ms ease,
-      box-shadow 120ms ease,
-      color 120ms ease;
+      background-color var(--motion-fast) ease,
+      border-color var(--motion-fast) ease,
+      box-shadow var(--motion-fast) ease,
+      color var(--motion-fast) ease;
   }
 
   .ghost-button {
@@ -113,10 +113,10 @@
       inset 0 1px 0 rgb(255 255 255 / 0.05),
       inset 2px 0 0 rgb(var(--source-green-rgb) / 0.16);
     transition:
-      background-color 120ms ease,
-      border-color 120ms ease,
-      box-shadow 120ms ease,
-      color 120ms ease;
+      background-color var(--motion-fast) ease,
+      border-color var(--motion-fast) ease,
+      box-shadow var(--motion-fast) ease,
+      color var(--motion-fast) ease;
   }
 
   .icon-button:not(:disabled):hover {

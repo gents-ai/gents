@@ -57,6 +57,36 @@ describe("design tokens", () => {
   });
 });
 
+describe("motion and focus", () => {
+  it("transition/animation durations use --motion-* tokens", () => {
+    const raw: string[] = [];
+    for (const [file, css] of sources) {
+      if (file.endsWith("tokens.css")) continue;
+      for (const match of css.matchAll(
+        /(?:transition|animation)[^:;{}]*:\s*[^;{}]*?(\d+(?:\.\d+)?m?s)\b/g,
+      )) {
+        // 0.01ms is the reduced-motion kill value in base.css.
+        if (match[1] === "0.01ms") continue;
+        raw.push(`${relative(STYLES_ROOT, file)}: ${match[1]}`);
+      }
+    }
+    expect(raw).toEqual([]);
+  });
+
+  it("focus outlines are never removed", () => {
+    const removals: string[] = [];
+    for (const [file, css] of sources) {
+      // All removal spellings: longhands, 0px, !important, any casing.
+      for (const match of css.matchAll(
+        /outline(?:-style|-width)?\s*:\s*(?:none|0(?:px)?)\b(?:\s*!important)?\s*[;}]/gi,
+      )) {
+        removals.push(`${relative(STYLES_ROOT, file)}: ${match[0]}`);
+      }
+    }
+    expect(removals).toEqual([]);
+  });
+});
+
 describe("type scale", () => {
   it("every font-size declaration uses a --text-* token", () => {
     const raw: string[] = [];

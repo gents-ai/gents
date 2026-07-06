@@ -33,10 +33,10 @@
     color: var(--color-text-muted);
     padding: 0;
     transition:
-      background-color 120ms ease,
-      border-color 120ms ease,
-      box-shadow 120ms ease,
-      color 120ms ease;
+      background-color var(--motion-fast) ease,
+      border-color var(--motion-fast) ease,
+      box-shadow var(--motion-fast) ease,
+      color var(--motion-fast) ease;
   }
 
   .behavior-new-chat-button:hover {

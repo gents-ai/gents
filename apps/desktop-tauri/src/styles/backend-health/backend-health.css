@@ -100,7 +100,7 @@
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
     overflow: hidden;
-    transition: border-color 120ms ease;
+    transition: border-color var(--motion-fast) ease;
   }
 
   .backend-health__row[data-state="available"] {
@@ -264,7 +264,7 @@
 
   .backend-health__chevron {
     color: var(--color-text-muted);
-    transition: transform 150ms ease;
+    transition: transform var(--motion-medium) ease;
     font-size: var(--text-base);
   }
 

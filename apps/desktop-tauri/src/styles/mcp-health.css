@@ -232,7 +232,7 @@
 
   .mcp-health-caret {
     color: var(--color-text-muted);
-    transition: transform 120ms ease;
+    transition: transform var(--motion-fast) ease;
     font-size: var(--text-2xs);
     user-select: none;
   }
@@ -301,7 +301,7 @@
   }
   .mcp-health-dot-blue {
     background: var(--color-info);
-    animation: mcp-health-pulse 1.4s ease-in-out infinite;
+    animation: mcp-health-pulse var(--motion-pulse) ease-in-out infinite;
   }
 
   .mcp-health-dot-stuck {
@@ -315,12 +315,6 @@
     }
     50% {
       box-shadow: 0 0 0 6px rgb(var(--source-blue-rgb) / 0.3);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .mcp-health-dot-blue {
-      animation: none;
     }
   }
 

@@ -66,7 +66,11 @@
   .operations-rail-collapsed-button:focus-visible {
     background: rgb(var(--source-green-rgb) / 0.1);
     color: var(--color-text);
-    outline: none;
+  }
+
+  .operations-rail-collapsed-button:focus-visible {
+    outline: 2px solid var(--color-info);
+    outline-offset: 2px;
   }
 
   .operations-rail-header {
@@ -105,7 +109,11 @@
     border-color: var(--border-selected);
     background: rgb(var(--source-green-rgb) / 0.1);
     color: var(--color-text);
-    outline: none;
+  }
+
+  .operations-rail-close:focus-visible {
+    outline: 2px solid var(--color-info);
+    outline-offset: 2px;
   }
 
   .operations-rail-tabs {
