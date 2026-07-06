@@ -76,7 +76,10 @@ describe("motion and focus", () => {
   it("focus outlines are never removed", () => {
     const removals: string[] = [];
     for (const [file, css] of sources) {
-      for (const match of css.matchAll(/outline:\s*(?:none|0)\s*[;}]/g)) {
+      // All removal spellings: longhands, 0px, !important, any casing.
+      for (const match of css.matchAll(
+        /outline(?:-style|-width)?\s*:\s*(?:none|0(?:px)?)\b(?:\s*!important)?\s*[;}]/gi,
+      )) {
         removals.push(`${relative(STYLES_ROOT, file)}: ${match[0]}`);
       }
     }
