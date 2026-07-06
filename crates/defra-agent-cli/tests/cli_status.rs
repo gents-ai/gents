@@ -211,6 +211,7 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
             r#"mutation {{
                 create_AgentToolCall(input: {{
                     tool_call_key: "{key}",
+                    agent_did: "{agent_did}",
                     request_id: "{request_id}",
                     session_id: "{session_id}",
                     message_sequence: 1,

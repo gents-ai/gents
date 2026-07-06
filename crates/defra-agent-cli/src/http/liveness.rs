@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 pub(crate) struct LivenessRequestRow {
     pub(crate) request_id: String,
     #[serde(default)]
+    pub(crate) agent_did: String,
+    #[serde(default)]
     pub(crate) claimed_at: Option<String>,
     #[serde(default)]
     pub(crate) deadline: Option<String>,
@@ -19,6 +21,8 @@ pub(crate) struct LivenessRequestRow {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LivenessToolCallRow {
     pub(crate) request_id: String,
+    #[serde(default)]
+    pub(crate) agent_did: String,
     pub(crate) tool_call_id: String,
     pub(crate) tool_name: String,
     #[serde(default)]
@@ -33,8 +37,10 @@ pub(crate) struct LivenessToolCallRow {
 pub(crate) struct RuntimeLivenessSnapshot {
     pub(crate) active_request_ids: Vec<String>,
     pub(crate) expired_processing_count: i64,
+    pub(crate) ignored_foreign_processing_count: i64,
     pub(crate) requests: Vec<ActiveRequest>,
     pub(crate) active_tool_calls: Vec<ActiveToolCall>,
+    pub(crate) ignored_foreign_tool_call_count: i64,
     pub(crate) active_native_executors_available: bool,
     pub(crate) active_native_executors: Vec<defra_agent::NativeExecutorStatus>,
 }
@@ -66,11 +72,25 @@ pub(crate) struct ActiveToolCall {
 
 pub(crate) fn compute_request_liveness_summary(
     now: DateTime<Utc>,
+    local_agent_did: &str,
     requests: Vec<LivenessRequestRow>,
     tool_calls: Vec<LivenessToolCallRow>,
 ) -> RuntimeLivenessSnapshot {
+    let local_agent_did = local_agent_did.trim();
+    let local_request_count = requests
+        .iter()
+        .filter(|row| owns_liveness_row(local_agent_did, &row.agent_did))
+        .count();
+    let ignored_foreign_processing_count =
+        requests.len().saturating_sub(local_request_count) as i64;
+    let ignored_foreign_tool_call_count = tool_calls
+        .iter()
+        .filter(|row| !owns_liveness_row(local_agent_did, &row.agent_did))
+        .count() as i64;
+
     let active_tool_calls: Vec<ActiveToolCall> = tool_calls
         .iter()
+        .filter(|row| owns_liveness_row(local_agent_did, &row.agent_did))
         .map(|row| {
             let started_at = parse_optional_rfc3339(row.started_at.as_deref());
             let deadline_at = parse_optional_rfc3339(row.deadline_at.as_deref());
@@ -91,11 +111,14 @@ pub(crate) fn compute_request_liveness_summary(
         })
         .collect();
 
-    let mut active_request_ids = Vec::with_capacity(requests.len());
-    let mut request_views = Vec::with_capacity(requests.len());
+    let mut active_request_ids = Vec::with_capacity(local_request_count);
+    let mut request_views = Vec::with_capacity(local_request_count);
     let mut expired_processing_count = 0i64;
 
-    for row in &requests {
+    for row in requests
+        .iter()
+        .filter(|row| owns_liveness_row(local_agent_did, &row.agent_did))
+    {
         active_request_ids.push(row.request_id.clone());
         let claimed_at = parse_optional_rfc3339(row.claimed_at.as_deref());
         let deadline = parse_optional_rfc3339(row.deadline.as_deref());
@@ -136,8 +159,10 @@ pub(crate) fn compute_request_liveness_summary(
     RuntimeLivenessSnapshot {
         active_request_ids,
         expired_processing_count,
+        ignored_foreign_processing_count,
         requests: request_views,
         active_tool_calls,
+        ignored_foreign_tool_call_count,
         active_native_executors_available: false,
         active_native_executors: Vec::new(),
     }
@@ -160,6 +185,10 @@ fn parse_optional_rfc3339(value: Option<&str>) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(trimmed)
         .ok()
         .map(|dt| dt.with_timezone(&Utc))
+}
+
+fn owns_liveness_row(local_agent_did: &str, row_agent_did: &str) -> bool {
+    local_agent_did.is_empty() || row_agent_did.trim() == local_agent_did
 }
 
 fn millis_between(earlier: DateTime<Utc>, later: DateTime<Utc>) -> i64 {
@@ -186,6 +215,7 @@ mod tests {
     ) -> LivenessRequestRow {
         LivenessRequestRow {
             request_id: request_id.to_string(),
+            agent_did: "did:defra-agent:local".to_string(),
             claimed_at: Some(iso(claimed_offset_secs)),
             deadline: Some(iso(deadline_offset_secs)),
             subagent_depth: None,
@@ -204,6 +234,7 @@ mod tests {
     ) -> LivenessToolCallRow {
         LivenessToolCallRow {
             request_id: request_id.to_string(),
+            agent_did: "did:defra-agent:local".to_string(),
             tool_call_id: tool_call_id.to_string(),
             tool_name: tool_name.to_string(),
             started_at: Some(iso(started_offset_secs)),
@@ -218,7 +249,8 @@ mod tests {
             request("req-expired", -120, -30), // claimed 2m ago, deadline 30s ago
             request("req-fresh", -10, 60),     // claimed 10s ago, deadline 60s in future
         ];
-        let snapshot = compute_request_liveness_summary(now(), requests, Vec::new());
+        let snapshot =
+            compute_request_liveness_summary(now(), "did:defra-agent:local", requests, Vec::new());
 
         assert_eq!(snapshot.expired_processing_count, 1);
         assert!(snapshot
@@ -249,7 +281,8 @@ mod tests {
     fn active_tool_calls_carry_tool_name_and_running_age() {
         let requests = vec![request("req-1", -45, 60)];
         let tools = vec![tool_call("req-1", "tc-1", "glob", -30, Some(60), None)];
-        let snapshot = compute_request_liveness_summary(now(), requests, tools);
+        let snapshot =
+            compute_request_liveness_summary(now(), "did:defra-agent:local", requests, tools);
 
         assert_eq!(snapshot.active_tool_calls.len(), 1);
         let tc = &snapshot.active_tool_calls[0];
@@ -274,7 +307,8 @@ mod tests {
             None,
             Some("bridge"),
         )];
-        let snapshot = compute_request_liveness_summary(now(), requests, tools);
+        let snapshot =
+            compute_request_liveness_summary(now(), "did:defra-agent:local", requests, tools);
 
         let tc = &snapshot.active_tool_calls[0];
         assert_eq!(tc.await_mode.as_deref(), Some("bridge"));
@@ -284,7 +318,8 @@ mod tests {
     fn last_progress_age_ms_uses_most_recent_tool_activity_over_claimed_at() {
         let requests = vec![request("req-1", -300, 60)];
         let tools = vec![tool_call("req-1", "tc-1", "bash", -10, Some(60), None)];
-        let snapshot = compute_request_liveness_summary(now(), requests, tools);
+        let snapshot =
+            compute_request_liveness_summary(now(), "did:defra-agent:local", requests, tools);
 
         let req = snapshot
             .requests
@@ -306,7 +341,8 @@ mod tests {
     #[test]
     fn last_progress_age_ms_falls_back_to_claimed_at_when_no_tool_calls() {
         let requests = vec![request("req-1", -45, 60)];
-        let snapshot = compute_request_liveness_summary(now(), requests, Vec::new());
+        let snapshot =
+            compute_request_liveness_summary(now(), "did:defra-agent:local", requests, Vec::new());
 
         let req = &snapshot.requests[0];
         assert!(
@@ -314,5 +350,39 @@ mod tests {
             "claimed 45s ago, got {}",
             req.last_progress_age_ms
         );
+    }
+
+    #[test]
+    fn foreign_processing_requests_do_not_count_as_active_or_expired() {
+        let mut foreign = request("req-foreign", -120, -30);
+        foreign.agent_did = "did:defra-agent:foreign".to_string();
+        let requests = vec![request("req-local", -120, -30), foreign];
+
+        let snapshot =
+            compute_request_liveness_summary(now(), "did:defra-agent:local", requests, Vec::new());
+
+        assert_eq!(snapshot.expired_processing_count, 1);
+        assert_eq!(snapshot.ignored_foreign_processing_count, 1);
+        assert_eq!(snapshot.active_request_ids, vec!["req-local".to_string()]);
+        assert_eq!(snapshot.requests.len(), 1);
+        assert_eq!(snapshot.requests[0].request_id, "req-local");
+    }
+
+    #[test]
+    fn foreign_running_tool_calls_are_ignored() {
+        let requests = vec![request("req-local", -45, 60)];
+        let mut foreign_tool = tool_call("req-foreign", "tc-foreign", "bash", -30, None, None);
+        foreign_tool.agent_did = "did:defra-agent:foreign".to_string();
+        let tools = vec![
+            tool_call("req-local", "tc-local", "glob", -30, None, None),
+            foreign_tool,
+        ];
+
+        let snapshot =
+            compute_request_liveness_summary(now(), "did:defra-agent:local", requests, tools);
+
+        assert_eq!(snapshot.active_tool_calls.len(), 1);
+        assert_eq!(snapshot.active_tool_calls[0].tool_call_id, "tc-local");
+        assert_eq!(snapshot.ignored_foreign_tool_call_count, 1);
     }
 }

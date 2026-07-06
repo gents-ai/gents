@@ -81,6 +81,8 @@ pub(crate) fn render_healthz_payload(
                         "active_native_executors_available": data.liveness.active_native_executors_available,
                         "active_native_executor_count": data.liveness.active_native_executors.len(),
                         "expired_processing_count": data.liveness.expired_processing_count,
+                        "ignored_foreign_processing_count": data.liveness.ignored_foreign_processing_count,
+                        "ignored_foreign_tool_call_count": data.liveness.ignored_foreign_tool_call_count,
                     },
                 },
                 "runtimes": data.agent_runtimes,
@@ -173,6 +175,7 @@ mod tests {
             liveness: RuntimeLivenessSnapshot {
                 active_request_ids: vec!["req-stuck".to_string()],
                 expired_processing_count: 1,
+                ignored_foreign_processing_count: 0,
                 requests: vec![ActiveRequest {
                     request_id: "req-stuck".to_string(),
                     claimed_at: Some("2026-05-13T11:55:00Z".to_string()),
@@ -194,6 +197,7 @@ mod tests {
                     running_age_ms: 270_000,
                     deadline_expired: true,
                 }],
+                ignored_foreign_tool_call_count: 0,
                 active_native_executors_available: true,
                 active_native_executors: Vec::new(),
             },

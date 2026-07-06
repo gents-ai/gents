@@ -267,7 +267,8 @@ async fn load_request_show_snapshot(
         .with_context(|| format!("loading child AgentRequest rows for {request_id}"))?;
     let child_rows = value_array(&child_response, "/data/AgentRequest");
 
-    let liveness = crate::commands::status::load_liveness_value(graphql).await;
+    let request_agent_did = string_field(&request_row, "agent_did").unwrap_or_default();
+    let liveness = crate::commands::status::load_liveness_value(graphql, &request_agent_did).await;
     let active_tool_calls = active_tool_call_keys(&liveness);
     let native_executors_available = liveness
         .get("active_native_executors_available")
