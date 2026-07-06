@@ -16,6 +16,7 @@ fn tool_selection_doc(bash_mode: &str) -> ToolSelectionDocument {
         command_execution_policy: None,
         command_allowed_argv_prefixes: Some(Vec::new()),
         command_forbidden_argv_prefixes: Some(Vec::new()),
+        read_only_command_allowlist: None,
         command_network_mode: None,
         cli_tool_names: Some(Vec::new()),
         enable_meta_tools: Some(false),
@@ -64,6 +65,36 @@ fn unrestricted_bash_mode_can_request_workspace_write_command_policy() {
 #[test]
 fn readonly_bash_mode_uses_builder_default_policy() {
     let selection = tool_selection_from_document(&tool_selection_doc("ReadOnly")).unwrap();
+
+    assert!(selection.command_policy.is_none());
+}
+
+#[test]
+fn readonly_bash_mode_custom_allowlist_flows_through_to_policy() {
+    let mut doc = tool_selection_doc("ReadOnly");
+    doc.read_only_command_allowlist = Some(vec!["cat".to_string(), "journalctl".to_string()]);
+
+    let selection = tool_selection_from_document(&doc).unwrap();
+
+    let policy = selection
+        .command_policy
+        .expect("a non-empty custom read-only allowlist must materialize a Some(command_policy)");
+    assert_eq!(policy.mode, CommandExecutionMode::ReadOnly);
+    assert_eq!(
+        policy.read_only_allowlist(),
+        ["cat".to_string(), "journalctl".to_string()]
+    );
+}
+
+#[test]
+fn readonly_bash_mode_empty_allowlist_falls_back_to_default() {
+    // An explicitly-empty allowlist must behave identically to absent: no
+    // override, so command_policy stays None and the builder applies the
+    // hardcoded default_read_only_commands() list (never a deny-all surface).
+    let mut doc = tool_selection_doc("ReadOnly");
+    doc.read_only_command_allowlist = Some(Vec::new());
+
+    let selection = tool_selection_from_document(&doc).unwrap();
 
     assert!(selection.command_policy.is_none());
 }

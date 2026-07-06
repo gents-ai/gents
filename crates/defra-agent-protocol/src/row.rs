@@ -601,6 +601,8 @@ pub struct ToolSelectionRow {
     pub command_allowed_argv_prefixes: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub command_forbidden_argv_prefixes: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    pub read_only_command_allowlist: Vec<String>,
     #[serde(default)]
     pub command_network_mode: Option<String>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]

@@ -589,6 +589,7 @@ fn tool_selection_for_package(
         command_execution_policy: default_command_execution_policy_for_init(tool_package),
         command_allowed_argv_prefixes: Some(Vec::new()),
         command_forbidden_argv_prefixes: Some(Vec::new()),
+        read_only_command_allowlist: Some(Vec::new()),
         command_network_mode: None,
         cli_tool_names: Some(Vec::new()),
         enable_meta_tools: Some(profile.enable_meta_tools),

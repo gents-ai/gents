@@ -11,6 +11,7 @@ type ToolSelection {
     command_execution_policy: String
     command_allowed_argv_prefixes: [String]
     command_forbidden_argv_prefixes: [String]
+    read_only_command_allowlist: [String]
     command_network_mode: String
     cli_tool_names: [String]
     enable_meta_tools: Boolean

@@ -140,6 +140,7 @@ pub(crate) fn manifest_from_export_bundle(
                         "command_execution_policy",
                         "command_allowed_argv_prefixes",
                         "command_forbidden_argv_prefixes",
+                        "read_only_command_allowlist",
                         "command_network_mode",
                         "cli_tool_names",
                         "enable_meta_tools",

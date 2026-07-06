@@ -271,6 +271,7 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         command_execution_policy: None,
         command_allowed_argv_prefixes: Vec::new(),
         command_forbidden_argv_prefixes: Vec::new(),
+        read_only_command_allowlist: Vec::new(),
         command_network_mode: None,
         cli_tool_names: Vec::new(),
         enable_meta_tools: true,
@@ -323,6 +324,45 @@ fn empty_manifest_with_event_trigger(t: DesiredEventTrigger) -> DesiredStateMani
     let mut m = empty_manifest("did:defra-agent:test");
     m.event_triggers.push(t);
     m
+}
+
+#[test]
+fn normalize_sorts_and_dedups_read_only_command_allowlist() {
+    let mut manifest = empty_manifest("did:defra-agent:test");
+    let mut selection = sample_tool_selection("tasks-tools");
+    selection.read_only_command_allowlist =
+        vec!["ss".to_string(), "cat".to_string(), "ss".to_string()];
+    manifest.tool_selections.push(selection);
+
+    super::normalize::normalize_manifest(&mut manifest);
+
+    assert_eq!(
+        manifest.tool_selections[0].read_only_command_allowlist,
+        vec!["cat".to_string(), "ss".to_string()],
+        "read_only_command_allowlist must be sorted and deduped by normalize"
+    );
+}
+
+#[test]
+fn normalize_makes_read_only_command_allowlist_order_insensitive() {
+    let mut a = empty_manifest("did:defra-agent:test");
+    let mut sel_a = sample_tool_selection("tasks-tools");
+    sel_a.read_only_command_allowlist = vec!["cat".to_string(), "ss".to_string()];
+    a.tool_selections.push(sel_a);
+
+    let mut b = empty_manifest("did:defra-agent:test");
+    let mut sel_b = sample_tool_selection("tasks-tools");
+    sel_b.read_only_command_allowlist = vec!["ss".to_string(), "cat".to_string()];
+    b.tool_selections.push(sel_b);
+
+    super::normalize::normalize_manifest(&mut a);
+    super::normalize::normalize_manifest(&mut b);
+
+    assert_eq!(
+        a.tool_selections[0].read_only_command_allowlist,
+        b.tool_selections[0].read_only_command_allowlist,
+        "differing allowlist order must normalize to the same value (no spurious diff)"
+    );
 }
 
 #[test]
