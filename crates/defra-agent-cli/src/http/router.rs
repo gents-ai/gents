@@ -85,7 +85,7 @@ pub(crate) fn runtime_contract_router(
 }
 
 async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {
-    match render_prometheus_metrics(&state.graphql).await {
+    match render_prometheus_metrics(&state.graphql, &state.agent_did).await {
         Ok(body) => ([(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)], body).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -101,7 +101,7 @@ async fn version_handler() -> impl IntoResponse {
 }
 
 async fn healthz_handler(State(state): State<RuntimeHttpState>) -> Response {
-    match load_metrics_query_data(&state.graphql).await {
+    match load_metrics_query_data(&state.graphql, &state.agent_did).await {
         Ok(data) => {
             let data = with_local_native_executors(data);
             let health = render_healthz_payload(&state, Some(&data), None);
@@ -121,7 +121,7 @@ async fn healthz_handler(State(state): State<RuntimeHttpState>) -> Response {
 
 async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
     let p2p = crate::commands::p2p::load_live_http_p2p_status(None, &state.graphql).await;
-    let mut body = match load_metrics_query_data(&state.graphql).await {
+    let mut body = match load_metrics_query_data(&state.graphql, &state.agent_did).await {
         Ok(data) => {
             let data = with_local_native_executors(data);
             let health = render_healthz_payload(&state, Some(&data), None);
@@ -187,28 +187,29 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
 }
 
 async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
-    let (health, runtime, status_code) = match load_metrics_query_data(&state.graphql).await {
-        Ok(data) => {
-            let data = with_local_native_executors(data);
-            let health = render_healthz_payload(&state, Some(&data), None);
-            let status_code = if health.get("ok") == Some(&Value::Bool(true)) {
-                StatusCode::OK
-            } else {
-                StatusCode::SERVICE_UNAVAILABLE
-            };
-            let runtime = data
-                .agent_runtimes
-                .iter()
-                .find(|runtime| runtime.agent_did == state.agent_did)
-                .or_else(|| data.agent_runtimes.first())
-                .cloned();
-            (health, runtime, status_code)
-        }
-        Err(error) => {
-            let health = render_healthz_payload(&state, None, Some(error.to_string()));
-            (health, None, StatusCode::SERVICE_UNAVAILABLE)
-        }
-    };
+    let (health, runtime, status_code) =
+        match load_metrics_query_data(&state.graphql, &state.agent_did).await {
+            Ok(data) => {
+                let data = with_local_native_executors(data);
+                let health = render_healthz_payload(&state, Some(&data), None);
+                let status_code = if health.get("ok") == Some(&Value::Bool(true)) {
+                    StatusCode::OK
+                } else {
+                    StatusCode::SERVICE_UNAVAILABLE
+                };
+                let runtime = data
+                    .agent_runtimes
+                    .iter()
+                    .find(|runtime| runtime.agent_did == state.agent_did)
+                    .or_else(|| data.agent_runtimes.first())
+                    .cloned();
+                (health, runtime, status_code)
+            }
+            Err(error) => {
+                let health = render_healthz_payload(&state, None, Some(error.to_string()));
+                (health, None, StatusCode::SERVICE_UNAVAILABLE)
+            }
+        };
 
     match load_self_view(&state.graphql, &state.agent_did).await {
         // `/self` already returns the full `context_budget`; the compact context

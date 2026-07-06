@@ -157,8 +157,11 @@ where
     Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_else(|| "unknown".to_string()))
 }
 
-pub(crate) async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
-    let data = load_metrics_query_data(graphql).await?;
+pub(crate) async fn render_prometheus_metrics(
+    graphql: &str,
+    local_agent_did: &str,
+) -> Result<String> {
+    let data = load_metrics_query_data(graphql, local_agent_did).await?;
     let data = with_local_native_executors(data);
     let inference_metrics = load_inference_metrics_query_data(graphql).await?;
 
@@ -386,6 +389,28 @@ pub(crate) async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
         "defra_agent_expired_processing_count",
         &[],
         data.liveness.expired_processing_count,
+    );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_ignored_foreign_processing_requests",
+        "Number of processing AgentRequest rows ignored because they belong to a different agent DID.",
+    );
+    push_metric_sample(
+        &mut lines,
+        "defra_agent_ignored_foreign_processing_requests",
+        &[],
+        data.liveness.ignored_foreign_processing_count,
+    );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_ignored_foreign_running_tool_calls",
+        "Number of running AgentToolCall rows ignored because they belong to a different agent DID.",
+    );
+    push_metric_sample(
+        &mut lines,
+        "defra_agent_ignored_foreign_running_tool_calls",
+        &[],
+        data.liveness.ignored_foreign_tool_call_count,
     );
     push_metric_prelude(
         &mut lines,
@@ -694,7 +719,10 @@ fn nonnegative_metric_value(value: Option<i64>) -> Option<i64> {
     value.map(|value| value.max(0))
 }
 
-pub(crate) async fn load_metrics_query_data(graphql: &str) -> Result<MetricsQueryData> {
+pub(crate) async fn load_metrics_query_data(
+    graphql: &str,
+    local_agent_did: &str,
+) -> Result<MetricsQueryData> {
     let response = post_graphql(
         graphql,
         r#"{
@@ -722,6 +750,7 @@ pub(crate) async fn load_metrics_query_data(graphql: &str) -> Result<MetricsQuer
                 lifecycle_state: { _eq: "processing" }
             }) {
                 request_id
+                agent_did
                 claimed_at
                 deadline
                 subagent_depth
@@ -732,6 +761,7 @@ pub(crate) async fn load_metrics_query_data(graphql: &str) -> Result<MetricsQuer
                 lifecycle_state: { _eq: "running" }
             }) {
                 request_id
+                agent_did
                 tool_call_id
                 tool_name
                 started_at
@@ -747,8 +777,12 @@ pub(crate) async fn load_metrics_query_data(graphql: &str) -> Result<MetricsQuer
         .unwrap_or_else(|| Value::Object(Default::default()));
     let envelope: MetricsQueryEnvelope =
         serde_json::from_value(data).context("decoding runtime HTTP query response")?;
-    let liveness =
-        compute_request_liveness_summary(Utc::now(), envelope.requests, envelope.tool_calls);
+    let liveness = compute_request_liveness_summary(
+        Utc::now(),
+        local_agent_did,
+        envelope.requests,
+        envelope.tool_calls,
+    );
     Ok(MetricsQueryData {
         agent_runtimes: envelope.agent_runtimes,
         inference_backends: envelope.inference_backends,

@@ -528,6 +528,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
             r#"mutation {{
                 create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key}",
+                    agent_did: "{agent_did}",
                     request_id: "{parent_request_id}",
                     session_id: "{session_id}",
                     message_sequence: 1,
