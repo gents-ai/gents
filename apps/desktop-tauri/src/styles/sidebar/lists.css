@@ -14,7 +14,7 @@
     border-bottom: 1px solid var(--border-subtle);
     border-radius: 0;
     background: transparent;
-    padding: 12px 12px;
+    padding: var(--space-5) var(--space-5);
   }
 
   .sidebar .list-item:last-of-type {

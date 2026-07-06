@@ -19,18 +19,18 @@
   .background-tools-panel .chip-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: var(--space-2);
     align-items: center;
   }
 
   .background-tools-panel .chip-row + .chip-row {
-    margin-top: 8px;
+    margin-top: var(--space-3);
   }
 
   .background-tools-panel .chip-label {
     font-size: var(--text-sm);
     color: var(--color-text-muted);
-    margin-right: 4px;
+    margin-right: var(--space-1);
     min-width: 64px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -39,8 +39,8 @@
   .background-tools-panel .chip {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-4);
     border-radius: var(--radius-pill);
     border: 1px solid var(--border-default);
     background: var(--color-surface-muted);
@@ -86,7 +86,7 @@
   .background-tools-panel .toggle {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-2);
     color: var(--color-text-soft);
     font-size: var(--text-sm);
     cursor: pointer;
@@ -103,8 +103,8 @@
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    gap: 12px;
-    margin-bottom: 8px;
+    gap: var(--space-5);
+    margin-bottom: var(--space-3);
   }
 
   .background-tools-panel .panel-summary .live-count {
@@ -144,7 +144,7 @@
 
   .background-tools-panel table.tools thead th {
     text-align: left;
-    padding: 10px 12px;
+    padding: var(--space-4) var(--space-5);
     background: var(--color-surface-deep);
     color: var(--color-text-muted);
     font-weight: 500;
@@ -197,7 +197,7 @@
   }
 
   .background-tools-panel table.tools td {
-    padding: 10px 12px;
+    padding: var(--space-4) var(--space-5);
     vertical-align: top;
     color: var(--color-text-soft);
   }
@@ -232,7 +232,7 @@
   .background-tools-panel .pill {
     display: inline-flex;
     align-items: center;
-    padding: 1px 8px;
+    padding: 1px var(--space-3);
     border-radius: var(--radius-pill);
     font-size: var(--text-xs);
     font-family: var(--font-body);
@@ -259,7 +259,7 @@
   }
 
   .background-tools-panel .pill.pill-status {
-    gap: 4px;
+    gap: var(--space-1);
   }
 
   .background-tools-panel .pill.pill-status[data-state="running"] {
@@ -289,7 +289,7 @@
 
   .background-tools-panel .row-actions {
     display: flex;
-    gap: 6px;
+    gap: var(--space-2);
     justify-content: flex-end;
   }
 
@@ -322,7 +322,7 @@
   /* ── Empty state ─────────────────────────────────────────────────────────── */
 
   .background-tools-panel .empty-state {
-    padding: 28px 12px;
+    padding: 28px var(--space-5);
     text-align: center;
     color: var(--color-text-muted);
     font-size: var(--text-md);
@@ -333,6 +333,6 @@
     color: var(--color-accent);
     opacity: 0.6;
     display: block;
-    margin-bottom: 6px;
+    margin-bottom: var(--space-2);
   }
 }

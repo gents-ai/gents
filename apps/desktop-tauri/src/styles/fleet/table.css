@@ -16,7 +16,7 @@
   .fleet-table th,
   .fleet-table td {
     border-bottom: 1px solid var(--border-default);
-    padding: 11px 10px;
+    padding: 11px var(--space-4);
     text-align: left;
     vertical-align: middle;
   }
@@ -182,7 +182,8 @@
      the page background so scrolled data columns can't ghost through. */
   .fleet-actions-header {
     width: 128px;
-    background: linear-gradient(rgb(0 0 0 / 0.88), rgb(0 0 0 / 0.88)) var(--color-bg);
+    /* 0.88 black over the black page bg composites to the page bg exactly. */
+    background: var(--color-bg);
   }
 
   .fleet-actions-cell {

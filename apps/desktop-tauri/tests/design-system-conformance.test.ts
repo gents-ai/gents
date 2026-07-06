@@ -90,6 +90,45 @@ describe("type scale", () => {
   });
 });
 
+describe("token ratchets", () => {
+  // These counts may only go DOWN. They hold the line on raw values the
+  // per-screen polish passes are still sweeping onto tokens — a new raw
+  // literal fails here; when you tokenize some, lower the ceiling.
+  function countMatches(pattern: RegExp): number {
+    let count = 0;
+    for (const css of sources.values()) {
+      count += [...css.matchAll(pattern)].length;
+    }
+    return count;
+  }
+
+  it("raw px inside spacing declarations does not grow (ceiling 40)", () => {
+    let count = 0;
+    for (const css of sources.values()) {
+      for (const match of css.matchAll(
+        // (?<![\w-]) keeps scroll-padding-* out; -start/-end covers the
+        // logical longhands so raw px can't smuggle through them.
+        /(?<![\w-])(?:padding|margin|gap|row-gap|column-gap)(?:-(?:top|right|bottom|left|inline|block))?(?:-(?:start|end))?\s*:\s*([^;{}]+)/g,
+      )) {
+        count += (match[1].match(/\d+px\b/g) ?? []).length;
+      }
+    }
+    expect(count).toBeLessThanOrEqual(40);
+  });
+
+  it("raw rgb() literals do not grow (ceiling 90)", () => {
+    expect(countMatches(/rgb\(\d+ \d+ \d+/g)).toBeLessThanOrEqual(90);
+  });
+
+  it("bespoke box-shadows do not grow (ceiling 38)", () => {
+    // 'none' and pure --shadow-* token values are conformant, not bespoke:
+    // tokenizing shadows must lower this pressure, not preserve it.
+    expect(
+      countMatches(/box-shadow:\s*(?!none[;}\s]|var\(--shadow-)[^;{}]+/gi),
+    ).toBeLessThanOrEqual(38);
+  });
+});
+
 describe("cascade layers", () => {
   const appCss = sources.get(APP_CSS) ?? "";
   const orderMatch = appCss.match(/@layer\s+([\w\s,-]+);/);
