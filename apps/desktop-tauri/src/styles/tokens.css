@@ -1,7 +1,7 @@
 @layer tokens {
   :root {
     color-scheme: dark;
-    font-family: "Inter", "SF Pro Text", system-ui, sans-serif;
+    font-family: var(--font-body);
     line-height: 1.45;
     font-weight: 400;
     color: var(--color-text);
@@ -11,7 +11,14 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 
-    --font-heading: "Funnel Display", "Inter", "SF Pro Display", system-ui, sans-serif;
+    /* Bundled via @fontsource-variable (imported in App.css); the bare
+       family names stay as fallbacks for locally-installed copies. */
+    --font-heading:
+      "Funnel Display Variable", "Funnel Display", "Inter Variable", "Inter",
+      "SF Pro Display", system-ui, sans-serif;
+    --font-body: "Inter Variable", "Inter", "SF Pro Text", system-ui, sans-serif;
+    --font-mono:
+      ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, monospace;
     --source-black: #000000;
     --source-green: #06b250;
     --source-dark-green: #1c2724;
@@ -58,5 +65,7 @@
     --space-6: 14px;
     --space-7: 16px;
     --space-8: 18px;
+    --space-9: 20px;
+    --space-10: 24px;
   }
 }

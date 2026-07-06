@@ -1,5 +1,7 @@
 @layer tokens, base, primitives, shell, sidebar, chat, fleet, config, transcript, components, backend-health, backgrounded-tools, utilities;
 
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/funnel-display";
 @import "./styles/tokens.css";
 @import "./styles/base.css";
 @import "./styles/primitives/layout.css";

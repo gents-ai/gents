@@ -1,4 +1,4 @@
-@layer utilities {
+@layer components {
   /* ---------- CancelCause badges ---------- */
   .cause-badge {
     display: inline-flex;
@@ -62,13 +62,13 @@
 
   .cause-details dd {
     margin: 0;
-    font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 11.5px;
     color: var(--color-text-muted);
   }
 
   .cause-details code {
-    font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+    font-family: var(--font-mono);
     color: var(--color-text-warm);
   }
 
@@ -131,7 +131,7 @@
   }
 
   .dialog header .sub code {
-    font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+    font-family: var(--font-mono);
     background: var(--color-surface-strong);
     padding: 1px 6px;
     border-radius: 4px;
@@ -227,7 +227,7 @@
   }
 
   .group ul li .reqid {
-    font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+    font-family: var(--font-mono);
     color: var(--color-text);
   }
 
@@ -236,7 +236,7 @@
   }
 
   .group ul li .meta {
-    font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+    font-family: var(--font-mono);
     color: var(--color-text-muted);
     font-size: 11px;
   }
