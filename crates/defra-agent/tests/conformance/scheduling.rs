@@ -1322,7 +1322,11 @@ async fn serial_gate_ignores_expired_claims() {
         }}"#
     );
     let resp = db.node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "backdating deadline failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "backdating deadline failed: {:?}",
+        resp.errors
+    );
 
     assert!(
         !has_active_runtime_request_for_trigger(
@@ -1372,7 +1376,10 @@ async fn supersede_only_touches_own_agent_requests() {
         "schedule",
     )
     .await;
-    assert_eq!(superseded, 1, "supersede must transition exactly the own-agent row");
+    assert_eq!(
+        superseded, 1,
+        "supersede must transition exactly the own-agent row"
+    );
 
     // The foreign row is untouched and still gates its own agent.
     assert!(

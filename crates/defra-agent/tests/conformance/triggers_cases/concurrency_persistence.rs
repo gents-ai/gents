@@ -26,8 +26,13 @@ async fn serial_skips_when_prior_active_runtime() {
     .unwrap();
 
     assert!(
-        has_active_runtime_request_for_trigger(db.node.as_ref(), AGENT_DID, "trigger-event-serial", "event")
-            .await,
+        has_active_runtime_request_for_trigger(
+            db.node.as_ref(),
+            AGENT_DID,
+            "trigger-event-serial",
+            "event"
+        )
+        .await,
         "gating query must see the in-flight event-kind request"
     );
     assert_eq!(
@@ -117,8 +122,13 @@ async fn latest_only_supersedes_prior_fire() {
         2
     );
     assert!(
-        has_active_runtime_request_for_trigger(db.node.as_ref(), AGENT_DID, "trigger-event-latest", "event")
-            .await,
+        has_active_runtime_request_for_trigger(
+            db.node.as_ref(),
+            AGENT_DID,
+            "trigger-event-latest",
+            "event"
+        )
+        .await,
         "after materialize, the new claimed request must be visible to the gating query"
     );
 }
