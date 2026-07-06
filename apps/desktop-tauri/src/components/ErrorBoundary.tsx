@@ -4,17 +4,20 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 /// white-screen the whole desktop app. Class component by necessity —
 /// React only exposes error boundaries via lifecycle methods.
 type ErrorBoundaryProps = { children: ReactNode };
-type ErrorBoundaryState = { error: Error | null };
+type ErrorBoundaryState = { error: Error | null; componentStack: string | null };
 
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { error: null };
+  state: ErrorBoundaryState = { error: null, componentStack: null };
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+  static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
     return { error };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("desktop render error", error, info.componentStack);
+    // The packaged app has no visible console — the details panel is the
+    // only route these diagnostics have into a bug report.
+    this.setState({ componentStack: info.componentStack ?? null });
   }
 
   render() {
@@ -27,6 +30,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         <article
           className="panel centered-panel error-boundary"
           data-testid="error-boundary"
+          role="alert"
         >
           <p className="eyebrow">Desktop</p>
           <h2>Something went wrong</h2>
@@ -36,9 +40,15 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           </p>
           <details className="error-boundary-details">
             <summary>Error details</summary>
-            <pre>{message}</pre>
+            <pre>
+              {this.state.error.stack || message}
+              {this.state.componentStack
+                ? `\n\nComponent stack:${this.state.componentStack}`
+                : null}
+            </pre>
           </details>
           <button
+            autoFocus
             className="primary-button"
             data-testid="error-boundary-reload"
             type="button"

@@ -187,6 +187,8 @@
     display: grid;
     gap: var(--space-5);
     justify-items: start;
+    /* .centered-panel centers text; wrapped error output must stay left. */
+    text-align: left;
   }
 
   .error-boundary-details {
