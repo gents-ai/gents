@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { ChatWorkspace } from "./components/ChatWorkspace";
 import { CodeContextHeader } from "./components/code/CodeContextHeader";
 import { ConfigWorkspace } from "./components/ConfigWorkspace";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FleetDashboard } from "./components/fleet/FleetDashboard";
 import { Sidebar } from "./components/Sidebar";
 import { useDesktopShell } from "./hooks/useDesktopShell";
@@ -10,6 +11,14 @@ import { installExternalLinkGuard } from "./lib/externalLinks";
 import "./App.css";
 
 function App() {
+  return (
+    <ErrorBoundary>
+      <AppShell />
+    </ErrorBoundary>
+  );
+}
+
+function AppShell() {
   const shell = useDesktopShell();
 
   // External links (e.g. markdown links in the transcript) must open in the

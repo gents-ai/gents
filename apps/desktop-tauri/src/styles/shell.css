@@ -180,3 +180,32 @@
     }
   }
 }
+
+@layer shell {
+  .error-boundary {
+    max-width: 60ch;
+    display: grid;
+    gap: var(--space-5);
+    justify-items: start;
+    /* .centered-panel centers text; wrapped error output must stay left. */
+    text-align: left;
+  }
+
+  .error-boundary-details {
+    justify-self: stretch;
+    color: var(--color-text-soft);
+    font-size: var(--text-sm);
+  }
+
+  .error-boundary-details pre {
+    margin: var(--space-3) 0 0;
+    padding: var(--space-5);
+    overflow: auto;
+    font-family: var(--font-mono);
+    background: var(--color-surface-deep);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+}
