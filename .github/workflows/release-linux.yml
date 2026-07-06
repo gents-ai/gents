@@ -63,6 +63,12 @@ jobs:
       - ${{ matrix.runner_arch }}
       - ${{ matrix.runner_label }}
     container: ${{ matrix.container_image }}
+    defaults:
+      run:
+        # Inside a job container the runner defaults `run:` steps to `sh`
+        # (dash on Debian), which rejects `set -o pipefail`. Every script in
+        # this job assumes bash; say so explicitly.
+        shell: bash
 
     env:
       GIT_CONFIG_GLOBAL: /tmp/defra-agent-release-${{ github.run_id }}-${{ matrix.target }}.gitconfig
