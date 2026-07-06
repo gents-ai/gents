@@ -339,11 +339,16 @@ impl ToolPolicySurface {
         } else if selection.defra_query_collections.is_empty() {
             EndpointScope::all()
         } else {
+            // Scope aliases (e.g. "agent-config") expand here so both the
+            // document path and the builder path resolve identically, and the
+            // runtime/explain projections see the literal collection set.
             EndpointScope::<String, ()>::only_units(
-                selection
-                    .defra_query_collections
-                    .iter()
-                    .map(|collection| collection.trim().to_string()),
+                crate::defra_query::expand_collection_scope_aliases(
+                    selection
+                        .defra_query_collections
+                        .iter()
+                        .map(String::as_str),
+                ),
             )
         };
 

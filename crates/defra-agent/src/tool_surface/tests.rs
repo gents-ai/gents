@@ -1471,3 +1471,42 @@ async fn defra_query_is_off_by_default() {
         meta_only.tool_names()
     );
 }
+
+/// The `agent-config` alias in `defra_query_collections` expands to the
+/// configuration read surface: config collections are allowed, conversation
+/// content stays denied, and the alias itself is never treated as a literal
+/// collection name.
+#[tokio::test]
+async fn agent_config_alias_expands_to_config_scope() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let surface = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            enable_defra_query: true,
+            defra_query_collections: vec!["agent-config".to_string()],
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+
+    assert!(surface.tool_names().contains(&"defra_query".to_string()));
+    for allowed in ["AgentBehavior", "ToolSelection", "Schedule", "AgentRuntime"] {
+        assert!(
+            surface.defra_query_scope.ensure_allowed(allowed).is_ok(),
+            "{allowed} must be readable under the agent-config preset"
+        );
+    }
+    for denied in ["AgentRequest", "AgentMessage", "OAuthCredential", "agent-config"] {
+        assert!(
+            surface.defra_query_scope.ensure_allowed(denied).is_err(),
+            "{denied} must stay outside the agent-config preset"
+        );
+    }
+}
