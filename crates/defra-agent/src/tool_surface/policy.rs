@@ -344,10 +344,7 @@ impl ToolPolicySurface {
             // runtime/explain projections see the literal collection set.
             EndpointScope::<String, ()>::only_units(
                 crate::defra_query::expand_collection_scope_aliases(
-                    selection
-                        .defra_query_collections
-                        .iter()
-                        .map(String::as_str),
+                    selection.defra_query_collections.iter().map(String::as_str),
                 ),
             )
         };

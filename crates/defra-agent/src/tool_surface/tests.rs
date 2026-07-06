@@ -1503,7 +1503,12 @@ async fn agent_config_alias_expands_to_config_scope() {
             "{allowed} must be readable under the agent-config preset"
         );
     }
-    for denied in ["AgentRequest", "AgentMessage", "OAuthCredential", "agent-config"] {
+    for denied in [
+        "AgentRequest",
+        "AgentMessage",
+        "OAuthCredential",
+        "agent-config",
+    ] {
         assert!(
             surface.defra_query_scope.ensure_allowed(denied).is_err(),
             "{denied} must stay outside the agent-config preset"

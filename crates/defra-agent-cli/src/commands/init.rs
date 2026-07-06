@@ -498,8 +498,11 @@ async fn initialize_runtime_home(
     };
     write_inference_backend_document(access, &backend_doc).await?;
 
-    let enable_defra_query =
-        init_enable_defra_query(tool_package, args.enable_defra_query, args.disable_defra_query);
+    let enable_defra_query = init_enable_defra_query(
+        tool_package,
+        args.enable_defra_query,
+        args.disable_defra_query,
+    );
     let tool_selection = tool_selection_for_package(
         agent_did,
         &tool_selection_id,
@@ -727,9 +730,7 @@ fn validate_init_tool_flags(args: &InitArgs, tool_package: ToolPackageArg) -> Re
     }
     if !args.defra_query_collections.is_empty() {
         let profile = tool_package_profile(tool_package);
-        if args.disable_defra_query
-            || !(profile.enable_defra_query || args.enable_defra_query)
-        {
+        if args.disable_defra_query || !(profile.enable_defra_query || args.enable_defra_query) {
             anyhow::bail!(
                 "--defra-query-collection requires defra_query to be enabled — pass --enable-defra-query or a tool package that enables it, and do not combine with --disable-defra-query"
             );

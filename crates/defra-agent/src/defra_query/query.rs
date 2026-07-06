@@ -331,7 +331,12 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         // The preset is config-only: no conversation content, no secrets.
-        for excluded in ["AgentRequest", "AgentResponse", "AgentMessage", "OAuthCredential"] {
+        for excluded in [
+            "AgentRequest",
+            "AgentResponse",
+            "AgentMessage",
+            "OAuthCredential",
+        ] {
             assert!(!expanded.contains(&excluded.to_string()), "{excluded}");
         }
     }
@@ -342,7 +347,10 @@ mod tests {
             expand_collection_scope_aliases(["AgentRequest", " agent-config ", "", "Custom"]);
         assert!(expanded.contains(&"AgentRequest".to_string()));
         assert!(expanded.contains(&"Custom".to_string()));
-        assert!(expanded.contains(&"AgentBehavior".to_string()), "alias expanded");
+        assert!(
+            expanded.contains(&"AgentBehavior".to_string()),
+            "alias expanded"
+        );
         assert!(!expanded.contains(&String::new()), "empties dropped");
         assert!(
             !expanded.contains(&"agent-config".to_string()),
