@@ -22,6 +22,17 @@ use tracing::Instrument;
 
 pub const AGENT_DID_HEADER: &str = "x-agent-did";
 
+/// Bound on establishing an MCP connection (TCP connect + MCP handshake).
+/// A blackholed endpoint — e.g. the tailscale address of a powered-off host —
+/// drops packets silently, so without this bound the connect future never
+/// resolves (#622). rmcp's transport carries no timeout of its own.
+const MCP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Bound on one tools/list round-trip. list_tools is a safe read on
+/// interactive paths (discover / describe / argument preflight) and the pool
+/// retries it once after eviction, so a caller waits at most two of these.
+const MCP_LIST_TOOLS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Wrapper that stores list_tools / call_tool closures over a concrete
 /// `RunningService` so that the pool doesn't need to name the transport
 /// generic parameter (which includes rmcp's internal reqwest 0.13 Client).
@@ -407,11 +418,24 @@ impl McpPool {
     }
 
     async fn list_tools_once(&self, service_id: &str) -> Result<ListToolsResult> {
-        let guard = self.inner.read().await;
-        let conn = guard
-            .get(service_id)
-            .context("connection disappeared after get_or_connect")?;
-        (conn.list_tools_fn)().await
+        // The closure's future owns an Arc of the client, so it can be
+        // awaited after the guard drops — a slow list call must not hold the
+        // pool lock and block unrelated services (#622).
+        let list_tools = {
+            let guard = self.inner.read().await;
+            let conn = guard
+                .get(service_id)
+                .context("connection disappeared after get_or_connect")?;
+            (conn.list_tools_fn)()
+        };
+        tokio::time::timeout(MCP_LIST_TOOLS_TIMEOUT, list_tools)
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "MCP list_tools on '{service_id}' timed out after {}s",
+                    MCP_LIST_TOOLS_TIMEOUT.as_secs()
+                )
+            })?
     }
 
     async fn call_tool_once(
@@ -419,11 +443,17 @@ impl McpPool {
         service_id: &str,
         params: CallToolRequestParams,
     ) -> Result<CallToolResult> {
-        let guard = self.inner.read().await;
-        let conn = guard
-            .get(service_id)
-            .context("connection disappeared after get_or_connect")?;
-        (conn.call_tool_fn)(params).await
+        // No pool-level timeout here — tool calls are bounded by the caller's
+        // health-keyed budget (meta_tools/call.rs). The guard still must not
+        // be held across the await (#622).
+        let call_tool = {
+            let guard = self.inner.read().await;
+            let conn = guard
+                .get(service_id)
+                .context("connection disappeared after get_or_connect")?;
+            (conn.call_tool_fn)(params)
+        };
+        call_tool.await
     }
 
     // -----------------------------------------------------------------------
@@ -432,9 +462,9 @@ impl McpPool {
 
     /// Ensure a valid connection for `service_id` exists in the pool.
     ///
-    /// Uses a double-checked locking pattern:
     /// 1. Read-lock: check if a connection exists and the endpoint matches.
-    /// 2. If not, take write-lock and re-check before actually connecting.
+    /// 2. If not, re-check under the write lock, then connect with no lock
+    ///    held and insert the result. Duplicate racing connects are benign.
     async fn get_or_connect(
         &self,
         service_id: &str,
@@ -458,37 +488,56 @@ impl McpPool {
             }
         }
 
-        // Slow path — write lock, re-check
-        let mut guard = self.inner.write().await;
-        if let Some(conn) = guard.get(service_id) {
-            let endpoint_changed = conn.endpoint != endpoint;
-            let agent_did_changed = conn.agent_did_header != agent_did_header;
-            let trace_context_changed = conn.trace_context_headers != trace_context_headers;
-            if conn.endpoint == endpoint
-                && conn.agent_did_header == agent_did_header
-                && conn.trace_context_headers == trace_context_headers
-            {
-                return Ok(());
+        // Slow path — re-check under the lock, but connect OUTSIDE it: a hung
+        // or slow connect (blackholed endpoint, #622) must not wedge every
+        // other service in the pool.
+        {
+            let guard = self.inner.write().await;
+            if let Some(conn) = guard.get(service_id) {
+                let endpoint_changed = conn.endpoint != endpoint;
+                let agent_did_changed = conn.agent_did_header != agent_did_header;
+                let trace_context_changed = conn.trace_context_headers != trace_context_headers;
+                if conn.endpoint == endpoint
+                    && conn.agent_did_header == agent_did_header
+                    && conn.trace_context_headers == trace_context_headers
+                {
+                    return Ok(());
+                }
+                tracing::info!(
+                    service_id,
+                    old_endpoint = %conn.endpoint,
+                    new_endpoint = %endpoint,
+                    endpoint_changed,
+                    agent_did_changed,
+                    trace_context_changed,
+                    "MCP connection context changed, reconnecting"
+                );
             }
-            tracing::info!(
-                service_id,
-                old_endpoint = %conn.endpoint,
-                new_endpoint = %endpoint,
-                endpoint_changed,
-                agent_did_changed,
-                trace_context_changed,
-                "MCP connection context changed, reconnecting"
-            );
         }
 
         tracing::info!(service_id, endpoint, "connecting MCP client");
-        let connection = (self.connect_fn)(
-            service_id.to_string(),
-            endpoint.to_string(),
-            agent_did_header,
-            trace_context_headers,
+        let connection = tokio::time::timeout(
+            MCP_CONNECT_TIMEOUT,
+            (self.connect_fn)(
+                service_id.to_string(),
+                endpoint.to_string(),
+                agent_did_header,
+                trace_context_headers,
+            ),
         )
-        .await?;
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "MCP connect to '{service_id}' ({endpoint}) timed out after {}s",
+                MCP_CONNECT_TIMEOUT.as_secs()
+            )
+        })??;
+
+        // Concurrent callers for the same service may both reach here; the
+        // last insert wins and the loser's connection is dropped. The
+        // handshake is idempotent and the cache is lazy, so this is benign —
+        // strictly better than serializing every connect behind one lock.
+        let mut guard = self.inner.write().await;
         guard.insert(service_id.to_string(), connection);
         Ok(())
     }

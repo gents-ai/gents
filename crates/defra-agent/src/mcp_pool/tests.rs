@@ -489,3 +489,101 @@ fn mcp_http_response(method: &str, id: Option<serde_json::Value>) -> String {
         body
     )
 }
+
+// --- #622: a blackholed endpoint must never wedge the pool -------------------
+//
+// The hf-data incident: a ToolServiceRegistry row pointed at a host whose
+// tailscale peer silently dropped packets (no RST). rmcp's transport has no
+// timeout of its own, so the connect future never resolved — and because
+// `get_or_connect` awaited it, callers hung. These tests fence the pool-seam
+// bounds under `tokio::time` paused clocks: if no internal timer exists the
+// paused runtime auto-advances straight to the outer guard and the test fails.
+
+fn pending_connect_pool() -> McpPool {
+    McpPool::new_with_connector(|_service_id, _endpoint, _agent_did, _trace_headers| async {
+        std::future::pending::<anyhow::Result<McpConnection>>().await
+    })
+}
+
+#[tokio::test(start_paused = true)]
+async fn hung_connect_is_internally_bounded() {
+    let pool = pending_connect_pool();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(3600),
+        pool.list_tools("hf-data", "http://strangenas:9200/mcp"),
+    )
+    .await
+    .expect("list_tools must internally bound a hung MCP connect");
+    let error = result.expect_err("hung connect must surface an error");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("timed out"),
+        "expected a timeout error, got: {message}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn hung_list_call_is_internally_bounded() {
+    let pool = McpPool::new_with_list_tools_handler(|_service_id, _endpoint| async {
+        std::future::pending::<anyhow::Result<ListToolsResult>>().await
+    });
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(3600),
+        pool.list_tools("hf-data", "http://strangenas:9200/mcp"),
+    )
+    .await
+    .expect("list_tools must internally bound a hung tools/list call");
+    let error = result.expect_err("hung list call must surface an error");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("timed out"),
+        "expected a timeout error, got: {message}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn hung_connect_does_not_wedge_other_services() {
+    let pool = McpPool::new_with_connector(
+        |service_id, endpoint, agent_did, trace_headers| async move {
+            if service_id == "hf-data" {
+                std::future::pending::<()>().await;
+            }
+            Ok(McpConnection {
+                endpoint,
+                agent_did_header: agent_did,
+                trace_context_headers: trace_headers,
+                list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
+                call_tool_fn: Box::new(|_params| {
+                    Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                }),
+            })
+        },
+    );
+
+    let hung_pool = pool.clone();
+    let hung = tokio::spawn(async move {
+        let _ = hung_pool
+            .list_tools("hf-data", "http://strangenas:9200/mcp")
+            .await;
+    });
+    // Let the hung connect start (and, under the defective locking, take the
+    // pool write lock) before the healthy service is queried.
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+    let started = tokio::time::Instant::now();
+    let healthy = tokio::time::timeout(
+        std::time::Duration::from_secs(3600),
+        pool.list_tools("x-data", "http://studio-1:9198/mcp"),
+    )
+    .await
+    .expect("a hung connect for one service must not block other services");
+    assert!(healthy.is_ok(), "healthy service must list tools");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "healthy service waited {:?} behind the hung connect — connect must \
+         not hold the pool lock",
+        started.elapsed()
+    );
+
+    hung.abort();
+}
