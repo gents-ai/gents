@@ -61,12 +61,28 @@ describe("type scale", () => {
   it("every font-size declaration uses a --text-* token", () => {
     const raw: string[] = [];
     for (const [file, css] of sources) {
-      for (const match of css.matchAll(/font-size:\s*([^;]+);/g)) {
+      // Case-insensitive; the final declaration of a block needs no ';'.
+      for (const match of css.matchAll(/font-size:\s*([^;}]+)[;}]/gi)) {
         const value = match[1].trim();
         if (!/^var\(--text-[\w-]+\)$/.test(value) && value !== "inherit") {
           // tokens.css defines the scale itself in raw px.
           if (file.endsWith("tokens.css")) continue;
           raw.push(`${relative(STYLES_ROOT, file)}: font-size: ${value}`);
+        }
+      }
+    }
+    expect(raw).toEqual([]);
+  });
+
+  it("the font shorthand never smuggles a raw size past the fence", () => {
+    const raw: string[] = [];
+    for (const [file, css] of sources) {
+      for (const match of css.matchAll(/(?<![\w-])font:\s*([^;}]+)[;}]/gi)) {
+        const value = match[1].trim();
+        // `font: inherit` is the only shorthand the fence allows; any other
+        // value can carry an off-scale raw size (e.g. `font: 12px/1.4 …`).
+        if (value !== "inherit") {
+          raw.push(`${relative(STYLES_ROOT, file)}: font: ${value}`);
         }
       }
     }
