@@ -53,6 +53,8 @@ pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
         selection.command_allowed_argv_prefixes.dedup();
         selection.command_forbidden_argv_prefixes.sort();
         selection.command_forbidden_argv_prefixes.dedup();
+        selection.read_only_command_allowlist.sort();
+        selection.read_only_command_allowlist.dedup();
         selection.cli_tool_names.sort();
         selection.cli_tool_names.dedup();
         selection.allowed_mcp_service_ids.sort();

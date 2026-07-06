@@ -225,7 +225,11 @@ fn command_policy_from_document(
         || selection
             .command_forbidden_argv_prefixes
             .as_ref()
-            .is_some_and(|prefixes| !prefixes.is_empty());
+            .is_some_and(|prefixes| !prefixes.is_empty())
+        || selection
+            .read_only_command_allowlist
+            .as_ref()
+            .is_some_and(|list| !list.is_empty());
     if !has_policy {
         return if matches!(bash, BashMode::Unrestricted) {
             Ok(Some(
@@ -272,6 +276,16 @@ fn command_policy_from_document(
         default_read_only_command_policy()
     } else {
         CommandExecutionPolicy::write_capable()
+    };
+    // A per-agent read-only allowlist overrides the hardcoded default only when
+    // it is present AND non-empty; an empty list is treated as "no override" and
+    // falls back to the default, matching the command_allowed_argv_prefixes idiom
+    // (Some(vec![]) must not become a deny-all read-only surface).
+    let base = match (mode, selection.read_only_command_allowlist.as_deref()) {
+        (CommandExecutionMode::ReadOnly, Some(list)) if !list.is_empty() => {
+            base.with_read_only_allowlist(list.to_vec())
+        }
+        _ => base,
     };
     Ok(Some(
         base.with_mode(mode)

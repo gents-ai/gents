@@ -138,6 +138,8 @@ pub(crate) struct DesiredToolSelection {
     #[serde(default)]
     pub(crate) command_forbidden_argv_prefixes: Vec<String>,
     #[serde(default)]
+    pub(crate) read_only_command_allowlist: Vec<String>,
+    #[serde(default)]
     pub(crate) command_network_mode: Option<String>,
     #[serde(default)]
     pub(crate) cli_tool_names: Vec<String>,

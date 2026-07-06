@@ -387,6 +387,10 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
                 .command_forbidden_argv_prefixes
                 .as_ref()
                 .and_then(|values| string_list_field("command_forbidden_argv_prefixes", values)),
+            selection
+                .read_only_command_allowlist
+                .as_ref()
+                .and_then(|values| string_list_field("read_only_command_allowlist", values)),
             optional_string_field(
                 "command_network_mode",
                 selection.command_network_mode.as_deref(),

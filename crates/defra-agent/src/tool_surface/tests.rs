@@ -703,6 +703,47 @@ fn defra_query_deny_all_collection_scope_gates_tool_off() {
 }
 
 #[test]
+fn from_document_read_only_allowlist_override_and_fallback() {
+    // (a) A doc that sets ONLY read_only_command_allowlist (no other command_*
+    // field) with enable_bash + ReadOnly must materialize a Some(command_policy)
+    // whose read_only_allowlist is the custom list — proving the has_policy gate
+    // fires and the override applies.
+    let mut doc = init_like_tool_selection_document(
+        "readonly-custom",
+        false,
+        "Off",
+        true,
+        "ReadOnly",
+        false,
+        Vec::new(),
+        false,
+    );
+    doc.read_only_command_allowlist = Some(vec!["cat".to_string()]);
+    let selection = ToolSelection::from_document(&doc).unwrap();
+    let policy = selection
+        .command_policy
+        .expect("custom read-only allowlist must produce Some(command_policy)");
+    assert_eq!(policy.read_only_allowlist(), ["cat".to_string()]);
+
+    // (b) The same doc with an absent / empty allowlist yields the historical
+    // default: command_policy resolves to None (builder applies the hardcoded
+    // default_read_only_command_policy).
+    let mut absent = doc.clone();
+    absent.read_only_command_allowlist = None;
+    assert!(ToolSelection::from_document(&absent)
+        .unwrap()
+        .command_policy
+        .is_none());
+
+    let mut empty = doc;
+    empty.read_only_command_allowlist = Some(Vec::new());
+    assert!(ToolSelection::from_document(&empty)
+        .unwrap()
+        .command_policy
+        .is_none());
+}
+
+#[test]
 fn tool_policy_version_controls_nullable_default_decode() {
     let legacy_doc = crate::document_config::ToolSelectionDocument {
         selection_id: "legacy-tools".to_string(),
@@ -801,6 +842,7 @@ fn init_like_tool_selection_document(
             .then(|| "unrestricted".to_string()),
         command_allowed_argv_prefixes: Some(Vec::new()),
         command_forbidden_argv_prefixes: Some(Vec::new()),
+        read_only_command_allowlist: None,
         command_network_mode: None,
         cli_tool_names: Some(Vec::new()),
         enable_meta_tools: Some(enable_meta_tools),
@@ -1058,6 +1100,7 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
         command_execution_policy: None,
         command_allowed_argv_prefixes: Some(Vec::new()),
         command_forbidden_argv_prefixes: Some(Vec::new()),
+        read_only_command_allowlist: None,
         command_network_mode: None,
         cli_tool_names: Some(Vec::new()),
         enable_meta_tools: Some(true),

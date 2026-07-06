@@ -638,6 +638,10 @@ async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Res
         .join("object.json");
     let mut selection = read_json_file(&selection_path)?;
     selection["display_name"] = Value::String("Empty list regression".to_string());
+    // A non-empty read_only_command_allowlist must round-trip through the
+    // `config apply` manifest path and read back equal (sorted by normalize).
+    selection["read_only_command_allowlist"] =
+        Value::Array(vec![Value::String("jq".into()), Value::String("echo".into())]);
     for field in [
         "command_allowed_argv_prefixes",
         "command_forbidden_argv_prefixes",
@@ -700,6 +704,7 @@ async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Res
                     display_name
                     command_allowed_argv_prefixes
                     command_forbidden_argv_prefixes
+                    read_only_command_allowlist
                     cli_tool_names
                     allowed_mcp_service_ids
                     delegate_to
@@ -739,6 +744,13 @@ async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Res
             "expected {field} to query back as null or empty array, got {row}"
         );
     }
+    assert_eq!(
+        row.get("read_only_command_allowlist")
+            .and_then(Value::as_array)
+            .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>()),
+        Some(vec!["echo", "jq"]),
+        "expected read_only_command_allowlist to round-trip (sorted by normalize): {row}"
+    );
     assert_eq!(
         row.get("subagent_allow_cross_deployment")
             .and_then(Value::as_bool),

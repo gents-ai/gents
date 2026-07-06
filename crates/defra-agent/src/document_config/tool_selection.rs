@@ -244,6 +244,11 @@ pub struct ToolSelectionDocument {
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
     )]
     pub command_forbidden_argv_prefixes: Option<Vec<String>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
+    pub read_only_command_allowlist: Option<Vec<String>>,
     pub command_network_mode: Option<String>,
     #[serde(
         default,
@@ -526,6 +531,7 @@ pub(crate) async fn load_tool_selection_record(
                 command_execution_policy
                 command_allowed_argv_prefixes
                 command_forbidden_argv_prefixes
+                read_only_command_allowlist
                 command_network_mode
                 cli_tool_names
                 enable_meta_tools
@@ -584,6 +590,7 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 command_execution_policy
                 command_allowed_argv_prefixes
                 command_forbidden_argv_prefixes
+                read_only_command_allowlist
                 command_network_mode
                 cli_tool_names
                 enable_meta_tools
@@ -642,6 +649,7 @@ pub(crate) async fn list_tool_selection_records(
                 command_execution_policy
                 command_allowed_argv_prefixes
                 command_forbidden_argv_prefixes
+                read_only_command_allowlist
                 command_network_mode
                 cli_tool_names
                 enable_meta_tools
@@ -694,6 +702,7 @@ pub(crate) async fn list_all_tool_selection_records(
                 command_execution_policy
                 command_allowed_argv_prefixes
                 command_forbidden_argv_prefixes
+                read_only_command_allowlist
                 command_network_mode
                 cli_tool_names
                 enable_meta_tools
@@ -767,6 +776,10 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_string_list_field(
             "command_forbidden_argv_prefixes",
             selection.command_forbidden_argv_prefixes.as_deref(),
+        ),
+        graphql_fields::graphql_string_list_field(
+            "read_only_command_allowlist",
+            selection.read_only_command_allowlist.as_deref(),
         ),
         graphql_fields::graphql_string_field(
             "command_network_mode",
@@ -875,6 +888,10 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_string_list_field(
             "command_forbidden_argv_prefixes",
             selection.command_forbidden_argv_prefixes.as_deref(),
+        ),
+        graphql_fields::graphql_string_list_field(
+            "read_only_command_allowlist",
+            selection.read_only_command_allowlist.as_deref(),
         ),
         graphql_fields::graphql_string_field(
             "command_network_mode",

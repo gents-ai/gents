@@ -450,6 +450,44 @@ async fn tool_selection_document_round_trips_defra_query_fields() {
     );
 }
 
+#[tokio::test]
+async fn tool_selection_document_round_trips_read_only_command_allowlist() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let doc = ToolSelectionDocument {
+        selection_id: "steward-readonly-allowlist".to_string(),
+        agent_did: "did:key:z-test-allowlist".to_string(),
+        read_only_command_allowlist: Some(vec!["jq".to_string(), "echo".to_string()]),
+        ..Default::default()
+    };
+    upsert_tool_selection(&node, &doc)
+        .await
+        .expect("upsert should persist the read_only_command_allowlist field");
+
+    let loaded = load_tool_selection(&node, "steward-readonly-allowlist")
+        .await
+        .expect("load should succeed")
+        .expect("selection should exist");
+    assert_eq!(
+        loaded.read_only_command_allowlist,
+        Some(vec!["jq".to_string(), "echo".to_string()]),
+        "read_only_command_allowlist must round-trip through the GraphQL document representation"
+    );
+}
+
+#[test]
+fn read_only_command_allowlist_absent_decodes_to_none() {
+    // A stored/manifest doc that omits the key must decode to None so the
+    // runtime falls back to the hardcoded default_read_only_commands() list.
+    let json = serde_json::json!({
+        "selection_id": "sel-1",
+        "agent_did": "did:defra-agent:test",
+    });
+    let loaded: ToolSelectionDocument = serde_json::from_value(json).unwrap();
+    assert_eq!(loaded.read_only_command_allowlist, None);
+}
+
 #[test]
 fn write_tools_round_trip() {
     let json = serde_json::json!({
