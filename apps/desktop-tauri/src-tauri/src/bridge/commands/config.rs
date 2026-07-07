@@ -292,6 +292,7 @@ pub(crate) async fn save_tool_selection_config(
             command_execution_policy: None,
             command_allowed_argv_prefixes: Vec::new(),
             command_forbidden_argv_prefixes: Vec::new(),
+            read_only_command_allowlist: Vec::new(),
             command_network_mode: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: Some(false),
