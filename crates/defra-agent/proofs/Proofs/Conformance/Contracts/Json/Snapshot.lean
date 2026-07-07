@@ -9,6 +9,7 @@ import Proofs.Conformance.Contracts.Json.BackgroundWork
 import Proofs.Conformance.Contracts.Json.ComposedInvariants
 import Proofs.Conformance.Contracts.Json.CodexShim
 import Proofs.Conformance.Contracts.Json.Workflow
+import Proofs.CompletionRetry.Contracts
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.ClientShell.Contracts
 import Proofs.ApplyReconcile.ContractCases
@@ -83,6 +84,8 @@ def snapshotJson : String :=
       ++ jsonArray (ToolExecution.preflightCases.map toolPreflightCaseJson) ++ ","
     ++ "\"tool_retry_cases\":"
       ++ jsonArray (ToolExecution.retryCases.map toolRetryCaseJson) ++ ","
+    ++ "\"completion_retry_cases\":"
+      ++ CompletionRetry.Contracts.casesJson ++ ","
     ++ "\"boundaries\":"
       ++ boundariesJson ++ ","
     ++ "\"deviations\":"

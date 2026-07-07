@@ -126,6 +126,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.runtimeInternal]
     , deferred := []
     }
+  , { feature := "completion-retry"
+    , required := [Surface.agentFacing, Surface.runtimeInternal]
+    , deferred := []
+    }
   , { feature := "tool-call"
     , required := [Surface.agentFacing, Surface.runtimeInternal]
     , deferred := []
@@ -287,6 +291,11 @@ def vocabularyCoverage : List CoverageEntry :=
       "InferenceCallTerminalReason"
       "admission::tests::rust_inference_call_terminal_reason_vocabulary_matches_lean_model")
       "inference-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "vocabulary"
+      "CompletionRetryFailureClass"
+      "conformance::completion_retry_lean_witness_cases_hold")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "vocabulary"
       "ToolRetryDisposition"
@@ -462,6 +471,11 @@ def caseCoverage : List CoverageEntry :=
       "InferenceCallSlotAccounting"
       "conformance::generated_inference_slot_accounting_cases_drive_db_backed_reconstruction")
       "inference-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "completion_retry_cases"
+      "completionRetry"
+      "conformance::completion_retry_lean_witness_cases_hold")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "fleet_cases"
       "FleetSlotAccounting"

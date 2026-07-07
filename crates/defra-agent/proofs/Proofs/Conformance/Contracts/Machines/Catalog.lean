@@ -9,6 +9,7 @@ import Proofs.Conformance.Contracts.Machines.InferenceCall
 import Proofs.Conformance.Contracts.Machines.ToolCall
 import Proofs.Conformance.Contracts.Machines.ManagedExec
 import Proofs.Conformance.Contracts.Machines.Subagent
+import Proofs.CompletionRetry.Contracts
 
 /-!
 # Conformance Machine Catalog
@@ -38,6 +39,9 @@ def vocabularies : List VocabularyContract :=
         , .queueFull
         , .streamDroppedBeforeTerminalResponse
         ].map InferenceCallTerminalReason.toDefraDB
+    }
+  , { domain := "CompletionRetryFailureClass"
+    , values := CompletionRetry.Contracts.failureClassVocabulary
     }
   , { domain := "ToolCallState", values := toolCallStateNames }
   , { domain := "CancelCause", values := toolCallCancelCauseNames }
