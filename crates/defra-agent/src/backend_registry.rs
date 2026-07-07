@@ -335,6 +335,35 @@ pub async fn set_backend_probe_status(
     Ok(())
 }
 
+/// Persist a backend's `probe_status` and stamp `last_probe` in one write —
+/// the scheduled prober's recurring `unknown → healthy` promotion path.
+pub async fn set_backend_probe_status_with_last_probe(
+    node: &EmbeddedNode,
+    backend_id: &str,
+    probe_status: &str,
+    last_probe: chrono::DateTime<chrono::Utc>,
+) -> Result<()> {
+    let mutation = format!(
+        r#"mutation {{
+            update_InferenceBackend(
+                filter: {{ backend_id: {{ _eq: "{}" }} }},
+                input: {{ probe_status: "{}", last_probe: "{}" }}
+            ) {{ _docID }}
+        }}"#,
+        escape_graphql_string(backend_id),
+        escape_graphql_string(probe_status),
+        last_probe.to_rfc3339(),
+    );
+    let resp = node.execute(&mutation).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "update InferenceBackend probe_status/last_probe for {backend_id} failed: {:?}",
+            resp.errors
+        );
+    }
+    Ok(())
+}
+
 /// Probe each enabled backend that is not already healthy and promote the
 /// reachable ones to `healthy`.
 ///

@@ -7,6 +7,7 @@ pub mod adapter_projection;
 pub(crate) mod admission;
 pub mod agent;
 pub mod apply_model;
+pub mod backend_health;
 pub mod backend_provider;
 pub mod backend_registry;
 pub mod background_completion;
@@ -130,6 +131,10 @@ pub use document_config::{
 pub use external_adapter_capture::{
     import_external_adapter_capture_to_timeline_rows, ExternalAdapterCapture,
     ExternalAdapterImport, ExternalAdapterMapping, ExternalAdapterSource,
+};
+pub use backend_health::{
+    probe_backends_cycle, run_backend_probe_cycle, spawn_backend_prober, BackendHealthMap,
+    BackendHealthSnapshot, BackendHealthState, BackendProberOptions, ProbeCycleOutcome,
 };
 pub use health_checker::{
     run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,
