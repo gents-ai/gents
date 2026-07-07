@@ -2914,9 +2914,29 @@ mod patch_kind_tests {
     }
 
     #[tokio::test]
-    async fn agent_response_reasoning_progress_migration_adds_counter() {
+    async fn agent_response_reasoning_progress_migration_is_idempotent_and_preserves_rows() {
         let node = test_node().await;
         node.add_schema(OLD_AGENT_RESPONSE_SCHEMA).await.unwrap();
+
+        let pre_migration = node
+            .execute(
+                r#"mutation {
+                    create_AgentResponse(input: {
+                        response_key: "pre-migration-response",
+                        request_id: "pre-migration-request",
+                        agent_did: "did:defra-agent:migration-test",
+                        session_id: "pre-migration-session",
+                        content: "pre-migration content",
+                        created_at: "2026-07-07T12:00:00Z"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !pre_migration.has_errors(),
+            "creating pre-migration AgentResponse row failed: {:?}",
+            pre_migration.errors
+        );
 
         ensure_agent_response_reasoning_progress_migration(node.clone())
             .await
@@ -2932,12 +2952,46 @@ mod patch_kind_tests {
         );
 
         let read = node
-            .execute(r#"query { AgentResponse { _docID reasoning_progress_seq } }"#)
+            .execute(
+                r#"query {
+                    AgentResponse {
+                        _docID
+                        response_key
+                        content
+                        reasoning_progress_seq
+                    }
+                }"#,
+            )
             .await;
         assert!(
             !read.has_errors(),
             "querying reasoning_progress_seq on AgentResponse must succeed after migration, got: {:?}",
             read.errors
+        );
+
+        let rows = read
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentResponse"))
+            .and_then(|rows| rows.as_array())
+            .expect("AgentResponse query should return rows");
+        let row = rows
+            .iter()
+            .find(|row| {
+                row.get("response_key").and_then(|value| value.as_str())
+                    == Some("pre-migration-response")
+            })
+            .expect("pre-migration AgentResponse row should survive migration");
+        assert_eq!(
+            row.get("content").and_then(|value| value.as_str()),
+            Some("pre-migration content")
+        );
+        let progress = row
+            .get("reasoning_progress_seq")
+            .expect("query should include reasoning_progress_seq");
+        assert!(
+            progress.is_null() || progress.as_i64() == Some(0),
+            "pre-migration row should read with an unset or zero reasoning_progress_seq, got {progress}"
         );
     }
 }
