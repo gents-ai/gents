@@ -42,6 +42,7 @@ pub(super) fn defra_turn_progress_query(request_id: &str, session_id: &str) -> S
                 error_message
                 token_count
                 progress_seq
+                reasoning_progress_seq
                 materialized_message_sequence
                 materialized_at
                 completed_at

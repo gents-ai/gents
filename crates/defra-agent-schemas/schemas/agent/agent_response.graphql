@@ -10,6 +10,7 @@ type AgentResponse @branchable {
     error_message: String
     token_count: Int
     progress_seq: Int
+    reasoning_progress_seq: Int
     materialized_message_sequence: Int
     materialized_at: String
     created_at: String @index

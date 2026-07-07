@@ -54,6 +54,7 @@ pub(crate) fn response_query(request_id: &str) -> String {
                 error_message
                 token_count
                 progress_seq
+                reasoning_progress_seq
                 materialized_message_sequence
                 materialized_at
                 completed_at
@@ -81,6 +82,7 @@ fn response_wait_progress_query(request_id: &str) -> String {
                 error_message
                 token_count
                 progress_seq
+                reasoning_progress_seq
                 materialized_message_sequence
                 materialized_at
                 completed_at
@@ -421,6 +423,7 @@ struct WaitProgressMarker {
     response_error_len: Option<usize>,
     response_token_count: Option<String>,
     response_progress_seq: Option<String>,
+    response_reasoning_progress_seq: Option<String>,
     response_materialized_message_sequence: Option<String>,
     response_materialized_at: Option<String>,
     response_completed_at: Option<String>,
@@ -443,6 +446,7 @@ fn wait_progress_marker(
         response_error_len: string_len_marker(response_row, "error_message"),
         response_token_count: scalar_marker(response_row, "token_count"),
         response_progress_seq: scalar_marker(response_row, "progress_seq"),
+        response_reasoning_progress_seq: scalar_marker(response_row, "reasoning_progress_seq"),
         response_materialized_message_sequence: scalar_marker(
             response_row,
             "materialized_message_sequence",

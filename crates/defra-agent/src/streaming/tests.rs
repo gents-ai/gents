@@ -39,6 +39,7 @@ async fn load_response(
                     error_message
                     status
                     token_count
+                    reasoning_progress_seq
                     completed_at
                     interrupted_at
                 }}
@@ -387,6 +388,7 @@ async fn finalize_keeps_buffer_when_mutation_fails() {
             content: "lost tail".to_string(),
             reasoning: String::new(),
             token_count: 2,
+            reasoning_progress_seq: 0,
             last_flush_at: Instant::now(),
         },
     );
@@ -509,6 +511,7 @@ async fn write_tokens_fails_when_response_document_is_missing() {
             content: String::new(),
             reasoning: String::new(),
             token_count: 0,
+            reasoning_progress_seq: 0,
             last_flush_at: Instant::now() - Duration::from_secs(1),
         },
     );
@@ -593,6 +596,36 @@ async fn write_reasoning_persists_on_response() {
         row.get("reasoning").and_then(|value| value.as_str()),
         Some("")
     );
+
+    let _ = fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn write_reasoning_advances_progress_when_preview_is_unchanged() {
+    let (node, data_path) = build_test_node("reasoning-progress-seq").await;
+    let writer = DefraStreamWriter::new(
+        node.clone(),
+        "did:defra-agent:test",
+        Duration::from_millis(0),
+    );
+    let request_id = uuid::Uuid::new_v4().to_string();
+    create_processing_request(&node, &request_id, "session-1").await;
+    let doc_id = writer
+        .begin("session-1", &request_id, "general")
+        .await
+        .unwrap();
+
+    let saturated = "x".repeat(MAX_LIVE_REASONING_BYTES);
+    writer.write_reasoning(&doc_id, &saturated).await.unwrap();
+    let before = load_response(&node, &doc_id).await;
+    assert_eq!(before["reasoning"].as_str(), Some(saturated.as_str()));
+    assert_eq!(before["reasoning_progress_seq"].as_i64(), Some(1));
+
+    writer.write_reasoning(&doc_id, "x").await.unwrap();
+    let after = load_response(&node, &doc_id).await;
+
+    assert_eq!(after["reasoning"].as_str(), before["reasoning"].as_str());
+    assert_eq!(after["reasoning_progress_seq"].as_i64(), Some(2));
 
     let _ = fs::remove_dir_all(&data_path);
 }

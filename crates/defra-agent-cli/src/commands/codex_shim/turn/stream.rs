@@ -35,6 +35,7 @@ struct ProgressMarker {
     response_status: Option<String>,
     response_token_count: Option<String>,
     response_progress_seq: Option<String>,
+    response_reasoning_progress_seq: Option<String>,
     response_content_len: Option<usize>,
     response_reasoning_fingerprint: Option<(usize, u64)>,
     response_error_len: Option<usize>,
@@ -266,6 +267,12 @@ pub(super) async fn stream_defra_turn(
                 {
                     if next_request.is_pending() {
                         if last_progress_at.elapsed() >= state.timeout {
+                            cancel_pending_steering_request(
+                                connection,
+                                state,
+                                &next_request.request_id,
+                            )
+                            .await;
                             anyhow::bail!(
                                 "timed out waiting for queued Codex steering request {} after {}s of inactivity\n{}",
                                 next_request.request_id,
@@ -410,6 +417,7 @@ fn progress_marker(
         response_status: scalar_marker(response_row, "status"),
         response_token_count: scalar_marker(response_row, "token_count"),
         response_progress_seq: scalar_marker(response_row, "progress_seq"),
+        response_reasoning_progress_seq: scalar_marker(response_row, "reasoning_progress_seq"),
         response_content_len: string_len_marker(response_row, "content"),
         response_reasoning_fingerprint: string_fingerprint_marker(response_row, "reasoning"),
         response_error_len: string_len_marker(response_row, "error_message"),
@@ -578,6 +586,21 @@ async fn finish_interrupted_turn(
         running_background_tools,
     );
     Ok(())
+}
+
+async fn cancel_pending_steering_request(
+    connection: &ConnectionState,
+    state: &ShimState,
+    request_id: &str,
+) {
+    connection.take_steering_input(request_id).await;
+    if let Err(error) = defra_agent::interrupt_request(state.node.as_ref(), request_id).await {
+        tracing::warn!(
+            %error,
+            request_id,
+            "Codex shim failed to interrupt timed-out queued steering request"
+        );
+    }
 }
 
 async fn steering_input_for_request(

@@ -112,6 +112,10 @@ const ADD_TOOL_SELECTION_POLICY_VERSION_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"tool_policy_version","Kind":11}}
 ]"#;
 
+const ADD_AGENT_RESPONSE_REASONING_PROGRESS_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentResponse/Fields/-","value":{"Name":"reasoning_progress_seq","Kind":5}}
+]"#;
+
 const ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"agent_did","Kind":11}}
 ]"#;
@@ -1308,6 +1312,37 @@ pub async fn ensure_agent_runtime_executor_status_migrations(
     Ok(())
 }
 
+/// Idempotent migration for AgentResponse: adds a monotonic reasoning-progress
+/// counter used by streaming waiters. Existing DBs need this field patched in so
+/// reasoning-only output can signal activity even after the bounded live
+/// reasoning preview stops changing.
+pub async fn ensure_agent_response_reasoning_progress_migration(
+    node: Arc<EmbeddedNode>,
+) -> Result<()> {
+    let Some(collection) = node
+        .get_collection("AgentResponse")
+        .context("get AgentResponse collection")?
+    else {
+        return Ok(());
+    };
+    if collection_has_field(&collection, "reasoning_progress_seq") {
+        return Ok(());
+    }
+
+    let next = node
+        .patch_collection("AgentResponse", ADD_AGENT_RESPONSE_REASONING_PROGRESS_PATCH)
+        .await
+        .context("patch_collection AgentResponse reasoning progress field")?;
+    node.set_active_collection_version(&next.version_id)
+        .await
+        .context("set_active_collection_version AgentResponse reasoning progress field")?;
+    tracing::info!(
+        version = %next.version_id,
+        "AgentResponse patched with reasoning_progress_seq field"
+    );
+    Ok(())
+}
+
 /// Per-collection outcome of the legacy `agent_did` scope-key reconciliation
 /// (Finding #11): how many rows were backfilled from their owning record, and
 /// how many remain unscoped (their `agent_did` is still null after the field was
@@ -1717,6 +1752,9 @@ pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()
     ensure_agent_behavior_migrations(node.clone())
         .await
         .context("ensure AgentBehavior migrations")?;
+    ensure_agent_response_reasoning_progress_migration(node.clone())
+        .await
+        .context("ensure AgentResponse reasoning progress migration")?;
     ensure_conversation_scope_key_migrations(node)
         .await
         .context("ensure conversation agent_did scope-key migrations")?;
@@ -2872,6 +2910,34 @@ mod patch_kind_tests {
                 .unwrap()
                 .is_some(),
             "ConsumedInviteNonce ledger must exist after ensure_all_runtime_migrations"
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_response_reasoning_progress_migration_adds_counter() {
+        let node = test_node().await;
+        node.add_schema(OLD_AGENT_RESPONSE_SCHEMA).await.unwrap();
+
+        ensure_agent_response_reasoning_progress_migration(node.clone())
+            .await
+            .unwrap();
+        ensure_agent_response_reasoning_progress_migration(node.clone())
+            .await
+            .unwrap();
+
+        let collection = node.get_collection("AgentResponse").unwrap().unwrap();
+        assert!(
+            collection_has_field(&collection, "reasoning_progress_seq"),
+            "AgentResponse.reasoning_progress_seq must exist after migration"
+        );
+
+        let read = node
+            .execute(r#"query { AgentResponse { _docID reasoning_progress_seq } }"#)
+            .await;
+        assert!(
+            !read.has_errors(),
+            "querying reasoning_progress_seq on AgentResponse must succeed after migration, got: {:?}",
+            read.errors
         );
     }
 }

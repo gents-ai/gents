@@ -39,6 +39,7 @@ struct ChatProgressMarker {
     response_reasoning_fingerprint: Option<(usize, u64)>,
     response_error_len: Option<usize>,
     response_progress_seq: Option<String>,
+    response_reasoning_progress_seq: Option<String>,
     response_materialized_message_sequence: Option<String>,
     response_materialized_at: Option<String>,
     response_completed_at: Option<String>,
@@ -81,6 +82,7 @@ pub(super) fn chat_progress_query(request_id: &str, session_id: &str) -> String 
                 reasoning
                 error_message
                 progress_seq
+                reasoning_progress_seq
                 materialized_message_sequence
                 materialized_at
                 completed_at
@@ -350,6 +352,7 @@ fn chat_progress_marker(
         response_reasoning_fingerprint: string_fingerprint_marker(response_row, "reasoning"),
         response_error_len: string_len_marker(response_row, "error_message"),
         response_progress_seq: scalar_marker(response_row, "progress_seq"),
+        response_reasoning_progress_seq: scalar_marker(response_row, "reasoning_progress_seq"),
         response_materialized_message_sequence: scalar_marker(
             response_row,
             "materialized_message_sequence",

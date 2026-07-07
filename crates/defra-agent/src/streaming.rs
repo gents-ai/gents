@@ -106,6 +106,7 @@ struct StreamBuffer {
     content: String,
     reasoning: String,
     token_count: usize,
+    reasoning_progress_seq: usize,
     last_flush_at: Instant,
 }
 
@@ -114,6 +115,7 @@ struct StreamBufferSnapshot {
     content: String,
     reasoning: String,
     token_count: usize,
+    reasoning_progress_seq: usize,
 }
 
 impl DefraStreamWriter {
@@ -144,13 +146,15 @@ impl DefraStreamWriter {
                     input: {{
                         content: "{content}",
                         reasoning: "{reasoning}",
-                        token_count: {token_count}
+                        token_count: {token_count},
+                        reasoning_progress_seq: {reasoning_progress_seq}
                     }}
                 ) {{ _docID }}
             }}"#,
             content = escape_graphql_string(&snapshot.content),
             reasoning = escape_graphql_string(&snapshot.reasoning),
             token_count = snapshot.token_count,
+            reasoning_progress_seq = snapshot.reasoning_progress_seq,
         );
 
         let resp =
@@ -194,6 +198,7 @@ impl DefraStreamWriter {
             content: buf.content.clone(),
             reasoning: buf.reasoning.clone(),
             token_count: buf.token_count,
+            reasoning_progress_seq: buf.reasoning_progress_seq,
         }))
     }
 
@@ -366,6 +371,7 @@ impl DefraStreamWriter {
                 content: buf.content.clone(),
                 reasoning: buf.reasoning.clone(),
                 token_count: buf.token_count,
+                reasoning_progress_seq: buf.reasoning_progress_seq,
             })
         };
         let request_id = existing
@@ -550,6 +556,7 @@ impl StreamWriter for DefraStreamWriter {
                     error_message: "",
                     token_count: 0,
                     progress_seq: 0,
+                    reasoning_progress_seq: 0,
                     created_at: "{now}",
                     completed_at: ""
                 }}) {{ _docID }}
@@ -574,6 +581,7 @@ impl StreamWriter for DefraStreamWriter {
                 content: String::new(),
                 reasoning: String::new(),
                 token_count: 0,
+                reasoning_progress_seq: 0,
                 last_flush_at: Instant::now(),
             },
         );
@@ -616,6 +624,7 @@ impl StreamWriter for DefraStreamWriter {
                 .get_mut(doc_id)
                 .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
             append_live_reasoning_preview(&mut buf.reasoning, reasoning);
+            buf.reasoning_progress_seq = buf.reasoning_progress_seq.saturating_add(1);
         }
 
         let snapshot = self.pending_snapshot(doc_id, false).await?;
