@@ -455,6 +455,7 @@ fn integration_test_behavior(behavior_name: &str) -> Arc<AgentBehavior> {
             crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
+        completion_retry: crate::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: SamplingConfig::default(),
     })
 }

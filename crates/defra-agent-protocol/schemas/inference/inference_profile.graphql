@@ -8,4 +8,9 @@ type InferenceProfile {
     stream_batch_ms: Int
     stream_liveness_timeout_secs: Int
     deadline_duration_secs: Int
+    retry_max_transport: Int
+    retry_backoff_ms: [Int]
+    retry_max_resample: Int
+    retry_allow_repair: Boolean
+    retry_interactive_max: Int
 }

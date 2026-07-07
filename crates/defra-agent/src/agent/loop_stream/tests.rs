@@ -245,6 +245,8 @@ fn config(max_turns: usize) -> LoopConfig {
         additional_params: None,
         tool_choice: None,
         on_rendered_request: None,
+        retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
+        deadline: None,
         max_turns,
     }
 }

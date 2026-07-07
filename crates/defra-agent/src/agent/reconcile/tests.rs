@@ -1005,6 +1005,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
             crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
+        completion_retry: crate::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: crate::config::SamplingConfig::default(),
     });
     let updated_behavior = Arc::new(AgentBehavior {
@@ -1053,6 +1054,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
             crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
+        completion_retry: crate::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: crate::config::SamplingConfig::default(),
     });
 

@@ -339,6 +339,7 @@ pub(crate) fn behavior_config_from_documents(
         stream_batch_ms,
         stream_liveness_timeout: Duration::from_secs(stream_liveness_timeout_secs),
         deadline_duration: Duration::from_secs(deadline_duration_secs),
+        completion_retry: completion_retry_fields_from_profile(inference_profile),
         sampling: SamplingConfig {
             temperature: inference_profile.temperature,
             top_p: None,
@@ -347,6 +348,18 @@ pub(crate) fn behavior_config_from_documents(
         },
         skills,
     })
+}
+
+fn completion_retry_fields_from_profile(
+    inference_profile: &crate::document_config::InferenceProfile,
+) -> completion_retry::CompletionRetryProfileFields {
+    completion_retry::CompletionRetryProfileFields {
+        retry_max_transport: inference_profile.retry_max_transport,
+        retry_backoff_ms: inference_profile.retry_backoff_ms.clone(),
+        retry_max_resample: inference_profile.retry_max_resample,
+        retry_allow_repair: inference_profile.retry_allow_repair,
+        retry_interactive_max: inference_profile.retry_interactive_max,
+    }
 }
 
 fn positive_duration_secs_or_default(

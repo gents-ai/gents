@@ -58,6 +58,11 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         stream_batch_ms: Some(50),
         stream_liveness_timeout_secs: Some(300),
         deadline_duration_secs: Some(300),
+        retry_max_transport: None,
+        retry_backoff_ms: None,
+        retry_max_resample: None,
+        retry_allow_repair: None,
+        retry_interactive_max: None,
     })
     .await?;
 

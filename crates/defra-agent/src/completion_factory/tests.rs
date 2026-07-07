@@ -1,5 +1,12 @@
 use super::*;
+use std::sync::Arc;
+use std::time::Duration;
+
+use crate::agent::completion_retry::CompletionRetryProfileFields;
+use crate::compaction::CompactionStrategy;
 use crate::config::SamplingConfig;
+use crate::identity::{AgentIdentity, AgentPrincipal, KeyIdentity};
+use crate::tool_surface::BehaviorToolConfig;
 use crate::watcher::AgentRequest;
 
 fn request() -> AgentRequest {
@@ -237,4 +244,85 @@ fn openai_cache_scope_falls_back_to_request_id() {
     let value = openai_cache_scope_params(&request).expect("fallback scope should be present");
 
     assert_eq!(value["user"], "request-123");
+}
+
+#[test]
+fn loop_config_for_request_resolves_completion_retry_policy_and_deadline() {
+    let behavior = behavior_with_retry(CompletionRetryProfileFields {
+        retry_interactive_max: Some(2),
+        ..Default::default()
+    });
+    let mut request = request();
+    request.execution_origin = Some("interactive".to_string());
+    request.deadline = Some("2030-01-01T00:00:00Z".to_string());
+
+    let config = loop_config_for_request(&behavior, "preamble".to_string(), &request, 0);
+
+    assert_eq!(
+        config.retry_policy.transport_backoff,
+        vec![Duration::from_secs(2), Duration::from_secs(2)]
+    );
+    assert_eq!(
+        config.deadline.map(|deadline| deadline.timestamp()),
+        Some(1_893_456_000)
+    );
+}
+
+#[test]
+fn loop_config_for_request_defaults_unknown_retry_origin_to_scheduled() {
+    let behavior = behavior_with_retry(CompletionRetryProfileFields::default());
+    let mut request = request();
+    request.execution_origin = Some("legacy-or-missing".to_string());
+
+    let config = loop_config_for_request(&behavior, "preamble".to_string(), &request, 0);
+
+    assert_eq!(
+        config.retry_policy,
+        CompletionRetryPolicy::scheduled_default()
+    );
+}
+
+fn behavior_with_retry(completion_retry: CompletionRetryProfileFields) -> AgentBehavior {
+    let identity = Arc::new(
+        KeyIdentity::load_or_create(
+            std::env::temp_dir().join(format!("completion-factory-{}.key", uuid::Uuid::new_v4())),
+            None,
+        )
+        .unwrap(),
+    );
+    let principal = Arc::new(AgentPrincipal {
+        agent_did: identity.did().to_string(),
+        identity,
+        default_behavior_id: "general".to_string(),
+        display_name: None,
+        enabled: true,
+    });
+
+    AgentBehavior {
+        behavior_id: "general".to_string(),
+        principal,
+        backend_id: Some("backend-general".to_string()),
+        backend_provider_kind: BackendProviderKind::OpenAiCompatible,
+        openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
+        backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
+        backend_api_key: None,
+        backend_api_key_env_var: None,
+        model_name: crate::config::DEFAULT_MODEL_NAME.to_string(),
+        context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: crate::config::DEFAULT_MAX_TURNS,
+        system_prompt: "system".to_string(),
+        request_context_template: None,
+        tools: BehaviorToolConfig::meta_only(),
+        compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
+        compaction_strategy: CompactionStrategy::StripThenSummarize,
+        stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
+        stream_liveness_timeout: Duration::from_secs(
+            crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+        ),
+        deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
+        completion_retry,
+        sampling: SamplingConfig::default(),
+        skills: Vec::new(),
+    }
 }

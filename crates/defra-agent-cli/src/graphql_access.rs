@@ -9,6 +9,7 @@ use defra_agent_protocol::graphql::{
     optional_bool_field as shared_optional_bool_field,
     optional_f64_field as shared_optional_f64_field,
     optional_i64_field as shared_optional_i64_field,
+    optional_i64_list_field as shared_optional_i64_list_field,
     optional_string_field as shared_optional_string_field,
     string_list_field as shared_string_list_field, GraphqlRequestOptions,
 };
@@ -115,6 +116,10 @@ pub(crate) fn optional_f64_field(name: &str, value: Option<f64>) -> Option<Strin
 
 pub(crate) fn optional_bool_field(name: &str, value: Option<bool>) -> Option<String> {
     shared_optional_bool_field(name, value)
+}
+
+pub(crate) fn optional_i64_list_field(name: &str, value: Option<&[i64]>) -> Option<String> {
+    shared_optional_i64_list_field(name, value)
 }
 
 pub(crate) fn optional_string_field(name: &str, value: Option<&str>) -> Option<String> {

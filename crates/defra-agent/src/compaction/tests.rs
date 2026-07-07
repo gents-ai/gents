@@ -593,6 +593,8 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         additional_params: None,
         tool_choice: None,
         on_rendered_request: None,
+        retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
+        deadline: None,
         max_turns: 0,
     };
     let compactor = DefraCompactor::new(std::sync::Arc::new(model), config);

@@ -37,6 +37,17 @@ use rand::Rng;
 
 use crate::error::InferenceError;
 
+/// Raw retry knobs carried by an `InferenceProfile` and copied onto a resolved
+/// [`crate::config::AgentBehavior`]. `None` means "use the origin default".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompletionRetryProfileFields {
+    pub retry_max_transport: Option<i64>,
+    pub retry_backoff_ms: Option<Vec<i64>>,
+    pub retry_max_resample: Option<i64>,
+    pub retry_allow_repair: Option<bool>,
+    pub retry_interactive_max: Option<i64>,
+}
+
 /// Retry-relevant failure classification. Mirrors the Lean
 /// `CompletionRetry.FailureClass`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,7 +84,7 @@ pub fn failure_class(error: &InferenceError, error_text: &str) -> FailureClass {
 /// Per-request retry policy, resolved from the `InferenceProfile` +
 /// execution origin before the owned loop starts. Mirrors the Lean `Budget`
 /// structure, plus the concrete ladder delays Lean leaves abstract.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletionRetryPolicy {
     /// Transport-class backoff ladder. `len()` IS the transport retry
     /// budget (`Budget.transportRetries` in Lean); the same ladder is
@@ -88,6 +99,42 @@ pub struct CompletionRetryPolicy {
 }
 
 impl CompletionRetryPolicy {
+    /// Resolve the concrete retry policy for one request from profile fields
+    /// and the request's execution origin.
+    pub fn resolve(
+        fields: &CompletionRetryProfileFields,
+        origin: crate::lifecycle::ExecutionOrigin,
+    ) -> Self {
+        let default = Self::default_for_origin(origin);
+        let mut transport_backoff = fields
+            .retry_backoff_ms
+            .as_deref()
+            .and_then(backoff_from_profile)
+            .unwrap_or(default.transport_backoff);
+
+        let max_transport = match origin {
+            crate::lifecycle::ExecutionOrigin::Interactive => fields
+                .retry_interactive_max
+                .or(fields.retry_max_transport)
+                .and_then(nonnegative_usize),
+            crate::lifecycle::ExecutionOrigin::Scheduled => {
+                fields.retry_max_transport.and_then(nonnegative_usize)
+            }
+        };
+        if let Some(max_transport) = max_transport {
+            transport_backoff = resize_backoff(transport_backoff, max_transport);
+        }
+
+        Self {
+            transport_backoff,
+            max_resample: fields
+                .retry_max_resample
+                .and_then(nonnegative_u32)
+                .unwrap_or(default.max_resample),
+            allow_repair: fields.retry_allow_repair.unwrap_or(default.allow_repair),
+        }
+    }
+
     /// Resolves the default policy for an execution origin: interactive
     /// requests get the short single-retry ladder, scheduled requests the
     /// patient one.
@@ -122,6 +169,43 @@ impl CompletionRetryPolicy {
             allow_repair: true,
         }
     }
+}
+
+fn backoff_from_profile(values: &[i64]) -> Option<Vec<Duration>> {
+    if values.is_empty() {
+        return None;
+    }
+    let backoff = values
+        .iter()
+        .filter_map(|value| u64::try_from(*value).ok())
+        .filter(|value| *value > 0)
+        .map(Duration::from_millis)
+        .collect::<Vec<_>>();
+    (!backoff.is_empty()).then_some(backoff)
+}
+
+fn resize_backoff(mut backoff: Vec<Duration>, target_len: usize) -> Vec<Duration> {
+    if target_len == 0 {
+        return Vec::new();
+    }
+    if backoff.is_empty() {
+        backoff.push(Duration::from_secs(1));
+    }
+    if backoff.len() > target_len {
+        backoff.truncate(target_len);
+    } else {
+        let last = *backoff.last().expect("backoff is non-empty");
+        backoff.resize(target_len, last);
+    }
+    backoff
+}
+
+fn nonnegative_usize(value: i64) -> Option<usize> {
+    (value >= 0).then(|| usize::try_from(value).ok()).flatten()
+}
+
+fn nonnegative_u32(value: i64) -> Option<u32> {
+    (value >= 0).then(|| u32::try_from(value).ok()).flatten()
 }
 
 /// Retry kind carried on a [`PreStreamDirective::RetryAfter`], distinguishing

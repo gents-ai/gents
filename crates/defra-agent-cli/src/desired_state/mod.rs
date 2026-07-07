@@ -332,6 +332,11 @@ pub(crate) struct DesiredInferenceProfile {
     pub(crate) stream_batch_ms: Option<i64>,
     pub(crate) stream_liveness_timeout_secs: Option<i64>,
     pub(crate) deadline_duration_secs: Option<i64>,
+    pub(crate) retry_max_transport: Option<i64>,
+    pub(crate) retry_backoff_ms: Option<Vec<i64>>,
+    pub(crate) retry_max_resample: Option<i64>,
+    pub(crate) retry_allow_repair: Option<bool>,
+    pub(crate) retry_interactive_max: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

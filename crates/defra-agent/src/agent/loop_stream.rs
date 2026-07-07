@@ -27,6 +27,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
+
+use crate::agent::completion_retry::CompletionRetryPolicy;
 use crate::llm::message::{Message, ToolCall, ToolResult, ToolResultContent, UserContent};
 use crate::llm::rig_compat;
 use crate::llm::{HookAction, ToolCallHookAction};
@@ -69,6 +72,8 @@ pub(crate) struct LoopConfig {
     pub(crate) additional_params: Option<serde_json::Value>,
     pub(crate) tool_choice: Option<ToolChoice>,
     pub(crate) on_rendered_request: Option<RenderedRequestSink>,
+    pub(crate) retry_policy: CompletionRetryPolicy,
+    pub(crate) deadline: Option<DateTime<Utc>>,
     /// Maximum number of tool round-trips before the loop fails with a
     /// max-turns error. Matches rig's `default_max_turns` semantics: a turn
     /// that produces a text response (no tool calls) always gets to run.
