@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 
 use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
@@ -30,9 +31,12 @@ struct ProgressMarker {
     request_lifecycle_state: Option<String>,
     request_interrupt_requested_at: Option<String>,
     request_valid_until: Option<String>,
+    response_doc_id: Option<String>,
     response_status: Option<String>,
+    response_token_count: Option<String>,
     response_progress_seq: Option<String>,
     response_content_len: Option<usize>,
+    response_reasoning_fingerprint: Option<(usize, u64)>,
     response_error_len: Option<usize>,
     response_materialized_message_sequence: Option<String>,
     response_materialized_at: Option<String>,
@@ -80,7 +84,6 @@ pub(super) async fn stream_defra_turn(
     let mut latest_content_cursor = ContentCursor::default();
     let mut latest_error_message: Option<String> = None;
     let mut latest_progress_marker: Option<ProgressMarker> = None;
-    let mut response_observed_for_current_turn = false;
     let mut last_progress_at = tokio::time::Instant::now();
 
     loop {
@@ -120,7 +123,6 @@ pub(super) async fn stream_defra_turn(
             .pointer("/data/AgentResponse")
             .and_then(Value::as_array)
             .and_then(|rows| rows.first());
-        response_observed_for_current_turn |= response_row.is_some();
         let tool_rows = response
             .pointer("/data/AgentToolCall")
             .and_then(Value::as_array)
@@ -263,7 +265,29 @@ pub(super) async fn stream_defra_turn(
                         .context("loading next Codex steering request")?
                 {
                     if next_request.is_pending() {
-                        tokio::time::sleep(state.poll_interval).await;
+                        if last_progress_at.elapsed() >= state.timeout {
+                            anyhow::bail!(
+                                "timed out waiting for queued Codex steering request {} after {}s of inactivity\n{}",
+                                next_request.request_id,
+                                state.timeout.as_secs(),
+                                request_diagnostic_hint(&next_request.request_id)
+                            );
+                        }
+                        tokio::select! {
+                            _ = tokio::time::sleep(state.poll_interval) => {}
+                            changed = cancel_rx.changed() => {
+                                if changed.is_ok() && *cancel_rx.borrow() {
+                                    return finish_interrupted_turn(
+                                        connection,
+                                        state,
+                                        &current,
+                                        projection,
+                                        running_background_tools,
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
                         continue;
                     }
                     projection
@@ -297,7 +321,6 @@ pub(super) async fn stream_defra_turn(
                     latest_content_cursor.reset();
                     latest_error_message = None;
                     latest_progress_marker = None;
-                    response_observed_for_current_turn = false;
                     last_progress_at = tokio::time::Instant::now();
                     continue;
                 }
@@ -357,12 +380,6 @@ pub(super) async fn stream_defra_turn(
                 if dropped > 0 {
                     tracing::warn!(dropped, "Codex shim update subscription dropped messages");
                 }
-                // Reasoning-only flushes update AgentResponse.reasoning without
-                // changing the compact marker; keep those streams alive without
-                // querying the full reasoning buffer.
-                if response_observed_for_current_turn {
-                    last_progress_at = tokio::time::Instant::now();
-                }
             }
             changed = cancel_rx.changed() => {
                 if changed.is_ok() && *cancel_rx.borrow() {
@@ -389,9 +406,12 @@ fn progress_marker(
         request_lifecycle_state: scalar_marker(request_row, "lifecycle_state"),
         request_interrupt_requested_at: scalar_marker(request_row, "interrupt_requested_at"),
         request_valid_until: scalar_marker(request_row, "valid_until"),
+        response_doc_id: scalar_marker(response_row, "_docID"),
         response_status: scalar_marker(response_row, "status"),
+        response_token_count: scalar_marker(response_row, "token_count"),
         response_progress_seq: scalar_marker(response_row, "progress_seq"),
         response_content_len: string_len_marker(response_row, "content"),
+        response_reasoning_fingerprint: string_fingerprint_marker(response_row, "reasoning"),
         response_error_len: string_len_marker(response_row, "error_message"),
         response_materialized_message_sequence: scalar_marker(
             response_row,
@@ -528,6 +548,13 @@ fn scalar_marker(row: Option<&Value>, field: &str) -> Option<String> {
 
 fn string_len_marker(row: Option<&Value>, field: &str) -> Option<usize> {
     row?.get(field)?.as_str().map(str::len)
+}
+
+fn string_fingerprint_marker(row: Option<&Value>, field: &str) -> Option<(usize, u64)> {
+    let value = row?.get(field)?.as_str()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    Some((value.len(), hasher.finish()))
 }
 
 async fn finish_interrupted_turn(

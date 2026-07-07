@@ -33,17 +33,47 @@ pub(super) fn defra_turn_progress_query(request_id: &str, session_id: &str) -> S
                 order: {{ created_at: DESC }},
                 limit: 1
             ) {{
+                _docID
                 request_id
                 session_id
                 status
                 content
+                reasoning
                 error_message
+                token_count
                 progress_seq
                 materialized_message_sequence
                 materialized_at
                 completed_at
                 interrupted_at
             }}
+            AgentToolCall(
+                filter: {{
+                    session_id: {{ _eq: "{session_id}" }},
+                    request_id: {{ _eq: "{request_id}" }}
+                }},
+                order: {{ started_at: ASC }}
+            ) {{
+                tool_call_key
+                tool_name
+                status
+                lifecycle_state
+                await_mode
+                child_request_id
+                args
+                result
+                started_at
+                completed_at
+            }}
+        }}"#,
+        request_id = escape_graphql_string(request_id),
+        session_id = escape_graphql_string(session_id),
+    )
+}
+
+pub(super) fn defra_tool_progress_query(request_id: &str, session_id: &str) -> String {
+    format!(
+        r#"{{
             AgentToolCall(
                 filter: {{
                     session_id: {{ _eq: "{session_id}" }},

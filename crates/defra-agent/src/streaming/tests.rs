@@ -154,6 +154,40 @@ fn stream_status_as_str() {
 }
 
 #[test]
+fn live_reasoning_preview_keeps_small_reasoning_exact() {
+    let mut preview = String::new();
+
+    append_live_reasoning_preview(&mut preview, "first ");
+    append_live_reasoning_preview(&mut preview, "second");
+
+    assert_eq!(preview, "first second");
+}
+
+#[test]
+fn live_reasoning_preview_is_bounded() {
+    let mut preview = "prefix".to_string();
+    let suffix = "x".repeat(MAX_LIVE_REASONING_BYTES + 128);
+
+    append_live_reasoning_preview(&mut preview, &suffix);
+
+    assert!(preview.len() <= MAX_LIVE_REASONING_BYTES);
+    assert!(preview.ends_with("x"));
+    assert!(!preview.contains("prefix"));
+}
+
+#[test]
+fn live_reasoning_preview_keeps_tail_of_oversized_chunk() {
+    let mut preview = "old prefix".to_string();
+    let chunk = format!("{}tail", "x".repeat(MAX_LIVE_REASONING_BYTES + 128));
+
+    append_live_reasoning_preview(&mut preview, &chunk);
+
+    assert!(preview.len() <= MAX_LIVE_REASONING_BYTES);
+    assert!(preview.ends_with("tail"));
+    assert!(!preview.contains("old prefix"));
+}
+
+#[test]
 fn extract_mutation_doc_id_accepts_upsert_create_and_add_shapes() {
     let upsert_data = json!({
         "upsert_AgentResponse": [{ "_docID": "doc-upsert" }]

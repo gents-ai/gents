@@ -1,7 +1,8 @@
+use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use defra_agent::graphql::escape_graphql_string;
 use serde_json::Value;
 
@@ -14,10 +15,7 @@ use super::SubmittedRequest;
 
 #[derive(Debug, Clone)]
 pub(super) struct ChatTurnProgress {
-    pub(super) content: String,
-    pub(super) reasoning: String,
     pub(super) error_message: Option<String>,
-    pub(super) progress_seq: u64,
     pub(super) status: String,
 }
 
@@ -28,6 +26,33 @@ pub(super) struct ToolCallProgress {
     pub(super) status: String,
     pub(super) args: String,
     pub(super) result: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ChatProgressMarker {
+    request_lifecycle_state: Option<String>,
+    request_failure_len: Option<usize>,
+    request_interrupt_requested_at: Option<String>,
+    request_valid_until: Option<String>,
+    response_status: Option<String>,
+    response_content_len: Option<usize>,
+    response_reasoning_fingerprint: Option<(usize, u64)>,
+    response_error_len: Option<usize>,
+    response_progress_seq: Option<String>,
+    response_materialized_message_sequence: Option<String>,
+    response_materialized_at: Option<String>,
+    response_completed_at: Option<String>,
+    tools: Vec<ChatToolProgressMarker>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ChatToolProgressMarker {
+    tool_call_key: Option<String>,
+    status: Option<String>,
+    args_len: Option<usize>,
+    result_len: Option<usize>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
 }
 
 pub(super) fn chat_progress_query(request_id: &str, session_id: &str) -> String {
@@ -61,7 +86,10 @@ pub(super) fn chat_progress_query(request_id: &str, session_id: &str) -> String 
                 completed_at
             }}
             AgentToolCall(
-                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                filter: {{
+                    session_id: {{ _eq: "{session_id}" }},
+                    request_id: {{ _eq: "{request_id}" }}
+                }},
                 order: {{ started_at: ASC }}
             ) {{
                 tool_call_key
@@ -123,11 +151,7 @@ pub(super) async fn stream_turn_progress(
 ) -> Result<Value> {
     let idle_timeout = Duration::from_secs(timeout_secs);
     let mut last_progress_at = tokio::time::Instant::now();
-    let mut latest_content = String::new();
-    let mut latest_reasoning = String::new();
-    let mut latest_progress_seq = 0;
-    let mut latest_error_message: Option<String> = None;
-    let mut latest_request_signature: Option<String> = None;
+    let mut latest_progress_marker: Option<ChatProgressMarker> = None;
     let mut thinking_printed = false;
 
     loop {
@@ -138,22 +162,13 @@ pub(super) async fn stream_turn_progress(
             .and_then(Value::as_array)
             .and_then(|rows| rows.first())
             .cloned();
-        let request_signature = serde_json::to_string(&request_row)
-            .context("serializing AgentRequest progress row for timeout tracking")?;
-        if latest_request_signature.as_deref() != Some(request_signature.as_str()) {
-            latest_request_signature = Some(request_signature);
-            last_progress_at = tokio::time::Instant::now();
-        }
 
         let tool_rows = response
             .pointer("/data/AgentToolCall")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        for tool in tool_rows
-            .into_iter()
-            .filter_map(|row| decode_tool_call_progress(&row))
-        {
+        for tool in tool_rows.iter().filter_map(decode_tool_call_progress) {
             let previous_status = known_tool_calls.get(&tool.tool_call_key).cloned();
             if previous_status.as_deref() == Some(tool.status.as_str()) {
                 continue;
@@ -176,28 +191,23 @@ pub(super) async fn stream_turn_progress(
             .and_then(Value::as_array)
             .and_then(|rows| rows.first())
             .cloned();
+        let marker = chat_progress_marker(request_row.as_ref(), response_row.as_ref(), &tool_rows);
+        if latest_progress_marker.as_ref() != Some(&marker) {
+            latest_progress_marker = Some(marker);
+            last_progress_at = tokio::time::Instant::now();
+        }
         let progress = response_row.as_ref().and_then(decode_chat_turn_progress);
         if let Some(progress) = progress.as_ref() {
-            if progress.progress_seq > latest_progress_seq
-                || progress.content != latest_content
-                || progress.reasoning != latest_reasoning
-                || progress.error_message != latest_error_message
-            {
-                last_progress_at = tokio::time::Instant::now();
-            }
             if !thinking_printed
                 && progress.status == "streaming"
-                && progress.content.is_empty()
-                && !progress.reasoning.trim().is_empty()
+                && response_row
+                    .as_ref()
+                    .is_some_and(response_has_reasoning_without_content)
             {
                 println!("[thinking]");
                 io::stdout().flush()?;
                 thinking_printed = true;
             }
-            latest_progress_seq = progress.progress_seq;
-            latest_error_message = progress.error_message.clone();
-            latest_content = progress.content.clone();
-            latest_reasoning = progress.reasoning.clone();
         }
 
         let lifecycle_state = request_row
@@ -317,19 +327,85 @@ pub(super) async fn stream_turn_progress(
 
 pub(super) fn decode_chat_turn_progress(row: &Value) -> Option<ChatTurnProgress> {
     Some(ChatTurnProgress {
-        content: row.get("content")?.as_str()?.to_string(),
-        reasoning: row
-            .get("reasoning")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
         error_message: row
             .get("error_message")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        progress_seq: row.get("progress_seq").and_then(Value::as_u64).unwrap_or(0),
         status: row.get("status")?.as_str()?.to_string(),
     })
+}
+
+fn chat_progress_marker(
+    request_row: Option<&Value>,
+    response_row: Option<&Value>,
+    tool_rows: &[Value],
+) -> ChatProgressMarker {
+    ChatProgressMarker {
+        request_lifecycle_state: scalar_marker(request_row, "lifecycle_state"),
+        request_failure_len: string_len_marker(request_row, "failure_reason"),
+        request_interrupt_requested_at: scalar_marker(request_row, "interrupt_requested_at"),
+        request_valid_until: scalar_marker(request_row, "valid_until"),
+        response_status: scalar_marker(response_row, "status"),
+        response_content_len: string_len_marker(response_row, "content"),
+        response_reasoning_fingerprint: string_fingerprint_marker(response_row, "reasoning"),
+        response_error_len: string_len_marker(response_row, "error_message"),
+        response_progress_seq: scalar_marker(response_row, "progress_seq"),
+        response_materialized_message_sequence: scalar_marker(
+            response_row,
+            "materialized_message_sequence",
+        ),
+        response_materialized_at: scalar_marker(response_row, "materialized_at"),
+        response_completed_at: scalar_marker(response_row, "completed_at"),
+        tools: tool_rows.iter().map(chat_tool_progress_marker).collect(),
+    }
+}
+
+fn chat_tool_progress_marker(row: &Value) -> ChatToolProgressMarker {
+    ChatToolProgressMarker {
+        tool_call_key: scalar_marker(Some(row), "tool_call_key"),
+        status: scalar_marker(Some(row), "status"),
+        args_len: string_len_marker(Some(row), "args"),
+        result_len: string_len_marker(Some(row), "result"),
+        started_at: scalar_marker(Some(row), "started_at"),
+        completed_at: scalar_marker(Some(row), "completed_at"),
+    }
+}
+
+fn response_has_reasoning_without_content(row: &Value) -> bool {
+    row.get("content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .is_empty()
+        && !row
+            .get("reasoning")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+}
+
+fn scalar_marker(row: Option<&Value>, field: &str) -> Option<String> {
+    let value = row?.get(field)?;
+    if value.is_null() {
+        return None;
+    }
+    value
+        .as_str()
+        .map(ToOwned::to_owned)
+        .or_else(|| value.as_i64().map(|value| value.to_string()))
+        .or_else(|| value.as_u64().map(|value| value.to_string()))
+        .or_else(|| value.as_bool().map(|value| value.to_string()))
+}
+
+fn string_len_marker(row: Option<&Value>, field: &str) -> Option<usize> {
+    row?.get(field)?.as_str().map(str::len)
+}
+
+fn string_fingerprint_marker(row: Option<&Value>, field: &str) -> Option<(usize, u64)> {
+    let value = row?.get(field)?.as_str()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    Some((value.len(), hasher.finish()))
 }
 
 pub(super) fn decode_tool_call_progress(row: &Value) -> Option<ToolCallProgress> {

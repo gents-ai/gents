@@ -13,7 +13,7 @@ use super::command_projection::{
     command_execution_item, command_output_payload, tool_projection_status, ToolProjectionStatus,
 };
 use super::progress::{
-    decode_defra_tool_call_progress, defra_turn_progress_query, DefraToolCallProgress,
+    decode_defra_tool_call_progress, defra_tool_progress_query, DefraToolCallProgress,
 };
 use super::protocol::{now_millis, send_notification};
 use super::store::query_node_json;
@@ -36,9 +36,14 @@ pub(super) fn spawn_background_tool_watcher(
     tokio::spawn(async move {
         let mut updates = state.node.subscribe_updates();
         while !running.is_empty() {
+            if connection.outbound.is_closed() {
+                tracing::debug!("Codex shim background tool watcher stopped after outbound closed");
+                break;
+            }
+
             let response = match query_node_json(
                 state.node.as_ref(),
-                &defra_turn_progress_query(&request_id, &session_id),
+                &defra_tool_progress_query(&request_id, &session_id),
             )
             .await
             {
