@@ -1192,6 +1192,51 @@ async fn parked_endpoint_does_not_block_different_endpoint_for_same_service() {
     );
 }
 
+/// Parking is also principal-scoped: a shared pool may legitimately connect to
+/// the same service and endpoint with different bound agent DIDs, and a failure
+/// for one principal must not park the other.
+#[tokio::test(start_paused = true)]
+async fn parked_agent_did_does_not_block_different_agent_did_for_same_service_endpoint() {
+    let connect_attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_fn = Arc::clone(&connect_attempts);
+    let pool =
+        McpPool::new_with_connector(move |_service_id, _endpoint, _agent_did, _trace_headers| {
+            let attempts = Arc::clone(&attempts_for_fn);
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                anyhow::bail!("connection refused")
+            }
+        });
+
+    let _ = pool
+        .list_tools_with_agent_did(
+            "multi-principal-service",
+            "http://mcp.test/mcp",
+            Some("did:key:agent-a"),
+        )
+        .await;
+    assert_eq!(connect_attempts.load(Ordering::SeqCst), 1);
+
+    let error = pool
+        .list_tools_with_agent_did(
+            "multi-principal-service",
+            "http://mcp.test/mcp",
+            Some("did:key:agent-b"),
+        )
+        .await
+        .expect_err("second principal still fails in this test connector");
+
+    assert!(
+        format!("{error:#}").contains("connection refused"),
+        "different agent DID should dial and surface connector error, not inherit principal-a park: {error:#}"
+    );
+    assert_eq!(
+        connect_attempts.load(Ordering::SeqCst),
+        2,
+        "parking one bound agent DID must not block a different bound agent DID"
+    );
+}
+
 /// Strikes decay after a quiet period: a service that flapped long ago must
 /// not inherit a huge park horizon for its next transient failure.
 #[tokio::test(start_paused = true)]

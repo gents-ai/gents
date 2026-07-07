@@ -291,26 +291,31 @@ pub struct McpPool {
     park: Arc<std::sync::Mutex<HashMap<ParkKey, ParkState>>>,
 }
 
-/// Parking is scoped by service and endpoint. A service can move between
-/// LAN/Tailscale/registry endpoints; a bad endpoint must not park a later
-/// healthy endpoint for the same logical service.
+/// Parking is scoped by service, endpoint, and bound agent DID. A service can
+/// move between LAN/Tailscale/registry endpoints; a bad endpoint must not park
+/// a later healthy endpoint for the same logical service. Agent DID is included
+/// because MCP services may authorize per principal. Trace headers are
+/// intentionally excluded: they are per-call correlation context, not a useful
+/// failure partition.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ParkKey {
     service_id: String,
     endpoint: String,
+    agent_did_header: Option<String>,
 }
 
 impl ParkKey {
-    fn new(service_id: &str, endpoint: &str) -> Self {
+    fn new(service_id: &str, endpoint: &str, agent_did_header: Option<&str>) -> Self {
         Self {
             service_id: service_id.to_string(),
             endpoint: endpoint.to_string(),
+            agent_did_header: agent_did_header.map(ToOwned::to_owned),
         }
     }
 }
 
-/// Per-service-endpoint connect-parking state (#639). Strikes are connect
-/// failures and poisoned-session detections; the park horizon grows
+/// Per-service-endpoint-principal connect-parking state (#639). Strikes are
+/// connect failures and poisoned-session detections; the park horizon grows
 /// exponentially so a flapping server ends up parked with a long retry
 /// horizon instead of converting the resume hot-loop into an init hot-loop.
 #[derive(Debug, Clone, Copy)]
@@ -656,11 +661,12 @@ impl McpPool {
         // Slow path — re-check under the lock, but connect OUTSIDE it: a hung
         // or slow connect (blackholed endpoint, #622) must not wedge every
         // other service in the pool.
-        let mut poison_detected_for_endpoint = None;
+        let mut poison_detected_for_key = None;
         {
             let mut guard = self.inner.write().await;
             if let Some(conn) = guard.get(service_id) {
                 let old_endpoint = conn.endpoint.clone();
+                let old_agent_did_header = conn.agent_did_header.clone();
                 let endpoint_changed = conn.endpoint != endpoint;
                 let agent_did_changed = conn.agent_did_header != agent_did_header;
                 let trace_context_changed = conn.trace_context_headers != trace_context_headers;
@@ -696,7 +702,7 @@ impl McpPool {
                         .session_reinits
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     guard.remove(service_id);
-                    poison_detected_for_endpoint = Some(old_endpoint);
+                    poison_detected_for_key = Some((old_endpoint, old_agent_did_header));
                 }
             }
         }
@@ -707,12 +713,18 @@ impl McpPool {
         // an expired horizon so concurrent callers do not stampede. Services
         // with no strike history keep the existing benign duplicate cold-start
         // connects.
-        let _dial_reservation =
-            self.reserve_dial_if_struck(service_id, endpoint, park_admission)?;
-        if let Some(poisoned_endpoint) = poison_detected_for_endpoint {
+        let park_agent_did_header = agent_did_header.clone();
+        let _dial_reservation = self.reserve_dial_if_struck(
+            service_id,
+            endpoint,
+            park_agent_did_header.as_deref(),
+            park_admission,
+        )?;
+        if let Some((poisoned_endpoint, poisoned_agent_did_header)) = poison_detected_for_key {
             self.record_strike(
                 service_id,
                 &poisoned_endpoint,
+                poisoned_agent_did_header.as_deref(),
                 "session poisoned (resume terminal)",
                 true,
             );
@@ -731,14 +743,14 @@ impl McpPool {
         .await
         {
             Err(_elapsed) => {
-                self.record_connect_failure(service_id, endpoint);
+                self.record_connect_failure(service_id, endpoint, park_agent_did_header.as_deref());
                 anyhow::bail!(
                     "MCP connect to '{service_id}' ({endpoint}) timed out after {}s",
                     MCP_CONNECT_TIMEOUT.as_secs()
                 );
             }
             Ok(Err(error)) => {
-                self.record_connect_failure(service_id, endpoint);
+                self.record_connect_failure(service_id, endpoint, park_agent_did_header.as_deref());
                 return Err(error);
             }
             Ok(Ok(connection)) => connection,
@@ -761,10 +773,11 @@ impl McpPool {
         &self,
         service_id: &str,
         endpoint: &str,
+        agent_did_header: Option<&str>,
         admission: ParkAdmission,
     ) -> Result<DialReservation> {
         let mut park = self.park.lock().expect("park lock");
-        let key = ParkKey::new(service_id, endpoint);
+        let key = ParkKey::new(service_id, endpoint, agent_did_header);
         if let Some(state) = park.get_mut(&key) {
             let now = tokio::time::Instant::now();
             if now < state.parked_until {
@@ -802,12 +815,23 @@ impl McpPool {
         Ok(DialReservation::Unreserved)
     }
 
-    fn record_connect_failure(&self, service_id: &str, endpoint: &str) {
+    fn record_connect_failure(
+        &self,
+        service_id: &str,
+        endpoint: &str,
+        agent_did_header: Option<&str>,
+    ) {
         self.resume_stats
             .stats_for(service_id)
             .connect_failures
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.record_strike(service_id, endpoint, "connect failed", false);
+        self.record_strike(
+            service_id,
+            endpoint,
+            agent_did_header,
+            "connect failed",
+            false,
+        );
     }
 
     /// Record a strike (a failed connect or a poisoned session) and extend
@@ -818,13 +842,14 @@ impl McpPool {
         &self,
         service_id: &str,
         endpoint: &str,
+        agent_did_header: Option<&str>,
         reason: &'static str,
         safe_read_retry_credit: bool,
     ) {
         let mut park = self.park.lock().expect("park lock");
         let now = tokio::time::Instant::now();
         let state = park
-            .entry(ParkKey::new(service_id, endpoint))
+            .entry(ParkKey::new(service_id, endpoint, agent_did_header))
             .or_insert_with(|| ParkState {
                 strikes: 0,
                 last_strike: now,
@@ -849,6 +874,7 @@ impl McpPool {
         tracing::warn!(
             service_id,
             endpoint,
+            agent_did_bound = agent_did_header.is_some(),
             reason,
             strikes = state.strikes,
             park_seconds = horizon.as_secs(),
