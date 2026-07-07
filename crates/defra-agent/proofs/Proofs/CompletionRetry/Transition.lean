@@ -80,13 +80,23 @@ inductive Transition : State → State → Prop
       Transition s { s with phase := Phase.repairing,
                             lastParseError := some err }
 
-  /-- Parse-400 with no repair left, or whose selected resample wake does
-  not fit the deadline → terminal. -/
-  | parseExhaust (s : State) (c : FailureClass) (wake : Time)
+  /-- Parse-400 that can make no progress → terminal: neither a fresh resample
+  (with ladder + deadline room, no open effects) nor a one-shot repair is
+  enabled for this error. The selected resample wake is carried so that a
+  deadline overshoot (`¬ fitsDeadline`) participates in `hno_resample`, giving
+  the same fail-fast decision as the transport ladder. -/
+  | parseExhaust (s : State) (c : FailureClass) (err : String) (wake : Time)
       (hc : c = FailureClass.parseBadRequest)
       (hp : s.phase = Phase.streaming)
       (hfwd : s.now ≤ wake)
-      (h : ¬ s.budget.allowRepair ∨ s.repairUsed ∨ ¬ fitsDeadline wake s.deadline) :
+      (hno_resample :
+        ¬ (s.turn.effects = 0 ∧ s.lastParseError ≠ some err ∧
+           s.resampleUsed < s.budget.resampleRetries ∧
+           fitsDeadline wake s.deadline ∧ s.now ≤ wake))
+      (hno_repair :
+        ¬ (s.turn.effects = 0 ∧
+           (s.lastParseError = some err ∨ s.resampleUsed ≥ s.budget.resampleRetries) ∧
+           s.budget.allowRepair ∧ ¬ s.repairUsed)) :
       Transition s { s with phase := Phase.exhausted }
 
   /-- Permanent classification → terminal, immediately. -/

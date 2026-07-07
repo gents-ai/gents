@@ -118,6 +118,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Scheduling.lean` | Scheduler/backend slot state |
 | `Proofs/Fleet.lean` | Barrel for fleet state, transitions, executable semantics, and slot accounting |
 | `Proofs/SessionRecovery.lean` | Retry/reissue model for session-linked requests |
+| `Proofs/CompletionRetry.lean` | Barrel for per-completion retry state, transitions, executable semantics, and budget/deadline/effects properties |
 | `Proofs/RuntimeReconcile.lean` | Barrel for runtime reconcile state, relational transitions, and executable semantics |
 | `Proofs/ApplyReconcile.lean` | Barrel for desired-state apply, prefix safety, runtime bridge, and convergence |
 | `Proofs/Triggers.lean` | Barrel for trigger types, dispatch, reachability, serial, latest-only, and lineage proofs |
@@ -156,6 +157,7 @@ Semantic submodules:
 | `Proofs.ToolExecution` | standalone health/schema preflight and retry eligibility model |
 | `Proofs.ManagedExec` | `State`, `Transition`, `Executable`, `Properties`, `Composed` |
 | `Proofs.Fleet` | `State`, `Transition`, `Executable`, `Properties` |
+| `Proofs.CompletionRetry` | `State`, `Transition`, `Executable`, `Properties` |
 | `Proofs.Conformance.Triggers` | `Lifecycle`, `Materialization`, `Trace` |
 
 The top-level barrel imports remain the stable entry points for downstream code.
@@ -463,6 +465,39 @@ session boundary:
 
 This is the formal version of "retry creates a new request without corrupting
 session history."
+
+### Completion Retry
+
+`Proofs/CompletionRetry.lean` models retry of a single request's completion
+inside the owned loop: transport backoff, resample and one-shot repair on
+vLLM parse-400s, turn-close-and-continue after effects, and budget/deadline
+exhaustion. It is executable in Lean through
+`Proofs/CompletionRetry/Executable.lean`, which defines `Action`, `step?`,
+`step_sound`, and `transition_complete`; a `preStreamFail` action carries the
+observed `FailureClass` and the selected wake time, so `step?` genuinely
+consumes both the classification and the fail-fast (overshoot) decision.
+
+The key guarantees (`Proofs/CompletionRetry/Properties.lean`) are:
+
+- **N1** — a re-issued or repaired completion never faces un-accounted tool
+  executions, so retry never re-executes tools
+  (`n1_reissue_requires_no_open_effects`, carried by `ReissueInv` /
+  `reissue_inv_preserved`)
+- **N2** — a partial render is retracted only before any effect this turn;
+  closing-and-continuing starts a new turn rather than retracting the old one
+  (`n2_retract_only_before_effects`)
+- **N3** — retry budgets advance monotonically and stay within their ladders,
+  and repair happens at most once
+  (`n3_budget_monotone_bounded`, `n3_repair_at_most_once`)
+- **N4** — every backoff wake fits the claimed deadline, never moves the clock
+  backwards, and retry never extends the deadline
+  (`n4_backoff_fits_deadline`)
+- **N5** — a turn retains at most one rendered instance
+  (`n5_rendered_at_most_one`)
+
+This is the formal reason retrying a failed completion is safe: tools are not
+re-run, renders are not double-counted, and a retry can neither exceed its
+budget nor sleep past its deadline.
 
 ### Runtime Reconcile
 
