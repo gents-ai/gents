@@ -178,6 +178,7 @@ impl<'a> StreamProcessor<'a> {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn has_observable_activity(&self) -> bool {
         self.assistant_turn.has_content()
             || !self.streamed_text.trim().is_empty()
@@ -297,6 +298,7 @@ impl AssistantTurnAccumulator {
         (!content.is_empty()).then_some(CompletionMessage::Assistant { id: None, content })
     }
 
+    #[cfg(test)]
     fn has_content(&self) -> bool {
         !self.text.is_empty()
             || !self.reasoning.is_empty()
