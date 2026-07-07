@@ -300,6 +300,7 @@ struct ParkState {
     strikes: u32,
     last_strike: tokio::time::Instant,
     parked_until: tokio::time::Instant,
+    connect_in_flight: bool,
 }
 
 /// First park horizon; doubles per strike up to [`MCP_PARK_MAX`].
@@ -309,6 +310,28 @@ const MCP_PARK_MAX: std::time::Duration = std::time::Duration::from_secs(15 * 60
 /// A strike this long after the previous one resets the strike count: a
 /// service that stayed clean for this window earned a fresh horizon.
 const MCP_STRIKE_DECAY: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+enum DialReservation {
+    Unreserved,
+    Reserved {
+        park: Arc<std::sync::Mutex<HashMap<String, ParkState>>>,
+        service_id: String,
+    },
+}
+
+impl Drop for DialReservation {
+    fn drop(&mut self) {
+        let Self::Reserved { park, service_id } = self else {
+            return;
+        };
+        let Ok(mut park) = park.lock() else {
+            return;
+        };
+        if let Some(state) = park.get_mut(service_id) {
+            state.connect_in_flight = false;
+        }
+    }
+}
 
 /// Default idle TTL for pooled MCP connections.
 ///
@@ -642,10 +665,12 @@ impl McpPool {
         }
 
         // Park gate (#639): while a service is parked after repeated connect
-        // failures or poisoned sessions, fail fast instead of dialing. The
-        // check uses the horizon from *previous* strikes, so the first
-        // detection after a healthy stretch still reconnects seamlessly.
-        self.check_parked(service_id)?;
+        // failures or poisoned sessions, fail fast instead of dialing. Once a
+        // service has strike history, reserve the single dial allowed through
+        // an expired horizon so concurrent callers do not stampede. Services
+        // with no strike history keep the existing benign duplicate cold-start
+        // connects.
+        let _dial_reservation = self.reserve_dial_if_struck(service_id)?;
         if poison_detected {
             self.record_strike(service_id, "session poisoned (resume terminal)");
         }
@@ -676,19 +701,22 @@ impl McpPool {
             Ok(Ok(connection)) => connection,
         };
 
-        // Concurrent callers for the same service may both reach here; the
-        // last insert wins and the loser's connection is dropped. The
-        // handshake is idempotent and the cache is lazy, so this is benign —
-        // strictly better than serializing every connect behind one lock.
+        // Concurrent cold-start callers for a service with no strike history
+        // may both reach here; the last insert wins and the loser's connection
+        // is dropped. Once a service has strike history,
+        // `reserve_dial_if_struck` above admits only one in-flight dial per
+        // expired park horizon.
         let mut guard = self.inner.write().await;
         guard.insert(service_id.to_string(), connection);
         Ok(())
     }
 
-    /// Fail fast while `service_id` is inside its park horizon (#639).
-    fn check_parked(&self, service_id: &str) -> Result<()> {
-        let park = self.park.lock().expect("park lock");
-        if let Some(state) = park.get(service_id) {
+    /// Fail fast while `service_id` is inside its park horizon, and reserve
+    /// the single dial admitted for a struck service once the horizon expires
+    /// (#639).
+    fn reserve_dial_if_struck(&self, service_id: &str) -> Result<DialReservation> {
+        let mut park = self.park.lock().expect("park lock");
+        if let Some(state) = park.get_mut(service_id) {
             let now = tokio::time::Instant::now();
             if now < state.parked_until {
                 anyhow::bail!(
@@ -698,8 +726,20 @@ impl McpPool {
                     state.strikes
                 );
             }
+            if state.connect_in_flight {
+                anyhow::bail!(
+                    "MCP service '{service_id}' connect already in flight after {} consecutive \
+                     connection/session failures (#639)",
+                    state.strikes
+                );
+            }
+            state.connect_in_flight = true;
+            return Ok(DialReservation::Reserved {
+                park: Arc::clone(&self.park),
+                service_id: service_id.to_string(),
+            });
         }
-        Ok(())
+        Ok(DialReservation::Unreserved)
     }
 
     fn record_connect_failure(&self, service_id: &str) {
@@ -723,6 +763,7 @@ impl McpPool {
                 strikes: 0,
                 last_strike: now,
                 parked_until: now,
+                connect_in_flight: false,
             });
         if now.saturating_duration_since(state.last_strike) > MCP_STRIKE_DECAY {
             state.strikes = 0;

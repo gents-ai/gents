@@ -990,6 +990,114 @@ async fn server_that_kills_every_fresh_session_gets_parked() {
     );
 }
 
+/// The park bound must hold under concurrency, not just sequentially: once a
+/// service has strike history, callers racing past an expired horizon must
+/// share ONE dial (a per-service in-flight reservation), not stampede — a
+/// stampede of N dials records N strikes and N warns before the first
+/// failure re-parks, breaking the ≤2-connects-per-horizon property.
+#[tokio::test(start_paused = true)]
+async fn concurrent_callers_to_struck_service_share_one_dial() {
+    let connect_attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_fn = Arc::clone(&connect_attempts);
+    let pool =
+        McpPool::new_with_connector(move |_service_id, _endpoint, _agent_did, _trace_headers| {
+            let attempts = Arc::clone(&attempts_for_fn);
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                // Slow failing dial: concurrent callers arrive while this is
+                // in flight.
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                anyhow::bail!("connection refused")
+            }
+        });
+
+    // Establish strike history (strike 1, park 1s), then let the horizon
+    // expire.
+    let _ = pool
+        .list_tools("struck-service", "http://mcp.test/mcp")
+        .await;
+    assert_eq!(connect_attempts.load(Ordering::SeqCst), 1);
+    tokio::time::advance(std::time::Duration::from_secs(2)).await;
+
+    // Eight callers race in while the leader's dial is in flight.
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let pool = pool.clone();
+        handles.push(tokio::spawn(async move {
+            pool.list_tools("struck-service", "http://mcp.test/mcp")
+                .await
+        }));
+    }
+    let mut fast_failures = 0usize;
+    for handle in handles {
+        let error = handle
+            .await
+            .expect("task join")
+            .expect_err("dials to a dead service must fail");
+        let message = format!("{error:#}");
+        if message.contains("parked") || message.contains("already in flight") {
+            fast_failures += 1;
+        }
+    }
+
+    assert_eq!(
+        connect_attempts.load(Ordering::SeqCst),
+        2,
+        "concurrent callers past an expired horizon must share one dial"
+    );
+    assert_eq!(
+        fast_failures, 7,
+        "the seven followers must fail fast without dialing"
+    );
+}
+
+/// Services with NO strike history keep the documented benign concurrent
+/// connects (racing duplicate handshakes, last insert wins) — the in-flight
+/// reservation must not serialize or fail healthy cold starts.
+#[tokio::test(start_paused = true)]
+async fn healthy_service_concurrent_cold_connects_stay_benign() {
+    let connect_attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_fn = Arc::clone(&connect_attempts);
+    let pool =
+        McpPool::new_with_connector(move |service_id, endpoint, agent_did, trace_headers| {
+            let attempts = Arc::clone(&attempts_for_fn);
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                Ok(McpConnection {
+                    endpoint,
+                    agent_did_header: agent_did,
+                    trace_context_headers: trace_headers,
+                    last_used: super::fresh_last_used(),
+                    resume_policy: SessionResumePolicy::detached(&service_id),
+                    list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
+                    call_tool_fn: Box::new(|_params| {
+                        Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                    }),
+                })
+            }
+        });
+
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        let pool = pool.clone();
+        handles.push(tokio::spawn(async move {
+            pool.list_tools("cold-service", "http://mcp.test/mcp").await
+        }));
+    }
+    for handle in handles {
+        handle
+            .await
+            .expect("task join")
+            .expect("concurrent cold connects to a healthy service must all succeed");
+    }
+    assert_eq!(
+        connect_attempts.load(Ordering::SeqCst),
+        4,
+        "healthy cold starts keep benign duplicate connects (no reservation)"
+    );
+}
+
 /// Strikes decay after a quiet period: a service that flapped long ago must
 /// not inherit a huge park horizon for its next transient failure.
 #[tokio::test(start_paused = true)]
