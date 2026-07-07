@@ -836,7 +836,15 @@ where
             None => anyhow::anyhow!("one-shot loop stream error: {error}"),
         })?;
         match item {
-            LoopStreamItem::TurnRetracted { .. } => continue,
+            LoopStreamItem::TurnRetracted { .. } => {
+                // Discard the retracted turn's accumulated content so the
+                // resample renders as the sole turn for this index. Mirrors
+                // `StreamProcessor`'s reset on the daemon path; without it the
+                // retracted partial concatenates into the persisted assistant
+                // message on the one-shot persisting path (#648).
+                accumulator = AssistantTurnAccumulator::default();
+                continue;
+            }
             LoopStreamItem::AttemptFailed { error, .. } => {
                 last_attempt_error = Some(error);
                 continue;
