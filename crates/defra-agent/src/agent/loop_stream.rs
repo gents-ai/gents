@@ -349,14 +349,91 @@ where
             let mut accumulator = AssistantTurnAccumulator::default();
             let mut pending_results: Vec<(ToolCall, String, String)> = Vec::new();
             let mut turn_text = String::new();
+            let mut saw_stream_item = false;
 
             while let Some(item) = stream.next().await {
                 let item = match item {
-                    Ok(item) => item,
+                    Ok(item) => {
+                        saw_stream_item = true;
+                        item
+                    }
                     Err(completion_error) if pending_results.is_empty() => {
                         let streaming_error = StreamingError::Completion(completion_error);
                         let classified = crate::error::classify_completion_error(&streaming_error);
                         let error_text = streaming_error.to_string();
+                        if !saw_stream_item {
+                            match retry.on_pre_stream_failure(
+                                &classified,
+                                &error_text,
+                                Utc::now(),
+                                config.deadline,
+                            ) {
+                                PreStreamDirective::RetryAfter { delay, kind } => {
+                                    yield LoopStreamItem::AttemptFailed {
+                                        turn: turn_index,
+                                        attempt,
+                                        error: classified,
+                                        will_retry: true,
+                                        backoff: delay,
+                                    };
+                                    tracing::warn!(
+                                        turn = turn_index,
+                                        attempt,
+                                        kind = ?kind,
+                                        delay_ms = delay.as_millis() as u64,
+                                        error = %error_text,
+                                        "retrying completion after first stream item failed"
+                                    );
+                                    tokio::time::sleep(delay).await;
+                                    attempt += 1;
+                                    continue 'attempts;
+                                }
+                                PreStreamDirective::Repair => {
+                                    retry.mark_repair_used();
+                                    yield LoopStreamItem::AttemptFailed {
+                                        turn: turn_index,
+                                        attempt,
+                                        error: classified,
+                                        will_retry: true,
+                                        backoff: std::time::Duration::ZERO,
+                                    };
+                                    repair_provider_input(&mut new_messages);
+                                    let repaired_prompt = new_messages.last().cloned().expect(
+                                        "new_messages remains non-empty after repair",
+                                    );
+                                    let repaired_prior = &new_messages[..new_messages.len() - 1];
+                                    request = build_request(
+                                        &model,
+                                        repaired_prompt,
+                                        &history,
+                                        repaired_prior,
+                                        tools.as_slice(),
+                                        &config,
+                                    )
+                                    .await?;
+                                    attempt += 1;
+                                    continue 'attempts;
+                                }
+                                PreStreamDirective::Fail { reason } => {
+                                    let terminal_reason = terminal_pre_stream_retry_reason(
+                                        &classified,
+                                        attempt,
+                                        reason,
+                                    );
+                                    yield LoopStreamItem::AttemptFailed {
+                                        turn: turn_index,
+                                        attempt,
+                                        error: classified,
+                                        will_retry: false,
+                                        backoff: std::time::Duration::ZERO,
+                                    };
+                                    Err(StreamingError::Completion(
+                                        CompletionError::ProviderError(terminal_reason),
+                                    ))?;
+                                    unreachable!("Err(..)? above ends the stream");
+                                }
+                            }
+                        }
                         match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
                             MidStreamDirective::RetractAndResample { delay } => {
                                 yield LoopStreamItem::TurnRetracted {

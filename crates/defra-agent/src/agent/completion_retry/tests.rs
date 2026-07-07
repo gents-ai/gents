@@ -101,6 +101,18 @@ fn failure_class_parse_signature_overrides_variant() {
 }
 
 #[test]
+fn failure_class_parse_signature_can_come_from_classified_reason() {
+    let body = r#"{"object":"error","message":"BadRequestError: Error in processing prompt inputs: Expecting value: line 1 column 28 (char 27)","type":"BadRequestError","code":400}"#;
+    let classified_reason =
+        format!("ProviderError: Invalid status code 400 Bad Request with message: {body}");
+
+    assert_eq!(
+        failure_class(&transient(&classified_reason), "completion request failed"),
+        FailureClass::ParseBadRequest
+    );
+}
+
+#[test]
 fn jitter_is_deterministic_for_a_seeded_rng_and_within_25_percent() {
     let base = Duration::from_secs(10);
     let mut rng_a = StdRng::seed_from_u64(42);

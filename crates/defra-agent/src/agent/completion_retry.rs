@@ -66,7 +66,9 @@ pub enum FailureClass {
 /// runs first and reclassifies it as `ParseBadRequest` regardless of which
 /// variant carries it.
 pub fn failure_class(error: &InferenceError, error_text: &str) -> FailureClass {
-    if crate::error::provider_message_is_tool_call_json_parse_failure(error_text) {
+    if crate::error::provider_message_is_tool_call_json_parse_failure(error_text)
+        || crate::error::provider_message_is_tool_call_json_parse_failure(&error.to_string())
+    {
         return FailureClass::ParseBadRequest;
     }
 

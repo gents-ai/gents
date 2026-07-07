@@ -733,6 +733,46 @@ async fn parse_400_resamples_once_then_repairs_on_identical_error() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn first_stream_poll_parse_400_uses_pre_stream_retry_policy() {
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::TurnWithMidStreamError(Vec::new(), parse_400_error("same")),
+        ScriptedCall::TurnWithMidStreamError(Vec::new(), parse_400_error("same")),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("repaired".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("hi"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        config(0),
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.final_text.as_deref(), Some("repaired"));
+    assert_eq!(collected.error, None);
+    assert_eq!(collected.attempts.len(), 2);
+    assert!(collected.attempts.iter().all(|attempt| attempt.will_retry));
+    assert_duration_in_range(collected.attempts[0].backoff, 3_750, 6_250);
+    assert_eq!(collected.attempts[1].backoff, Duration::ZERO);
+
+    let histories = model.seen_histories().await;
+    assert_eq!(
+        histories.len(),
+        3,
+        "first-poll parse failure, resample, and repaired retry"
+    );
+    assert_eq!(
+        histories[0], histories[1],
+        "first parse-400 retry must resample the same provider request"
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn permanent_400_fails_immediately() {
     let model =
         ScriptedModel::new_calls(vec![ScriptedCall::FailStream(permanent_provider_error())]);

@@ -1,6 +1,6 @@
 # Completion Retry (#631) — Design
 
-**Status:** approved-in-brainstorm, pending spec review
+**Status:** implemented
 **Issue:** #631 (runtime never retries failed completion requests)
 **Related:** #638 (tool-replay hazard, closed by this work), #589/#590/#601 (tool-args
 boundary), #442 (tool-result backfill), #438/#509 (owned provider layer), #544
