@@ -390,8 +390,50 @@ where
                         }
                     }
                     Err(completion_error) => {
-                        Err(StreamingError::Completion(completion_error))?;
-                        unreachable!("Err(..)? above ends the stream");
+                        let streaming_error = StreamingError::Completion(completion_error);
+                        let classified = crate::error::classify_completion_error(&streaming_error);
+                        let error_text = streaming_error.to_string();
+                        match retry.on_mid_stream_failure(true, Utc::now(), config.deadline) {
+                            MidStreamDirective::CloseAndContinue { delay } => {
+                                for item in close_streaming_turn(
+                                    &mut new_messages,
+                                    &mut accumulator,
+                                    stream.message_id.clone(),
+                                    pending_results,
+                                ) {
+                                    yield item;
+                                }
+                                yield LoopStreamItem::AttemptFailed {
+                                    turn: turn_index,
+                                    attempt,
+                                    error: classified,
+                                    will_retry: true,
+                                    backoff: delay,
+                                };
+                                tracing::warn!(
+                                    turn = turn_index,
+                                    attempt,
+                                    delay_ms = delay.as_millis() as u64,
+                                    error = %error_text,
+                                    "closing completion turn after mid-stream failure with tool effects"
+                                );
+                                tokio::time::sleep(delay).await;
+                                continue 'turns;
+                            }
+                            MidStreamDirective::RetractAndResample { .. } => {
+                                unreachable!(
+                                    "effectful mid-stream failure cannot retract and resample"
+                                );
+                            }
+                            MidStreamDirective::Fail { reason } => {
+                                let terminal_reason =
+                                    terminal_pre_stream_retry_reason(&classified, attempt, reason);
+                                Err(StreamingError::Completion(
+                                    CompletionError::ProviderError(terminal_reason),
+                                ))?;
+                                unreachable!("Err(..)? above ends the stream");
+                            }
+                        }
                     }
                 };
 
@@ -539,51 +581,72 @@ where
                 break 'turns;
             }
 
-            // Thread the assistant turn (text + reasoning + tool calls) ahead of
-            // its tool results, matching rig's history ordering. Carry the
-            // provider message id (captured into `stream.message_id` from the
-            // stream's `MessageId` event) onto the threaded message — rig threads
-            // this same id, and OpenAI Responses / ChatGPT Codex follow-up
-            // requests reference prior `msg_` ids, so dropping it breaks them.
-            if let Some(mut assistant_message) = accumulator.take_message() {
-                if let Message::Assistant { id, .. } = &mut assistant_message {
-                    *id = stream.message_id.clone();
-                }
-                new_messages.push(assistant_message);
-            }
-
-            // The tools already ran inline as their ToolCalls arrived; now that the
-            // assistant turn is complete, thread each bounded result into history
-            // and forward it to the consumer (which persists the assistant turn on
-            // the first tool result, so results must trail the whole turn).
-            for (tool_call, internal_call_id, bounded_result) in pending_results {
-                let content = ToolResultContent::from_tool_output(bounded_result);
-                let user_content = match tool_call.call_id.clone() {
-                    Some(call_id) => UserContent::tool_result_with_call_id(
-                        tool_call.id.clone(),
-                        call_id,
-                        content.clone(),
-                    ),
-                    None => UserContent::tool_result(tool_call.id.clone(), content.clone()),
-                };
-                new_messages.push(Message::User {
-                    content: vec![user_content],
-                });
-
-                let tool_result = ToolResult {
-                    id: tool_call.id.clone(),
-                    call_id: tool_call.call_id.clone(),
-                    content,
-                };
-                yield LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
-                    tool_result: rig_compat::to_rig_tool_result(&tool_result),
-                    internal_call_id,
-                }));
+            for item in close_streaming_turn(
+                &mut new_messages,
+                &mut accumulator,
+                stream.message_id.clone(),
+                pending_results,
+            ) {
+                yield item;
             }
             break 'attempts;
         }
         }
     }
+}
+
+fn close_streaming_turn<R>(
+    new_messages: &mut Vec<Message>,
+    accumulator: &mut AssistantTurnAccumulator,
+    message_id: Option<String>,
+    pending_results: Vec<(ToolCall, String, String)>,
+) -> Vec<LoopStreamItem<R>> {
+    // Thread the assistant turn (text + reasoning + tool calls) ahead of its
+    // tool results, matching rig's history ordering. Carry the provider
+    // message id (captured into `stream.message_id` from the stream's
+    // `MessageId` event) onto the threaded message — rig threads this same id,
+    // and OpenAI Responses / ChatGPT Codex follow-up requests reference prior
+    // `msg_` ids, so dropping it breaks them.
+    if let Some(mut assistant_message) = accumulator.take_message() {
+        if let Message::Assistant { id, .. } = &mut assistant_message {
+            *id = message_id;
+        }
+        new_messages.push(assistant_message);
+    }
+
+    // The tools already ran inline as their ToolCalls arrived; now that the
+    // assistant turn is complete, thread each bounded result into history and
+    // forward it to the consumer (which persists the assistant turn on the
+    // first tool result, so results must trail the whole turn).
+    pending_results
+        .into_iter()
+        .map(|(tool_call, internal_call_id, bounded_result)| {
+            let content = ToolResultContent::from_tool_output(bounded_result);
+            let user_content = match tool_call.call_id.clone() {
+                Some(call_id) => UserContent::tool_result_with_call_id(
+                    tool_call.id.clone(),
+                    call_id,
+                    content.clone(),
+                ),
+                None => UserContent::tool_result(tool_call.id.clone(), content.clone()),
+            };
+            new_messages.push(Message::User {
+                content: vec![user_content],
+            });
+
+            let tool_result = ToolResult {
+                id: tool_call.id.clone(),
+                call_id: tool_call.call_id.clone(),
+                content,
+            };
+            LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
+                StreamedUserContent::ToolResult {
+                    tool_result: rig_compat::to_rig_tool_result(&tool_result),
+                    internal_call_id,
+                },
+            ))
+        })
+        .collect()
 }
 
 fn terminal_pre_stream_retry_reason(

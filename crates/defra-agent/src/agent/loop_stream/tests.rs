@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -166,6 +167,37 @@ impl ToolDyn for EchoTool {
     }
 }
 
+struct CountingTool {
+    name: String,
+    output: String,
+    calls: Arc<AtomicUsize>,
+}
+
+impl ToolDyn for CountingTool {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async move {
+            ToolDefinition {
+                name: self.name.clone(),
+                description: "counting".to_string(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        let calls = self.calls.clone();
+        let output = self.output.clone();
+        Box::pin(async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(output)
+        })
+    }
+}
+
 /// A tool whose call always returns a fixed string (used for large/managed
 /// outputs); name defaults to "echo".
 struct FixedTool {
@@ -282,6 +314,7 @@ struct AttemptEvent {
 struct CollectedScriptedStream {
     attempts: Vec<AttemptEvent>,
     text_chunks: Vec<String>,
+    tool_results: Vec<String>,
     retractions: Vec<(usize, u32)>,
     final_text: Option<String>,
     error: Option<String>,
@@ -315,6 +348,16 @@ where
                 StreamedAssistantContent::Text(text),
             ))))) => {
                 collected.text_chunks.push(text.text);
+            }
+            Ok(Some(Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
+                StreamedUserContent::ToolResult { tool_result, .. },
+            ))))) => {
+                collected.tool_results.push(
+                    tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
+                        &tool_result.content.first(),
+                    ))
+                    .to_string(),
+                );
             }
             Ok(Some(Ok(LoopStreamItem::Item(MultiTurnStreamItem::FinalResponse(
                 final_response,
@@ -367,6 +410,32 @@ fn history_has_control_char_tool_arg(history: &[Message]) -> bool {
                 json_value_has_control_char(&tool_call.function.arguments)
             }
             _ => false,
+        }),
+        _ => false,
+    })
+}
+
+fn history_has_tool_call(history: &[Message], tool_name: &str) -> bool {
+    history.iter().any(|message| match message {
+        Message::Assistant { content, .. } => content.iter().any(|item| {
+            matches!(
+                item,
+                AssistantContent::ToolCall(tool_call)
+                    if tool_call.function.name == tool_name
+            )
+        }),
+        _ => false,
+    })
+}
+
+fn history_has_tool_result_text(history: &[Message], expected: &str) -> bool {
+    history.iter().any(|message| match message {
+        Message::User { content } => content.iter().any(|item| {
+            matches!(
+                item,
+                UserContent::ToolResult(result)
+                    if tool_result_text(first_content(&result.content)) == expected
+            )
         }),
         _ => false,
     })
@@ -815,6 +884,113 @@ async fn mid_stream_decode_error_without_effects_retracts_and_resamples() {
     assert_eq!(
         histories[0], histories[1],
         "mid-stream retraction must reissue the same turn request"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn mid_stream_failure_after_tool_ran_closes_turn_and_continues() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::TurnWithMidStreamError(
+            vec![RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "call-1".to_string(),
+                "echo".to_string(),
+                serde_json::json!({}),
+            ))],
+            transient_provider_error("decode after tool"),
+        ),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("done".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(CountingTool {
+        name: "echo".to_string(),
+        output: "ECHOED".to_string(),
+        calls: calls.clone(),
+    })];
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("use the echo tool"),
+        Vec::new(),
+        Arc::new(tools),
+        config(4),
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.tool_results, vec!["ECHOED".to_string()]);
+    assert_eq!(collected.final_text.as_deref(), Some("done"));
+    assert_eq!(collected.error, None);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(collected.attempts.len(), 1);
+    assert_eq!(collected.attempts[0].turn, 0);
+    assert_eq!(collected.attempts[0].attempt, 0);
+    assert!(collected.attempts[0].will_retry);
+    assert_duration_in_range(collected.attempts[0].backoff, 3_750, 6_250);
+
+    let histories = model.seen_histories().await;
+    assert_eq!(
+        histories.len(),
+        2,
+        "effectful mid-stream failure should close the turn then continue"
+    );
+    assert!(
+        history_has_tool_call(&histories[1], "echo"),
+        "continued request must include the assistant tool call: {:?}",
+        histories[1]
+    );
+    assert!(
+        history_has_tool_result_text(&histories[1], "ECHOED"),
+        "continued request must include the tool result: {:?}",
+        histories[1]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn mid_stream_failure_after_tool_budget_exhausted_fails() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let model = ScriptedModel::new_calls(vec![ScriptedCall::TurnWithMidStreamError(
+        vec![RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+            "call-1".to_string(),
+            "echo".to_string(),
+            serde_json::json!({}),
+        ))],
+        transient_provider_error("decode after tool"),
+    )]);
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(CountingTool {
+        name: "echo".to_string(),
+        output: "ECHOED".to_string(),
+        calls: calls.clone(),
+    })];
+    let mut loop_config = config(4);
+    loop_config.retry_policy = crate::agent::completion_retry::CompletionRetryPolicy {
+        transport_backoff: Vec::new(),
+        max_resample: 0,
+        allow_repair: false,
+    };
+
+    let stream = run_loop_stream(
+        model,
+        None,
+        Message::user("use the echo tool"),
+        Vec::new(),
+        Arc::new(tools),
+        loop_config,
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.final_text, None);
+    assert_eq!(collected.tool_results, Vec::<String>::new());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let error = collected
+        .error
+        .expect("effectful retry exhaustion should fail");
+    assert!(
+        error.contains("completion retry budget exhausted")
+            && error.contains("transport retry budget exhausted"),
+        "terminal error must report exhausted effectful retry budget; got {error}"
     );
 }
 
