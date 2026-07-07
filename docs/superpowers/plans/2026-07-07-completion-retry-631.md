@@ -166,12 +166,18 @@ inductive Transition : State → State → Prop
       Transition s { s with phase := Phase.backingOff wake,
                             transportUsed := s.transportUsed + 1 }
 
-  /-- Transport-class failure with no ladder or no deadline room → terminal. -/
-  | transportExhaust (s : State) (c : FailureClass)
+  /-- Transport-class failure with no ladder room, or whose SELECTED wake
+  time does not fit the deadline → terminal. The chosen wake models Rust's
+  fail-fast: the jittered ladder delay is picked first, and if `now + delay`
+  passes a still-future deadline the attempt fails immediately rather than
+  sleeping into certain death. Also covers the retract case (same phase,
+  budget/deadline exhausted). -/
+  | transportExhaust (s : State) (c : FailureClass) (wake : Time)
       (hc : c = FailureClass.transport)
       (hp : s.phase = Phase.streaming)
+      (hfwd : s.now ≤ wake)
       (h : s.transportUsed ≥ s.budget.transportRetries ∨
-           ∀ wake, s.now ≤ wake → ¬ fitsDeadline wake s.deadline) :
+           ¬ fitsDeadline wake s.deadline) :
       Transition s { s with phase := Phase.exhausted }
 
   /-- Fresh parse-400 (differs from the last seen) with resample room. -/
@@ -199,11 +205,13 @@ inductive Transition : State → State → Prop
       Transition s { s with phase := Phase.repairing,
                             lastParseError := some err }
 
-  /-- Parse-400 with no repair left → terminal. -/
-  | parseExhaust (s : State) (c : FailureClass)
+  /-- Parse-400 with no repair left, or whose selected resample wake does
+  not fit the deadline → terminal. -/
+  | parseExhaust (s : State) (c : FailureClass) (wake : Time)
       (hc : c = FailureClass.parseBadRequest)
       (hp : s.phase = Phase.streaming)
-      (h : ¬ s.budget.allowRepair ∨ s.repairUsed) :
+      (hfwd : s.now ≤ wake)
+      (h : ¬ s.budget.allowRepair ∨ s.repairUsed ∨ ¬ fitsDeadline wake s.deadline) :
       Transition s { s with phase := Phase.exhausted }
 
   /-- Permanent classification → terminal, immediately. -/
@@ -247,11 +255,13 @@ inductive Transition : State → State → Prop
                             turn := { turnIndex := s.turn.turnIndex + 1,
                                       effects := 0, rendered := 0 } }
 
-  /-- A closed turn with no budget/deadline room → terminal. -/
-  | closeExhaust (s : State)
+  /-- A closed turn with no ladder room, or whose selected wake does not
+  fit the deadline → terminal. -/
+  | closeExhaust (s : State) (wake : Time)
       (hp : s.phase = Phase.turnClosed)
+      (hfwd : s.now ≤ wake)
       (h : s.transportUsed ≥ s.budget.transportRetries ∨
-           ∀ wake, s.now ≤ wake → ¬ fitsDeadline wake s.deadline) :
+           ¬ fitsDeadline wake s.deadline) :
       Transition s { s with phase := Phase.exhausted }
 
   /-- Wake from backoff and re-issue. Clock moves to the wake time. -/
@@ -301,7 +311,7 @@ git commit -m "spec(lean): CompletionRetry state machine for #631 — states and
 - Consumes: Task 1's `State`/`Transition`.
 - Produces: `CompletionRetry.Action`, `CompletionRetry.step?`, theorems `n1_reissue_requires_no_open_effects`, `n2_retract_only_before_effects`, `n3_budget_monotone_bounded`, `n3_repair_at_most_once`, `n4_backoff_fits_deadline`, `n5_rendered_at_most_one`. Task 3 emits cases from `step?`.
 
-- [ ] **Step 1: Write `Executable.lean`** — follow the house pattern (`Proofs/RuntimeReconcile/Executable.lean` is the closest template): an `Action` inductive naming each `Transition` constructor with its data, where every failure action carries the observed `FailureClass` so `step?` genuinely consumes the classification (`issue`, `toolEffect`, `streamOk`, `preStreamFail (c : FailureClass) (err : String) (wake : Time)` — dispatched by `step?` on `c` to the transport/resample/repair/permanent branches exactly as `Transition` guards them, `transportExhaust (c : FailureClass)`, `parseExhaust (c : FailureClass)`, `retract (wake : Time)`, `closeTurn`, `continueAfterClose (wake : Time)`, `closeExhaust`, `wake (w : Time)`, `repairIssue`), a total `step? : Action → State → Option State` that checks each guard with `decide`-able conditions (use `Bool` guards mirroring the `Prop` guards; for the universally-quantified deadline-exhaust guard, use the decidable equivalent `match s.deadline with | none => false | some d => d < s.now` — no wake at or after `now` can fit iff the deadline is already behind the clock), and the two bridge theorems `step_sound : step? a s = some s' → Transition s s'` and `transition_complete : Transition s s' → ∃ a, step? a s = some s'`. Prove by case analysis on the action/transition (`cases`, `simp [step?]`, `omega` for arithmetic guards). Wake-time/delay VALUES are chosen by the action's data, not the model — the model constrains only budget counts and deadline fit; record that in the Boundaries note (Task 4).
+- [ ] **Step 1: Write `Executable.lean`** — follow the house pattern (`Proofs/RuntimeReconcile/Executable.lean` is the closest template): an `Action` inductive naming each `Transition` constructor with its data, where every failure action carries the observed `FailureClass` AND the selected wake time so `step?` genuinely consumes both — the classification and the fail-fast decision. Actions: `issue`, `toolEffect`, `streamOk`, `preStreamFail (c : FailureClass) (err : String) (wake : Time)` — dispatched by `step?` on `c` to the transport/resample/repair/permanent branches and, when the budget is spent or `wake` does not fit the deadline, to the matching exhaust outcome (this makes the Rust rule "pick the jittered delay, then fail fast if it overshoots a still-future deadline" a single executable decision), plus `retract (wake : Time)`, `closeTurn`, `continueAfterClose (wake : Time)`, `wake (w : Time)`, `repairIssue`. `step?` is total with directly `decide`-able guards (every deadline check is `fitsDeadline wake s.deadline` on the action's own wake — no quantifiers). Bridge theorems: `step_sound : step? a s = some s' → Transition s s'` and `transition_complete : Transition s s' → ∃ a, step? a s = some s'`. Prove by case analysis (`cases`, `simp [step?]`, `omega` for arithmetic guards). Wake-time/delay VALUES are chosen by the action's data, not the model — the model constrains only budget counts and deadline fit; record that in the Boundaries note (Task 4).
 
 - [ ] **Step 2: Write `Properties.lean`**
 
@@ -499,7 +509,8 @@ git commit -m "feat(retry): CompletionRetryState decision mirror of the Lean mod
 - [ ] **Step 1: Write `Contracts.lean`** — generate finite witness rows from `step?` (house pattern: `Proofs/Conformance/ClientShell/Contracts.lean`), plus the `FailureClass` vocabulary (`toDefraDB`-style strings `transport` / `parse_bad_request` / `permanent`). Emit at minimum these named cases, each computed (not hand-written) by running `step?` on a concrete state:
   - `transport_ladder_progresses`: streaming + transport failure, budget 3, used 0, no deadline → `backingOff`, `transportUsed = 1`.
   - `transport_exhausts_after_budget`: used 3 of 3 → `exhausted`.
-  - `deadline_behind_clock_fails_fast`: deadline < now → `exhausted` (fail-fast).
+  - `selected_delay_past_deadline_fails_fast`: budget available, deadline STILL FUTURE, but the selected wake passes it (`now < deadline < wake`) → `exhausted`, never `backingOff` (the Rust jittered-delay fail-fast).
+  - `deadline_behind_clock_fails_fast`: deadline < now, any wake ≥ now → `exhausted`.
   - `deterministic_400_skips_to_repair`: `lastParseError = some e`, failure `e` again → `repairing`.
   - `repair_second_time_illegal`: `repairUsed = true`, repair action → `none`.
   - `retract_with_effects_illegal`: `effects = 1`, retract action → `none`.
@@ -601,7 +612,7 @@ Expected: PASS — this task is behavior-neutral; any semantic diff is a bug in 
 
 **Interfaces:**
 - Consumes: `LoopConfig.retry_policy`/`LoopConfig.deadline` (Task 5), `CompletionRetryState` (Task 3), `LoopStreamItem::AttemptFailed` (Task 6).
-- Produces: retry semantics at the `model.stream(request)` seam; `repair_provider_input(history: &[Message], new_messages: &mut Vec<Message>)` helper that re-runs `normalize_tool_call_arguments` (`llm/tool.rs:360`, seam label `"repair"`) over every assistant tool call in `new_messages` and re-sanitizes via `crate::compaction::sanitize_history_for_provider`.
+- Produces: retry semantics at the `model.stream(request)` seam; `repair_provider_input(history: &[Message], new_messages: &mut Vec<Message>)` helper. **Repair must exceed the normalization that already runs on every request** — `from_rig_tool_call` (ingest, `rig_compat.rs:388`) and `to_rig` at `build_request` (egress, `rig_compat.rs:204`) already heal string/null/non-object args, so re-running them is a no-op. Repair therefore does the aggressive pass those seams deliberately skip: for every assistant tool call in `new_messages`, run `normalize_tool_call_arguments("repair", ..)` AND deep-sanitize every string leaf of the (valid-object) args — strip/escape ASCII control characters (`char::is_control`, keeping `\n`/`\t` as escaped sequences) that vLLM's template-side `json.loads` chokes on — then re-run `crate::compaction::sanitize_history_for_provider` over the result.
 
 - [ ] **Step 1: Extend `ScriptedModel`** in `loop_stream/tests.rs` with scripted per-call failures:
 
@@ -619,7 +630,7 @@ enum ScriptedCall {
   - `pre_stream_transport_failure_retries_and_succeeds`: `[FailStream(connect-refused-shaped ProviderError), Turn(text)]` → final text; exactly one `AttemptFailed { will_retry: true }` yielded; `seen_histories` shows two identical requests.
   - `transport_ladder_exhaustion_fails_with_last_error`: 4× `FailStream` with budget 3 → stream ends with `Err`, error text contains `completion retry budget exhausted` and the last classified reason; three `AttemptFailed { will_retry: true }` then one `{ will_retry: false }`.
   - `three_minute_outage_recovers_within_ladder`: 3× `FailStream` then `Turn(text)`, assert total advanced sleep ≥ 5s+30s+120s neighborhood (jitter ±25%) and completion succeeds — the backend-restart acceptance shape at loop level.
-  - `parse_400_resamples_once_then_repairs_on_identical_error`: two `FailStream(ProviderError(<exact prod payload>))` with the literal prod body `{"error":{"message":"Expecting value: line 1 column 28 (char 27)","type":"BadRequestError","param":null,"code":400}}` then `Turn(text)` → success; assert the third request's history had tool args re-normalized (seed `new_messages` via a prior scripted tool-call turn whose args are a JSON string, and assert `seen_histories[2]` carries object args) and that no fourth attempt happened.
+  - `parse_400_resamples_once_then_repairs_on_identical_error`: script a first tool-call turn whose args are a **valid JSON object containing a raw control character in a string value** (e.g. `{"note": "bad\u{0007}value"}`) — this survives BOTH normalization seams (ingest `from_rig_tool_call` and egress at `build_request` preserve valid objects as-is), which is exactly why it can prove repair ran; then two `FailStream(ProviderError(<exact prod payload>))` with the literal prod body `{"error":{"message":"Expecting value: line 1 column 28 (char 27)","type":"BadRequestError","param":null,"code":400}}` then `Turn(text)` → success. The stream() call sequence is: [0] turn 1 (emits the poisoned tool call), [1] turn 2 first attempt (fails), [2] turn 2 resample (fails identically → repair), [3] turn 2 post-repair (succeeds). Assert: `seen_histories[2]` still carries the control character; `seen_histories[3]` does NOT; there is no fifth call. If this test passes with `repair_provider_input` stubbed to a no-op, the fixture is broken — verify it fails first.
   - `permanent_400_fails_immediately`: `FailStream` with a non-parse-signature 400 (`duplicate field max_tokens`) → immediate `Err`, no `AttemptFailed { will_retry: true }`.
   - `deadline_fail_fast_pre_sleep`: `LoopConfig.deadline = now + 10s`, first failure wants 30s → immediate `Err`, and **no sleep occurred** (assert elapsed paused-time is 0).
   - `retry_reissues_same_request`: assert `seen_histories[0] == seen_histories[1]` and `seen_tools[0] == seen_tools[1]` for a transport retry (same assembled input, constraint 1).
@@ -719,15 +730,17 @@ let mut stream = loop {
 **No schema change and no admission change.** The admission client acquires a permit per `model.stream()` call (`admission/client.rs:111`), so every retry attempt already persists its own `InferenceCall` row: a pre-stream failure is terminalized `failed` with `failure_reason` (`client.rs:129`) *before* the loop's backoff sleep, and the re-issue acquires a fresh permit/row. No slot is held during backoff. The observability work is purely a projection.
 
 **Files:**
-- Modify: `crates/defra-agent/src/run_timeline.rs` (group a request's `InferenceCall` rows into a retry summary, following how the timeline already loads/projects InferenceCall rows)
-- Test: the run-timeline tests where InferenceCall projection is already covered, plus an admission-level assertion in `crates/defra-agent/src/admission/tests.rs`
+- Modify: `crates/defra-agent/src/run_timeline.rs` — **`RunTimelineRows` has no InferenceCall rows today** (`run_timeline.rs:7` lists request/session/conversation/requests/messages/tool_calls/responses only); add `TimelineInferenceCallRow` and an `inference_calls: Vec<TimelineInferenceCallRow>` field (with `#[serde(default)]` like its siblings), plus the `RetrySummary` rollup and its event/summary surfacing
+- Modify: `crates/defra-agent-cli/src/commands/trace.rs` — the loader (`trace.rs:147` region) loads four row kinds; add `load_timeline_inference_calls_for_request(access, request_id)` (query `InferenceCall` filtered by `request_id`, selecting `call_id`, `call_seq`, `attempt`, `call_state`, `failure_reason`, `queued_at`, `started_at`, `ended_at`, `backend_id`, `call_kind`; loop over root + child request ids like the message/tool-call loaders loop over sessions) and populate the new field
+- Check: `crates/defra-agent/src/adapter_projection.rs` — if projection redaction modes touch per-row fields, `failure_reason` carries provider error text (can embed payload fragments); apply the same redaction treatment the projections give response error strings, and add the new row kind to whatever row-enumeration the ACP/redaction fence tests cover
+- Test: the run-timeline tests where timeline row projection is already covered, plus an admission-level assertion in `crates/defra-agent/src/admission/tests.rs`
 
 **Interfaces:**
-- Consumes: existing per-attempt `InferenceCall` rows (`attempt`, `call_seq`, `call_state`, `failure_reason`, timestamps).
-- Produces: a `RetrySummary { retry_count: u32, last_transient_error: Option<String>, recovered: bool }` on the timeline's request projection. Rollup rule: order the request's inference-kind rows by `queued_at`/`call_seq`; `retry_count` = number of `failed` rows that are followed by a later row (a failed attempt that was retried); `last_transient_error` = `failure_reason` of the most recent such row; `recovered` = request terminal state is `completed` AND `retry_count > 0`. A `failed` row with no successor keeps today's meaning (the failure that killed the run).
+- Consumes: existing per-attempt `InferenceCall` rows. **Ordering key is `call_seq` (+ `queued_at` tiebreak), NOT `attempt`:** `call_seq` is the monotone per-request provider-call counter (`admission/client.rs:211`); `attempt` remains legacy daemon-attempt metadata and is constantly `1` after Task 11 — say so in the row struct's doc comment.
+- Produces: `TimelineInferenceCallRow` and a `RetrySummary { retry_count: u32, last_transient_error: Option<String>, recovered: bool }` on the timeline's request projection. Rollup rule: order the request's inference-kind rows by (`call_seq`, `queued_at`); `retry_count` = number of `failed` rows that are followed by a later row (a failed attempt that was retried); `last_transient_error` = `failure_reason` of the most recent such row; `recovered` = request terminal state is `completed` AND `retry_count > 0`. A `failed` row with no successor keeps today's meaning (the failure that killed the run).
 
-- [ ] **Step 1: Failing tests:** (a) timeline test — seed a request with three InferenceCall rows (`failed` w/ reason, `failed` w/ reason, `completed`) and a completed request; assert `RetrySummary { retry_count: 2, last_transient_error: Some(<second reason>), recovered: true }`; (b) timeline test — rows (`failed`, `failed`) with a failed request → `retry_count: 1`, `recovered: false` (the last row is the killing failure, not a retry); (c) admission test — drive two consecutive `scope_call` inference failures then a success within one scope and assert three persisted rows exist for the request with the expected `call_state` sequence (this pins the per-attempt row granularity the rollup depends on).
-- [ ] **Step 2: Implement** the rollup in `run_timeline.rs` and surface it wherever the timeline exposes request-level fields (follow the existing projection struct shape; CLI `trace timeline` output picks it up automatically through that struct).
+- [ ] **Step 1: Failing tests:** (a) timeline test — seed a request with three InferenceCall rows (`failed` w/ reason, `failed` w/ reason, `completed`, ascending `call_seq`) and a completed request; assert `RetrySummary { retry_count: 2, last_transient_error: Some(<second reason>), recovered: true }` and that `inference_calls` carries all three rows in `call_seq` order; (b) timeline test — rows (`failed`, `failed`) with a failed request → `retry_count: 1`, `recovered: false` (the last row is the killing failure, not a retry); (c) admission test — drive two consecutive `scope_call` inference failures then a success within one scope and assert three persisted rows exist for the request with ascending `call_seq` and the expected `call_state` sequence (this pins the per-attempt row granularity the rollup depends on).
+- [ ] **Step 2: Implement** the row type + rollup in `run_timeline.rs`, the CLI loader + wiring in `trace.rs`, and the redaction treatment for `failure_reason`; surface `RetrySummary` wherever the timeline exposes request-level fields (follow the existing projection struct shape so CLI `trace timeline` output picks it up through that struct).
 - [ ] **Step 3:** targeted tests PASS → full gate PASS.
 - [ ] **Step 4: Commit** — `feat(observability): retry rollup over per-attempt InferenceCall rows in run timeline (#631)`
 
