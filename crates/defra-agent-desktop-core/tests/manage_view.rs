@@ -76,6 +76,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         enable_bash: Some(true),
         bash_mode: Some("workspace".to_string()),
         command_execution_policy: None,
+        read_only_command_allowlist: Vec::new(),
         command_allowed_argv_prefixes: Vec::new(),
         command_forbidden_argv_prefixes: Vec::new(),
         command_network_mode: None,

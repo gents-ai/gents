@@ -290,6 +290,7 @@ pub(crate) async fn save_tool_selection_config(
             enable_bash: Some(false),
             bash_mode: None,
             command_execution_policy: None,
+            read_only_command_allowlist: Vec::new(),
             command_allowed_argv_prefixes: Vec::new(),
             command_forbidden_argv_prefixes: Vec::new(),
             command_network_mode: None,
