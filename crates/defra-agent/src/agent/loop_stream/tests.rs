@@ -1,9 +1,10 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::llm::message::{AssistantContent, ToolResultContent, UserContent};
 use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-use futures::{stream, StreamExt};
+use futures::{stream, Stream, StreamExt};
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 
 use crate::llm::message::Message;
@@ -18,13 +19,20 @@ use crate::ensure_schemas;
 use crate::hook::{DefraSessionHook, FailurePolicy};
 use crate::test_support::first_content;
 
-/// A `CompletionModel` whose `stream` replays one scripted turn per call: each
-/// `stream()` pops the next `Vec<RawStreamingChoice>` from the queue, letting a
-/// test drive a multi-turn (tool-call then text) loop without a provider. Once
-/// the queue is empty it yields a bare final response so the loop terminates.
+enum ScriptedCall {
+    Turn(Vec<RawStreamingChoice<()>>),
+    FailStream(CompletionError),
+    #[allow(dead_code)]
+    TurnWithMidStreamError(Vec<RawStreamingChoice<()>>, CompletionError),
+}
+
+/// A `CompletionModel` whose `stream` replays one scripted call: each
+/// `stream()` pops the next [`ScriptedCall`] from the queue, letting a test
+/// drive multi-turn loops and provider failures without a provider. Once the
+/// queue is empty it yields a bare final response so the loop terminates.
 #[derive(Clone)]
 struct ScriptedModel {
-    turns: Arc<Mutex<VecDeque<Vec<RawStreamingChoice<()>>>>>,
+    calls: Arc<Mutex<VecDeque<ScriptedCall>>>,
     /// `chat_history` of every request the loop sent, in order (converted to
     /// native at the capture boundary) — lets a test assert how the loop
     /// threaded prior turns back to the provider.
@@ -43,8 +51,12 @@ impl ScriptedModel {
     }
 
     fn new_turns(turns: Vec<Vec<RawStreamingChoice<()>>>) -> Self {
+        Self::new_calls(turns.into_iter().map(ScriptedCall::Turn).collect())
+    }
+
+    fn new_calls(calls: Vec<ScriptedCall>) -> Self {
         Self {
-            turns: Arc::new(Mutex::new(turns.into())),
+            calls: Arc::new(Mutex::new(calls.into())),
             seen_histories: Arc::new(Mutex::new(Vec::new())),
             seen_tools: Arc::new(Mutex::new(Vec::new())),
             stall_after_chunks: false,
@@ -53,7 +65,7 @@ impl ScriptedModel {
 
     /// A single turn that emits `chunks` then stalls forever instead of ending.
     fn new_stalling(chunks: Vec<RawStreamingChoice<()>>) -> Self {
-        let mut model = Self::new_turns(vec![chunks]);
+        let mut model = Self::new_calls(vec![ScriptedCall::Turn(chunks)]);
         model.stall_after_chunks = true;
         model
     }
@@ -104,14 +116,22 @@ impl CompletionModel for ScriptedModel {
                 .map(|tool| tool.name.clone())
                 .collect(),
         );
-        let chunks = self
-            .turns
+        let call = self
+            .calls
             .lock()
             .await
             .pop_front()
-            .unwrap_or_else(|| vec![RawStreamingChoice::FinalResponse(())]);
-        let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> =
-            chunks.into_iter().map(Ok).collect();
+            .unwrap_or_else(|| ScriptedCall::Turn(vec![RawStreamingChoice::FinalResponse(())]));
+        let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> = match call {
+            ScriptedCall::Turn(chunks) => chunks.into_iter().map(Ok).collect(),
+            ScriptedCall::FailStream(error) => return Err(error),
+            ScriptedCall::TurnWithMidStreamError(chunks, error) => {
+                let mut items: Vec<Result<RawStreamingChoice<()>, CompletionError>> =
+                    chunks.into_iter().map(Ok).collect();
+                items.push(Err(error));
+                items
+            }
+        };
         let inner: rig::streaming::StreamingResult<()> = if self.stall_after_chunks {
             Box::pin(stream::iter(items).chain(stream::pending()))
         } else {
@@ -251,6 +271,107 @@ fn config(max_turns: usize) -> LoopConfig {
     }
 }
 
+#[derive(Debug)]
+struct AttemptEvent {
+    turn: usize,
+    attempt: u32,
+    will_retry: bool,
+    backoff: Duration,
+}
+
+#[derive(Debug, Default)]
+struct CollectedScriptedStream {
+    attempts: Vec<AttemptEvent>,
+    final_text: Option<String>,
+    error: Option<String>,
+}
+
+async fn collect_scripted_stream<S>(stream: S) -> CollectedScriptedStream
+where
+    S: Stream<Item = Result<LoopStreamItem<()>, StreamingError>>,
+{
+    futures::pin_mut!(stream);
+    let mut collected = CollectedScriptedStream::default();
+
+    loop {
+        match tokio::time::timeout(Duration::from_millis(1), stream.next()).await {
+            Ok(Some(Ok(LoopStreamItem::AttemptFailed {
+                turn,
+                attempt,
+                error: _,
+                will_retry,
+                backoff,
+            }))) => collected.attempts.push(AttemptEvent {
+                turn,
+                attempt,
+                will_retry,
+                backoff,
+            }),
+            Ok(Some(Ok(LoopStreamItem::Item(MultiTurnStreamItem::FinalResponse(
+                final_response,
+            ))))) => {
+                collected.final_text = Some(final_response.response().to_string());
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(error))) => {
+                collected.error = Some(format!("{error:?}"));
+                break;
+            }
+            Ok(None) => break,
+            Err(_) => {
+                tokio::time::advance(Duration::from_secs(300)).await;
+            }
+        }
+    }
+
+    collected
+}
+
+fn transient_provider_error(label: &str) -> CompletionError {
+    CompletionError::ProviderError(format!("status code 503: {label}"))
+}
+
+fn permanent_provider_error() -> CompletionError {
+    CompletionError::ProviderError("status code 400: duplicate field max_tokens".to_string())
+}
+
+fn parse_400_text(tag: &str) -> String {
+    format!("BadRequestError: Expecting value [{tag}]: line 1 column 28 (char 27)")
+}
+
+fn parse_400_error(tag: &str) -> CompletionError {
+    CompletionError::ProviderError(parse_400_text(tag))
+}
+
+fn assert_duration_in_range(delay: Duration, low_ms: u64, high_ms: u64) {
+    let actual_ms = delay.as_millis() as u64;
+    assert!(
+        actual_ms >= low_ms && actual_ms <= high_ms,
+        "expected duration in [{low_ms}, {high_ms}]ms, got {actual_ms}ms"
+    );
+}
+
+fn history_has_control_char_tool_arg(history: &[Message]) -> bool {
+    history.iter().any(|message| match message {
+        Message::Assistant { content, .. } => content.iter().any(|item| match item {
+            AssistantContent::ToolCall(tool_call) => {
+                json_value_has_control_char(&tool_call.function.arguments)
+            }
+            _ => false,
+        }),
+        _ => false,
+    })
+}
+
+fn json_value_has_control_char(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(text) => text.chars().any(char::is_control),
+        serde_json::Value::Array(values) => values.iter().any(json_value_has_control_char),
+        serde_json::Value::Object(map) => map.values().any(json_value_has_control_char),
+        _ => false,
+    }
+}
+
 async fn test_hook() -> (Arc<defra_node::EmbeddedNode>, DefraSessionHook) {
     let data_path =
         std::env::temp_dir().join(format!("agent-loop-stream-{}", uuid::Uuid::new_v4()));
@@ -355,6 +476,297 @@ async fn rendered_request_sink_runs_before_provider_stream() {
         model.seen_histories().await.is_empty(),
         "provider stream must not start after capture failure"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn pre_stream_transport_failure_retries_and_succeeds() {
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::FailStream(transient_provider_error("first")),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("recovered".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("hi"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        config(0),
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.final_text.as_deref(), Some("recovered"));
+    assert_eq!(collected.error, None);
+    assert_eq!(collected.attempts.len(), 1);
+    assert_eq!(collected.attempts[0].turn, 0);
+    assert_eq!(collected.attempts[0].attempt, 0);
+    assert!(collected.attempts[0].will_retry);
+    assert_duration_in_range(collected.attempts[0].backoff, 3_750, 6_250);
+
+    let histories = model.seen_histories().await;
+    assert_eq!(
+        histories.len(),
+        2,
+        "one failed attempt plus one successful retry"
+    );
+    assert_eq!(
+        histories[0], histories[1],
+        "transport retry must reissue the identical provider request"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn transport_ladder_exhaustion_fails_with_last_error() {
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::FailStream(transient_provider_error("still down 1")),
+        ScriptedCall::FailStream(transient_provider_error("still down 2")),
+        ScriptedCall::FailStream(transient_provider_error("still down 3")),
+        ScriptedCall::FailStream(transient_provider_error("still down 4")),
+    ]);
+
+    let stream = run_loop_stream(
+        model,
+        None,
+        Message::user("hi"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        config(0),
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.final_text, None);
+    assert_eq!(collected.attempts.len(), 4);
+    assert!(collected.attempts[..3]
+        .iter()
+        .all(|attempt| attempt.will_retry));
+    assert!(!collected.attempts[3].will_retry);
+    assert_eq!(collected.attempts[3].attempt, 3);
+    assert_eq!(collected.attempts[3].backoff, Duration::ZERO);
+    let error = collected
+        .error
+        .expect("retry exhaustion should end in error");
+    assert!(
+        error.contains("completion retry budget exhausted") && error.contains("still down 4"),
+        "terminal error must include budget exhaustion and the last provider error; got {error}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn three_minute_outage_recovers_within_ladder() {
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::FailStream(transient_provider_error("outage 1")),
+        ScriptedCall::FailStream(transient_provider_error("outage 2")),
+        ScriptedCall::FailStream(transient_provider_error("outage 3")),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("back".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+
+    let stream = run_loop_stream(
+        model,
+        None,
+        Message::user("hi"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        config(0),
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.final_text.as_deref(), Some("back"));
+    assert_eq!(collected.error, None);
+    assert_eq!(collected.attempts.len(), 3);
+    assert!(collected.attempts.iter().all(|attempt| attempt.will_retry));
+    let total_backoff = collected
+        .attempts
+        .iter()
+        .fold(Duration::ZERO, |total, attempt| total + attempt.backoff);
+    assert_duration_in_range(total_backoff, 116_250, 193_750);
+}
+
+#[tokio::test(start_paused = true)]
+async fn parse_400_resamples_once_then_repairs_on_identical_error() {
+    let poison = format!("bad{}value", '\u{0007}');
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "call-1".to_string(),
+                "echo".to_string(),
+                serde_json::json!({ "note": poison }),
+            )),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+        ScriptedCall::FailStream(parse_400_error("same")),
+        ScriptedCall::FailStream(parse_400_error("same")),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("repaired".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+    let mut loop_config = config(4);
+    loop_config.context_message = Some(Message::user("<context>\nrepair-test\n</context>"));
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("use the echo tool"),
+        Vec::new(),
+        Arc::new(vec![echo_tool()]),
+        loop_config,
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.final_text.as_deref(), Some("repaired"));
+    assert_eq!(collected.error, None);
+    assert_eq!(collected.attempts.len(), 2);
+    assert!(collected.attempts.iter().all(|attempt| attempt.will_retry));
+    assert_duration_in_range(collected.attempts[0].backoff, 3_750, 6_250);
+    assert_eq!(collected.attempts[1].backoff, Duration::ZERO);
+
+    let histories = model.seen_histories().await;
+    assert_eq!(
+        histories.len(),
+        4,
+        "tool turn, parse failure, resample, and repaired retry"
+    );
+    assert_eq!(
+        histories[1], histories[2],
+        "first parse-400 retry must resample the same provider request"
+    );
+    assert!(
+        history_has_control_char_tool_arg(&histories[1]),
+        "dirty tool arguments should be present before repair: {:?}",
+        histories[1]
+    );
+    assert!(
+        !history_has_control_char_tool_arg(&histories[3]),
+        "repair must sanitize provider-bound tool arguments: {:?}",
+        histories[3]
+    );
+    assert!(
+        histories[3].iter().any(is_request_context_message),
+        "repair must preserve the current request context: {:?}",
+        histories[3]
+    );
+    assert_provider_request_invariants(4, &histories[3]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn permanent_400_fails_immediately() {
+    let model =
+        ScriptedModel::new_calls(vec![ScriptedCall::FailStream(permanent_provider_error())]);
+
+    let stream = run_loop_stream(
+        model,
+        None,
+        Message::user("hi"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        config(0),
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.final_text, None);
+    assert_eq!(collected.attempts.len(), 1);
+    assert!(!collected.attempts[0].will_retry);
+    assert_eq!(collected.attempts[0].backoff, Duration::ZERO);
+    let error = collected.error.expect("permanent 400 should fail");
+    assert!(
+        error.contains("duplicate field max_tokens")
+            && !error.contains("completion retry budget exhausted"),
+        "permanent 400 should not be retried or wrapped as budget exhaustion; got {error}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn deadline_fail_fast_pre_sleep() {
+    let model = ScriptedModel::new_calls(vec![ScriptedCall::FailStream(transient_provider_error(
+        "too late",
+    ))]);
+    let mut loop_config = config(0);
+    loop_config.retry_policy = crate::agent::completion_retry::CompletionRetryPolicy {
+        transport_backoff: vec![Duration::from_secs(30)],
+        max_resample: 0,
+        allow_repair: false,
+    };
+    loop_config.deadline = Some(chrono::Utc::now() + chrono::Duration::seconds(10));
+
+    let stream = run_loop_stream(
+        model,
+        None,
+        Message::user("hi"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        loop_config,
+    );
+    futures::pin_mut!(stream);
+    let started_at = tokio::time::Instant::now();
+
+    let first = stream
+        .next()
+        .await
+        .expect("deadline failure should yield attempt event")
+        .expect("attempt event should be Ok");
+    match first {
+        LoopStreamItem::AttemptFailed {
+            attempt,
+            will_retry,
+            backoff,
+            ..
+        } => {
+            assert_eq!(attempt, 0);
+            assert!(!will_retry);
+            assert_eq!(backoff, Duration::ZERO);
+        }
+        other => panic!("expected AttemptFailed, got {other:?}"),
+    }
+
+    let second = stream
+        .next()
+        .await
+        .expect("deadline failure should yield terminal error");
+    assert!(
+        second.is_err(),
+        "expected terminal deadline error: {second:?}"
+    );
+    assert_eq!(
+        tokio::time::Instant::now(),
+        started_at,
+        "deadline fail-fast must not sleep before failing"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn retry_reissues_same_request() {
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::FailStream(transient_provider_error("reset")),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("ok".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("use the tool"),
+        Vec::new(),
+        Arc::new(vec![echo_tool()]),
+        config(1),
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.final_text.as_deref(), Some("ok"));
+    assert_eq!(collected.error, None);
+    let histories = model.seen_histories().await;
+    let tools = model.seen_tools().await;
+    assert_eq!(histories.len(), 2);
+    assert_eq!(tools.len(), 2);
+    assert_eq!(histories[0], histories[1]);
+    assert_eq!(tools[0], tools[1]);
 }
 
 #[tokio::test]

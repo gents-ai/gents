@@ -28,9 +28,13 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
-use crate::agent::completion_retry::CompletionRetryPolicy;
+use crate::agent::completion_retry::{
+    CompletionRetryPolicy, CompletionRetryState, PreStreamDirective,
+};
 use crate::error::InferenceError;
-use crate::llm::message::{Message, ToolCall, ToolResult, ToolResultContent, UserContent};
+use crate::llm::message::{
+    AssistantContent, Message, ToolCall, ToolResult, ToolResultContent, UserContent,
+};
 use crate::llm::rig_compat;
 use crate::llm::{HookAction, ToolCallHookAction};
 use async_stream::try_stream;
@@ -182,6 +186,7 @@ where
             assemble_new_messages(config.context_message.clone(), prompt);
         let mut aggregated_usage = Usage::new();
         let mut current_turn: usize = 0;
+        let mut retry = CompletionRetryState::new(config.retry_policy.clone());
 
         loop {
             // rig semantics: `max_turns` is the number of tool round-trips, so up
@@ -242,21 +247,96 @@ where
                 }
             }
 
-            let request = build_request(&model, current_prompt, &history, prior, tools.as_slice(), &config).await?;
-            if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
-                on_rendered_request(current_turn - 1, 0, request.clone())
-                    .await
-                    .map_err(|error| {
-                        StreamingError::Completion(CompletionError::ProviderError(format!(
-                            "capturing rendered completion request failed: {error:#}"
-                        )))
-                    })?;
-            }
+            let turn_index = current_turn - 1;
+            let mut attempt = 0_u32;
+            let mut request = build_request(&model, current_prompt, &history, prior, tools.as_slice(), &config).await?;
+            let mut stream = loop {
+                if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
+                    on_rendered_request(turn_index, attempt, request.clone())
+                        .await
+                        .map_err(|error| {
+                            StreamingError::Completion(CompletionError::ProviderError(format!(
+                                "capturing rendered completion request failed: {error:#}"
+                            )))
+                        })?;
+                }
 
-            let mut stream = model
-                .stream(request)
-                .await
-                .map_err(StreamingError::Completion)?;
+                match model.stream(request.clone()).await {
+                    Ok(stream) => break stream,
+                    Err(completion_error) => {
+                        let streaming_error = StreamingError::Completion(completion_error);
+                        let classified = crate::error::classify_completion_error(&streaming_error);
+                        let error_text = streaming_error.to_string();
+                        match retry.on_pre_stream_failure(
+                            &classified,
+                            &error_text,
+                            Utc::now(),
+                            config.deadline,
+                        ) {
+                            PreStreamDirective::RetryAfter { delay, kind } => {
+                                yield LoopStreamItem::AttemptFailed {
+                                    turn: turn_index,
+                                    attempt,
+                                    error: classified,
+                                    will_retry: true,
+                                    backoff: delay,
+                                };
+                                tracing::warn!(
+                                    turn = turn_index,
+                                    attempt,
+                                    kind = ?kind,
+                                    delay_ms = delay.as_millis() as u64,
+                                    error = %error_text,
+                                    "retrying completion after transient failure"
+                                );
+                                tokio::time::sleep(delay).await;
+                                attempt += 1;
+                            }
+                            PreStreamDirective::Repair => {
+                                retry.mark_repair_used();
+                                yield LoopStreamItem::AttemptFailed {
+                                    turn: turn_index,
+                                    attempt,
+                                    error: classified,
+                                    will_retry: true,
+                                    backoff: std::time::Duration::ZERO,
+                                };
+                                repair_provider_input(&mut new_messages);
+                                let repaired_prompt = new_messages
+                                    .last()
+                                    .cloned()
+                                    .expect("new_messages remains non-empty after repair");
+                                let repaired_prior = &new_messages[..new_messages.len() - 1];
+                                request = build_request(
+                                    &model,
+                                    repaired_prompt,
+                                    &history,
+                                    repaired_prior,
+                                    tools.as_slice(),
+                                    &config,
+                                )
+                                .await?;
+                                attempt += 1;
+                            }
+                            PreStreamDirective::Fail { reason } => {
+                                let terminal_reason =
+                                    terminal_pre_stream_retry_reason(&classified, attempt, reason);
+                                yield LoopStreamItem::AttemptFailed {
+                                    turn: turn_index,
+                                    attempt,
+                                    error: classified,
+                                    will_retry: false,
+                                    backoff: std::time::Duration::ZERO,
+                                };
+                                Err(StreamingError::Completion(
+                                    CompletionError::ProviderError(terminal_reason),
+                                ))?;
+                                unreachable!("Err(..)? above ends the stream");
+                            }
+                        }
+                    }
+                }
+            };
 
             // Accumulate assistant content twice over: `accumulator` builds the
             // assistant message we thread back into `new_messages` for the next
@@ -457,6 +537,75 @@ where
             }
         }
     }
+}
+
+fn terminal_pre_stream_retry_reason(
+    classified: &InferenceError,
+    attempt: u32,
+    reason: String,
+) -> String {
+    if !classified.is_retryable() {
+        reason
+    } else {
+        format!(
+            "completion retry budget exhausted after {} attempts: {reason}; last error: {classified}",
+            attempt + 1
+        )
+    }
+}
+
+pub(crate) fn repair_provider_input(new_messages: &mut Vec<Message>) {
+    for message in new_messages.iter_mut() {
+        let Message::Assistant { content, .. } = message else {
+            continue;
+        };
+        for item in content {
+            let AssistantContent::ToolCall(tool_call) = item else {
+                continue;
+            };
+            let mut repaired = crate::llm::tool::normalize_tool_call_arguments(
+                "repair",
+                &tool_call.function.name,
+                &tool_call.function.arguments,
+            );
+            sanitize_json_string_leaves(&mut repaired);
+            tool_call.function.arguments = repaired;
+        }
+    }
+
+    *new_messages = crate::compaction::sanitize_history_for_provider(std::mem::take(new_messages));
+}
+
+fn sanitize_json_string_leaves(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                sanitize_json_string_leaves(value);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for value in map.values_mut() {
+                sanitize_json_string_leaves(value);
+            }
+        }
+        serde_json::Value::String(text) => {
+            *text = sanitize_provider_arg_string(text);
+        }
+        _ => {}
+    }
+}
+
+fn sanitize_provider_arg_string(text: &str) -> String {
+    let mut sanitized = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\n' => sanitized.push_str("\\n"),
+            '\t' => sanitized.push_str("\\t"),
+            ch if ch.is_control() => {}
+            ch => sanitized.push(ch),
+        }
+    }
+    sanitized
 }
 
 /// Drive the owned loop to completion and return the final assistant text, for
