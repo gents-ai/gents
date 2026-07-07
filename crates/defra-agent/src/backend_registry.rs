@@ -376,8 +376,8 @@ pub async fn set_backend_probe_status_with_last_probe(
 /// Probe failures are intentionally non-destructive: the backend is left at its
 /// current status (typically `unknown`) and logged, so a transiently-unreachable
 /// backend degrades rather than being marked `unhealthy` and flapping. Recurring
-/// re-probing and unhealthy demotion are a separate concern (the admission path
-/// handles live request failures).
+/// re-probing and unhealthy demotion are handled by the scheduled backend prober
+/// (`crate::backend_health`), whose measured state is merged into admission.
 pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
     let backends = match list_enabled_backends(node).await {
         Ok(backends) => backends,

@@ -75,7 +75,8 @@ outside the config-apply set).
   ChatGPT-Codex backends keep the existing skip (OAuthCredential is
   agent-scoped) → never probed → never demoted → doc-status governed.
 - Every attempt stamps `last_probe_at` in the map. Transitions across the
-  routing boundary (healthy↔unhealthy) log at `warn!` and nudge reconcile;
+  routing boundary (`blocksRouting(prev) != blocksRouting(next)`, e.g.
+  degraded→unhealthy or unhealthy→healthy) log at `warn!` and nudge reconcile;
   steady-state failures log at `debug!` (no per-cycle spam).
 
 ### 3. Routing integration
