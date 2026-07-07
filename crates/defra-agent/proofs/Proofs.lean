@@ -22,6 +22,7 @@ import Proofs.ClientShell
 import Proofs.CommandPolicy
 import Proofs.ToolPolicy
 import Proofs.ToolExecution
+import Proofs.CompletionRetry
 import Proofs.ManagedExec
 import Proofs.MCPHealth
 import Proofs.StreamingResponse
