@@ -580,6 +580,7 @@ fn resolve_server_p2p_config(
         rate_limit_burst: crate::DEFAULT_P2P_RATE_LIMIT_BURST,
         rate_limit_rate: crate::DEFAULT_P2P_RATE_LIMIT_RATE,
         max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
+        max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
     }))
 }
 
