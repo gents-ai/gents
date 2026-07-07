@@ -20,6 +20,11 @@ use rmcp::{
 use tokio::sync::RwLock;
 use tracing::Instrument;
 
+mod resume;
+
+pub use resume::McpResumeStats;
+use resume::SessionResumePolicy;
+
 pub const AGENT_DID_HEADER: &str = "x-agent-did";
 
 /// Bound on establishing an MCP connection (TCP connect + MCP handshake).
@@ -52,6 +57,9 @@ struct McpConnection {
     list_tools_fn: Box<ListToolsFn>,
     call_tool_fn: Box<CallToolFn>,
     last_used: std::sync::Mutex<std::time::Instant>,
+    /// The transport's SSE retry policy (#639). Once it reports poisoned,
+    /// this connection must be replaced, never reused.
+    resume_policy: Arc<SessionResumePolicy>,
 }
 
 impl McpConnection {
@@ -62,6 +70,10 @@ impl McpConnection {
     fn idle_longer_than(&self, ttl: std::time::Duration) -> bool {
         self.last_used.lock().expect("last_used lock").elapsed() > ttl
     }
+
+    fn resume_poisoned(&self) -> bool {
+        self.resume_policy.is_poisoned()
+    }
 }
 
 fn fresh_last_used() -> std::sync::Mutex<std::time::Instant> {
@@ -71,6 +83,7 @@ fn fresh_last_used() -> std::sync::Mutex<std::time::Instant> {
 fn wrap_connection<S>(
     endpoint: String,
     client: rmcp::service::RunningService<RoleClient, S>,
+    resume_policy: Arc<SessionResumePolicy>,
 ) -> McpConnection
 where
     S: rmcp::service::Service<RoleClient> + Send + Sync + 'static,
@@ -84,6 +97,7 @@ where
         agent_did_header: None,
         trace_context_headers: HashMap::new(),
         last_used: fresh_last_used(),
+        resume_policy,
         list_tools_fn: Box::new(move || {
             let c = Arc::clone(&c1);
             Box::pin(async move {
@@ -145,37 +159,59 @@ async fn connect_mcp_service(
     endpoint: &str,
     agent_did_header: Option<&str>,
     trace_context_headers: HashMap<String, String>,
+    resume_stats: Arc<McpResumeStats>,
 ) -> Result<McpConnection> {
-    let config =
+    let mut config =
         streamable_http_transport_config(endpoint, agent_did_header, &trace_context_headers)?;
+    let resume_policy = Arc::new(SessionResumePolicy::new(service_id, resume_stats));
+    // Bounded SSE resume (#639): without this, rmcp's default policy resumes
+    // a dead session forever (a graceful stream close resets its counter).
+    config.retry_config = Arc::clone(&resume_policy)
+        as Arc<dyn rmcp::transport::common::client_side_sse::SseRetryPolicy>;
     let transport = rmcp::transport::StreamableHttpClientTransport::from_config(config);
     let client = ()
         .serve(transport)
         .await
         .map_err(|e| anyhow::anyhow!("MCP handshake failed for {service_id} ({endpoint}): {e}"))?;
-    let mut connection = wrap_connection(endpoint.to_string(), client);
+    let mut connection = wrap_connection(endpoint.to_string(), client, resume_policy);
     connection.agent_did_header = agent_did_header.map(ToOwned::to_owned);
     connection.trace_context_headers = trace_context_headers;
     Ok(connection)
 }
 
-fn default_connect_fn() -> Arc<ConnectFn> {
+fn default_connect_fn(stats: ResumeStatsRegistry) -> Arc<ConnectFn> {
     Arc::new(
-        |service_id: String,
-         endpoint: String,
-         agent_did_header: Option<String>,
-         trace_context_headers: HashMap<String, String>| {
+        move |service_id: String,
+              endpoint: String,
+              agent_did_header: Option<String>,
+              trace_context_headers: HashMap<String, String>| {
+            let resume_stats = stats.stats_for(&service_id);
             Box::pin(async move {
                 connect_mcp_service(
                     &service_id,
                     &endpoint,
                     agent_did_header.as_deref(),
                     trace_context_headers,
+                    resume_stats,
                 )
                 .await
             })
         },
     )
+}
+
+/// Per-service [`McpResumeStats`] registry, shared between the pool and the
+/// connections it creates.
+#[derive(Clone, Default)]
+struct ResumeStatsRegistry {
+    inner: Arc<std::sync::Mutex<HashMap<String, Arc<McpResumeStats>>>>,
+}
+
+impl ResumeStatsRegistry {
+    fn stats_for(&self, service_id: &str) -> Arc<McpResumeStats> {
+        let mut guard = self.inner.lock().expect("resume stats lock");
+        Arc::clone(guard.entry(service_id.to_string()).or_default())
+    }
 }
 
 #[cfg(test)]
@@ -251,7 +287,28 @@ pub struct McpPool {
     connect_fn: Arc<ConnectFn>,
     trace_context_headers_fn: Arc<TraceContextHeadersFn>,
     idle_ttl: Option<std::time::Duration>,
+    resume_stats: ResumeStatsRegistry,
+    park: Arc<std::sync::Mutex<HashMap<String, ParkState>>>,
 }
+
+/// Per-service connect-parking state (#639). Strikes are connect failures
+/// and poisoned-session detections; the park horizon grows exponentially so
+/// a flapping server ends up parked with a long retry horizon instead of
+/// converting the resume hot-loop into an init hot-loop.
+#[derive(Debug, Clone, Copy)]
+struct ParkState {
+    strikes: u32,
+    last_strike: tokio::time::Instant,
+    parked_until: tokio::time::Instant,
+}
+
+/// First park horizon; doubles per strike up to [`MCP_PARK_MAX`].
+const MCP_PARK_BASE: std::time::Duration = std::time::Duration::from_secs(1);
+/// Ceiling on the park horizon for a persistently failing service.
+const MCP_PARK_MAX: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+/// A strike this long after the previous one resets the strike count: a
+/// service that stayed clean for this window earned a fresh horizon.
+const MCP_STRIKE_DECAY: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 /// Default idle TTL for pooled MCP connections.
 ///
@@ -262,11 +319,14 @@ pub const DEFAULT_MCP_IDLE_TTL: std::time::Duration = std::time::Duration::from_
 
 impl McpPool {
     pub fn new() -> Self {
+        let resume_stats = ResumeStatsRegistry::default();
         Self {
             inner: Arc::new(RwLock::new(HashMap::new())),
-            connect_fn: default_connect_fn(),
+            connect_fn: default_connect_fn(resume_stats.clone()),
             trace_context_headers_fn: Arc::new(crate::runtime_trace::current_trace_context_headers),
             idle_ttl: Some(DEFAULT_MCP_IDLE_TTL),
+            resume_stats,
+            park: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -275,6 +335,12 @@ impl McpPool {
     pub fn with_idle_ttl(mut self, ttl: std::time::Duration) -> Self {
         self.idle_ttl = Some(ttl);
         self
+    }
+
+    /// Resume/re-init counters for `service_id` (#639). Created on first
+    /// access; shared with the connections the pool creates for the service.
+    pub fn resume_stats(&self, service_id: &str) -> Arc<McpResumeStats> {
+        self.resume_stats.stats_for(service_id)
     }
 
     #[cfg(test)]
@@ -300,6 +366,8 @@ impl McpPool {
             ),
             trace_context_headers_fn: Arc::new(crate::runtime_trace::current_trace_context_headers),
             idle_ttl: None,
+            resume_stats: ResumeStatsRegistry::default(),
+            park: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -330,6 +398,7 @@ impl McpPool {
                         agent_did_header,
                         trace_context_headers: trace_headers,
                         last_used: fresh_last_used(),
+                        resume_policy: SessionResumePolicy::detached(&service_id),
                         list_tools_fn: Box::new(move || {
                             let handler = Arc::clone(&handler);
                             let service_id = service_id_for_list.clone();
@@ -517,6 +586,7 @@ impl McpPool {
                     && conn.agent_did_header == agent_did_header
                     && conn.trace_context_headers == trace_context_headers
                     && !self.idle_ttl.is_some_and(|ttl| conn.idle_longer_than(ttl))
+                    && !conn.resume_poisoned()
                 {
                     conn.touch();
                     return Ok(());
@@ -527,17 +597,20 @@ impl McpPool {
         // Slow path — re-check under the lock, but connect OUTSIDE it: a hung
         // or slow connect (blackholed endpoint, #622) must not wedge every
         // other service in the pool.
+        let mut poison_detected = false;
         {
-            let guard = self.inner.write().await;
+            let mut guard = self.inner.write().await;
             if let Some(conn) = guard.get(service_id) {
                 let endpoint_changed = conn.endpoint != endpoint;
                 let agent_did_changed = conn.agent_did_header != agent_did_header;
                 let trace_context_changed = conn.trace_context_headers != trace_context_headers;
                 let idle_ttl_expired = self.idle_ttl.is_some_and(|ttl| conn.idle_longer_than(ttl));
-                if conn.endpoint == endpoint
-                    && conn.agent_did_header == agent_did_header
-                    && conn.trace_context_headers == trace_context_headers
+                let resume_poisoned = conn.resume_poisoned();
+                if !endpoint_changed
+                    && !agent_did_changed
+                    && !trace_context_changed
                     && !idle_ttl_expired
+                    && !resume_poisoned
                 {
                     conn.touch();
                     return Ok(());
@@ -550,13 +623,35 @@ impl McpPool {
                     agent_did_changed,
                     trace_context_changed,
                     idle_ttl_expired,
+                    resume_poisoned,
                     "MCP connection context changed, reconnecting"
                 );
+                if resume_poisoned {
+                    // Terminal resume (#639): drop the dead session now —
+                    // through the #626 drop → cancellation → worker-cleanup
+                    // DELETE path — whether or not the fresh connect below
+                    // succeeds.
+                    self.resume_stats
+                        .stats_for(service_id)
+                        .session_reinits
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    guard.remove(service_id);
+                    poison_detected = true;
+                }
             }
         }
 
+        // Park gate (#639): while a service is parked after repeated connect
+        // failures or poisoned sessions, fail fast instead of dialing. The
+        // check uses the horizon from *previous* strikes, so the first
+        // detection after a healthy stretch still reconnects seamlessly.
+        self.check_parked(service_id)?;
+        if poison_detected {
+            self.record_strike(service_id, "session poisoned (resume terminal)");
+        }
+
         tracing::info!(service_id, endpoint, "connecting MCP client");
-        let connection = tokio::time::timeout(
+        let connection = match tokio::time::timeout(
             MCP_CONNECT_TIMEOUT,
             (self.connect_fn)(
                 service_id.to_string(),
@@ -566,12 +661,20 @@ impl McpPool {
             ),
         )
         .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "MCP connect to '{service_id}' ({endpoint}) timed out after {}s",
-                MCP_CONNECT_TIMEOUT.as_secs()
-            )
-        })??;
+        {
+            Err(_elapsed) => {
+                self.record_connect_failure(service_id);
+                anyhow::bail!(
+                    "MCP connect to '{service_id}' ({endpoint}) timed out after {}s",
+                    MCP_CONNECT_TIMEOUT.as_secs()
+                );
+            }
+            Ok(Err(error)) => {
+                self.record_connect_failure(service_id);
+                return Err(error);
+            }
+            Ok(Ok(connection)) => connection,
+        };
 
         // Concurrent callers for the same service may both reach here; the
         // last insert wins and the loser's connection is dropped. The
@@ -580,6 +683,66 @@ impl McpPool {
         let mut guard = self.inner.write().await;
         guard.insert(service_id.to_string(), connection);
         Ok(())
+    }
+
+    /// Fail fast while `service_id` is inside its park horizon (#639).
+    fn check_parked(&self, service_id: &str) -> Result<()> {
+        let park = self.park.lock().expect("park lock");
+        if let Some(state) = park.get(service_id) {
+            let now = tokio::time::Instant::now();
+            if now < state.parked_until {
+                anyhow::bail!(
+                    "MCP service '{service_id}' is parked for {:?} after {} consecutive \
+                     connection/session failures (#639)",
+                    state.parked_until - now,
+                    state.strikes
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn record_connect_failure(&self, service_id: &str) {
+        self.resume_stats
+            .stats_for(service_id)
+            .connect_failures
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_strike(service_id, "connect failed");
+    }
+
+    /// Record a strike (a failed connect or a poisoned session) and extend
+    /// the park horizon. Strikes are only recorded for actual attempts —
+    /// calls blocked by the park gate never strike — so the horizon reflects
+    /// how the service behaves, not how often callers knock.
+    fn record_strike(&self, service_id: &str, reason: &'static str) {
+        let mut park = self.park.lock().expect("park lock");
+        let now = tokio::time::Instant::now();
+        let state = park
+            .entry(service_id.to_string())
+            .or_insert_with(|| ParkState {
+                strikes: 0,
+                last_strike: now,
+                parked_until: now,
+            });
+        if now.saturating_duration_since(state.last_strike) > MCP_STRIKE_DECAY {
+            state.strikes = 0;
+        }
+        state.strikes = state.strikes.saturating_add(1);
+        state.last_strike = now;
+        let horizon = MCP_PARK_BASE
+            .saturating_mul(2u32.saturating_pow(state.strikes.saturating_sub(1).min(30)))
+            .min(MCP_PARK_MAX);
+        state.parked_until = now + horizon;
+        // Bounded by construction: at most one strike per attempt, and
+        // attempts are park-gated — a flapping service converges to one warn
+        // per park horizon (≤ one per 15 minutes at the ceiling).
+        tracing::warn!(
+            service_id,
+            reason,
+            strikes = state.strikes,
+            park_seconds = horizon.as_secs(),
+            "MCP service struck; new connects parked (#639)"
+        );
     }
 }
 
