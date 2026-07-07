@@ -45,7 +45,8 @@ use lean_vocab_test::{
     lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
     lean_event_delivery_transition_cases, lean_fleet_slot_accounting_case,
     lean_inference_slot_accounting_case, lean_inference_slot_accounting_cases,
-    lean_managed_exec_liveness_cases, lean_mcp_health_cases, lean_process_transition_cases,
+    lean_backend_health_cases, lean_managed_exec_liveness_cases, lean_mcp_health_cases,
+    lean_process_transition_cases,
     lean_queue_deadline_case, lean_queue_deadline_cases, lean_r4c_background_work_case,
     lean_r4c_background_work_cases, lean_r5_cross_deployment_cases,
     lean_r6_background_theorem_witness, lean_r6_background_theorem_witnesses,
@@ -72,6 +73,8 @@ use support::{
     AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
 };
 
+#[path = "conformance/backend_health.rs"]
+mod backend_health;
 #[path = "conformance/background.rs"]
 mod background;
 #[path = "conformance/cancel_propagation.rs"]
@@ -235,6 +238,11 @@ fn managed_exec_liveness_cases_pin_native_process_boundary() {
 #[test]
 fn generated_mcp_health_cases_pin_threshold_projection_shape() {
     mcp_health::generated_mcp_health_cases_pin_threshold_projection_shape();
+}
+
+#[test]
+fn generated_backend_health_cases_pin_threshold_and_veto_shape() {
+    backend_health::generated_backend_health_cases_pin_threshold_and_veto_shape();
 }
 
 #[test]

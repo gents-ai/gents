@@ -136,3 +136,21 @@ pub(crate) struct LeanMcpHealthCase {
     pub(crate) next_count: Option<usize>,
     pub(crate) rust_projection: Option<String>,
 }
+
+/// Generated witness for `Proofs.BackendHealth.step` (#640): the scheduled
+/// inference-backend prober's per-runtime hysteresis machine. Unlike
+/// `LeanMcpHealthCase` the machine is total (no removal), so `next_state` /
+/// `next_count` are non-optional, and each row carries the `blocks_routing`
+/// projection of the next state (the routing veto the admission merge
+/// consumes).
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendHealthCase {
+    pub(crate) name: String,
+    pub(crate) start_state: String,
+    pub(crate) start_count: usize,
+    pub(crate) event: String,
+    pub(crate) threshold_k: usize,
+    pub(crate) next_state: String,
+    pub(crate) next_count: usize,
+    pub(crate) blocks_routing: bool,
+}
