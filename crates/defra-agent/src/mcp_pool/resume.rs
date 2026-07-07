@@ -29,6 +29,13 @@
 //! closes from different streams can in rare cases be misread as a rapid
 //! death. The consequence is one extra session re-initialization — accepted
 //! for the simplicity of keeping the policy stateless per-stream.
+//!
+//! Scope note: rmcp bypasses `retry_config.retry(0)` when an SSE stream
+//! supplies a `retry:` field, because the server-provided interval takes
+//! precedence. The production pathology this module bounds was a 200 + empty
+//! stream with no `retry:` field; bounding a server that repeatedly sends only
+//! `retry:` control frames and then closes requires an upstream rmcp seam or a
+//! custom transport wrapper.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};

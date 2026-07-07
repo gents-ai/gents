@@ -1098,6 +1098,100 @@ async fn healthy_service_concurrent_cold_connects_stay_benign() {
     );
 }
 
+/// A poison-driven reconnect happens before the safe-read `list_tools` call.
+/// If that first call fails, the existing one-shot safe-read retry must still
+/// be allowed through the just-recorded poison park horizon.
+#[tokio::test(start_paused = true)]
+async fn poison_recovery_preserves_list_tools_safe_read_retry() {
+    let connect_attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_fn = Arc::clone(&connect_attempts);
+    let policies = Arc::new(Mutex::new(Vec::new()));
+    let policies_for_fn = Arc::clone(&policies);
+    let pool =
+        McpPool::new_with_connector(move |service_id, endpoint, agent_did, trace_headers| {
+            let attempts = Arc::clone(&attempts_for_fn);
+            let policies = Arc::clone(&policies_for_fn);
+            async move {
+                let attempt = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                let resume_policy = SessionResumePolicy::detached(&service_id);
+                policies
+                    .lock()
+                    .expect("policies lock")
+                    .push(Arc::clone(&resume_policy));
+                Ok(McpConnection {
+                    endpoint,
+                    agent_did_header: agent_did,
+                    trace_context_headers: trace_headers,
+                    last_used: super::fresh_last_used(),
+                    resume_policy,
+                    list_tools_fn: Box::new(move || {
+                        Box::pin(async move {
+                            if attempt == 2 {
+                                anyhow::bail!("transport dropped after poison recovery")
+                            }
+                            Ok(ListToolsResult::default())
+                        })
+                    }),
+                    call_tool_fn: Box::new(|_params| {
+                        Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                    }),
+                })
+            }
+        });
+
+    pool.list_tools("retry-service", "http://mcp.test/mcp")
+        .await
+        .expect("first list_tools should succeed");
+    policies.lock().expect("policies lock")[0].poison_for_test();
+
+    pool.list_tools("retry-service", "http://mcp.test/mcp")
+        .await
+        .expect("safe-read retry after poison recovery must not be blocked by parking");
+
+    assert_eq!(
+        connect_attempts.load(Ordering::SeqCst),
+        3,
+        "poison recovery should connect once, then safe-read retry once"
+    );
+}
+
+/// Parking is endpoint-scoped: a dynamic endpoint change for the same
+/// service id must be allowed through instead of inheriting the previous
+/// endpoint's park horizon.
+#[tokio::test(start_paused = true)]
+async fn parked_endpoint_does_not_block_different_endpoint_for_same_service() {
+    let connect_attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_fn = Arc::clone(&connect_attempts);
+    let pool =
+        McpPool::new_with_connector(move |_service_id, _endpoint, _agent_did, _trace_headers| {
+            let attempts = Arc::clone(&attempts_for_fn);
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                anyhow::bail!("connection refused")
+            }
+        });
+
+    let _ = pool
+        .list_tools("dynamic-service", "http://old-endpoint.test/mcp")
+        .await;
+    assert_eq!(connect_attempts.load(Ordering::SeqCst), 1);
+
+    let error = pool
+        .list_tools("dynamic-service", "http://new-endpoint.test/mcp")
+        .await
+        .expect_err("new endpoint still fails in this test connector");
+
+    assert!(
+        format!("{error:#}").contains("connection refused"),
+        "new endpoint should dial and surface connector error, not inherit old endpoint park: {error:#}"
+    );
+    assert_eq!(
+        connect_attempts.load(Ordering::SeqCst),
+        2,
+        "parking one endpoint must not block a different endpoint"
+    );
+}
+
 /// Strikes decay after a quiet period: a service that flapped long ago must
 /// not inherit a huge park horizon for its next transient failure.
 #[tokio::test(start_paused = true)]
