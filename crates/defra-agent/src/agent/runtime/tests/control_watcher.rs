@@ -59,6 +59,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         resolve_context,
         proposal_tx,
         runtime_status.clone(),
+        mpsc::channel::<()>(1).1,
         shutdown_rx,
     ));
 
@@ -91,6 +92,121 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     );
     let resolving = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
     assert_eq!(resolving.reconcile_phase, "resolving");
+
+    let _ = shutdown_tx.send(true);
+    watcher_task.await.unwrap().unwrap();
+}
+
+/// #640: a measured-health flip must re-resolve the snapshot without any
+/// document changing — demoting the behavior and marking the admission
+/// config while the backend is measured unhealthy, and restoring both after
+/// a successful probe flips the veto back.
+#[tokio::test(start_paused = true)]
+async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("control-watcher-health"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-measured",
+        "http://127.0.0.1:8113/v1",
+    )
+    .await;
+    let agent = crate::DefraAgent::from_default_behavior_documents(
+        node.clone(),
+        identity,
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let resolve_context = agent
+        .document_runtime_context()
+        .cloned()
+        .expect("document-backed agent");
+    let backend_health = agent.backend_health();
+    let behavior_id = agent.default_behavior_id().to_string();
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.agent_did().to_string());
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
+    let (health_tx, health_rx) = mpsc::channel::<()>(1);
+
+    let watcher_task = tokio::spawn(run_control_watcher(
+        node.clone(),
+        agent.agent_did().to_string(),
+        resolve_context,
+        proposal_tx,
+        runtime_status.clone(),
+        health_rx,
+        shutdown_rx,
+    ));
+
+    tokio::task::yield_now().await;
+
+    // The prober measured K consecutive failures: routing veto engages.
+    backend_health
+        .set_for_test(
+            "backend-measured",
+            crate::backend_health::BackendHealthState::Unhealthy,
+            3,
+        )
+        .await;
+    health_tx.send(()).await.unwrap();
+
+    tokio::task::yield_now().await;
+    let debouncing = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
+    assert_eq!(debouncing.reconcile_phase, "debouncing");
+    tokio::time::advance(CONTROL_RECONCILE_DEBOUNCE + Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+
+    let snapshot = proposal_rx.recv().await.expect("demotion snapshot");
+    assert!(
+        !snapshot.behaviors.contains_key(&behavior_id),
+        "behavior on a measured-unhealthy backend must leave the active set"
+    );
+    let reason = snapshot
+        .unavailable_behaviors
+        .get(&behavior_id)
+        .expect("unavailable reason for demoted behavior");
+    assert!(
+        reason.contains("measured unhealthy"),
+        "reason must name the local measurement, got: {reason}"
+    );
+    let config = snapshot
+        .backend_admission_configs
+        .get("backend-measured")
+        .expect("admission config for measured backend");
+    assert!(config.measured_unhealthy);
+
+    // One successful probe re-promotes: routing resumes.
+    backend_health
+        .set_for_test(
+            "backend-measured",
+            crate::backend_health::BackendHealthState::Healthy,
+            0,
+        )
+        .await;
+    health_tx.send(()).await.unwrap();
+
+    tokio::task::yield_now().await;
+    tokio::time::advance(CONTROL_RECONCILE_DEBOUNCE + Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+
+    let snapshot = proposal_rx.recv().await.expect("recovery snapshot");
+    assert!(
+        snapshot.behaviors.contains_key(&behavior_id),
+        "behavior must return to the active set after recovery"
+    );
+    assert!(
+        !snapshot
+            .backend_admission_configs
+            .get("backend-measured")
+            .expect("admission config after recovery")
+            .measured_unhealthy
+    );
 
     let _ = shutdown_tx.send(true);
     watcher_task.await.unwrap().unwrap();
@@ -132,6 +248,7 @@ async fn control_watcher_recovers_after_resolve_error() {
         resolve_context,
         proposal_tx,
         runtime_status.clone(),
+        mpsc::channel::<()>(1).1,
         shutdown_rx,
     ));
 
@@ -199,6 +316,7 @@ async fn control_watcher_resolves_tool_selection_into_reconciled_tool_surface() 
         resolve_context,
         proposal_tx,
         runtime_status.clone(),
+        mpsc::channel::<()>(1).1,
         shutdown_rx,
     ));
 

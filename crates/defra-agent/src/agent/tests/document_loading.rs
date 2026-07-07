@@ -343,6 +343,7 @@ async fn from_default_behavior_documents_filters_inactive_subagent_targets_from_
         &DocumentResolveContext {
             identity,
             tool_ceiling: ToolCeiling::readonly(),
+            backend_health: crate::backend_health::BackendHealthMap::new(),
         },
     )
     .await

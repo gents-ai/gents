@@ -56,6 +56,10 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         enabled: view.principal.value.enabled,
     };
 
+    // Snapshot the local prober's routing vetoes once per resolution so every
+    // behavior gate and admission config in this snapshot shares one opinion.
+    let measured_vetoed = context.backend_health.vetoed_backend_ids().await;
+
     let mut unavailable_behaviors = HashMap::new();
     // Collect sync factory closures for each resolvable behavior.  All
     // resolution done here is synchronous (the existing `async { }.await`
@@ -116,6 +120,16 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                     behavior.behavior_id,
                     backend.backend_id,
                     backend.enabled,
+                    backend.probe_status
+                );
+            }
+            if measured_vetoed.contains(&backend.backend_id) {
+                anyhow::bail!(
+                    "behavior {} backend {} is measured unhealthy by the local prober \
+                     (document probe_status={} is operator intent; routing resumes on \
+                     the next successful probe)",
+                    behavior.behavior_id,
+                    backend.backend_id,
                     backend.probe_status
                 );
             }
@@ -290,6 +304,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
 
     let backend_admission_configs = backend_admission_configs_from_backends(
         view.backends.values().map(|record| &record.value),
+        &measured_vetoed,
     )?;
 
     let (active_schedules, unavailable_schedules) = resolve_schedules(view, &unavailable_behaviors);
