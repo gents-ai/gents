@@ -310,6 +310,13 @@ fn final_item(response_text: &str) -> Result<LoopStreamItem<()>, rig::agent::Str
     ))
 }
 
+fn turn_retracted_item(
+    turn: usize,
+    attempt: u32,
+) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
+    Ok(LoopStreamItem::TurnRetracted { turn, attempt })
+}
+
 #[tokio::test]
 async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     let data_path = std::env::temp_dir().join(format!(
@@ -1047,6 +1054,134 @@ async fn post_tool_resumed_resets_response_tail() {
         after_final["reasoning"].as_str(),
         Some(""),
         "reasoning must be cleared after final-response persisted"
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-stream-processor-turn-retract-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = crate::hook::DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:test",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("test prompt"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
+    let request = AgentRequest {
+        doc_id: request_doc_id,
+        request_id: request_id.clone(),
+        agent_did: "did:defra-agent:test".to_string(),
+        behavior_id: Some("general".to_string()),
+        session_id: session_id.clone(),
+        content: "test prompt".to_string(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
+        execution_origin: None,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        deadline: None,
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
+    };
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        "general",
+        "did:defra-agent:test",
+        request,
+        30,
+        ExecutionOrigin::Interactive,
+        "test-backend",
+    );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+
+    let stream_writer = DefraStreamWriter::new(
+        node.clone(),
+        "did:defra-agent:test",
+        Duration::from_millis(0),
+    );
+    let response_doc_id = stream_writer
+        .begin(&session_id, &request_id, "general")
+        .await
+        .unwrap();
+    lifecycle.set_response_doc_id(&response_doc_id);
+    let mut processor =
+        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+
+    processor.process_item(text_item("Hel")).await.unwrap();
+    let before_retract = load_response_doc(&node, &response_doc_id).await;
+    assert_eq!(before_retract["content"].as_str(), Some("Hel"));
+
+    processor
+        .process_item(turn_retracted_item(0, 0))
+        .await
+        .unwrap();
+    let after_retract = load_response_doc(&node, &response_doc_id).await;
+    assert_eq!(
+        after_retract["content"].as_str(),
+        Some(""),
+        "retraction must clear uncommitted live text"
+    );
+    assert_eq!(processor.streamed_text, "");
+
+    processor
+        .process_item(text_item("Hello world"))
+        .await
+        .unwrap();
+    let after_retry_text = load_response_doc(&node, &response_doc_id).await;
+    assert_eq!(
+        after_retry_text["content"].as_str(),
+        Some("Hello world"),
+        "retry text must rebuild the live tail after retraction"
+    );
+
+    processor
+        .process_item(final_item("Hello world"))
+        .await
+        .unwrap();
+    assert_eq!(processor.streamed_text, "Hello world");
+
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    let assistant_texts = history
+        .iter()
+        .filter_map(|message| match message {
+            Message::Assistant { content, .. } => content.iter().find_map(|item| match item {
+                AssistantContent::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        assistant_texts,
+        vec!["Hello world"],
+        "partial retracted text must not persist as an assistant message"
     );
 
     let _ = std::fs::remove_dir_all(&data_path);

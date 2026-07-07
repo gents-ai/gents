@@ -29,7 +29,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::agent::completion_retry::{
-    CompletionRetryPolicy, CompletionRetryState, PreStreamDirective,
+    CompletionRetryPolicy, CompletionRetryState, MidStreamDirective, PreStreamDirective,
 };
 use crate::error::InferenceError;
 use crate::llm::message::{
@@ -188,7 +188,7 @@ where
         let mut current_turn: usize = 0;
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
 
-        loop {
+        'turns: loop {
             // rig semantics: `max_turns` is the number of tool round-trips, so up
             // to `max_turns + 1` completions are allowed (the extra one produces
             // the final text answer after the last tool call). Matches rig's
@@ -250,93 +250,94 @@ where
             let turn_index = current_turn - 1;
             let mut attempt = 0_u32;
             let mut request = build_request(&model, current_prompt, &history, prior, tools.as_slice(), &config).await?;
-            let mut stream = loop {
-                if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
-                    on_rendered_request(turn_index, attempt, request.clone())
-                        .await
-                        .map_err(|error| {
-                            StreamingError::Completion(CompletionError::ProviderError(format!(
-                                "capturing rendered completion request failed: {error:#}"
-                            )))
-                        })?;
-                }
+            'attempts: loop {
+                let mut stream = loop {
+                    if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
+                        on_rendered_request(turn_index, attempt, request.clone())
+                            .await
+                            .map_err(|error| {
+                                StreamingError::Completion(CompletionError::ProviderError(format!(
+                                    "capturing rendered completion request failed: {error:#}"
+                                )))
+                            })?;
+                    }
 
-                match model.stream(request.clone()).await {
-                    Ok(stream) => break stream,
-                    Err(completion_error) => {
-                        let streaming_error = StreamingError::Completion(completion_error);
-                        let classified = crate::error::classify_completion_error(&streaming_error);
-                        let error_text = streaming_error.to_string();
-                        match retry.on_pre_stream_failure(
-                            &classified,
-                            &error_text,
-                            Utc::now(),
-                            config.deadline,
-                        ) {
-                            PreStreamDirective::RetryAfter { delay, kind } => {
-                                yield LoopStreamItem::AttemptFailed {
-                                    turn: turn_index,
-                                    attempt,
-                                    error: classified,
-                                    will_retry: true,
-                                    backoff: delay,
-                                };
-                                tracing::warn!(
-                                    turn = turn_index,
-                                    attempt,
-                                    kind = ?kind,
-                                    delay_ms = delay.as_millis() as u64,
-                                    error = %error_text,
-                                    "retrying completion after transient failure"
-                                );
-                                tokio::time::sleep(delay).await;
-                                attempt += 1;
-                            }
-                            PreStreamDirective::Repair => {
-                                retry.mark_repair_used();
-                                yield LoopStreamItem::AttemptFailed {
-                                    turn: turn_index,
-                                    attempt,
-                                    error: classified,
-                                    will_retry: true,
-                                    backoff: std::time::Duration::ZERO,
-                                };
-                                repair_provider_input(&mut new_messages);
-                                let repaired_prompt = new_messages
-                                    .last()
-                                    .cloned()
-                                    .expect("new_messages remains non-empty after repair");
-                                let repaired_prior = &new_messages[..new_messages.len() - 1];
-                                request = build_request(
-                                    &model,
-                                    repaired_prompt,
-                                    &history,
-                                    repaired_prior,
-                                    tools.as_slice(),
-                                    &config,
-                                )
-                                .await?;
-                                attempt += 1;
-                            }
-                            PreStreamDirective::Fail { reason } => {
-                                let terminal_reason =
-                                    terminal_pre_stream_retry_reason(&classified, attempt, reason);
-                                yield LoopStreamItem::AttemptFailed {
-                                    turn: turn_index,
-                                    attempt,
-                                    error: classified,
-                                    will_retry: false,
-                                    backoff: std::time::Duration::ZERO,
-                                };
-                                Err(StreamingError::Completion(
-                                    CompletionError::ProviderError(terminal_reason),
-                                ))?;
-                                unreachable!("Err(..)? above ends the stream");
+                    match model.stream(request.clone()).await {
+                        Ok(stream) => break stream,
+                        Err(completion_error) => {
+                            let streaming_error = StreamingError::Completion(completion_error);
+                            let classified = crate::error::classify_completion_error(&streaming_error);
+                            let error_text = streaming_error.to_string();
+                            match retry.on_pre_stream_failure(
+                                &classified,
+                                &error_text,
+                                Utc::now(),
+                                config.deadline,
+                            ) {
+                                PreStreamDirective::RetryAfter { delay, kind } => {
+                                    yield LoopStreamItem::AttemptFailed {
+                                        turn: turn_index,
+                                        attempt,
+                                        error: classified,
+                                        will_retry: true,
+                                        backoff: delay,
+                                    };
+                                    tracing::warn!(
+                                        turn = turn_index,
+                                        attempt,
+                                        kind = ?kind,
+                                        delay_ms = delay.as_millis() as u64,
+                                        error = %error_text,
+                                        "retrying completion after transient failure"
+                                    );
+                                    tokio::time::sleep(delay).await;
+                                    attempt += 1;
+                                }
+                                PreStreamDirective::Repair => {
+                                    retry.mark_repair_used();
+                                    yield LoopStreamItem::AttemptFailed {
+                                        turn: turn_index,
+                                        attempt,
+                                        error: classified,
+                                        will_retry: true,
+                                        backoff: std::time::Duration::ZERO,
+                                    };
+                                    repair_provider_input(&mut new_messages);
+                                    let repaired_prompt = new_messages
+                                        .last()
+                                        .cloned()
+                                        .expect("new_messages remains non-empty after repair");
+                                    let repaired_prior = &new_messages[..new_messages.len() - 1];
+                                    request = build_request(
+                                        &model,
+                                        repaired_prompt,
+                                        &history,
+                                        repaired_prior,
+                                        tools.as_slice(),
+                                        &config,
+                                    )
+                                    .await?;
+                                    attempt += 1;
+                                }
+                                PreStreamDirective::Fail { reason } => {
+                                    let terminal_reason =
+                                        terminal_pre_stream_retry_reason(&classified, attempt, reason);
+                                    yield LoopStreamItem::AttemptFailed {
+                                        turn: turn_index,
+                                        attempt,
+                                        error: classified,
+                                        will_retry: false,
+                                        backoff: std::time::Duration::ZERO,
+                                    };
+                                    Err(StreamingError::Completion(
+                                        CompletionError::ProviderError(terminal_reason),
+                                    ))?;
+                                    unreachable!("Err(..)? above ends the stream");
+                                }
                             }
                         }
                     }
-                }
-            };
+                };
 
             // Accumulate assistant content twice over: `accumulator` builds the
             // assistant message we thread back into `new_messages` for the next
@@ -350,7 +351,51 @@ where
             let mut turn_text = String::new();
 
             while let Some(item) = stream.next().await {
-                match item.map_err(StreamingError::Completion)? {
+                let item = match item {
+                    Ok(item) => item,
+                    Err(completion_error) if pending_results.is_empty() => {
+                        let streaming_error = StreamingError::Completion(completion_error);
+                        let classified = crate::error::classify_completion_error(&streaming_error);
+                        let error_text = streaming_error.to_string();
+                        match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
+                            MidStreamDirective::RetractAndResample { delay } => {
+                                yield LoopStreamItem::TurnRetracted {
+                                    turn: turn_index,
+                                    attempt,
+                                };
+                                tracing::warn!(
+                                    turn = turn_index,
+                                    attempt,
+                                    delay_ms = delay.as_millis() as u64,
+                                    error = %error_text,
+                                    "retracting partial completion turn after mid-stream failure"
+                                );
+                                tokio::time::sleep(delay).await;
+                                attempt += 1;
+                                continue 'attempts;
+                            }
+                            MidStreamDirective::CloseAndContinue { .. } => {
+                                unreachable!(
+                                    "no-effect mid-stream failure cannot close and continue"
+                                );
+                            }
+                            MidStreamDirective::Fail { reason } => {
+                                let terminal_reason =
+                                    terminal_pre_stream_retry_reason(&classified, attempt, reason);
+                                Err(StreamingError::Completion(
+                                    CompletionError::ProviderError(terminal_reason),
+                                ))?;
+                                unreachable!("Err(..)? above ends the stream");
+                            }
+                        }
+                    }
+                    Err(completion_error) => {
+                        Err(StreamingError::Completion(completion_error))?;
+                        unreachable!("Err(..)? above ends the stream");
+                    }
+                };
+
+                match item {
                     StreamedAssistantContent::Text(text) => {
                         turn_text.push_str(&text.text);
                         accumulator.push_text(&text.text);
@@ -491,7 +536,7 @@ where
 
             if pending_results.is_empty() {
                 yield LoopStreamItem::Item(MultiTurnStreamItem::final_response(&turn_text, aggregated_usage));
-                break;
+                break 'turns;
             }
 
             // Thread the assistant turn (text + reasoning + tool calls) ahead of
@@ -535,6 +580,8 @@ where
                     internal_call_id,
                 }));
             }
+            break 'attempts;
+        }
         }
     }
 }

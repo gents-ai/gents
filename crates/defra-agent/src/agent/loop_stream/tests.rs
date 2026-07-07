@@ -22,7 +22,6 @@ use crate::test_support::first_content;
 enum ScriptedCall {
     Turn(Vec<RawStreamingChoice<()>>),
     FailStream(CompletionError),
-    #[allow(dead_code)]
     TurnWithMidStreamError(Vec<RawStreamingChoice<()>>, CompletionError),
 }
 
@@ -282,6 +281,8 @@ struct AttemptEvent {
 #[derive(Debug, Default)]
 struct CollectedScriptedStream {
     attempts: Vec<AttemptEvent>,
+    text_chunks: Vec<String>,
+    retractions: Vec<(usize, u32)>,
     final_text: Option<String>,
     error: Option<String>,
 }
@@ -307,6 +308,14 @@ where
                 will_retry,
                 backoff,
             }),
+            Ok(Some(Ok(LoopStreamItem::TurnRetracted { turn, attempt }))) => {
+                collected.retractions.push((turn, attempt));
+            }
+            Ok(Some(Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
+                StreamedAssistantContent::Text(text),
+            ))))) => {
+                collected.text_chunks.push(text.text);
+            }
             Ok(Some(Ok(LoopStreamItem::Item(MultiTurnStreamItem::FinalResponse(
                 final_response,
             ))))) => {
@@ -767,6 +776,46 @@ async fn retry_reissues_same_request() {
     assert_eq!(tools.len(), 2);
     assert_eq!(histories[0], histories[1]);
     assert_eq!(tools[0], tools[1]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn mid_stream_decode_error_without_effects_retracts_and_resamples() {
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::TurnWithMidStreamError(
+            vec![RawStreamingChoice::Message("Hel".to_string())],
+            transient_provider_error("decode"),
+        ),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("Hello ".to_string()),
+            RawStreamingChoice::Message("world".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("hi"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        config(0),
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(
+        collected.text_chunks,
+        vec!["Hel".to_string(), "Hello ".to_string(), "world".to_string()]
+    );
+    assert_eq!(collected.retractions, vec![(0, 0)]);
+    assert_eq!(collected.final_text.as_deref(), Some("Hello world"));
+    assert_eq!(collected.error, None);
+
+    let histories = model.seen_histories().await;
+    assert_eq!(histories.len(), 2);
+    assert_eq!(
+        histories[0], histories[1],
+        "mid-stream retraction must reissue the same turn request"
+    );
 }
 
 #[tokio::test]

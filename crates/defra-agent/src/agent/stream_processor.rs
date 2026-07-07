@@ -23,6 +23,7 @@ pub(super) struct StreamProcessor<'a> {
     lifecycle: &'a mut RequestLifecycle,
     assistant_turn: AssistantTurnAccumulator,
     pub(super) streamed_text: String,
+    committed_text_len: usize,
     pub(super) final_text: Option<String>,
     doc_id: &'a str,
 }
@@ -43,6 +44,7 @@ impl<'a> StreamProcessor<'a> {
             lifecycle,
             assistant_turn: AssistantTurnAccumulator::default(),
             streamed_text: String::new(),
+            committed_text_len: 0,
             final_text: None,
             doc_id,
         }
@@ -132,6 +134,7 @@ impl<'a> StreamProcessor<'a> {
                         "persist streamed assistant turn",
                     )?;
                 }
+                self.committed_text_len = self.streamed_text.len();
                 self.persistence_hook.apply_persistence_policy(
                     self.persistence_hook
                         .persist_stream_tool_result_message(
@@ -156,14 +159,21 @@ impl<'a> StreamProcessor<'a> {
                             .await,
                         "mark final assistant turn materialized",
                     )?;
+                    self.committed_text_len = self.streamed_text.len();
                     self.stream_writer.reset_tail(self.doc_id).await?;
                 }
                 self.final_text = Some(response.response().to_string());
                 Ok(StreamAction::Done)
             }
-            Ok(LoopStreamItem::Item(_))
-            | Ok(LoopStreamItem::TurnRetracted { .. })
-            | Ok(LoopStreamItem::AttemptFailed { .. }) => Ok(StreamAction::Continue),
+            Ok(LoopStreamItem::TurnRetracted { .. }) => {
+                self.assistant_turn = AssistantTurnAccumulator::default();
+                self.streamed_text.truncate(self.committed_text_len);
+                self.stream_writer.reset_tail(self.doc_id).await?;
+                Ok(StreamAction::Continue)
+            }
+            Ok(LoopStreamItem::Item(_)) | Ok(LoopStreamItem::AttemptFailed { .. }) => {
+                Ok(StreamAction::Continue)
+            }
             Err(error) => Ok(StreamAction::Error(error)),
         }
     }
