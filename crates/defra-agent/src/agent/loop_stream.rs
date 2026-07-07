@@ -9,10 +9,9 @@
 //! execute them, thread their results back into the history, and loop. When a
 //! turn produces no tool calls, it yields a terminal `FinalResponse`.
 //!
-//! The generator yields rig's own `MultiTurnStreamItem` (kept per decision D3),
-//! so the existing `StreamProcessor` consumer and the `inference.rs` lifecycle
-//! envelope around it consume the owned loop with no changes — only the stream
-//! *source* moves from `Agent::stream_prompt` to `run_loop_stream`.
+//! The generator yields a native `LoopStreamItem` envelope around rig's
+//! `MultiTurnStreamItem`, keeping provider payloads at the rig boundary while
+//! giving the runtime a place to carry retry-control events.
 //!
 //! Tool side-effects (lifecycle tracking, truncation/spill, persistence) are
 //! NOT reimplemented here: the generator calls the existing
@@ -30,6 +29,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::agent::completion_retry::CompletionRetryPolicy;
+use crate::error::InferenceError;
 use crate::llm::message::{Message, ToolCall, ToolResult, ToolResultContent, UserContent};
 use crate::llm::rig_compat;
 use crate::llm::{HookAction, ToolCallHookAction};
@@ -56,10 +56,31 @@ use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLi
 mod tests;
 
 pub(crate) type RenderedRequestSink = Arc<
-    dyn Fn(usize, CompletionRequest) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
+    dyn Fn(
+            usize,
+            u32,
+            CompletionRequest,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
         + Send
         + Sync,
 >;
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(crate) enum LoopStreamItem<R> {
+    Item(MultiTurnStreamItem<R>),
+    TurnRetracted {
+        turn: usize,
+        attempt: u32,
+    },
+    AttemptFailed {
+        turn: usize,
+        attempt: u32,
+        error: InferenceError,
+        will_retry: bool,
+        backoff: std::time::Duration,
+    },
+}
 
 /// Per-request configuration for the loop, mirroring the agent-builder knobs we
 /// previously handed to rig (`completion_factory::configure_agent_builder`).
@@ -113,7 +134,7 @@ pub(crate) fn is_request_context_message(message: &Message) -> bool {
     trimmed.starts_with("<context>") && trimmed.ends_with("</context>")
 }
 
-/// Drive the owned multi-turn loop, producing a stream of `MultiTurnStreamItem`s.
+/// Drive the owned multi-turn loop, producing a stream of `LoopStreamItem`s.
 ///
 /// `prompt` is the new user message; `history` is the prior conversation
 /// (without the new prompt). `tools` are dispatched by name when the model
@@ -126,7 +147,7 @@ pub(crate) fn run_loop_stream<M>(
     history: Vec<Message>,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     config: LoopConfig,
-) -> impl Stream<Item = Result<MultiTurnStreamItem<M::StreamingResponse>, StreamingError>>
+) -> impl Stream<Item = Result<LoopStreamItem<M::StreamingResponse>, StreamingError>>
 where
     M: CompletionModel + 'static,
     M::StreamingResponse: 'static,
@@ -223,7 +244,7 @@ where
 
             let request = build_request(&model, current_prompt, &history, prior, tools.as_slice(), &config).await?;
             if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
-                on_rendered_request(current_turn - 1, request.clone())
+                on_rendered_request(current_turn - 1, 0, request.clone())
                     .await
                     .map_err(|error| {
                         StreamingError::Completion(CompletionError::ProviderError(format!(
@@ -253,15 +274,15 @@ where
                     StreamedAssistantContent::Text(text) => {
                         turn_text.push_str(&text.text);
                         accumulator.push_text(&text.text);
-                        yield MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text));
+                        yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text)));
                     }
                     StreamedAssistantContent::Reasoning(reasoning) => {
                         accumulator.push_reasoning(rig_compat::from_rig_reasoning(&reasoning));
-                        yield MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(reasoning));
+                        yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(reasoning)));
                     }
                     StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
                         accumulator.push_reasoning_delta(id.clone(), &reasoning);
-                        yield MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta { id, reasoning });
+                        yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta { id, reasoning }));
                     }
                     StreamedAssistantContent::ToolCall { tool_call, internal_call_id } => {
                         accumulator.push_tool_call(rig_compat::from_rig_tool_call(&tool_call));
@@ -276,12 +297,12 @@ where
                         // result is threaded and yielded only after the loop, so
                         // the assistant turn (all its tool calls) still persists as
                         // one message ahead of its results.
-                        yield MultiTurnStreamItem::StreamAssistantItem(
+                        yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
                             StreamedAssistantContent::ToolCall {
                                 tool_call: tool_call.clone(),
                                 internal_call_id: internal_call_id.clone(),
                             },
-                        );
+                        ));
 
                         let tool_name = tool_call.function.name.clone();
                         let tool_args = value_to_json_string(&tool_call.function.arguments);
@@ -389,7 +410,7 @@ where
             }
 
             if pending_results.is_empty() {
-                yield MultiTurnStreamItem::final_response(&turn_text, aggregated_usage);
+                yield LoopStreamItem::Item(MultiTurnStreamItem::final_response(&turn_text, aggregated_usage));
                 break;
             }
 
@@ -429,10 +450,10 @@ where
                     call_id: tool_call.call_id.clone(),
                     content,
                 };
-                yield MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
+                yield LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
                     tool_result: rig_compat::to_rig_tool_result(&tool_result),
                     internal_call_id,
-                });
+                }));
             }
         }
     }
@@ -467,67 +488,83 @@ where
     futures::pin_mut!(stream);
     let mut accumulator = AssistantTurnAccumulator::default();
     let mut final_text = String::new();
+    let mut last_attempt_error: Option<InferenceError> = None;
 
     while let Some(item) = stream.next().await {
-        match item.map_err(|error| anyhow::anyhow!("one-shot loop stream error: {error}"))? {
-            MultiTurnStreamItem::StreamAssistantItem(content) => match content {
-                StreamedAssistantContent::Text(text) => accumulator.push_text(&text.text),
-                StreamedAssistantContent::Reasoning(reasoning) => {
-                    accumulator.push_reasoning(rig_compat::from_rig_reasoning(&reasoning))
-                }
-                StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
-                    accumulator.push_reasoning_delta(id, &reasoning)
-                }
-                StreamedAssistantContent::ToolCall {
-                    tool_call,
-                    internal_call_id,
-                } => {
-                    if let Some(hook) = hook.as_ref() {
-                        hook.register_stream_tool_call_identity(
-                            &internal_call_id,
-                            &tool_call.id,
-                            tool_call.call_id.as_deref(),
-                        )
-                        .await;
+        let item = item.map_err(|error| match last_attempt_error.as_ref() {
+            Some(last_error) => {
+                anyhow::anyhow!(
+                    "one-shot loop stream error after retry failure ({last_error}): {error}"
+                )
+            }
+            None => anyhow::anyhow!("one-shot loop stream error: {error}"),
+        })?;
+        match item {
+            LoopStreamItem::TurnRetracted { .. } => continue,
+            LoopStreamItem::AttemptFailed { error, .. } => {
+                last_attempt_error = Some(error);
+                continue;
+            }
+            LoopStreamItem::Item(item) => match item {
+                MultiTurnStreamItem::StreamAssistantItem(content) => match content {
+                    StreamedAssistantContent::Text(text) => accumulator.push_text(&text.text),
+                    StreamedAssistantContent::Reasoning(reasoning) => {
+                        accumulator.push_reasoning(rig_compat::from_rig_reasoning(&reasoning))
                     }
-                    accumulator.push_tool_call(rig_compat::from_rig_tool_call(&tool_call));
+                    StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
+                        accumulator.push_reasoning_delta(id, &reasoning)
+                    }
+                    StreamedAssistantContent::ToolCall {
+                        tool_call,
+                        internal_call_id,
+                    } => {
+                        if let Some(hook) = hook.as_ref() {
+                            hook.register_stream_tool_call_identity(
+                                &internal_call_id,
+                                &tool_call.id,
+                                tool_call.call_id.as_deref(),
+                            )
+                            .await;
+                        }
+                        accumulator.push_tool_call(rig_compat::from_rig_tool_call(&tool_call));
+                    }
+                    _ => {}
+                },
+                MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
+                    tool_result,
+                    internal_call_id,
+                }) => {
+                    if let Some(hook) = hook.as_ref() {
+                        if let Some(message) = accumulator.take_message() {
+                            hook.apply_persistence_policy(
+                                hook.persist_message(&message).await.map(|_| ()),
+                                "persist one-shot assistant turn",
+                            )?;
+                        }
+                        hook.apply_persistence_policy(
+                            hook.persist_stream_tool_result_message(
+                                &rig_compat::from_rig_tool_result(&tool_result),
+                                &internal_call_id,
+                            )
+                            .await,
+                            "persist one-shot tool result",
+                        )?;
+                    }
+                }
+                MultiTurnStreamItem::FinalResponse(final_response) => {
+                    accumulator.reconcile_text(final_response.response());
+                    if let Some(hook) = hook.as_ref() {
+                        if let Some(message) = accumulator.take_message() {
+                            hook.apply_persistence_policy(
+                                hook.persist_message(&message).await.map(|_| ()),
+                                "persist one-shot final assistant turn",
+                            )?;
+                        }
+                    }
+                    final_text = final_response.response().to_string();
                 }
                 _ => {}
             },
-            MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
-                tool_result,
-                internal_call_id,
-            }) => {
-                if let Some(hook) = hook.as_ref() {
-                    if let Some(message) = accumulator.take_message() {
-                        hook.apply_persistence_policy(
-                            hook.persist_message(&message).await.map(|_| ()),
-                            "persist one-shot assistant turn",
-                        )?;
-                    }
-                    hook.apply_persistence_policy(
-                        hook.persist_stream_tool_result_message(
-                            &rig_compat::from_rig_tool_result(&tool_result),
-                            &internal_call_id,
-                        )
-                        .await,
-                        "persist one-shot tool result",
-                    )?;
-                }
-            }
-            MultiTurnStreamItem::FinalResponse(final_response) => {
-                accumulator.reconcile_text(final_response.response());
-                if let Some(hook) = hook.as_ref() {
-                    if let Some(message) = accumulator.take_message() {
-                        hook.apply_persistence_policy(
-                            hook.persist_message(&message).await.map(|_| ()),
-                            "persist one-shot final assistant turn",
-                        )?;
-                    }
-                }
-                final_text = final_response.response().to_string();
-            }
-            _ => {}
         }
     }
     Ok(final_text)

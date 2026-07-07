@@ -78,6 +78,7 @@ impl RenderedRequestContext {
 pub struct RenderedCompletionRequest {
     pub request_id: String,
     pub turn_index: usize,
+    pub attempt: u32,
     pub agent_did: String,
     pub behavior_id: String,
     pub session_id: String,
@@ -95,6 +96,7 @@ pub struct RenderedCompletionRequest {
 pub(crate) fn build_rendered_completion_request(
     context: &RenderedRequestContext,
     turn_index: usize,
+    attempt: u32,
     request_json: Value,
     messages_json: Value,
     tools_json: Value,
@@ -107,6 +109,7 @@ pub(crate) fn build_rendered_completion_request(
     Ok(RenderedCompletionRequest {
         request_id: context.request_id.clone(),
         turn_index,
+        attempt,
         agent_did: context.agent_did.clone(),
         behavior_id: context.behavior_id.clone(),
         session_id: context.session_id.clone(),
@@ -218,6 +221,7 @@ mod tests {
         let rendered = build_rendered_completion_request(
             &context,
             0,
+            0,
             json!({"messages": [{"role": "user", "content": "hi"}]}),
             json!([{"role": "user", "content": "hi"}]),
             json!([{"type": "function", "function": {"name": "read_file"}}]),
@@ -232,6 +236,7 @@ mod tests {
 
         assert_eq!(rendered.request_id, "req-1");
         assert_eq!(rendered.turn_index, 0);
+        assert_eq!(rendered.attempt, 0);
         assert_eq!(
             rendered.source,
             RenderedRequestSource::OpenAiChatCompletions

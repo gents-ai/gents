@@ -294,10 +294,12 @@ async fn single_turn_no_tools_yields_text_then_final() {
     let mut final_text = None;
     while let Some(item) = stream.next().await {
         match item.expect("loop item should be Ok") {
-            MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text)) => {
+            LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
+                StreamedAssistantContent::Text(text),
+            )) => {
                 texts.push(text.text);
             }
-            MultiTurnStreamItem::FinalResponse(final_response) => {
+            LoopStreamItem::Item(MultiTurnStreamItem::FinalResponse(final_response)) => {
                 final_text = Some(final_response.response().to_string());
             }
             _ => {}
@@ -318,13 +320,13 @@ async fn rendered_request_sink_runs_before_provider_stream() {
     let captures = Arc::new(Mutex::new(Vec::new()));
     let captures_for_sink = captures.clone();
     let mut loop_config = config(0);
-    loop_config.on_rendered_request = Some(Arc::new(move |turn_index, request| {
+    loop_config.on_rendered_request = Some(Arc::new(move |turn_index, attempt, request| {
         let captures = captures_for_sink.clone();
         Box::pin(async move {
             captures
                 .lock()
                 .await
-                .push((turn_index, request.chat_history.len()));
+                .push((turn_index, attempt, request.chat_history.len()));
             Err(anyhow::anyhow!("capture failed"))
         })
     }));
@@ -348,7 +350,7 @@ async fn rendered_request_sink_runs_before_provider_stream() {
         format!("{error:?}").contains("capturing rendered completion request failed"),
         "unexpected error: {error:?}"
     );
-    assert_eq!(captures.lock().await.as_slice(), &[(0, 1)]);
+    assert_eq!(captures.lock().await.as_slice(), &[(0, 0, 1)]);
     assert!(
         model.seen_histories().await.is_empty(),
         "provider stream must not start after capture failure"
@@ -426,10 +428,9 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     let mut final_text = None;
     while let Some(item) = stream.next().await {
         match item.expect("loop item should be Ok") {
-            MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
-                tool_result,
-                ..
-            }) => {
+            LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
+                StreamedUserContent::ToolResult { tool_result, .. },
+            )) => {
                 tool_results.push(
                     tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
                         &tool_result.content.first(),
@@ -437,7 +438,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
                     .to_string(),
                 );
             }
-            MultiTurnStreamItem::FinalResponse(final_response) => {
+            LoopStreamItem::Item(MultiTurnStreamItem::FinalResponse(final_response)) => {
                 final_text = Some(final_response.response().to_string());
             }
             _ => {}
@@ -524,8 +525,8 @@ async fn tool_executes_before_provider_stalls_mid_stream() {
     assert!(
         matches!(
             first,
-            Ok(MultiTurnStreamItem::StreamAssistantItem(
-                StreamedAssistantContent::ToolCall { .. }
+            Ok(LoopStreamItem::Item(
+                MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall { .. })
             ))
         ),
         "first item should be the tool call; got {first:?}"
@@ -1039,10 +1040,9 @@ async fn oversized_tool_result_is_bounded_before_threading() {
 
     let mut bounded_len = None;
     while let Some(item) = stream.next().await {
-        if let MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
-            tool_result,
-            ..
-        }) = item.expect("loop item should be Ok")
+        if let LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
+            StreamedUserContent::ToolResult { tool_result, .. },
+        )) = item.expect("loop item should be Ok")
         {
             bounded_len = Some(
                 tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
@@ -1347,10 +1347,9 @@ async fn unparseable_tool_args_notify_model_and_terminalize_failed() {
     // the clean notice and answers on the next turn.
     let mut tool_results = Vec::new();
     while let Some(item) = stream.next().await {
-        if let MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
-            tool_result,
-            ..
-        }) = item.expect("loop must not fail; unparseable args are notified, not raised")
+        if let LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
+            StreamedUserContent::ToolResult { tool_result, .. },
+        )) = item.expect("loop must not fail; unparseable args are notified, not raised")
         {
             tool_results.push(
                 tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
@@ -1470,10 +1469,9 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
 
     let mut tool_results = Vec::new();
     while let Some(item) = stream.next().await {
-        if let MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
-            tool_result,
-            ..
-        }) = item.expect("loop item should be Ok")
+        if let LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
+            StreamedUserContent::ToolResult { tool_result, .. },
+        )) = item.expect("loop item should be Ok")
         {
             tool_results.push(
                 tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(

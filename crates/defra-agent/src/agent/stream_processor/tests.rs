@@ -230,11 +230,13 @@ async fn load_response_doc(
         .expect("AgentResponse row")
 }
 
-fn text_item(text: &str) -> Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> {
-    Ok(MultiTurnStreamItem::StreamAssistantItem(
-        StreamedAssistantContent::Text(rig::completion::message::Text {
-            text: text.to_string(),
-        }),
+fn text_item(text: &str) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
+    Ok(LoopStreamItem::Item(
+        MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(
+            rig::completion::message::Text {
+                text: text.to_string(),
+            },
+        )),
     ))
 }
 
@@ -242,7 +244,7 @@ fn tool_call_item(
     name: &str,
     args_json: &str,
     internal_id: &str,
-) -> Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> {
+) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
     tool_call_item_with_ids(name, args_json, internal_id, internal_id, None)
 }
 
@@ -252,9 +254,9 @@ fn tool_call_item_with_ids(
     tool_id: &str,
     internal_id: &str,
     call_id: Option<&str>,
-) -> Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> {
-    Ok(MultiTurnStreamItem::StreamAssistantItem(
-        StreamedAssistantContent::ToolCall {
+) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
+    Ok(LoopStreamItem::Item(
+        MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
             tool_call: rig::completion::message::ToolCall {
                 id: tool_id.to_string(),
                 call_id: call_id.map(ToOwned::to_owned),
@@ -266,7 +268,7 @@ fn tool_call_item_with_ids(
                 additional_params: None,
             },
             internal_call_id: internal_id.to_string(),
-        },
+        }),
     ))
 }
 
@@ -274,7 +276,7 @@ fn tool_result_item(
     tool_id: &str,
     result_json: &str,
     internal_id: &str,
-) -> Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> {
+) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
     tool_result_item_with_call_id(tool_id, None, result_json, internal_id)
 }
 
@@ -283,8 +285,8 @@ fn tool_result_item_with_call_id(
     call_id: Option<&str>,
     result_json: &str,
     internal_id: &str,
-) -> Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> {
-    Ok(MultiTurnStreamItem::StreamUserItem(
+) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
+    Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
         StreamedUserContent::ToolResult {
             tool_result: rig::completion::message::ToolResult {
                 id: tool_id.to_string(),
@@ -299,13 +301,12 @@ fn tool_result_item_with_call_id(
             },
             internal_call_id: internal_id.to_string(),
         },
-    ))
+    )))
 }
 
-fn final_item(response_text: &str) -> Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> {
-    Ok(MultiTurnStreamItem::<()>::final_response(
-        response_text,
-        rig::completion::Usage::new(),
+fn final_item(response_text: &str) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
+    Ok(LoopStreamItem::Item(
+        MultiTurnStreamItem::<()>::final_response(response_text, rig::completion::Usage::new()),
     ))
 }
 
@@ -1133,23 +1134,24 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
 
     // The wire parser could not shape the corrupt bytes, so the streamed rig
     // ToolCall carries them as a raw Value::String — the exact production shape.
-    let corrupt_call: Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> = Ok(
-        MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
-            tool_call: rig::completion::message::ToolCall {
-                id: "result-1".to_string(),
-                call_id: Some("call-1".to_string()),
-                function: rig::completion::message::ToolFunction {
-                    name: "describe_tool".to_string(),
-                    arguments: serde_json::Value::String(
-                        crate::test_support::CORRUPT_TOOL_ARGS_589.to_string(),
-                    ),
+    let corrupt_call: Result<LoopStreamItem<()>, rig::agent::StreamingError> =
+        Ok(LoopStreamItem::Item(
+            MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
+                tool_call: rig::completion::message::ToolCall {
+                    id: "result-1".to_string(),
+                    call_id: Some("call-1".to_string()),
+                    function: rig::completion::message::ToolFunction {
+                        name: "describe_tool".to_string(),
+                        arguments: serde_json::Value::String(
+                            crate::test_support::CORRUPT_TOOL_ARGS_589.to_string(),
+                        ),
+                    },
+                    signature: None,
+                    additional_params: None,
                 },
-                signature: None,
-                additional_params: None,
-            },
-            internal_call_id: "internal-1".to_string(),
-        }),
-    );
+                internal_call_id: "internal-1".to_string(),
+            }),
+        ));
     processor.process_item(corrupt_call).await.unwrap();
 
     assert!(matches!(

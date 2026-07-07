@@ -260,7 +260,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     );
                     let sink = factory(context.clone());
                     loop_config.on_rendered_request = Some(std::sync::Arc::new(
-                        move |turn_index, completion_request| {
+                        move |turn_index, attempt, completion_request| {
                             let context = context.clone();
                             let sink = sink.clone();
                             Box::pin(async move {
@@ -268,6 +268,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                     crate::llm::rig_compat::rendered_completion_request(
                                         &context,
                                         turn_index,
+                                        attempt,
                                         &completion_request,
                                     )?;
                                 sink(rendered).await
