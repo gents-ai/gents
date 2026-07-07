@@ -80,6 +80,7 @@ pub(super) async fn stream_defra_turn(
     let mut latest_content_cursor = ContentCursor::default();
     let mut latest_error_message: Option<String> = None;
     let mut latest_progress_marker: Option<ProgressMarker> = None;
+    let mut response_observed_for_current_turn = false;
     let mut last_progress_at = tokio::time::Instant::now();
 
     loop {
@@ -119,6 +120,7 @@ pub(super) async fn stream_defra_turn(
             .pointer("/data/AgentResponse")
             .and_then(Value::as_array)
             .and_then(|rows| rows.first());
+        response_observed_for_current_turn |= response_row.is_some();
         let tool_rows = response
             .pointer("/data/AgentToolCall")
             .and_then(Value::as_array)
@@ -295,6 +297,7 @@ pub(super) async fn stream_defra_turn(
                     latest_content_cursor.reset();
                     latest_error_message = None;
                     latest_progress_marker = None;
+                    response_observed_for_current_turn = false;
                     last_progress_at = tokio::time::Instant::now();
                     continue;
                 }
@@ -353,6 +356,12 @@ pub(super) async fn stream_defra_turn(
                 let dropped = updates.check_and_reset_dropped();
                 if dropped > 0 {
                     tracing::warn!(dropped, "Codex shim update subscription dropped messages");
+                }
+                // Reasoning-only flushes update AgentResponse.reasoning without
+                // changing the compact marker; keep those streams alive without
+                // querying the full reasoning buffer.
+                if response_observed_for_current_turn {
+                    last_progress_at = tokio::time::Instant::now();
                 }
             }
             changed = cancel_rx.changed() => {
