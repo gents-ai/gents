@@ -886,7 +886,11 @@ mod tests {
     /// the measurement, doc fallback only where the prober has no opinion.
     #[test]
     fn backend_probe_status_metric_reflects_measured_health() {
-        fn doc_row(backend_id: &str, probe_status: &str, last_probe: Option<&str>) -> MetricsBackendRow {
+        fn doc_row(
+            backend_id: &str,
+            probe_status: &str,
+            last_probe: Option<&str>,
+        ) -> MetricsBackendRow {
             MetricsBackendRow {
                 backend_id: backend_id.to_string(),
                 enabled: true,

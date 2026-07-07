@@ -128,9 +128,7 @@ impl BackendHealthMap {
             .read()
             .await
             .iter()
-            .map(|(backend_id, entry)| {
-                (backend_id.clone(), snapshot_from_entry(backend_id, entry))
-            })
+            .map(|(backend_id, entry)| (backend_id.clone(), snapshot_from_entry(backend_id, entry)))
             .collect()
     }
 
@@ -504,9 +502,7 @@ mod tests {
                             );
                             let _ = stream.write_all(response.as_bytes());
                         }
-                        Err(error)
-                            if error.kind() == std::io::ErrorKind::WouldBlock =>
-                        {
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             std::thread::sleep(Duration::from_millis(10));
                         }
                         Err(_) => break,
@@ -527,8 +523,7 @@ mod tests {
 
     impl Drop for ModelsListener {
         fn drop(&mut self) {
-            self.stop
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
             let _ = std::net::TcpStream::connect(("127.0.0.1", self.port));
             if let Some(handle) = self.handle.take() {
                 let _ = handle.join();
@@ -575,8 +570,7 @@ mod tests {
         let endpoint = listener.endpoint();
         let backends = vec![backend("spark", endpoint.clone(), "healthy")];
         let now = Utc::now();
-        let outcome =
-            probe_backends_cycle(&client, &backends, now, &health_map, &options).await;
+        let outcome = probe_backends_cycle(&client, &backends, now, &health_map, &options).await;
         assert!(outcome.flipped.is_empty());
         let snap = health_map.get("spark").await.expect("entry after probe");
         assert_eq!(snap.state, BackendHealthState::Healthy);

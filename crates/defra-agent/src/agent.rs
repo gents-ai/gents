@@ -5,13 +5,13 @@ use std::time::Duration;
 use defra_node::EmbeddedNode;
 use tokio::sync::{watch, OnceCell};
 
+use crate::backend_health::{BackendHealthMap, BackendProberOptions};
 use crate::compaction::CompactionStrategy;
 use crate::config::{
     AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
     DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
-use crate::backend_health::{BackendHealthMap, BackendProberOptions};
 use crate::health_checker::HealthCheckerOptions;
 use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use crate::identity::{AgentIdentity, AgentPrincipal};
