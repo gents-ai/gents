@@ -867,6 +867,59 @@ async fn explicit_failure_releases_reconstructed_slot() {
 }
 
 #[tokio::test]
+async fn repeated_inference_scope_calls_persist_per_attempt_rows() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    registry.reconcile(
+        1,
+        &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 1))]),
+    );
+    let context =
+        AdmissionCallContext::for_request(&request("req-retry-rows"), "default", "backend-a");
+
+    scope_request(context, async {
+        scope_call(CallKind::Inference, 1, async {
+            let mut permit = registry.acquire_current_call().await.unwrap();
+            permit.finish_failure("transient one").await;
+        })
+        .await;
+        scope_call(CallKind::Inference, 1, async {
+            let mut permit = registry.acquire_current_call().await.unwrap();
+            permit.finish_failure("transient two").await;
+        })
+        .await;
+        scope_call(CallKind::Inference, 1, async {
+            let mut permit = registry.acquire_current_call().await.unwrap();
+            permit.finish_success(None).await;
+        })
+        .await;
+    })
+    .await;
+
+    let rows = call_rows(node.as_ref()).await;
+    assert_eq!(rows.len(), 3);
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["call_seq"].as_i64().expect("call_seq"))
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["call_state"].as_str().expect("call_state"))
+            .collect::<Vec<_>>(),
+        vec!["failed", "failed", "completed"]
+    );
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["call_kind"].as_str().expect("call_kind"))
+            .collect::<Vec<_>>(),
+        vec!["inference", "inference", "inference"]
+    );
+    assert_reconstructed_slot_count(&rows, "backend-a", 0);
+}
+
+#[tokio::test]
 async fn scoped_scheduled_calls_are_persisted_with_scheduled_kind() {
     let node = test_node().await;
     let registry = AdmissionRegistry::new(node.clone());

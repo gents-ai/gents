@@ -17,6 +17,8 @@ pub struct RunTimelineRows {
     #[serde(default)]
     pub tool_calls: Vec<TimelineToolCallRow>,
     #[serde(default)]
+    pub inference_calls: Vec<TimelineInferenceCallRow>,
+    #[serde(default)]
     pub responses: Vec<TimelineResponseRow>,
 }
 
@@ -35,6 +37,8 @@ pub struct RunTimeline {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation: Option<TimelineConversationRow>,
     pub child_request_ids: Vec<String>,
+    #[serde(default)]
+    pub inference_calls: Vec<TimelineInferenceCallRow>,
     pub events: Vec<RunTimelineEvent>,
 }
 
@@ -72,6 +76,22 @@ pub struct TimelineRequestRow {
     pub caused_by_parent_request_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caused_by_parent_tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "RetrySummary::is_empty")]
+    pub retry_summary: RetrySummary,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetrySummary {
+    pub retry_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_transient_error: Option<String>,
+    pub recovered: bool,
+}
+
+impl RetrySummary {
+    fn is_empty(&self) -> bool {
+        self.retry_count == 0 && self.last_transient_error.is_none() && !self.recovered
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +146,37 @@ pub struct TimelineResponseRow {
     pub completed_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interrupted_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineInferenceCallRow {
+    #[serde(default, rename = "_docID", skip_serializing)]
+    pub doc_id: Option<String>,
+    #[serde(default)]
+    pub call_id: String,
+    #[serde(default)]
+    pub request_id: String,
+    /// Monotone per-request provider-call counter. Retry rollups order by
+    /// `call_seq`; `attempt` below is legacy daemon-attempt metadata and is
+    /// expected to remain constant once the daemon outer retry is removed.
+    #[serde(default)]
+    pub call_seq: i64,
+    #[serde(default)]
+    pub attempt: i64,
+    #[serde(default)]
+    pub call_state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_id: Option<String>,
+    #[serde(default)]
+    pub call_kind: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,6 +293,7 @@ pub struct TimelineConversationRow {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RunTimelineEvent {
     Request(TimelineRequestEvent),
+    InferenceCall(TimelineInferenceCallEvent),
     Message(TimelineMessageEvent),
     ToolCall(TimelineToolCallEvent),
     Response(TimelineResponseEvent),
@@ -270,6 +322,28 @@ pub struct TimelineRequestEvent {
     pub metadata: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
+    #[serde(default, skip_serializing_if = "RetrySummary::is_empty")]
+    pub retry_summary: RetrySummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineInferenceCallEvent {
+    pub call_id: String,
+    pub request_id: String,
+    pub call_seq: i64,
+    pub attempt: i64,
+    pub call_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend_id: Option<String>,
+    pub call_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queued_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -355,7 +429,7 @@ pub struct TimelineResponseEvent {
     pub timestamp: Option<String>,
 }
 
-pub fn build_run_timeline(rows: RunTimelineRows) -> RunTimeline {
+pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
     let root_request_id = rows.request.request_id.clone();
     let session_id = rows.request.session_id.clone();
     let mut included_request_ids = BTreeSet::from([root_request_id.clone()]);
@@ -373,6 +447,8 @@ pub fn build_run_timeline(rows: RunTimelineRows) -> RunTimeline {
             included_request_ids.insert(child_request_id.to_string());
         }
     }
+    let inference_calls = sorted_inference_calls(rows.inference_calls, &included_request_ids);
+    apply_retry_summaries(&mut rows.request, &mut rows.requests, &inference_calls);
 
     let mut events = Vec::new();
     push_request_event(&mut events, &rows.request);
@@ -382,6 +458,24 @@ pub fn build_run_timeline(rows: RunTimelineRows) -> RunTimeline {
         {
             push_request_event(&mut events, request);
         }
+    }
+
+    for call in &inference_calls {
+        events.push(RunTimelineEvent::InferenceCall(
+            TimelineInferenceCallEvent {
+                call_id: call.call_id.clone(),
+                request_id: call.request_id.clone(),
+                call_seq: call.call_seq,
+                attempt: call.attempt,
+                call_state: call.call_state.clone(),
+                failure_reason: call.failure_reason.clone(),
+                backend_id: call.backend_id.clone(),
+                call_kind: call.call_kind.clone(),
+                queued_at: call.queued_at.clone(),
+                started_at: call.started_at.clone(),
+                ended_at: call.ended_at.clone(),
+            },
+        ));
     }
 
     for message in &rows.messages {
@@ -493,8 +587,78 @@ pub fn build_run_timeline(rows: RunTimelineRows) -> RunTimeline {
         session: rows.session,
         conversation: rows.conversation,
         child_request_ids,
+        inference_calls,
         events,
     }
+}
+
+fn sorted_inference_calls(
+    inference_calls: Vec<TimelineInferenceCallRow>,
+    included_request_ids: &BTreeSet<String>,
+) -> Vec<TimelineInferenceCallRow> {
+    let mut inference_calls = inference_calls
+        .into_iter()
+        .filter(|call| included_request_ids.contains(&call.request_id))
+        .collect::<Vec<_>>();
+    inference_calls.sort_by_key(|call| {
+        (
+            call.request_id.clone(),
+            call.call_seq,
+            call.queued_at
+                .as_deref()
+                .and_then(timestamp_millis)
+                .unwrap_or(i64::MIN),
+            call.call_id.clone(),
+        )
+    });
+    inference_calls
+}
+
+fn apply_retry_summaries(
+    root_request: &mut TimelineRequestRow,
+    requests: &mut [TimelineRequestRow],
+    inference_calls: &[TimelineInferenceCallRow],
+) {
+    root_request.retry_summary = retry_summary_for_request(root_request, inference_calls);
+    for request in requests {
+        request.retry_summary = retry_summary_for_request(request, inference_calls);
+    }
+}
+
+fn retry_summary_for_request(
+    request: &TimelineRequestRow,
+    inference_calls: &[TimelineInferenceCallRow],
+) -> RetrySummary {
+    let request_calls = inference_calls
+        .iter()
+        .filter(|call| call.request_id == request.request_id)
+        .filter(|call| call.call_kind == "inference")
+        .collect::<Vec<_>>();
+
+    let mut retry_count = 0;
+    let mut last_transient_error = None;
+    for (index, call) in request_calls.iter().enumerate() {
+        if call.call_state == "failed" && index + 1 < request_calls.len() {
+            retry_count += 1;
+            last_transient_error = call.failure_reason.clone();
+        }
+    }
+
+    RetrySummary {
+        retry_count,
+        last_transient_error,
+        recovered: request_completed(request) && retry_count > 0,
+    }
+}
+
+fn request_completed(request: &TimelineRequestRow) -> bool {
+    [
+        request.lifecycle_state.as_deref(),
+        request.status.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|state| state == "completed")
 }
 
 fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequestRow) {
@@ -510,6 +674,7 @@ fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequ
         failure_reason: request.failure_reason.clone(),
         metadata: request.metadata.clone(),
         timestamp: request.created_at.clone(),
+        retry_summary: request.retry_summary.clone(),
     }));
 }
 
@@ -621,13 +786,25 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
             -1,
             event.request_id.clone(),
         ),
+        RunTimelineEvent::InferenceCall(event) => (
+            first_nonempty([
+                event.queued_at.as_deref(),
+                event.started_at.as_deref(),
+                event.ended_at.as_deref(),
+            ])
+            .and_then(timestamp_millis)
+            .unwrap_or(i64::MIN),
+            1,
+            event.call_seq,
+            event.call_id.clone(),
+        ),
         RunTimelineEvent::Message(event) => (
             event
                 .timestamp
                 .as_deref()
                 .and_then(timestamp_millis)
                 .unwrap_or(i64::MIN),
-            1,
+            2,
             event.sequence,
             format!("{}:{}", event.session_id, event.sequence),
         ),
@@ -637,7 +814,7 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
                 .as_deref()
                 .and_then(timestamp_millis)
                 .unwrap_or(i64::MIN),
-            2,
+            3,
             event.message_sequence.unwrap_or(i64::MAX),
             event.tool_call_id.clone(),
         ),
@@ -647,7 +824,7 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
                 .as_deref()
                 .and_then(timestamp_millis)
                 .unwrap_or(i64::MIN),
-            3,
+            4,
             event.materialized_message_sequence.unwrap_or(i64::MAX),
             event.request_id.clone(),
         ),
@@ -774,5 +951,97 @@ mod tests {
         assert_eq!(tool.request_id.as_deref(), Some("req-1"));
         assert_eq!(tool.child_request_id.as_deref(), Some("child-1"));
         assert_eq!(tool.denial_reason.as_deref(), Some("not allowed"));
+    }
+
+    #[test]
+    fn retry_summary_counts_failed_attempt_rows_with_successors() {
+        let rows = RunTimelineRows {
+            request: TimelineRequestRow {
+                request_id: "req-recovered".to_string(),
+                status: Some("completed".to_string()),
+                lifecycle_state: Some("completed".to_string()),
+                created_at: Some("2026-05-04T12:00:00Z".to_string()),
+                ..Default::default()
+            },
+            inference_calls: vec![
+                inference_call("req-recovered", 3, "completed", None),
+                inference_call("req-recovered", 1, "failed", Some("first transient")),
+                inference_call("req-recovered", 2, "failed", Some("second transient")),
+            ],
+            ..Default::default()
+        };
+
+        let timeline = build_run_timeline(rows);
+
+        assert_eq!(
+            timeline.request.retry_summary,
+            RetrySummary {
+                retry_count: 2,
+                last_transient_error: Some("second transient".to_string()),
+                recovered: true,
+            }
+        );
+        assert_eq!(
+            timeline
+                .inference_calls
+                .iter()
+                .map(|call| call.call_seq)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        let retry_summary = timeline.events.iter().find_map(|event| match event {
+            RunTimelineEvent::Request(request) => Some(&request.retry_summary),
+            _ => None,
+        });
+        assert_eq!(retry_summary, Some(&timeline.request.retry_summary));
+    }
+
+    #[test]
+    fn retry_summary_excludes_terminal_failed_attempt_without_successor() {
+        let rows = RunTimelineRows {
+            request: TimelineRequestRow {
+                request_id: "req-failed".to_string(),
+                status: Some("failed".to_string()),
+                lifecycle_state: Some("error".to_string()),
+                created_at: Some("2026-05-04T12:00:00Z".to_string()),
+                ..Default::default()
+            },
+            inference_calls: vec![
+                inference_call("req-failed", 1, "failed", Some("retried transient")),
+                inference_call("req-failed", 2, "failed", Some("terminal provider error")),
+            ],
+            ..Default::default()
+        };
+
+        let timeline = build_run_timeline(rows);
+
+        assert_eq!(
+            timeline.request.retry_summary,
+            RetrySummary {
+                retry_count: 1,
+                last_transient_error: Some("retried transient".to_string()),
+                recovered: false,
+            }
+        );
+    }
+
+    fn inference_call(
+        request_id: &str,
+        call_seq: i64,
+        call_state: &str,
+        failure_reason: Option<&str>,
+    ) -> TimelineInferenceCallRow {
+        TimelineInferenceCallRow {
+            call_id: format!("call-{call_seq}"),
+            request_id: request_id.to_string(),
+            call_seq,
+            attempt: 1,
+            call_state: call_state.to_string(),
+            failure_reason: failure_reason.map(ToOwned::to_owned),
+            queued_at: Some(format!("2026-05-04T12:00:0{call_seq}Z")),
+            backend_id: Some("backend-a".to_string()),
+            call_kind: "inference".to_string(),
+            ..Default::default()
+        }
     }
 }
