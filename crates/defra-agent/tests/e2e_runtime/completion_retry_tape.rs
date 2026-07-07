@@ -91,6 +91,63 @@ async fn backend_restart_cluster_recovers() {
 }
 
 #[tokio::test]
+async fn backoff_longer_than_liveness_timeout_recovers() {
+    // #648 (re-review): the retry backoff sleep runs inside the loop generator,
+    // spanning the daemon's liveness-timeout-wrapped poll. FIX-B extends that
+    // poll's liveness budget by the pending backoff so a legitimate backoff
+    // longer than stream_liveness_timeout is not misread as a dead stream.
+    // Fence it end-to-end: liveness = 1s, backoff (scheduled ladder first step)
+    // exceeds it. Without the extension the run would fail with a spurious
+    // "stream liveness timeout"; with it, the retry recovers.
+    let marker = "backoff-vs-liveness";
+    let backend = MockStreamingBackend::start_with_plans(
+        RETRY_MODEL,
+        vec![StreamPlan::new(
+            marker,
+            vec![
+                StreamResponse::service_unavailable(
+                    "HTTP status 503 forcing a backoff longer than the liveness timeout",
+                ),
+                StreamResponse::completes(marker, ["recovered despite long backoff"]),
+            ],
+        )],
+    )
+    .unwrap();
+    let db = test_db("completion-retry-backoff-liveness").await;
+    let agent = boot_retry_agent_with_liveness(
+        &db,
+        "completion-retry-backoff-liveness",
+        backend.endpoint(),
+        1,
+        60,
+        Some(1),
+    )
+    .await;
+
+    let request_id = "req-backoff-vs-liveness";
+    let doc_id = create_runtime_request(
+        db.node.as_ref(),
+        &agent.agent_did,
+        RETRY_BEHAVIOR_ID,
+        request_id,
+        "session-backoff-vs-liveness",
+        &format!("recover across a long backoff {marker}"),
+    )
+    .await;
+    wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "completed").await;
+
+    let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
+    assert_retry_recovered(&calls, 1);
+    let timeline = build_timeline(db.node.as_ref(), request_id).await;
+    assert!(
+        timeline.request.retry_summary.recovered,
+        "a backoff longer than the liveness timeout must not be misread as a dead stream"
+    );
+
+    agent.shutdown().await;
+}
+
+#[tokio::test]
 async fn deadline_tight_fails_cleanly() {
     let marker = "deadline-tight";
     let backend = MockStreamingBackend::start_with_plans(
@@ -274,12 +331,32 @@ async fn boot_retry_agent(
     max_concurrent: i64,
     deadline_duration_secs: u64,
 ) -> BootedAgent {
-    let agent = build_retry_agent(
+    boot_retry_agent_with_liveness(
         db,
         test_name,
         endpoint,
         max_concurrent,
         deadline_duration_secs,
+        None,
+    )
+    .await
+}
+
+async fn boot_retry_agent_with_liveness(
+    db: &crate::support::TestDb,
+    test_name: &str,
+    endpoint: &str,
+    max_concurrent: i64,
+    deadline_duration_secs: u64,
+    stream_liveness_timeout_secs: Option<u64>,
+) -> BootedAgent {
+    let agent = build_retry_agent_with_liveness(
+        db,
+        test_name,
+        endpoint,
+        max_concurrent,
+        deadline_duration_secs,
+        stream_liveness_timeout_secs,
     )
     .await;
     let agent_did = agent.agent_did().to_string();
@@ -293,9 +370,28 @@ async fn build_retry_agent(
     max_concurrent: i64,
     deadline_duration_secs: u64,
 ) -> DefraAgent {
+    build_retry_agent_with_liveness(
+        db,
+        test_name,
+        endpoint,
+        max_concurrent,
+        deadline_duration_secs,
+        None,
+    )
+    .await
+}
+
+async fn build_retry_agent_with_liveness(
+    db: &crate::support::TestDb,
+    test_name: &str,
+    endpoint: &str,
+    max_concurrent: i64,
+    deadline_duration_secs: u64,
+    stream_liveness_timeout_secs: Option<u64>,
+) -> DefraAgent {
     upsert_retry_backend(db.node.as_ref(), endpoint, max_concurrent).await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
-    DefraAgent::builder()
+    let mut behavior = DefraAgent::builder()
         .node(db.node.clone())
         .identity(identity)
         .default_behavior_id(RETRY_BEHAVIOR_ID)
@@ -304,7 +400,11 @@ async fn build_retry_agent(
         .backend_id(RETRY_BACKEND_ID)
         .model_name(RETRY_MODEL)
         .stream_batch_ms(0)
-        .deadline_duration_secs(deadline_duration_secs)
+        .deadline_duration_secs(deadline_duration_secs);
+    if let Some(secs) = stream_liveness_timeout_secs {
+        behavior = behavior.stream_liveness_timeout_secs(secs);
+    }
+    behavior
         .done()
         .build()
         .await

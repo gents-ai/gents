@@ -341,7 +341,7 @@ where
                 will_retry,
                 backoff,
             }),
-            Ok(Some(Ok(LoopStreamItem::TurnRetracted { turn, attempt }))) => {
+            Ok(Some(Ok(LoopStreamItem::TurnRetracted { turn, attempt, .. }))) => {
                 collected.retractions.push((turn, attempt));
             }
             Ok(Some(Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(

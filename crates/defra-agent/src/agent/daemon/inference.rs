@@ -428,6 +428,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                     backoff,
                                     will_retry: true,
                                     ..
+                                })
+                                | Ok(crate::agent::loop_stream::LoopStreamItem::TurnRetracted {
+                                    backoff,
+                                    ..
                                 }) => *backoff,
                                 _ => std::time::Duration::ZERO,
                             };

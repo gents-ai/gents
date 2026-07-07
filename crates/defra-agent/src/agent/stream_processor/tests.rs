@@ -314,7 +314,11 @@ fn turn_retracted_item(
     turn: usize,
     attempt: u32,
 ) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
-    Ok(LoopStreamItem::TurnRetracted { turn, attempt })
+    Ok(LoopStreamItem::TurnRetracted {
+        turn,
+        attempt,
+        backoff: std::time::Duration::ZERO,
+    })
 }
 
 #[tokio::test]

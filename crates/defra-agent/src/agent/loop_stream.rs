@@ -76,6 +76,11 @@ pub(crate) enum LoopStreamItem<R> {
     TurnRetracted {
         turn: usize,
         attempt: u32,
+        /// Backoff the generator sleeps before the resample. Carried so the
+        /// daemon can extend the next poll's liveness budget by it, exactly as
+        /// for `AttemptFailed` — otherwise a retract backoff longer than the
+        /// liveness timeout is misread as a dead stream (#648).
+        backoff: std::time::Duration,
     },
     AttemptFailed {
         turn: usize,
@@ -439,6 +444,7 @@ where
                                 yield LoopStreamItem::TurnRetracted {
                                     turn: turn_index,
                                     attempt,
+                                    backoff: delay,
                                 };
                                 tracing::warn!(
                                     turn = turn_index,
