@@ -34,7 +34,7 @@
 - Modify: `crates/defra-agent/proofs/Proofs.lean` (add `import Proofs.CompletionRetry` after `import Proofs.ToolExecution`)
 
 **Interfaces:**
-- Produces: `CompletionRetry.State`, `CompletionRetry.Phase`, `CompletionRetry.FailureClass`, `CompletionRetry.Budget`, `CompletionRetry.Transition` — consumed verbatim by Tasks 2–3, mirrored by Rust in Task 4.
+- Produces: `CompletionRetry.State`, `CompletionRetry.Phase`, `CompletionRetry.FailureClass`, `CompletionRetry.Budget`, `CompletionRetry.Transition` — consumed verbatim by Tasks 2 and 4, mirrored by Rust in Task 3.
 
 - [ ] **Step 1: Write `State.lean`**
 
@@ -83,10 +83,13 @@ inductive Phase
   | failedPermanent -- non-retryable classification → terminal failed
   deriving DecidableEq, Repr
 
-/-- Per-turn effect/render tracking. `effects` counts tool executions in
-the CURRENT turn; `rendered` counts retained rendered instances of the
-current turn index in the materialized response. -/
+/-- Per-turn effect/render tracking. `turnIndex` identifies the current
+turn; `effects` counts tool executions in the CURRENT turn; `rendered`
+counts retained rendered instances of the current turn index in the
+materialized response. Close-and-continue increments `turnIndex` (a new
+turn with fresh counters); retraction keeps it (same turn, re-sampled). -/
 structure TurnCtx where
+  turnIndex : Nat
   effects : Nat
   rendered : Nat
   deriving DecidableEq, Repr
@@ -126,12 +129,17 @@ namespace CompletionRetry
 
 /-- Legal transitions of the per-completion retry machine.
 
-Design invariants are structural here:
-- every re-issue (`wake`, `repairIssue`, `continueAfterClose`) requires
-  `s.turn.effects = 0` or passes through `turnClosed`;
-- `retract` requires `s.turn.effects = 0` and zeroes `rendered`;
+Failure transitions consume the observed `FailureClass`: transport
+failures may only take the transport constructors, parse-400s the
+resample/repair constructors, permanent classifications only
+`failPermanent`. Design invariants are structural here:
+- every entry into `backingOff`/`repairing` requires `s.turn.effects = 0`
+  or increments the turn index (`continueAfterClose`), so re-issues never
+  face open effects (proved as an invariant in `Properties.lean`);
+- `retract` requires `s.turn.effects = 0`, zeroes `rendered`, and keeps
+  the turn index — it is the only same-turn rendered decrease;
 - every entry into `backingOff wake` carries `fitsDeadline wake s.deadline`;
-- `repair` requires `¬ s.repairUsed` and sets it. -/
+- `repair` requires `¬ s.repairUsed`; `repairIssue` sets it. -/
 inductive Transition : State → State → Prop
   /-- Issue the completion for the current turn. -/
   | issue (s : State) (h : s.phase = Phase.issuing) :
@@ -146,8 +154,10 @@ inductive Transition : State → State → Prop
       Transition s { s with phase := Phase.turnDone,
                             turn := { s.turn with rendered := 1 } }
 
-  /-- Pre-stream / no-yield transport failure with ladder + deadline room. -/
-  | transportBackoff (s : State) (wake : Time)
+  /-- Pre-stream / no-yield transport-class failure with ladder + deadline
+  room. -/
+  | transportBackoff (s : State) (c : FailureClass) (wake : Time)
+      (hc : c = FailureClass.transport)
       (hp : s.phase = Phase.streaming)
       (heff : s.turn.effects = 0)
       (hbudget : s.transportUsed < s.budget.transportRetries)
@@ -156,15 +166,17 @@ inductive Transition : State → State → Prop
       Transition s { s with phase := Phase.backingOff wake,
                             transportUsed := s.transportUsed + 1 }
 
-  /-- Transport failure with no ladder or no deadline room → terminal. -/
-  | transportExhaust (s : State)
+  /-- Transport-class failure with no ladder or no deadline room → terminal. -/
+  | transportExhaust (s : State) (c : FailureClass)
+      (hc : c = FailureClass.transport)
       (hp : s.phase = Phase.streaming)
       (h : s.transportUsed ≥ s.budget.transportRetries ∨
            ∀ wake, s.now ≤ wake → ¬ fitsDeadline wake s.deadline) :
       Transition s { s with phase := Phase.exhausted }
 
   /-- Fresh parse-400 (differs from the last seen) with resample room. -/
-  | resampleBackoff (s : State) (err : String) (wake : Time)
+  | resampleBackoff (s : State) (c : FailureClass) (err : String) (wake : Time)
+      (hc : c = FailureClass.parseBadRequest)
       (hp : s.phase = Phase.streaming)
       (heff : s.turn.effects = 0)
       (hfresh : s.lastParseError ≠ some err)
@@ -177,7 +189,8 @@ inductive Transition : State → State → Prop
 
   /-- Deterministic parse-400 (identical to last) or resample budget spent:
   go straight to repair — at most once per request. -/
-  | repair (s : State) (err : String)
+  | repair (s : State) (c : FailureClass) (err : String)
+      (hc : c = FailureClass.parseBadRequest)
       (hp : s.phase = Phase.streaming)
       (heff : s.turn.effects = 0)
       (hdet : s.lastParseError = some err ∨ s.resampleUsed ≥ s.budget.resampleRetries)
@@ -187,13 +200,16 @@ inductive Transition : State → State → Prop
                             lastParseError := some err }
 
   /-- Parse-400 with no repair left → terminal. -/
-  | parseExhaust (s : State)
+  | parseExhaust (s : State) (c : FailureClass)
+      (hc : c = FailureClass.parseBadRequest)
       (hp : s.phase = Phase.streaming)
       (h : ¬ s.budget.allowRepair ∨ s.repairUsed) :
       Transition s { s with phase := Phase.exhausted }
 
   /-- Permanent classification → terminal, immediately. -/
-  | failPermanent (s : State) (hp : s.phase = Phase.streaming) :
+  | failPermanent (s : State) (c : FailureClass)
+      (hc : c = FailureClass.permanent)
+      (hp : s.phase = Phase.streaming) :
       Transition s { s with phase := Phase.failedPermanent }
 
   /-- Mid-stream failure with NO effects this turn: retract the partial
@@ -217,8 +233,10 @@ inductive Transition : State → State → Prop
       Transition s { s with phase := Phase.turnClosed,
                             turn := { s.turn with rendered := 1 } }
 
-  /-- Continue after a closed turn: next completion begins a NEW turn
-  (fresh effects/render counters), budget consumed like a transport retry. -/
+  /-- Continue after a closed turn: next completion begins a NEW turn —
+  the turn index advances and effect/render counters reset (this is NOT a
+  retraction of the closed turn, whose rendered content is frozen under
+  its own index). Budget consumed like a transport retry. -/
   | continueAfterClose (s : State) (wake : Time)
       (hp : s.phase = Phase.turnClosed)
       (hbudget : s.transportUsed < s.budget.transportRetries)
@@ -226,7 +244,8 @@ inductive Transition : State → State → Prop
       (hfwd : s.now ≤ wake) :
       Transition s { s with phase := Phase.backingOff wake,
                             transportUsed := s.transportUsed + 1,
-                            turn := { effects := 0, rendered := 0 } }
+                            turn := { turnIndex := s.turn.turnIndex + 1,
+                                      effects := 0, rendered := 0 } }
 
   /-- A closed turn with no budget/deadline room → terminal. -/
   | closeExhaust (s : State)
@@ -282,7 +301,7 @@ git commit -m "spec(lean): CompletionRetry state machine for #631 — states and
 - Consumes: Task 1's `State`/`Transition`.
 - Produces: `CompletionRetry.Action`, `CompletionRetry.step?`, theorems `n1_reissue_requires_no_open_effects`, `n2_retract_only_before_effects`, `n3_budget_monotone_bounded`, `n3_repair_at_most_once`, `n4_backoff_fits_deadline`, `n5_rendered_at_most_one`. Task 3 emits cases from `step?`.
 
-- [ ] **Step 1: Write `Executable.lean`** — follow the house pattern (`Proofs/RuntimeReconcile/Executable.lean` is the closest template): an `Action` inductive naming each `Transition` constructor with its data (`issue`, `toolEffect`, `streamOk`, `transportBackoff (wake : Time)`, `transportExhaust`, `resampleBackoff (err : String) (wake : Time)`, `repair (err : String)`, `parseExhaust`, `failPermanent`, `retract (wake : Time)`, `closeTurn`, `continueAfterClose (wake : Time)`, `closeExhaust`, `wake (w : Time)`, `repairIssue`), a total `step? : Action → State → Option State` that checks each guard with `decide`-able conditions (use `Bool` guards mirroring the `Prop` guards; for the universally-quantified deadline-exhaust guard, use the decidable equivalent `match s.deadline with | none => false | some d => d < s.now` — no wake at or after `now` can fit iff the deadline is already behind the clock), and the two bridge theorems `step_sound : step? a s = some s' → Transition s s'` and `transition_complete : Transition s s' → ∃ a, step? a s = some s'`. Prove by case analysis on the action/transition (`cases`, `simp [step?]`, `omega` for arithmetic guards).
+- [ ] **Step 1: Write `Executable.lean`** — follow the house pattern (`Proofs/RuntimeReconcile/Executable.lean` is the closest template): an `Action` inductive naming each `Transition` constructor with its data, where every failure action carries the observed `FailureClass` so `step?` genuinely consumes the classification (`issue`, `toolEffect`, `streamOk`, `preStreamFail (c : FailureClass) (err : String) (wake : Time)` — dispatched by `step?` on `c` to the transport/resample/repair/permanent branches exactly as `Transition` guards them, `transportExhaust (c : FailureClass)`, `parseExhaust (c : FailureClass)`, `retract (wake : Time)`, `closeTurn`, `continueAfterClose (wake : Time)`, `closeExhaust`, `wake (w : Time)`, `repairIssue`), a total `step? : Action → State → Option State` that checks each guard with `decide`-able conditions (use `Bool` guards mirroring the `Prop` guards; for the universally-quantified deadline-exhaust guard, use the decidable equivalent `match s.deadline with | none => false | some d => d < s.now` — no wake at or after `now` can fit iff the deadline is already behind the clock), and the two bridge theorems `step_sound : step? a s = some s' → Transition s s'` and `transition_complete : Transition s s' → ∃ a, step? a s = some s'`. Prove by case analysis on the action/transition (`cases`, `simp [step?]`, `omega` for arithmetic guards). Wake-time/delay VALUES are chosen by the action's data, not the model — the model constrains only budget counts and deadline fit; record that in the Boundaries note (Task 4).
 
 - [ ] **Step 2: Write `Properties.lean`**
 
@@ -291,24 +310,36 @@ import Proofs.CompletionRetry.Transition
 
 namespace CompletionRetry
 
-/-- N1: any transition that re-enters `issuing` (a re-issue of a
-completion) starts from a state whose current turn has no open effects —
-`backingOff`/`repairing` are only reachable with `effects = 0` or through
-`turnClosed`, which resets the turn. Stated as: a re-issue's source phase
-is `backingOff` or `repairing`, and every transition INTO those phases
-either had no effects or came from `turnClosed`. -/
+/-- Re-issue invariant: away from an active stream (and outside a closed
+turn awaiting continuation), the current turn has no open effects. This is
+the inductive carrier for N1 — `continueAfterClose` re-establishes it by
+resetting the (new) turn's counters. -/
+def ReissueInv (s : State) : Prop :=
+  (s.phase = Phase.issuing ∨ (∃ w, s.phase = Phase.backingOff w) ∨
+   s.phase = Phase.repairing) → s.turn.effects = 0
+
+theorem reissue_inv_preserved
+    {s s' : State} (t : Transition s s') (h : ReissueInv s) :
+    ReissueInv s' := by
+  cases t <;> simp_all [ReissueInv]
+
+/-- N1: from any invariant-satisfying state, issuing a completion
+(`issuing → streaming`) happens with zero open effects — a retried or
+repaired completion can never face un-accounted tool executions, so retry
+never re-executes tools. -/
 theorem n1_reissue_requires_no_open_effects
     {s s' : State} (t : Transition s s')
-    (h : s'.phase = Phase.backingOff w ∨ s'.phase = Phase.repairing) :
-    s.turn.effects = 0 ∨ s.phase = Phase.turnClosed := by
-  cases t <;> simp_all
+    (hinv : ReissueInv s) (h : s.phase = Phase.issuing) :
+    s.turn.effects = 0 := by
+  exact hinv (Or.inl h)
 
-/-- N2: retraction (a transition that zeroes `rendered` while staying in
-the same turn) requires zero effects this turn. -/
+/-- N2: a same-turn rendered decrease (retraction) requires zero effects
+this turn. `continueAfterClose` increments the turn index, so its counter
+reset is starting a new turn, not retracting the closed one. -/
 theorem n2_retract_only_before_effects
     {s s' : State} (t : Transition s s')
-    (hr : s'.turn.rendered = 0) (hprev : s.turn.rendered ≠ 0)
-    (hsame : s'.phase ≠ Phase.turnClosed) :
+    (hr : s'.turn.rendered < s.turn.rendered)
+    (hsame : s'.turn.turnIndex = s.turn.turnIndex) :
     s.turn.effects = 0 := by
   cases t <;> simp_all
 
@@ -364,127 +395,135 @@ git commit -m "spec(lean): CompletionRetry executable semantics and N1-N5 obliga
 
 ---
 
-### Task 3: Lean contract emission + Rust conformance consumer
+### Task 3: Rust decision mirror — `agent/completion_retry.rs`
 
 **Files:**
-- Create: `crates/defra-agent/proofs/Proofs/CompletionRetry/Contracts.lean`
-- Modify: `crates/defra-agent/proofs/Proofs/Conformance/Contracts.lean` (emit the new domain)
-- Modify: `crates/defra-agent/proofs/Proofs/Conformance/CoverageLedger.lean` (ledger row)
-- Modify: `crates/defra-agent/proofs/Proofs/Conformance/Boundaries.lean` (slot-held-during-backoff boundary note)
-- Create: `crates/defra-agent/tests/conformance/completion_retry.rs` (follow the `tests/conformance/` mirror structure — check the existing module registration in that directory's `main`/mod file and register the new file the same way)
-- Modify: `crates/defra-agent/tests/support/conformance_consumers.rs` (register consumer)
-
-**Interfaces:**
-- Consumes: Task 2's `step?` and `Action`.
-- Produces: JSON contract domain `completionRetry` with witness rows; Rust test `completion_retry_lean_witness_cases_hold` that Task 4's `CompletionRetryState` must satisfy (the test is written against the pure Rust mirror, so it will not compile until Task 4 — see Step 4 ordering note).
-
-- [ ] **Step 1: Write `Contracts.lean`** — generate finite witness rows from `step?` (house pattern: `Proofs/Conformance/ClientShell/Contracts.lean`). Emit at minimum these named cases, each computed (not hand-written) by running `step?` on a concrete state:
-  - `transport_ladder_progresses`: streaming + transport failure, budget 3, used 0, no deadline → `backingOff`, `transportUsed = 1`.
-  - `transport_exhausts_after_budget`: used 3 of 3 → `exhausted`.
-  - `deadline_behind_clock_fails_fast`: deadline < now → `exhausted` (fail-fast).
-  - `deterministic_400_skips_to_repair`: `lastParseError = some e`, failure `e` again → `repairing`.
-  - `repair_second_time_illegal`: `repairUsed = true`, repair action → `none`.
-  - `retract_with_effects_illegal`: `effects = 1`, retract action → `none`.
-  - `close_turn_with_effects_legal`: `effects = 1`, closeTurn → `turnClosed`, `rendered = 1`.
-  - `reissue_with_open_effects_illegal`: transportBackoff action with `effects = 1` → `none`.
-  - `rendered_never_two`: streamOk from `rendered = 0` → `rendered = 1`.
-- [ ] **Step 2: Emit the domain in `Conformance/Contracts.lean`** between the existing sentinel structure (mirror how `ToolExecution` cases are emitted), add the `consumerCoverage` ledger row in `CoverageLedger.lean` naming the Rust consumer registered in Step 4, and add the Boundaries note: "CompletionRetry backoff holds the running InferenceCall slot; accepted because per-completion sleeps are bounded by the ladder and backend-outage backoff coincides with an unusable backend."
-- [ ] **Step 3: Build and print the contract**
-
-Run: `cd crates/defra-agent/proofs && lake build Proofs.Conformance.Contracts && lake env lean --run Proofs/Conformance/Contracts.lean | grep -A2 completionRetry | head`
-Expected: JSON contains the `completionRetry` domain with the nine named cases.
-
-- [ ] **Step 4: Write the Rust conformance test** in `tests/conformance/completion_retry.rs`: parse the emitted cases via the existing `lean_vocab_test` helper (see `src/lean_vocab_test.rs` usage in `tests/state_machine_conformance.rs`), and for each witness row drive `defra_agent::agent::completion_retry::CompletionRetryState` (Task 4) through the corresponding decision and assert the outcome matches. Register the test in `conformance_consumers.rs` with package/file/module/test-fn per the registry shape already in that file. **Ordering note:** this test consumes Task 4's type. Write the test now (it is the fence), mark it `#[ignore = "conformance consumer lands with agent::completion_retry (#631 task 4)"]` so the ledger check passes, and remove the ignore in Task 4.
-- [ ] **Step 5: Run the ledger check**
-
-Run: `cargo test -p defra-agent lean_contract_coverage_ledger_accounts_for_every_emitted_domain`
-Expected: PASS (new domain accounted).
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add crates/defra-agent/proofs crates/defra-agent/tests
-git commit -m "spec(lean): CompletionRetry conformance contract, ledger row, and Rust consumer fence (#631)"
-```
-
----
-
-### Task 4: Rust decision mirror — `agent/completion_retry.rs`
-
-**Files:**
-- Create: `crates/defra-agent/src/agent/completion_retry.rs` (+ `mod completion_retry;` in `crates/defra-agent/src/agent.rs` near the other agent submodules)
-- Modify: `crates/defra-agent/tests/conformance/completion_retry.rs` (remove `#[ignore]`)
+- Create: `crates/defra-agent/src/agent/completion_retry.rs` (+ `pub mod completion_retry;` in `crates/defra-agent/src/agent.rs` near the other agent submodules — **`pub`, not `pub(crate)`**: Task 4's conformance consumer lives in `tests/`, a separate compile unit)
 - Test: unit tests inline in the new module (`#[cfg(test)] mod tests`)
 
 **Interfaces:**
 - Consumes: `crate::error::InferenceError` (existing), `crate::lifecycle::ExecutionOrigin`.
-- Produces (used by Tasks 5–9 verbatim):
+- Produces (used by Tasks 4–9 verbatim; all types `pub` for the external conformance consumer):
 
 ```rust
-pub(crate) struct CompletionRetryPolicy {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureClass { Transport, ParseBadRequest, Permanent } // mirrors Lean CompletionRetry.FailureClass
+pub fn failure_class(error: &crate::error::InferenceError, error_text: &str) -> FailureClass;
+pub struct CompletionRetryPolicy {
     pub transport_backoff: Vec<std::time::Duration>, // ladder; len == transport retry budget
     pub max_resample: u32,
     pub allow_repair: bool,
 }
-pub(crate) struct CompletionRetryState { /* policy + used counters + last_parse_error */ }
-pub(crate) enum RetryKind { Transport, Resample }
-pub(crate) enum PreStreamDirective {
+pub struct CompletionRetryState { /* policy + used counters + last_parse_error */ }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryKind { Transport, Resample }
+pub enum PreStreamDirective {
     RetryAfter { delay: std::time::Duration, kind: RetryKind },
     Repair,
     Fail { reason: String },
 }
-pub(crate) enum MidStreamDirective {
+pub enum MidStreamDirective {
     RetractAndResample { delay: std::time::Duration },
     CloseAndContinue { delay: std::time::Duration },
     Fail { reason: String },
 }
 impl CompletionRetryPolicy {
-    pub(crate) fn scheduled_default() -> Self;   // [5s, 30s, 120s], 1 resample, repair
-    pub(crate) fn interactive_default() -> Self; // [2s], 0 resample, repair
+    pub fn scheduled_default() -> Self;   // [5s, 30s, 120s], 1 resample, repair
+    pub fn interactive_default() -> Self; // [2s], 0 resample, repair
 }
 impl CompletionRetryState {
-    pub(crate) fn new(policy: CompletionRetryPolicy) -> Self;
-    pub(crate) fn retry_count(&self) -> u32;
-    pub(crate) fn on_pre_stream_failure(
+    pub fn new(policy: CompletionRetryPolicy) -> Self;
+    pub fn retry_count(&self) -> u32;
+    pub fn on_pre_stream_failure(
         &mut self,
         error: &crate::error::InferenceError,
         error_text: &str,
         now: chrono::DateTime<chrono::Utc>,
         deadline: Option<chrono::DateTime<chrono::Utc>>,
     ) -> PreStreamDirective;
-    pub(crate) fn on_mid_stream_failure(
+    pub fn on_mid_stream_failure(
         &mut self,
         effects_this_turn: bool,
         now: chrono::DateTime<chrono::Utc>,
         deadline: Option<chrono::DateTime<chrono::Utc>>,
     ) -> MidStreamDirective;
-    pub(crate) fn mark_repair_used(&mut self);
+    pub fn mark_repair_used(&mut self);
 }
 ```
 
+`failure_class` is the pinned classification bridge: `ModelUnreachable`/`TransientFailure`/`Timeout`/`RateLimited` → `Transport`; parse-signature detection (`error.rs::provider_message_is_tool_call_json_parse_failure` on `error_text` — make that fn `pub(crate)`) → `ParseBadRequest`; `PermanentFailure`/`ContextLengthExceeded`/`RetriesExhausted` → `Permanent`. `on_pre_stream_failure` dispatches on `failure_class`, exactly as the Lean `step?` dispatches on its `FailureClass` argument.
+
 Decision rules (must mirror Lean `step?` exactly):
-- `InferenceError::PermanentFailure`/`ContextLengthExceeded`/`RetriesExhausted` → `Fail`.
-- Parse-signature 400 (`error.rs::provider_message_is_tool_call_json_parse_failure` — make it `pub(crate)`): identical `error_text` to the stored last parse error, OR resample budget spent → `Repair` if `allow_repair && !repair_used`, else `Fail`; otherwise `RetryAfter { kind: Resample }` with the next ladder delay, record `error_text`.
-- Other retryable (`ModelUnreachable`/`TransientFailure`/`Timeout`/`RateLimited`): next ladder entry; for `RateLimited { retry_after_secs }` use `max(ladder_delay, retry_after)`.
+- `failure_class == Permanent` → `Fail`.
+- `failure_class == ParseBadRequest`: identical `error_text` to the stored last parse error, OR resample budget spent → `Repair` if `allow_repair && !repair_used`, else `Fail`; otherwise `RetryAfter { kind: Resample }` with the next ladder delay, record `error_text`.
+- `failure_class == Transport`: next ladder entry; for `RateLimited { retry_after_secs }` use `max(ladder_delay, retry_after)`.
 - **Deadline fail-fast:** apply ±25% jitter to the ladder delay first (reuse the arithmetic from `RetryPolicy::delay_for_attempt`), then if `now + jittered_delay > deadline` → `Fail { reason }` immediately (never sleep into certain death).
 - Mid-stream: `effects_this_turn == false` → `RetractAndResample` (consumes a transport ladder entry, same deadline check); `true` → `CloseAndContinue` (same); budget spent → `Fail`.
 
-- [ ] **Step 1: Write failing unit tests** covering: ladder progression 5s→30s→120s then Fail; deterministic-400 (same text twice) skips remaining resample and returns Repair; Repair only once; RateLimited uses provider hint when larger; deadline fail-fast (deadline in 10s, next delay 30s → Fail, and the reason mentions the deadline); mid-stream with effects → CloseAndContinue; mid-stream without effects → RetractAndResample; interactive default = single ~2s retry. For deterministic jitter in tests, make jitter a private fn taking an injected `&mut impl rand::Rng` and use a seeded `rand::rngs::StdRng` in tests; production callers pass `rand::rng()`.
+- [ ] **Step 1: Write failing unit tests** covering: ladder progression 5s→30s→120s then Fail; deterministic-400 (same text twice) skips remaining resample and returns Repair; Repair only once; RateLimited uses provider hint when larger; deadline fail-fast (deadline in 10s, next delay 30s → Fail, and the reason mentions the deadline); mid-stream with effects → CloseAndContinue; mid-stream without effects → RetractAndResample; interactive default = single ~2s retry; `failure_class` mapping for every `InferenceError` variant including the parse-signature `error_text` override. For deterministic jitter in tests, make jitter a private fn taking an injected `&mut impl rand::Rng` and use a seeded `rand::rngs::StdRng` in tests; production callers pass `rand::rng()`.
 
 Run: `cargo test -p defra-agent --lib agent::completion_retry -- --nocapture` (unit-level iteration only; full gate at task end)
 Expected: FAIL (module does not exist).
 
 - [ ] **Step 2: Implement the module to the interface above.**
-- [ ] **Step 3: Remove `#[ignore]` from the Task 3 conformance test; make it pass.**
 
-Run: `cargo test -p defra-agent completion_retry`
-Expected: unit + conformance tests PASS.
+Run: `cargo test -p defra-agent --lib agent::completion_retry`
+Expected: PASS.
+
+- [ ] **Step 3: Full gate:** `cargo test -p defra-agent`
+Expected: PASS.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/defra-agent/src crates/defra-agent/tests
+git add crates/defra-agent/src
 git commit -m "feat(retry): CompletionRetryState decision mirror of the Lean model (#631)"
+```
+
+---
+
+### Task 4: Lean contract emission + Rust conformance consumer
+
+**Files:**
+- Create: `crates/defra-agent/proofs/Proofs/CompletionRetry/Contracts.lean`
+- Modify: `crates/defra-agent/proofs/Proofs/Conformance/Contracts.lean` (emit the new domain)
+- Modify: `crates/defra-agent/proofs/Proofs/Conformance/CoverageLedger.lean` (ledger row)
+- Modify: `crates/defra-agent/proofs/Proofs/Conformance/Boundaries.lean` (boundary notes)
+- Create: `crates/defra-agent/tests/conformance/completion_retry.rs` (follow the `tests/conformance/` mirror structure — check the existing module registration in that directory's `main`/mod file and register the new file the same way)
+- Modify: `crates/defra-agent/tests/support/conformance_consumers.rs` (register consumer)
+
+**Interfaces:**
+- Consumes: Task 2's `step?`/`Action`; Task 3's public `CompletionRetryState`/`failure_class` (this task compiles against them — that is why the mirror lands first).
+- Produces: JSON contract domain `completionRetry` (witness rows + `FailureClass` vocabulary); Rust test `completion_retry_lean_witness_cases_hold`.
+
+- [ ] **Step 1: Write `Contracts.lean`** — generate finite witness rows from `step?` (house pattern: `Proofs/Conformance/ClientShell/Contracts.lean`), plus the `FailureClass` vocabulary (`toDefraDB`-style strings `transport` / `parse_bad_request` / `permanent`). Emit at minimum these named cases, each computed (not hand-written) by running `step?` on a concrete state:
+  - `transport_ladder_progresses`: streaming + transport failure, budget 3, used 0, no deadline → `backingOff`, `transportUsed = 1`.
+  - `transport_exhausts_after_budget`: used 3 of 3 → `exhausted`.
+  - `deadline_behind_clock_fails_fast`: deadline < now → `exhausted` (fail-fast).
+  - `deterministic_400_skips_to_repair`: `lastParseError = some e`, failure `e` again → `repairing`.
+  - `repair_second_time_illegal`: `repairUsed = true`, repair action → `none`.
+  - `retract_with_effects_illegal`: `effects = 1`, retract action → `none`.
+  - `close_turn_with_effects_legal`: `effects = 1`, closeTurn → `turnClosed`, `rendered = 1`, turn index advances on the follow-up `continueAfterClose`.
+  - `reissue_with_open_effects_illegal`: transport preStreamFail action with `effects = 1` → `none`.
+  - `rendered_never_two`: streamOk from `rendered = 0` → `rendered = 1`.
+  - `permanent_class_cannot_backoff`: preStreamFail with class `permanent` → `failedPermanent`, never `backingOff`.
+- [ ] **Step 2: Emit the domain in `Conformance/Contracts.lean`** (mirror how `ToolExecution` cases are emitted), add the `consumerCoverage` ledger row in `CoverageLedger.lean` naming the consumer registered in Step 4, and add TWO Boundaries notes: (a) "Each completion retry attempt is its own InferenceCall row and admission permit; no backend slot is held during backoff sleeps — admission granularity is per provider call." (b) "Backoff delay values, jitter, and rate-limit hints are product policy: the model constrains budget counts and deadline fit, not the delay schedule."
+- [ ] **Step 3: Build and print the contract**
+
+Run: `cd crates/defra-agent/proofs && lake build Proofs.Conformance.Contracts && lake env lean --run Proofs/Conformance/Contracts.lean | grep -c completionRetry`
+Expected: non-zero — the JSON contains the `completionRetry` domain with the ten named cases and the `FailureClass` vocabulary.
+
+- [ ] **Step 4: Write the Rust conformance test** in `tests/conformance/completion_retry.rs`: parse the emitted cases via the existing `lean_vocab_test` helper (see `src/lean_vocab_test.rs` usage in `tests/state_machine_conformance.rs`); for each witness row drive `defra_agent::agent::completion_retry::CompletionRetryState` through the corresponding decision and assert the outcome matches; assert the `FailureClass` vocabulary strings match `failure_class`'s variants for representative `InferenceError` inputs (transport = `TransientFailure`, parse = a `ProviderError` text with the prod 400 body, permanent = `PermanentFailure`). Register the test in `conformance_consumers.rs` with package/file/module/test-fn per the registry shape already in that file.
+- [ ] **Step 5: Run the ledger check and the new test**
+
+Run: `cargo test -p defra-agent lean_contract_coverage_ledger_accounts_for_every_emitted_domain && cargo test -p defra-agent completion_retry_lean_witness_cases_hold`
+Expected: both PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add crates/defra-agent/proofs crates/defra-agent/tests
+git commit -m "spec(lean): CompletionRetry conformance contract, ledger row, and Rust consumer fence (#631)"
 ```
 
 ---
@@ -500,7 +539,7 @@ git commit -m "feat(retry): CompletionRetryState decision mirror of the Lean mod
 - Test: `crates/defra-agent/src/document_config/tests.rs` additions
 
 **Interfaces:**
-- Consumes: Task 4's `CompletionRetryPolicy`.
+- Consumes: Task 3's `CompletionRetryPolicy`.
 - Produces: `CompletionRetryProfileFields { retry_max_transport: Option<i64>, retry_backoff_ms: Option<Vec<i64>>, retry_max_resample: Option<i64>, retry_allow_repair: Option<bool>, retry_interactive_max: Option<i64> }` on the profile struct and `AgentBehavior`; `CompletionRetryPolicy::resolve(fields: &CompletionRetryProfileFields, origin: ExecutionOrigin) -> CompletionRetryPolicy` (add to `completion_retry.rs`).
 
 - [ ] **Step 1: SDL** — add to `inference_profile.graphql`:
@@ -561,7 +600,7 @@ Expected: PASS — this task is behavior-neutral; any semantic diff is a bug in 
 - Test: `crates/defra-agent/src/agent/loop_stream/tests.rs`
 
 **Interfaces:**
-- Consumes: `LoopConfig.retry_policy`/`LoopConfig.deadline` (Task 5), `CompletionRetryState` (Task 4), `LoopStreamItem::AttemptFailed` (Task 6).
+- Consumes: `LoopConfig.retry_policy`/`LoopConfig.deadline` (Task 5), `CompletionRetryState` (Task 3), `LoopStreamItem::AttemptFailed` (Task 6).
 - Produces: retry semantics at the `model.stream(request)` seam; `repair_provider_input(history: &[Message], new_messages: &mut Vec<Message>)` helper that re-runs `normalize_tool_call_arguments` (`llm/tool.rs:360`, seam label `"repair"`) over every assistant tool call in `new_messages` and re-sanitizes via `crate::compaction::sanitize_history_for_provider`.
 
 - [ ] **Step 1: Extend `ScriptedModel`** in `loop_stream/tests.rs` with scripted per-call failures:
@@ -647,7 +686,7 @@ let mut stream = loop {
 - Test: `crates/defra-agent/src/agent/stream_processor/tests.rs` (durable fence — this is where #589/#590 says these fences live), plus loop-level tests in `loop_stream/tests.rs`
 
 **Interfaces:**
-- Consumes: `MidStreamDirective::RetractAndResample` (Task 4), `LoopStreamItem::TurnRetracted` (Task 6).
+- Consumes: `MidStreamDirective::RetractAndResample` (Task 3), `LoopStreamItem::TurnRetracted` (Task 6).
 - Produces: `StreamProcessor` turn-retraction handling; internal `committed_text_len: usize` mark.
 
 - [ ] **Step 1: Failing loop test** `mid_stream_decode_error_without_effects_retracts_and_resamples`: `[TurnWithMidStreamError(text-chunks "Hel", decode-shaped ProviderError), Turn(text "Hello world")]` → items contain the "Hel" deltas, then `TurnRetracted { turn: 0, attempt: 0 }`, then the fresh turn's deltas, then final response "Hello world".
@@ -665,7 +704,7 @@ let mut stream = loop {
 - Test: `crates/defra-agent/src/agent/loop_stream/tests.rs`
 
 **Interfaces:**
-- Consumes: `MidStreamDirective::CloseAndContinue` (Task 4).
+- Consumes: `MidStreamDirective::CloseAndContinue` (Task 3).
 - Produces: turn-closing on mid-stream failure with effects; the no-re-execution guarantee (N1/`closeTurn` path).
 
 - [ ] **Step 1: Failing test** `mid_stream_failure_after_tool_ran_closes_turn_and_continues`: script `[TurnWithMidStreamError([tool-call chunk for echo tool], decode error), Turn(text "done")]` with a counting spy tool (wrap `EchoTool` with an `Arc<AtomicUsize>` dispatch counter): assert final text "done"; assert the tool dispatched **exactly once**; assert the second request's history (via `seen_histories[1]`) contains the assistant tool-call turn AND its tool-result message (the closed turn), and the loop yielded the `ToolResult` item before continuing. Also `mid_stream_failure_after_tool_budget_exhausted_fails`: same first call but zero remaining ladder → terminal `Err`, tool still dispatched exactly once.
@@ -675,23 +714,22 @@ let mut stream = loop {
 
 ---
 
-### Task 10: InferenceCall observability + run_timeline projection
+### Task 10: Retry observability — run_timeline rollup over per-attempt InferenceCall rows
+
+**No schema change and no admission change.** The admission client acquires a permit per `model.stream()` call (`admission/client.rs:111`), so every retry attempt already persists its own `InferenceCall` row: a pre-stream failure is terminalized `failed` with `failure_reason` (`client.rs:129`) *before* the loop's backoff sleep, and the re-issue acquires a fresh permit/row. No slot is held during backoff. The observability work is purely a projection.
 
 **Files:**
-- Modify: `crates/defra-agent-protocol/schemas/inference/inference_call.graphql` (add `completion_retry_count: Int`, `last_transient_error: String`)
-- Modify: `crates/defra-agent/src/admission/persistence.rs` (update fn for the two fields; find the existing call-row update mutation helpers and add `update_inference_call_retry_progress(node, call_id, retry_count, last_error)`)
-- Modify: `crates/defra-agent/src/agent/daemon/inference.rs` (count `AttemptFailed` items in the item loop; call the update on each, best-effort `tracing::warn!` on error)
-- Modify: `crates/defra-agent/src/run_timeline.rs` (project the two fields into the timeline row for inference calls, following how existing InferenceCall fields are projected)
-- Test: extend the admission persistence tests (`crates/defra-agent/src/admission/tests.rs`) and the run-timeline tests where InferenceCall projection is already covered
+- Modify: `crates/defra-agent/src/run_timeline.rs` (group a request's `InferenceCall` rows into a retry summary, following how the timeline already loads/projects InferenceCall rows)
+- Test: the run-timeline tests where InferenceCall projection is already covered, plus an admission-level assertion in `crates/defra-agent/src/admission/tests.rs`
 
 **Interfaces:**
-- Consumes: `LoopStreamItem::AttemptFailed` (Task 6/7).
-- Produces: persisted `completion_retry_count`/`last_transient_error`; timeline rows carrying them. Recovered-vs-dead is derivable and needs no schema flag.
+- Consumes: existing per-attempt `InferenceCall` rows (`attempt`, `call_seq`, `call_state`, `failure_reason`, timestamps).
+- Produces: a `RetrySummary { retry_count: u32, last_transient_error: Option<String>, recovered: bool }` on the timeline's request projection. Rollup rule: order the request's inference-kind rows by `queued_at`/`call_seq`; `retry_count` = number of `failed` rows that are followed by a later row (a failed attempt that was retried); `last_transient_error` = `failure_reason` of the most recent such row; `recovered` = request terminal state is `completed` AND `retry_count > 0`. A `failed` row with no successor keeps today's meaning (the failure that killed the run).
 
-- [ ] **Step 1: Failing tests:** persistence round-trip (create call row, apply two retry-progress updates, read back count=2 and the second error string — `escape_graphql_string` the error text, it contains quotes/braces in the wild); timeline projection includes the fields.
-- [ ] **Step 2: Implement** SDL + update fn + daemon counting (`AttemptFailed { will_retry: true }` increments; the final `will_retry: false` writes the last error without increment — the terminal failure_reason already captures it) + timeline projection.
+- [ ] **Step 1: Failing tests:** (a) timeline test — seed a request with three InferenceCall rows (`failed` w/ reason, `failed` w/ reason, `completed`) and a completed request; assert `RetrySummary { retry_count: 2, last_transient_error: Some(<second reason>), recovered: true }`; (b) timeline test — rows (`failed`, `failed`) with a failed request → `retry_count: 1`, `recovered: false` (the last row is the killing failure, not a retry); (c) admission test — drive two consecutive `scope_call` inference failures then a success within one scope and assert three persisted rows exist for the request with the expected `call_state` sequence (this pins the per-attempt row granularity the rollup depends on).
+- [ ] **Step 2: Implement** the rollup in `run_timeline.rs` and surface it wherever the timeline exposes request-level fields (follow the existing projection struct shape; CLI `trace timeline` output picks it up automatically through that struct).
 - [ ] **Step 3:** targeted tests PASS → full gate PASS.
-- [ ] **Step 4: Commit** — `feat(observability): completion retry count and last error on InferenceCall, projected in run timeline (#631)`
+- [ ] **Step 4: Commit** — `feat(observability): retry rollup over per-attempt InferenceCall rows in run timeline (#631)`
 
 ---
 
@@ -699,9 +737,9 @@ let mut stream = loop {
 
 **Files:**
 - Modify: `crates/defra-agent/src/agent/daemon/inference.rs`
-- Modify: `crates/defra-agent/src/agent.rs`, `crates/defra-agent/src/agent/daemon.rs`, `crates/defra-agent/src/agent/reconcile.rs`, `crates/defra-agent/src/agent/reconcile/slot.rs` (drop the threaded `RetryPolicy` — `retry.rs` keeps `RetryPolicy` only if other call sites still use it; if `run_inference` was the last consumer, delete the struct and its tests too, keeping the DefraDB-conflict helpers)
+- Modify: `crates/defra-agent/src/agent/daemon.rs` (drop `BehaviorDaemon.retry_policy` field + constructor arg — **only** the daemon's copy). **Scope guard: `RetryPolicy` itself stays.** `agent/reconcile/slot.rs:239` and `:251` use `retry_policy.delay_for_attempt` for behavior-slot *restart* backoff — unrelated resilience that must not change. Keep `RetryPolicy` in `retry.rs`, keep it threaded through `agent.rs` options → `reconcile.rs` → `slot.rs`; the only removal is the daemon's inference-retry consumption.
 - Modify: `crates/defra-agent/src/agent/daemon/inference.rs` LoopConfig population: set `loop_config.deadline = request_deadline` and confirm `retry_policy` resolution from Task 5 flows here
-- Test: existing daemon tests updated; the deleted `retry_backoff_wait_is_cut_off_by_request_deadline` test's obligation is superseded by Task 4's deadline fail-fast unit test — note that in the commit message
+- Test: existing daemon tests updated; the deleted `retry_backoff_wait_is_cut_off_by_request_deadline` test's obligation is superseded by Task 3's deadline fail-fast unit test — note that in the commit message
 
 **Interfaces:**
 - Consumes: everything above; after this task the loop is the only retry seam.
@@ -723,10 +761,10 @@ Expected: PASS. Pay attention to daemon tests that scripted multi-attempt behavi
 **Interfaces:** consumes everything; produces the 48h-tape regression suite at the daemon level (mock streaming backend from `tests/support/streaming_backend.rs` / `mock_endpoint.rs`).
 
 - [ ] **Step 1: Write the tape tests** (daemon-level where the fixtures allow, loop-level otherwise — the loop-level variants from Tasks 7–9 already cover shapes (b)(c)(d); this file adds the daemon-visible ends):
-  - `backend_restart_cluster_recovers`: 3 concurrent requests against a mock endpoint that refuses connections for ~3 simulated minutes then serves; all 3 complete; each `InferenceCall` row shows `completion_retry_count > 0`; zero failed requests. (If the mock endpoint can't run under paused time because it uses real sockets, drive 3 concurrent `BehaviorDaemon` mock-stream fixtures instead — the point is N concurrent recoveries with persisted retry counts.)
+  - `backend_restart_cluster_recovers`: 3 concurrent requests against a mock endpoint that refuses connections for ~3 simulated minutes then serves; all 3 complete; each request's `InferenceCall` rows include ≥1 `failed` attempt row followed by a `completed` row, and the run-timeline `RetrySummary` reports `retry_count > 0` with `recovered: true`; zero failed requests. (If the mock endpoint can't run under paused time because it uses real sockets, drive 3 concurrent `BehaviorDaemon` mock-stream fixtures instead — the point is N concurrent recoveries with persisted per-attempt rows.)
   - `deadline_tight_fails_cleanly`: request with a claimed deadline 10s out; backend down; terminal `failed` with today's error semantics; elapsed wall/simulated time well under the ladder total.
   - `interactive_budget_is_quick`: interactive-origin request, backend down; exactly 1 retry (~2s) then terminal failure.
-  - `deterministic_400_tape`: daemon-level replay of the exact prod 400 body twice → repair → completes-or-fails cleanly with `completion_retry_count == 2` and no further attempts.
+  - `deterministic_400_tape`: daemon-level replay of the exact prod 400 body twice → repair → completes-or-fails cleanly with run-timeline `retry_count == 2` (two failed attempt rows, then the repair attempt's row) and no further attempts.
 - [ ] **Step 2: Full gate + Lean:**
 
 Run: `cd crates/defra-agent/proofs && lake build && cd ../../.. && cargo test -p defra-agent`
@@ -740,6 +778,7 @@ Expected: both clean. Any flake here is a defect — capture and fix, never shru
 
 ## Self-Review Notes (already applied)
 
-- Spec coverage: triage (spec §Triage → PR body), mechanisms 1/2/3 (Tasks 7/8+9/11), native enum (Task 6), config (Task 5), observability (Task 10), Lean N1–N5 + contracts (Tasks 1–3), acceptance (a)–(e) (Tasks 7 (a-loop,b,c,e), 8 (d), 12 (a,e daemon-level + interactive)). Rendered-request capture keying: Task 6 changes the sink signature; Task 7 threads real attempts.
-- Type consistency: `CompletionRetryPolicy`/`CompletionRetryState`/`PreStreamDirective`/`MidStreamDirective`/`LoopStreamItem` names match across Tasks 3–11; conformance test path `tests/conformance/completion_retry.rs` matches ledger registration in Task 3.
+- Spec coverage: triage (spec §Triage → PR body), mechanisms 1/2/3 (Tasks 7/8+9/11), native enum (Task 6), config (Task 5), observability (Task 10), Lean N1–N5 + contracts (Tasks 1–2, 4), acceptance (a)–(e) (Tasks 7 (a-loop,b,c,e), 8 (d), 12 (a,e daemon-level + interactive)). Rendered-request capture keying: Task 6 changes the sink signature; Task 7 threads real attempts.
+- Review round 1 (plan-level) applied: per-attempt InferenceCall rows instead of a mutable per-request row (admission acquires a permit per `model.stream()` — no admission refactor, no slot held during backoff); Task 3/4 order swapped so the conformance consumer compiles against an existing `pub` module; Lean model gained `turnIndex`, class-consuming failure transitions, and the `ReissueInv` reachability invariant (fixes the N2 counterexample via `continueAfterClose` and grounds N1 in actual re-issues); `RetryPolicy` retained for behavior-slot restart backoff (`slot.rs:239`), Task 11 removes only the daemon's inference-retry consumption; `FailureClass` is now consumed by `step?` and pinned by a vocabulary contract, with delay/jitter values documented as a product-policy boundary.
+- Type consistency: `CompletionRetryPolicy`/`CompletionRetryState`/`FailureClass`/`PreStreamDirective`/`MidStreamDirective`/`LoopStreamItem` names match across Tasks 3–11; conformance test path `tests/conformance/completion_retry.rs` matches ledger registration in Task 4.
 - Known judgment calls left to the implementer, deliberately: exact Lean binder spellings (statements must keep their stated content), the `tests/conformance/` module registration mechanics, and which existing daemon tests assert multi-attempt semantics (Task 11 Step 2 flags them).

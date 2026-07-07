@@ -142,20 +142,26 @@ and the `!had_observable_activity` gate go away.
   remaining claimed deadline, fail *now* (do not sleep a truncated delay into
   certain death). Requests without deadlines (today's scheduled runs have
   `has_deadline=false`) are bounded by the ladder total (~3m).
-- The `InferenceCall` row stays `running` (slot held) through backoff sleeps —
-  documented as an accepted boundary; during backend outages the backend is
-  down anyway, and per-completion sleeps are short.
+- Admission granularity: the admission client acquires a permit **per
+  `model.stream()` call** (`admission/client.rs`), so each retry attempt is
+  its own `InferenceCall` row and its own permit — a failed attempt's row is
+  terminalized (`failed`) before the backoff sleep, and **no slot is held
+  during backoff**. This matches today's per-turn call-row granularity, needs
+  no admission refactor, and leaves the Lean `InferenceCall` slot-accounting
+  model untouched. Documented as a boundary note.
 
 ### Observability
 
-- `InferenceCall` gains `completion_retry_count: Int` and
-  `last_transient_error: String` (nillable). Recovered-vs-dead is derivable:
-  terminal `completed` × `completion_retry_count > 0` = recovered. These
-  persisted fields are the durable operator surface — `run_timeline.rs`
-  projects them so retries are readable from run history without log
-  archaeology (the issue's operator ask). Per-attempt detail beyond
-  count + last error stays in `tracing` spans (`AttemptFailed` events carry
-  it in-process).
+- Retry attempts are **already durable as per-attempt `InferenceCall` rows**
+  (one per provider call, with `failure_reason`, timing, and terminal state)
+  — no schema change. `run_timeline.rs` groups a request's inference rows
+  into a retry summary: `retry_count` = failed retryable-class rows preceding
+  the outcome, `last_transient_error` = the latest such `failure_reason`,
+  recovered = request terminal `completed` with `retry_count > 0`. That makes
+  retries readable from run history without log archaeology (the issue's
+  operator ask), with per-attempt detail exceeding the issue's minimum.
+  In-process, `AttemptFailed`/`TurnRetracted` loop events carry the same data
+  into `tracing` spans.
 
 ## Lean scope
 
@@ -165,13 +171,25 @@ exhaustion reaches the existing `failed` transition. No new request states.
 New executable model `Proofs/CompletionRetry.lean` (+ `Executable`,
 `Properties` submodules per house structure):
 
-- State: turn index, attempt counter, per-class budget, effects-this-turn flag,
-  turn-closed flag, repair-used flag, deadline, clock.
+- State: turn index, attempt counter, per-class budget, effects-this-turn
+  count, turn-closed phase, repair-used flag, deadline, clock. Failure
+  classification (`transport` / `parseBadRequest` / `permanent`) is a modeled
+  vocabulary consumed by the transitions, and the Rust
+  `InferenceError → FailureClass` mapping is pinned by a conformance
+  contract. Delay values, jitter, and rate-limit hints are product policy
+  outside the model (a documented boundary); the model constrains
+  budget counts and deadline fit only.
+- A reachability invariant (`phase ∈ {issuing, backingOff, repairing} →
+  effects = 0`, proved preserved by every transition) carries the
+  no-re-execution guarantee across the close-and-continue path, which starts
+  a **new turn index** with fresh effect/render counters.
 - Obligations:
   - **N1 no-tool-re-execution:** a re-issue transition requires
     `effectsThisTurn = ∅ ∨ turnClosed`.
-  - **N2 retract-only-before-effects:** `TurnRetracted` requires
-    `effectsThisTurn = ∅`.
+  - **N2 retract-only-before-effects:** a transition that removes rendered
+    content *within the same turn index* requires `effectsThisTurn = ∅`
+    (close-and-continue increments the turn index, so its counter reset is
+    a new turn, not a retraction).
   - **N3 bounded progress:** attempt counters monotone and bounded by budget;
     repair fires at most once.
   - **N4 backoff-fits-deadline:** a backoff transition requires
@@ -185,8 +203,10 @@ New executable model `Proofs/CompletionRetry.lean` (+ `Executable`,
 - Contract emission in `Proofs/Conformance/Contracts.lean`, coverage-ledger
   entry, and consumer registration in
   `tests/support/conformance_consumers.rs` — same change, per proofs README.
-- Boundary note: slot-held-during-backoff recorded in
-  `Proofs/Conformance/Boundaries.lean`.
+- Boundary notes recorded in `Proofs/Conformance/Boundaries.lean`: each retry
+  attempt is its own `InferenceCall` row/permit (no slot held during backoff);
+  delay values, jitter, and rate-limit hints are product policy outside the
+  model.
 
 Zero `sorry`s, as always. Spec lands before Rust.
 
@@ -197,7 +217,7 @@ Mock-model / time-paused tokio where timing matters; full package gate
 
 1. **Backend-restart cluster:** N concurrent completions hit connect-refused;
    the mock backend recovers at ~3 simulated minutes; all N runs complete,
-   `completion_retry_count > 0`, zero lost runs.
+   a run-timeline retry summary with `retry_count > 0`, zero lost runs.
 2. **Sampling 400:** first attempt 400s with parse signature, resample
    succeeds.
 3. **Deterministic 400 (regression fence):** the exact prod
