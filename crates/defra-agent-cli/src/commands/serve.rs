@@ -120,12 +120,17 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             args.mcp_query_collections.clone(),
         ))
     };
+    // One measured-health handle shared between the runtime's prober (writer)
+    // and the /metrics endpoint (reader), so the probe-status metric reports
+    // measurement instead of the stored document constant (#640).
+    let backend_health = defra_agent::BackendHealthMap::new();
     let mut node_builder = crate::persistent_node_builder(&data_dir).with_http(
         defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(runtime_contract_router(
             graphql_url.clone(),
             agent_name.clone(),
             identity.did().to_string(),
             mcp_query_scope,
+            Some(backend_health.clone()),
         )),
     );
     if let Some(node_identity_did) = server_identity.node_identity_did.as_ref() {
@@ -154,6 +159,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             mcp_pool: McpPool::new(),
             local_hostname: Some(local_hostname),
             tool_ceiling,
+            backend_health: Some(backend_health),
             process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
             ..Default::default()
         },

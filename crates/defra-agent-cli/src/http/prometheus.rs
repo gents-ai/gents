@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
@@ -160,6 +160,7 @@ where
 pub(crate) async fn render_prometheus_metrics(
     graphql: &str,
     local_agent_did: &str,
+    measured_backend_health: &HashMap<String, defra_agent::BackendHealthSnapshot>,
 ) -> Result<String> {
     let data = load_metrics_query_data(graphql, local_agent_did).await?;
     let data = with_local_native_executors(data);
@@ -315,47 +316,11 @@ pub(crate) async fn render_prometheus_metrics(
         "Unix timestamp of the last backend probe.",
     );
 
-    for backend in &data.inference_backends {
-        push_metric_sample(
-            &mut lines,
-            "defra_agent_backend_enabled",
-            &[("backend_id", backend.backend_id.clone())],
-            i64::from(backend.enabled),
-        );
-        push_metric_sample(
-            &mut lines,
-            "defra_agent_backend_max_concurrent",
-            &[("backend_id", backend.backend_id.clone())],
-            backend.max_concurrent,
-        );
-        push_metric_sample(
-            &mut lines,
-            "defra_agent_backend_max_queue_depth",
-            &[("backend_id", backend.backend_id.clone())],
-            backend.max_queue_depth,
-        );
-        push_metric_sample(
-            &mut lines,
-            "defra_agent_backend_probe_status",
-            &[
-                ("backend_id", backend.backend_id.clone()),
-                ("status", backend.probe_status.clone()),
-            ],
-            1,
-        );
-        if let Some(timestamp) = backend
-            .last_probe
-            .as_deref()
-            .and_then(rfc3339_timestamp_seconds)
-        {
-            push_metric_sample(
-                &mut lines,
-                "defra_agent_backend_last_probe_seconds",
-                &[("backend_id", backend.backend_id.clone())],
-                timestamp,
-            );
-        }
-    }
+    push_backend_metrics(
+        &mut lines,
+        &data.inference_backends,
+        measured_backend_health,
+    );
 
     push_metric_prelude(
         &mut lines,
@@ -796,6 +761,70 @@ pub(crate) fn with_local_native_executors(mut data: MetricsQueryData) -> Metrics
     data
 }
 
+/// Per-backend metric samples with the local runtime's measured probe
+/// health overlaid (#640). When the prober has measured a backend, the
+/// `status` label carries the MEASURED state and the sample value is 1 iff
+/// that state is healthy — so `defra_agent_backend_probe_status` genuinely
+/// reads 0 for a dead endpoint instead of pinning at the stored document
+/// constant. Backends the prober never measures (ChatGPT-Codex, or an HTTP
+/// surface without an in-process runtime) fall back to the document's
+/// `probe_status`/`last_probe`.
+pub(crate) fn push_backend_metrics(
+    lines: &mut Vec<String>,
+    backends: &[MetricsBackendRow],
+    measured: &HashMap<String, defra_agent::BackendHealthSnapshot>,
+) {
+    for backend in backends {
+        push_metric_sample(
+            lines,
+            "defra_agent_backend_enabled",
+            &[("backend_id", backend.backend_id.clone())],
+            i64::from(backend.enabled),
+        );
+        push_metric_sample(
+            lines,
+            "defra_agent_backend_max_concurrent",
+            &[("backend_id", backend.backend_id.clone())],
+            backend.max_concurrent,
+        );
+        push_metric_sample(
+            lines,
+            "defra_agent_backend_max_queue_depth",
+            &[("backend_id", backend.backend_id.clone())],
+            backend.max_queue_depth,
+        );
+        let measured_entry = measured.get(&backend.backend_id);
+        let status = measured_entry
+            .map(|entry| entry.state.as_str().to_string())
+            .unwrap_or_else(|| backend.probe_status.clone());
+        push_metric_sample(
+            lines,
+            "defra_agent_backend_probe_status",
+            &[
+                ("backend_id", backend.backend_id.clone()),
+                ("status", status.clone()),
+            ],
+            i64::from(status == "healthy"),
+        );
+        let last_probe_seconds = measured_entry
+            .map(|entry| entry.last_probe_at.timestamp())
+            .or_else(|| {
+                backend
+                    .last_probe
+                    .as_deref()
+                    .and_then(rfc3339_timestamp_seconds)
+            });
+        if let Some(timestamp) = last_probe_seconds {
+            push_metric_sample(
+                lines,
+                "defra_agent_backend_last_probe_seconds",
+                &[("backend_id", backend.backend_id.clone())],
+                timestamp,
+            );
+        }
+    }
+}
+
 fn push_metric_prelude(lines: &mut Vec<String>, name: &str, help: &str) {
     push_metric_prelude_with_type(lines, name, help, "gauge");
 }
@@ -850,6 +879,121 @@ fn rfc3339_timestamp(value: &str) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #640 ledger consumer (`backend-health.operatorCli`): the probe-status
+    /// metric must report the local runtime's MEASURED health — value 0 with
+    /// the measured status label for a dead endpoint, fresh last_probe from
+    /// the measurement, doc fallback only where the prober has no opinion.
+    #[test]
+    fn backend_probe_status_metric_reflects_measured_health() {
+        fn doc_row(backend_id: &str, probe_status: &str, last_probe: Option<&str>) -> MetricsBackendRow {
+            MetricsBackendRow {
+                backend_id: backend_id.to_string(),
+                enabled: true,
+                max_concurrent: 4,
+                max_queue_depth: 100,
+                probe_status: probe_status.to_string(),
+                last_probe: last_probe.map(str::to_string),
+            }
+        }
+        fn measured_entry(
+            backend_id: &str,
+            state: defra_agent::BackendHealthState,
+            failure_count: u32,
+            last_probe_at: &str,
+        ) -> defra_agent::BackendHealthSnapshot {
+            defra_agent::BackendHealthSnapshot {
+                backend_id: backend_id.to_string(),
+                state,
+                failure_count,
+                last_probe_at: chrono::DateTime::parse_from_rfc3339(last_probe_at)
+                    .unwrap()
+                    .with_timezone(&Utc),
+                last_error: (failure_count > 0).then(|| "connection refused".to_string()),
+            }
+        }
+
+        let backends = vec![
+            // The fleet-evidence shape: document pinned "healthy", endpoint
+            // measured dead — the metric MUST read 0.
+            doc_row("sparks-cluster", "healthy", None),
+            // Measured healthy: 1 with a fresh measured last_probe.
+            doc_row("workstation-1", "healthy", Some("2026-07-01T00:00:00Z")),
+            // Below-threshold blip: truthful degraded label, value 0.
+            doc_row("spark-2", "healthy", None),
+            // Never probed (e.g. ChatGPT-Codex): document status governs.
+            doc_row("codex", "healthy", Some("2026-07-06T00:00:00Z")),
+            doc_row("unprobed-unknown", "unknown", None),
+        ];
+        let measured = HashMap::from([
+            (
+                "sparks-cluster".to_string(),
+                measured_entry(
+                    "sparks-cluster",
+                    defra_agent::BackendHealthState::Unhealthy,
+                    3,
+                    "2026-07-07T12:00:00Z",
+                ),
+            ),
+            (
+                "workstation-1".to_string(),
+                measured_entry(
+                    "workstation-1",
+                    defra_agent::BackendHealthState::Healthy,
+                    0,
+                    "2026-07-07T12:00:00Z",
+                ),
+            ),
+            (
+                "spark-2".to_string(),
+                measured_entry(
+                    "spark-2",
+                    defra_agent::BackendHealthState::Degraded,
+                    1,
+                    "2026-07-07T12:00:00Z",
+                ),
+            ),
+        ]);
+
+        let mut lines = Vec::new();
+        push_backend_metrics(&mut lines, &backends, &measured);
+        let rendered = lines.join("\n");
+
+        let measured_last_probe = chrono::DateTime::parse_from_rfc3339("2026-07-07T12:00:00Z")
+            .unwrap()
+            .timestamp();
+        assert!(rendered.contains(
+            r#"defra_agent_backend_probe_status{backend_id="sparks-cluster",status="unhealthy"} 0"#
+        ));
+        assert!(rendered.contains(&format!(
+            r#"defra_agent_backend_last_probe_seconds{{backend_id="sparks-cluster"}} {measured_last_probe}"#
+        )));
+        assert!(rendered.contains(
+            r#"defra_agent_backend_probe_status{backend_id="workstation-1",status="healthy"} 1"#
+        ));
+        assert!(rendered.contains(&format!(
+            r#"defra_agent_backend_last_probe_seconds{{backend_id="workstation-1"}} {measured_last_probe}"#
+        )));
+        assert!(rendered.contains(
+            r#"defra_agent_backend_probe_status{backend_id="spark-2",status="degraded"} 0"#
+        ));
+        // Doc fallback: measured absent.
+        assert!(rendered.contains(
+            r#"defra_agent_backend_probe_status{backend_id="codex",status="healthy"} 1"#
+        ));
+        let doc_last_probe = chrono::DateTime::parse_from_rfc3339("2026-07-06T00:00:00Z")
+            .unwrap()
+            .timestamp();
+        assert!(rendered.contains(&format!(
+            r#"defra_agent_backend_last_probe_seconds{{backend_id="codex"}} {doc_last_probe}"#
+        )));
+        assert!(rendered.contains(
+            r#"defra_agent_backend_probe_status{backend_id="unprobed-unknown",status="unknown"} 0"#
+        ));
+        // No last_probe series at all when neither measurement nor doc has one.
+        assert!(!rendered
+            .contains(r#"defra_agent_backend_last_probe_seconds{backend_id="unprobed-unknown"}"#));
+    }
 
     #[test]
     fn metrics_query_envelope_treats_null_probe_status_as_unknown() {

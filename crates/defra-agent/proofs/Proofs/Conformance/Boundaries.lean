@@ -345,7 +345,7 @@ def boundaries : List Boundary :=
     , domain := "Admission"
     , subject := "backend health freshness"
     , statement :=
-        "Lean-generated cases and Rust tests cover observed-document admission availability; backend document freshness, probes, provider behavior, and network behavior remain environmental."
+        "Lean-generated cases and Rust tests cover observed-document admission availability composed with the local runtime's measured probe health (Proofs/BackendHealth, #640: scheduled probes, K-failure demotion, single-success promotion). Provider behavior beyond the probed models endpoint, cross-runtime reachability divergence, and fleet-wide document freshness remain environmental."
     }
   , { id := boundarySessionRecoveryClientRetrySurfaceId
     , domain := "SessionRecovery"

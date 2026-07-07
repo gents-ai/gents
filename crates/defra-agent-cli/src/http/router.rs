@@ -31,6 +31,11 @@ pub(crate) struct RuntimeHttpState {
     pub(crate) agent_did: String,
     pub(crate) started_at: String,
     pub(crate) started_instant: Instant,
+    /// The in-process runtime's measured backend health (#640) — the serve
+    /// command shares the same handle the prober writes, so the metrics
+    /// endpoint reports measurement, not the stored document constant.
+    /// `None` when the HTTP surface runs without an in-process runtime.
+    pub(crate) backend_health: Option<defra_agent::BackendHealthMap>,
 }
 
 pub(crate) fn runtime_contract_router(
@@ -41,6 +46,7 @@ pub(crate) fn runtime_contract_router(
     // `None` leaves it off. It is opt-in because it is an unauthenticated read
     // surface (same listener exposure as the GraphQL endpoint).
     defra_query_mcp_scope: Option<CollectionScope>,
+    backend_health: Option<defra_agent::BackendHealthMap>,
 ) -> Router {
     let graphql_for_mcp = graphql.clone();
     let state = RuntimeHttpState {
@@ -49,6 +55,7 @@ pub(crate) fn runtime_contract_router(
         agent_did,
         started_at: chrono::Utc::now().to_rfc3339(),
         started_instant: Instant::now(),
+        backend_health,
     };
 
     let mut router = Router::new()
@@ -85,7 +92,13 @@ pub(crate) fn runtime_contract_router(
 }
 
 async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {
-    match render_prometheus_metrics(&state.graphql, &state.agent_did).await {
+    let measured_backend_health = match &state.backend_health {
+        Some(map) => map.snapshot().await,
+        None => Default::default(),
+    };
+    match render_prometheus_metrics(&state.graphql, &state.agent_did, &measured_backend_health)
+        .await
+    {
         Ok(body) => ([(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)], body).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -376,6 +389,7 @@ mod tests {
             agent_did: "did:key:zAgent".to_string(),
             started_at: "2026-06-04T00:00:00Z".to_string(),
             started_instant: Instant::now(),
+            backend_health: None,
         }
     }
 
