@@ -22,6 +22,7 @@ use crate::tool_surface::{BehaviorToolConfig, SubagentToolConfig, ToolCeiling, T
 use crate::trigger_engine::manual_source::ManualTriggerHandle;
 
 mod builder;
+pub mod completion_retry;
 mod daemon;
 mod document_view;
 pub(crate) mod loop_stream;

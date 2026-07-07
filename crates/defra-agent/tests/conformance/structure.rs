@@ -42,6 +42,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("CommandPolicy", Module("conformance/command_policy.rs")),
         ("Compaction", Module("conformance/streaming_compaction.rs")),
         (
+            "CompletionRetry",
+            Gap("#631 — Rust mirror landed; generated conformance consumer lands in Task 4"),
+        ),
+        (
             "CancelPropagation",
             Module("conformance/cancel_propagation.rs"),
         ),
