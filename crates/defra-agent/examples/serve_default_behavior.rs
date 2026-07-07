@@ -132,6 +132,7 @@ async fn seed_demo_documents(
             command_execution_policy: None,
             command_allowed_argv_prefixes: Some(Vec::new()),
             command_forbidden_argv_prefixes: Some(Vec::new()),
+            read_only_command_allowlist: None,
             command_network_mode: None,
             cli_tool_names: Some(Vec::new()),
             enable_meta_tools: Some(true),

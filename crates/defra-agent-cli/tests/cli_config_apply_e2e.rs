@@ -640,8 +640,10 @@ async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Res
     selection["display_name"] = Value::String("Empty list regression".to_string());
     // A non-empty read_only_command_allowlist must round-trip through the
     // `config apply` manifest path and read back equal (sorted by normalize).
-    selection["read_only_command_allowlist"] =
-        Value::Array(vec![Value::String("jq".into()), Value::String("echo".into())]);
+    selection["read_only_command_allowlist"] = Value::Array(vec![
+        Value::String("jq".into()),
+        Value::String("echo".into()),
+    ]);
     for field in [
         "command_allowed_argv_prefixes",
         "command_forbidden_argv_prefixes",

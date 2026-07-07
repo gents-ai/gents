@@ -78,6 +78,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         command_execution_policy: None,
         command_allowed_argv_prefixes: Vec::new(),
         command_forbidden_argv_prefixes: Vec::new(),
+        read_only_command_allowlist: Vec::new(),
         command_network_mode: None,
         cli_tool_names: vec!["rg".to_string(), "cargo".to_string()],
         enable_meta_tools: Some(true),
