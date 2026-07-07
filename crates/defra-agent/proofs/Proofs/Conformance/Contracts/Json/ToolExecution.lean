@@ -2,6 +2,7 @@ import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases
 import Proofs.ToolExecution
 import Proofs.MCPHealth.Executable
+import Proofs.BackendHealth.Executable
 
 /-!
 # Tool Execution JSON
@@ -82,6 +83,18 @@ def mcpHealthCaseJson (witness : Proofs.MCPHealth.TransitionCase) : String :=
           (witness.nextState.map Proofs.MCPHealth.HealthState.toDefraDB) ++ ","
     ++ "\"next_count\":" ++ nextCountStr ++ ","
     ++ "\"rust_projection\":" ++ jsonOptionalString witness.rustProjection
+    ++ "}"
+
+def backendHealthCaseJson (witness : Proofs.BackendHealth.TransitionCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"start_state\":" ++ jsonString witness.startState.toDefraDB ++ ","
+    ++ "\"start_count\":" ++ toString witness.startCount ++ ","
+    ++ "\"event\":" ++ jsonString witness.event.toDefraDB ++ ","
+    ++ "\"threshold_k\":" ++ toString witness.thresholdK ++ ","
+    ++ "\"next_state\":" ++ jsonString witness.nextState.toDefraDB ++ ","
+    ++ "\"next_count\":" ++ toString witness.nextCount ++ ","
+    ++ "\"blocks_routing\":" ++ boolString witness.blocksRouting
     ++ "}"
 
 end Conformance.Contracts

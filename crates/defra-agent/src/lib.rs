@@ -7,6 +7,7 @@ pub mod adapter_projection;
 pub(crate) mod admission;
 pub mod agent;
 pub mod apply_model;
+pub mod backend_health;
 pub mod backend_provider;
 pub mod backend_registry;
 pub mod background_completion;
@@ -105,6 +106,10 @@ pub use admission::{InferenceCall, InferenceCallRecoveryReport};
 pub use agent::{
     BehaviorBuilder, DefraAgent, DefraAgentBuilder, DocumentRuntimeOptions,
     ProcessLifecycleObserver, ProcessLifecycleState,
+};
+pub use backend_health::{
+    probe_backends_cycle, run_backend_probe_cycle, spawn_backend_prober, BackendHealthMap,
+    BackendHealthSnapshot, BackendHealthState, BackendProberOptions, ProbeCycleOutcome,
 };
 pub use backend_provider::{discover_models as discover_backend_models, BackendProviderKind};
 pub use backend_registry::{InferenceBackend, HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS};

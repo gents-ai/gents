@@ -20,6 +20,38 @@ agent loop itself.
 | `OpenRouter` | Chat Completions | API key | SSE | Function tools through rig | Provider-dependent | Adds OpenRouter provider preference `require_parameters: true` | Standard rig OpenRouter handling | Planned by #545 |
 | local OpenAI-compatible servers | Responses or Chat Completions depending on server support | Usually none/local key | SSE varies by server | Function tools when server supports them | Reasoning parser support varies; `enable_thinking` is sent for vLLM-style servers | Same as `OpenAiCompatible`; operators may need Chat Completions fallback for servers without `/v1/responses` | Standard rig OpenAI handling | Planned by #545 |
 
+## Probe lifecycle and health (#640)
+
+Backend availability composes two signals, and they deliberately live in
+different places:
+
+- **Operator/bootstrap intent** — the fleet-replicated `InferenceBackend`
+  document's `enabled` and `probe_status`. The startup ratchet promotes
+  `unknown → healthy` for reachable backends and stamps `last_probe`; the
+  scheduled prober keeps that promotion recurring with fresh `last_probe`, and
+  `defra-agent config backend set --probe-status ...` remains the manual
+  override. Nothing ever writes `unhealthy` here: reachability is
+  observer-relative, and 16 runtimes stomping one document would replicate
+  churn and conflicting opinions.
+- **Measured health** — each runtime's scheduled prober (default: every 60s,
+  10s timeout) probes the models endpoint of every enabled, probeable backend
+  and keeps an in-memory `BackendHealthMap`. Hysteresis is K=3 consecutive
+  failures to demote to `unhealthy`, one success to promote back (formal
+  model: `crates/defra-agent/proofs/Proofs/BackendHealth/`). ChatGPT-Codex
+  backends are never probed (OAuthCredential is agent-scoped) and therefore
+  never demoted — the document status governs them.
+
+Effective availability is `intent AND NOT measured-unhealthy`: a measured
+demotion removes the backend from admission and marks dependent behaviors
+unavailable within `probe_interval × K + reconcile debounce`, and one
+successful probe restores routing. Measured state resets on restart (a dead
+backend is doc-available again for up to K probe intervals until re-demoted).
+
+The `defra_agent_backend_probe_status{backend_id,status}` metric reports the
+MEASURED state with value 1 iff healthy — it genuinely reads 0 during an
+outage — and `defra_agent_backend_last_probe_seconds` reports probe freshness.
+Both fall back to document values for backends the prober has no opinion on.
+
 ## Wire Fixture Policy
 
 Provider fixture replay is tracked in #545. Recorded fixtures live under

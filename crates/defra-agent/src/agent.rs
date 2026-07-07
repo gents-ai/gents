@@ -5,6 +5,7 @@ use std::time::Duration;
 use defra_node::EmbeddedNode;
 use tokio::sync::{watch, OnceCell};
 
+use crate::backend_health::{BackendHealthMap, BackendProberOptions};
 use crate::compaction::CompactionStrategy;
 use crate::config::{
     AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
@@ -76,6 +77,11 @@ pub struct DocumentRuntimeOptions {
     pub retry_policy: RetryPolicy,
     pub hook_failure_policy: FailurePolicy,
     pub health_checker_options: HealthCheckerOptions,
+    pub backend_prober_options: BackendProberOptions,
+    /// Share a pre-built measured-health map with the embedder (the CLI
+    /// `serve` hands the same handle to its metrics endpoint). `None` lets
+    /// the runtime create its own.
+    pub backend_health: Option<BackendHealthMap>,
     pub process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
 }
 
@@ -83,6 +89,9 @@ pub struct DocumentRuntimeOptions {
 pub(crate) struct DocumentResolveContext {
     pub(crate) identity: Arc<dyn AgentIdentity>,
     pub(crate) tool_ceiling: ToolCeiling,
+    /// The local prober's measured backend health, merged into behavior
+    /// availability and admission configs at snapshot resolution (#640).
+    pub(crate) backend_health: BackendHealthMap,
 }
 
 #[derive(Clone)]
@@ -99,6 +108,8 @@ pub struct DefraAgent {
     hook_failure_policy: FailurePolicy,
     background_execution_registry: BackgroundExecutionRegistry,
     health_checker_options: HealthCheckerOptions,
+    backend_prober_options: BackendProberOptions,
+    backend_health: BackendHealthMap,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
@@ -124,9 +135,11 @@ impl DefraAgent {
         // even when the DB was created before branch #377. This is idempotent
         // (field-presence-checked) and cheap on already-migrated DBs.
         migration::ensure_agent_behavior_migrations(node.clone()).await?;
+        let backend_health = options.backend_health.clone().unwrap_or_default();
         let document_runtime_context = DocumentResolveContext {
             identity: identity.clone(),
             tool_ceiling: options.tool_ceiling.clone(),
+            backend_health: backend_health.clone(),
         };
         let resolved_snapshot =
             resolve_document_runtime_snapshot(node.as_ref(), &document_runtime_context).await?;
@@ -178,10 +191,19 @@ impl DefraAgent {
             hook_failure_policy: options.hook_failure_policy,
             background_execution_registry: BackgroundExecutionRegistry::default(),
             health_checker_options: options.health_checker_options,
+            backend_prober_options: options.backend_prober_options,
+            backend_health,
             process_state_observer: options.process_state_observer,
             rendered_request_capture_factory: None,
             manual_trigger_handle: Arc::new(OnceCell::new()),
         })
+    }
+
+    /// The local prober's measured backend health — the truthful signal
+    /// behind effective availability. Exposed for embedders and for the
+    /// completion-retry path (#631) to make fail-fast-vs-backoff decisions.
+    pub fn backend_health(&self) -> BackendHealthMap {
+        self.backend_health.clone()
     }
 
     pub fn behaviors(&self) -> &[Arc<AgentBehavior>] {

@@ -383,6 +383,7 @@ mod tests {
             "r5-dispatch-test-agent".to_string(),
             "did:key:z6Mkr5dispatchtest".to_string(),
             None,
+            None,
         );
         tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;

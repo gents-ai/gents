@@ -24,6 +24,7 @@ import Proofs.ToolPolicy
 import Proofs.ToolExecution
 import Proofs.ManagedExec
 import Proofs.MCPHealth
+import Proofs.BackendHealth
 import Proofs.StreamingResponse
 import Proofs.Background
 import Proofs.Workflow

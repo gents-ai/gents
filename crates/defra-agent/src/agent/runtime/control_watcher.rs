@@ -24,6 +24,7 @@ pub(super) async fn run_control_watcher(
     resolve_context: DocumentResolveContext,
     proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
     runtime_status: RuntimeStatusHandle,
+    mut health_events_rx: mpsc::Receiver<()>,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     let mut document_view =
@@ -128,6 +129,21 @@ pub(super) async fn run_control_watcher(
                     settle_deadline = None;
                     sleep.as_mut().reset(tokio::time::Instant::now() + CONTROL_WATCHER_IDLE_SLEEP);
                 }
+            }
+            // The backend prober's measured health crossed the routing
+            // threshold (#640). No document changed, so no reload or settle
+            // window — the existing view re-resolves against the updated
+            // BackendHealthMap and proposes if the fingerprint moved.
+            Some(()) = health_events_rx.recv() => {
+                tracing::info!(
+                    agent_did = %agent_did,
+                    "backend measured-health transition detected; scheduling reconcile"
+                );
+                dirty = true;
+                runtime_status
+                    .set_reconcile_phase(ReconcilePhase::Debouncing)
+                    .await;
+                sleep.as_mut().reset(tokio::time::Instant::now() + CONTROL_RECONCILE_DEBOUNCE);
             }
             message = subscription.recv() => {
                 let Some(message) = message else {

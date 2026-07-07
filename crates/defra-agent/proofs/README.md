@@ -51,7 +51,7 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 
 ## What Is Proven
 
-The current proof suite covers thirteen practical areas:
+The current proof suite covers fourteen practical areas:
 
 1. Request/process/persistence state transitions
 2. Daemon storage-observation assumptions that refine persistence
@@ -69,6 +69,10 @@ The current proof suite covers thirteen practical areas:
     eligibility before future idempotent tool retries are enabled
 13. Managed native executor liveness: deadline/cancel transitions signal the
     executor and compose to a terminal timed-out/cancelled tool outcome
+14. Backend probe health (#640): the scheduled prober's per-runtime hysteresis
+    machine — demotion at exactly K consecutive failures, no flap below K,
+    single-success promotion, and effective availability as
+    intent ∧ ¬measured-unhealthy
 
 The proof boundary matters:
 
@@ -155,6 +159,7 @@ Semantic submodules:
 | `Proofs.CommandPolicy` | `Types`, `Validation`, `Sandbox`, `Env`, `Theorems` |
 | `Proofs.ToolExecution` | standalone health/schema preflight and retry eligibility model |
 | `Proofs.ManagedExec` | `State`, `Transition`, `Executable`, `Properties`, `Composed` |
+| `Proofs.BackendHealth` | `State`, `Transition`, `Properties`, `Executable` |
 | `Proofs.Fleet` | `State`, `Transition`, `Executable`, `Properties` |
 | `Proofs.Conformance.Triggers` | `Lifecycle`, `Materialization`, `Trace` |
 
