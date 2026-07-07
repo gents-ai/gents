@@ -12,9 +12,8 @@ use super::super::command_projection::{
     tool_projection_status, update_running_background_tools, ToolProjectionStatus,
 };
 use super::super::progress::{
-    content_delta, decode_defra_tool_call_progress, decode_defra_turn_progress,
-    defra_turn_progress_query, response_field_is_blank, terminal_error_message,
-    terminal_turn_status,
+    content_delta, decode_defra_tool_call_progress, defra_turn_progress_query,
+    response_field_is_blank, terminal_error_message, terminal_turn_status,
 };
 use super::super::protocol::{send_committed_user_message, send_notification};
 use super::super::store::{hydrate_materialized_response_content, query_node_json};
@@ -25,6 +24,43 @@ use super::super::turn_projection::TurnProjection;
 use super::super::{ConnectionState, ShimState};
 use super::active::next_steering_request_after;
 use crate::{is_terminal_lifecycle_state, request_diagnostic_hint, SubmittedRequest};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProgressMarker {
+    request_lifecycle_state: Option<String>,
+    request_interrupt_requested_at: Option<String>,
+    request_valid_until: Option<String>,
+    response_status: Option<String>,
+    response_progress_seq: Option<String>,
+    response_content_len: Option<usize>,
+    response_error_len: Option<usize>,
+    response_materialized_message_sequence: Option<String>,
+    response_materialized_at: Option<String>,
+    response_completed_at: Option<String>,
+    response_interrupted_at: Option<String>,
+    tools: Vec<ToolProgressMarker>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ToolProgressMarker {
+    tool_call_key: Option<String>,
+    tool_name: Option<String>,
+    status: Option<String>,
+    lifecycle_state: Option<String>,
+    await_mode: Option<String>,
+    child_request_id: Option<String>,
+    args_len: Option<usize>,
+    result_len: Option<usize>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ContentCursor {
+    rendered_len: usize,
+    head: String,
+    tail: String,
+}
 
 pub(super) async fn stream_defra_turn(
     connection: &ConnectionState,
@@ -37,13 +73,13 @@ pub(super) async fn stream_defra_turn(
     let mut current = submitted.clone();
     let mut turn_request_ids = vec![current.request_id.clone()];
     let mut known_tool_calls: BTreeMap<String, ToolProjectionStatus> = BTreeMap::new();
+    let mut known_tool_markers: BTreeMap<String, ToolProgressMarker> = BTreeMap::new();
     let mut running_background_tools: BTreeMap<String, codex::CommandExecutionStatus> =
         BTreeMap::new();
     let mut updates = state.node.subscribe_updates();
-    let mut latest_content = String::new();
-    let mut latest_reasoning = String::new();
+    let mut latest_content_cursor = ContentCursor::default();
     let mut latest_error_message: Option<String> = None;
-    let mut latest_progress_signature: Option<String> = None;
+    let mut latest_progress_marker: Option<ProgressMarker> = None;
     let mut last_progress_at = tokio::time::Instant::now();
 
     loop {
@@ -78,34 +114,39 @@ pub(super) async fn stream_defra_turn(
         let request_row = response
             .pointer("/data/AgentRequest")
             .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .cloned();
+            .and_then(|rows| rows.first());
         let response_row = response
             .pointer("/data/AgentResponse")
             .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .cloned();
-
-        let signature = serde_json::to_string(&json!({
-            "request": &request_row,
-            "response": &response_row,
-            "tools": response.pointer("/data/AgentToolCall"),
-        }))
-        .context("serializing DEFRA Codex shim progress signature")?;
-        if latest_progress_signature.as_deref() != Some(signature.as_str()) {
-            latest_progress_signature = Some(signature);
-            last_progress_at = tokio::time::Instant::now();
-        }
-
+            .and_then(|rows| rows.first());
         let tool_rows = response
             .pointer("/data/AgentToolCall")
             .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        for tool in tool_rows.iter().filter_map(decode_defra_tool_call_progress) {
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+
+        let marker = progress_marker(request_row, response_row, tool_rows);
+        let marker_changed = latest_progress_marker.as_ref() != Some(&marker);
+        if marker_changed {
+            latest_progress_marker = Some(marker);
+            last_progress_at = tokio::time::Instant::now();
+        }
+
+        for row in tool_rows {
+            let tool_marker = tool_progress_marker(row);
+            let Some(tool_key) = tool_marker.tool_call_key.as_deref() else {
+                continue;
+            };
+            if known_tool_markers.get(tool_key) == Some(&tool_marker) {
+                continue;
+            }
+            let Some(tool) = decode_defra_tool_call_progress(row) else {
+                continue;
+            };
             let projection_status = tool_projection_status(&tool);
             let previous_status = known_tool_calls.get(&tool.tool_call_key).cloned();
             if previous_status.as_ref() == Some(&projection_status) {
+                known_tool_markers.insert(tool.tool_call_key.clone(), tool_marker);
                 continue;
             }
 
@@ -124,17 +165,26 @@ pub(super) async fn stream_defra_turn(
                 &projection_status,
             );
             known_tool_calls.insert(tool.tool_call_key.clone(), projection_status);
+            known_tool_markers.insert(tool.tool_call_key.clone(), tool_marker);
         }
 
-        let response_progress = response_row.as_ref().and_then(decode_defra_turn_progress);
-        if let Some(progress) = response_progress.as_ref() {
-            if progress.content != latest_content {
-                let delta = content_delta(&latest_content, &progress.content);
-                latest_content = progress.content.clone();
+        let response_status = response_row
+            .and_then(|row| row.get("status"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if marker_changed {
+            if let Some(content) = response_row
+                .and_then(|row| row.get("content"))
+                .and_then(Value::as_str)
+            {
+                let delta = content_delta_from_cursor(&mut latest_content_cursor, content);
                 projection.append_agent_delta(outbound, &delta).await?;
             }
-            latest_reasoning = progress.reasoning.clone();
-            latest_error_message = progress.error_message.clone();
+            latest_error_message = response_row
+                .and_then(|row| row.get("error_message"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned);
         }
 
         let lifecycle_state = request_row
@@ -147,17 +197,13 @@ pub(super) async fn stream_defra_turn(
             .and_then(|row| row.get("failure_reason"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        let response_status = response_progress
-            .as_ref()
-            .map(|progress| progress.status.as_str())
-            .unwrap_or("");
         let terminal_by_request = is_terminal_lifecycle_state(lifecycle_state);
         let terminal_by_response = matches!(response_status, "complete" | "completed" | "error");
 
         if terminal_by_request || terminal_by_response {
-            let mut terminal_response = response_row.unwrap_or_else(|| {
+            let mut terminal_response = response_row.cloned().unwrap_or_else(|| {
                 json!({
-                    "request_id": current.request_id,
+                    "request_id": current.request_id.clone(),
                     "status": null,
                     "content": null,
                 })
@@ -245,10 +291,10 @@ pub(super) async fn stream_defra_turn(
                     current.request_id = next_request.request_id;
                     turn_request_ids.push(current.request_id.clone());
                     known_tool_calls.clear();
-                    latest_content.clear();
-                    latest_reasoning.clear();
+                    known_tool_markers.clear();
+                    latest_content_cursor.reset();
                     latest_error_message = None;
-                    latest_progress_signature = None;
+                    latest_progress_marker = None;
                     last_progress_at = tokio::time::Instant::now();
                     continue;
                 }
@@ -298,7 +344,6 @@ pub(super) async fn stream_defra_turn(
             );
         }
 
-        let _ = &latest_reasoning;
         tokio::select! {
             _ = tokio::time::sleep(state.poll_interval) => {}
             msg = updates.recv() => {
@@ -324,6 +369,156 @@ pub(super) async fn stream_defra_turn(
             }
         }
     }
+}
+
+fn progress_marker(
+    request_row: Option<&Value>,
+    response_row: Option<&Value>,
+    tool_rows: &[Value],
+) -> ProgressMarker {
+    ProgressMarker {
+        request_lifecycle_state: scalar_marker(request_row, "lifecycle_state"),
+        request_interrupt_requested_at: scalar_marker(request_row, "interrupt_requested_at"),
+        request_valid_until: scalar_marker(request_row, "valid_until"),
+        response_status: scalar_marker(response_row, "status"),
+        response_progress_seq: scalar_marker(response_row, "progress_seq"),
+        response_content_len: string_len_marker(response_row, "content"),
+        response_error_len: string_len_marker(response_row, "error_message"),
+        response_materialized_message_sequence: scalar_marker(
+            response_row,
+            "materialized_message_sequence",
+        ),
+        response_materialized_at: scalar_marker(response_row, "materialized_at"),
+        response_completed_at: scalar_marker(response_row, "completed_at"),
+        response_interrupted_at: scalar_marker(response_row, "interrupted_at"),
+        tools: tool_rows.iter().map(tool_progress_marker).collect(),
+    }
+}
+
+fn content_delta_from_cursor(cursor: &mut ContentCursor, current: &str) -> String {
+    if current.is_empty() {
+        cursor.reset();
+        return String::new();
+    }
+    let current_len = current.len();
+    if current_len > cursor.rendered_len
+        && current.is_char_boundary(cursor.rendered_len)
+        && cursor.tail_matches_at_rendered_len(current)
+    {
+        let delta = current[cursor.rendered_len..].to_string();
+        cursor.observe(current);
+        return delta;
+    }
+    if current_len == cursor.rendered_len && cursor.tail_matches_at_end(current) {
+        return String::new();
+    }
+    cursor.observe(current);
+    current.to_string()
+}
+
+impl ContentCursor {
+    const TAIL_BYTES: usize = 64;
+
+    fn observe(&mut self, current: &str) {
+        self.rendered_len = current.len();
+        self.head = head_window(current, Self::TAIL_BYTES).to_string();
+        self.tail = tail_window(current, Self::TAIL_BYTES).to_string();
+    }
+
+    fn reset(&mut self) {
+        self.rendered_len = 0;
+        self.head.clear();
+        self.tail.clear();
+    }
+
+    fn tail_matches_at_rendered_len(&self, current: &str) -> bool {
+        if self.rendered_len == 0 {
+            return true;
+        }
+        if !self.head_matches_start(current) {
+            return false;
+        }
+        let tail_len = self.tail.len();
+        if tail_len == 0 || self.rendered_len < tail_len {
+            return false;
+        }
+        let start = self.rendered_len - tail_len;
+        current.get(start..self.rendered_len) == Some(self.tail.as_str())
+    }
+
+    fn tail_matches_at_end(&self, current: &str) -> bool {
+        let tail_len = self.tail.len();
+        if tail_len == 0 {
+            return current.is_empty();
+        }
+        if !self.head_matches_start(current) {
+            return false;
+        }
+        current
+            .len()
+            .checked_sub(tail_len)
+            .and_then(|start| current.get(start..))
+            == Some(self.tail.as_str())
+    }
+
+    fn head_matches_start(&self, current: &str) -> bool {
+        let head_len = self.head.len();
+        head_len > 0 && current.get(..head_len) == Some(self.head.as_str())
+    }
+}
+
+fn head_window(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
+fn tail_window(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut start = value.len() - max_bytes;
+    while !value.is_char_boundary(start) {
+        start += 1;
+    }
+    &value[start..]
+}
+
+fn tool_progress_marker(row: &Value) -> ToolProgressMarker {
+    ToolProgressMarker {
+        tool_call_key: scalar_marker(Some(row), "tool_call_key"),
+        tool_name: scalar_marker(Some(row), "tool_name"),
+        status: scalar_marker(Some(row), "status"),
+        lifecycle_state: scalar_marker(Some(row), "lifecycle_state"),
+        await_mode: scalar_marker(Some(row), "await_mode"),
+        child_request_id: scalar_marker(Some(row), "child_request_id"),
+        args_len: string_len_marker(Some(row), "args"),
+        result_len: string_len_marker(Some(row), "result"),
+        started_at: scalar_marker(Some(row), "started_at"),
+        completed_at: scalar_marker(Some(row), "completed_at"),
+    }
+}
+
+fn scalar_marker(row: Option<&Value>, field: &str) -> Option<String> {
+    let value = row?.get(field)?;
+    if value.is_null() {
+        return None;
+    }
+    value
+        .as_str()
+        .map(ToOwned::to_owned)
+        .or_else(|| value.as_i64().map(|value| value.to_string()))
+        .or_else(|| value.as_u64().map(|value| value.to_string()))
+        .or_else(|| value.as_bool().map(|value| value.to_string()))
+}
+
+fn string_len_marker(row: Option<&Value>, field: &str) -> Option<usize> {
+    row?.get(field)?.as_str().map(str::len)
 }
 
 async fn finish_interrupted_turn(
@@ -382,4 +577,85 @@ async fn steering_input_for_request(
         text: content,
         text_elements: Vec::new(),
     }])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{content_delta_from_cursor, ContentCursor};
+
+    #[test]
+    fn content_cursor_emits_only_appended_suffix() {
+        let mut cursor = ContentCursor::default();
+
+        assert_eq!(
+            content_delta_from_cursor(&mut cursor, "first chunk"),
+            "first chunk"
+        );
+        assert_eq!(cursor.rendered_len, "first chunk".len());
+        assert_eq!(
+            content_delta_from_cursor(&mut cursor, "first chunk and second"),
+            " and second"
+        );
+        assert_eq!(cursor.rendered_len, "first chunk and second".len());
+        assert_eq!(
+            content_delta_from_cursor(&mut cursor, "first chunk and second"),
+            ""
+        );
+    }
+
+    #[test]
+    fn content_cursor_falls_back_to_full_text_on_rewrite() {
+        let mut cursor = ContentCursor::default();
+
+        assert_eq!(
+            content_delta_from_cursor(&mut cursor, "draft answer"),
+            "draft answer"
+        );
+        assert_eq!(content_delta_from_cursor(&mut cursor, "final"), "final");
+        assert_eq!(cursor.rendered_len, "final".len());
+    }
+
+    #[test]
+    fn content_cursor_falls_back_when_tail_reset_was_missed() {
+        let mut cursor = ContentCursor::default();
+
+        assert_eq!(
+            content_delta_from_cursor(&mut cursor, "previous assistant text"),
+            "previous assistant text"
+        );
+        assert_eq!(
+            content_delta_from_cursor(&mut cursor, "new assistant text after reset"),
+            "new assistant text after reset"
+        );
+    }
+
+    #[test]
+    fn content_cursor_empty_current_resets_boundary() {
+        let mut cursor = ContentCursor::default();
+
+        assert_eq!(
+            content_delta_from_cursor(&mut cursor, "old tail"),
+            "old tail"
+        );
+        assert_eq!(content_delta_from_cursor(&mut cursor, ""), "");
+        assert_eq!(cursor.rendered_len, 0);
+        assert_eq!(
+            content_delta_from_cursor(&mut cursor, "new tail"),
+            "new tail"
+        );
+    }
+
+    #[test]
+    fn content_cursor_uses_utf8_byte_boundaries_from_prior_content() {
+        let mut cursor = ContentCursor::default();
+
+        assert_eq!(
+            content_delta_from_cursor(&mut cursor, "hello ☕"),
+            "hello ☕"
+        );
+        assert_eq!(
+            content_delta_from_cursor(&mut cursor, "hello ☕ done"),
+            " done"
+        );
+    }
 }

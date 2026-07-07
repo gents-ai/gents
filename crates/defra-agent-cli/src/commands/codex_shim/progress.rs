@@ -3,14 +3,6 @@ use defra_agent::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone)]
-pub(super) struct DefraTurnProgress {
-    pub(super) content: String,
-    pub(super) reasoning: String,
-    pub(super) error_message: Option<String>,
-    pub(super) status: String,
-}
-
-#[derive(Debug, Clone)]
 pub(super) struct DefraToolCallProgress {
     pub(super) tool_call_key: String,
     pub(super) tool_name: String,
@@ -45,7 +37,6 @@ pub(super) fn defra_turn_progress_query(request_id: &str, session_id: &str) -> S
                 session_id
                 status
                 content
-                reasoning
                 error_message
                 progress_seq
                 materialized_message_sequence
@@ -75,27 +66,6 @@ pub(super) fn defra_turn_progress_query(request_id: &str, session_id: &str) -> S
         request_id = escape_graphql_string(request_id),
         session_id = escape_graphql_string(session_id),
     )
-}
-
-pub(super) fn decode_defra_turn_progress(row: &Value) -> Option<DefraTurnProgress> {
-    Some(DefraTurnProgress {
-        content: row
-            .get("content")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        reasoning: row
-            .get("reasoning")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        error_message: row
-            .get("error_message")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned),
-        status: row.get("status")?.as_str()?.to_string(),
-    })
 }
 
 pub(super) fn decode_defra_tool_call_progress(row: &Value) -> Option<DefraToolCallProgress> {
