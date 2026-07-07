@@ -2093,11 +2093,13 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
         },
     )
     .await?;
-    let _: codex::TurnInterruptResponse = read_typed_response(&mut ws, request_id(221)).await?;
-    let capture = tokio::time::timeout(Duration::from_secs(15), read_turn_capture(&mut ws))
-        .await
-        .context("timed out waiting for interrupted turn with running background tool")??;
-    assert_eq!(capture.turn.status, codex::TurnStatus::Interrupted);
+    let interrupted_turn = tokio::time::timeout(
+        Duration::from_secs(15),
+        read_interrupt_response_and_completed_turn(&mut ws, request_id(221)),
+    )
+    .await
+    .context("timed out waiting for interrupted turn with running background tool")??;
+    assert_eq!(interrupted_turn.status, codex::TurnStatus::Interrupted);
 
     wait_for_request_lifecycle_state(
         &graphql,
@@ -3929,6 +3931,54 @@ async fn read_background_command_started(
                 bail!("Codex shim sent unexpected server request: {request:?}");
             }
             codex::JSONRPCMessage::Response(_) => {}
+        }
+    }
+}
+
+async fn read_interrupt_response_and_completed_turn(
+    ws: &mut ShimWebSocket,
+    expected_id: codex::RequestId,
+) -> Result<codex::Turn> {
+    let mut saw_interrupt_response = false;
+    let mut completed_turn = None;
+    loop {
+        match read_jsonrpc(ws).await? {
+            codex::JSONRPCMessage::Response(response) if response.id == expected_id => {
+                let _: codex::TurnInterruptResponse = serde_json::from_value(response.result)
+                    .context("decoding interrupt response")?;
+                saw_interrupt_response = true;
+            }
+            codex::JSONRPCMessage::Error(error) if error.id == expected_id => {
+                bail!(
+                    "Codex shim returned error for interrupt {}: {}",
+                    expected_id,
+                    error.error.message
+                );
+            }
+            codex::JSONRPCMessage::Notification(notification) => {
+                if let codex::ServerNotification::TurnCompleted(completed) =
+                    server_notification_from_jsonrpc(notification)?
+                {
+                    completed_turn = Some(completed.turn);
+                }
+            }
+            codex::JSONRPCMessage::Error(error) => {
+                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+            }
+            codex::JSONRPCMessage::Request(request) => {
+                bail!("Codex shim sent unexpected server request: {request:?}");
+            }
+            codex::JSONRPCMessage::Response(response) => {
+                bail!(
+                    "unexpected JSON-RPC response while waiting for interrupt {expected_id}: {response:?}"
+                );
+            }
+        }
+
+        if saw_interrupt_response {
+            if let Some(turn) = completed_turn.take() {
+                return Ok(turn);
+            }
         }
     }
 }
