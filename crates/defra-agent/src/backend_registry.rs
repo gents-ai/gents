@@ -335,8 +335,9 @@ pub async fn set_backend_probe_status(
     Ok(())
 }
 
-/// Persist a backend's `probe_status` and stamp `last_probe` in one write —
-/// the scheduled prober's recurring `unknown → healthy` promotion path.
+/// Persist a backend's `probe_status` and stamp `last_probe` in one write.
+/// Used by both the startup ratchet and the scheduled prober's recurring
+/// `unknown → healthy` promotion path.
 pub async fn set_backend_probe_status_with_last_probe(
     node: &EmbeddedNode,
     backend_id: &str,
@@ -423,18 +424,23 @@ pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
             {
                 Ok(models) => {
                     tracing::Span::current().record("model_count", models.len() as i64);
-                    match set_backend_probe_status(node, &backend.backend_id, HEALTHY_PROBE_STATUS)
-                        .await
+                    match set_backend_probe_status_with_last_probe(
+                        node,
+                        &backend.backend_id,
+                        HEALTHY_PROBE_STATUS,
+                        chrono::Utc::now(),
+                    )
+                    .await
                     {
                         Ok(()) => tracing::info!(
                             backend_id = %backend.backend_id,
                             endpoint = %backend.endpoint,
-                            "startup backend probe: promoted to healthy"
+                            "startup backend probe: promoted to healthy and stamped last_probe"
                         ),
                         Err(error) => tracing::warn!(
                             backend_id = %backend.backend_id,
                             error = %error,
-                            "startup backend probe: reachable but failed to persist healthy status"
+                            "startup backend probe: reachable but failed to persist healthy status and last_probe"
                         ),
                     }
                 }

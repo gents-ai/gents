@@ -27,8 +27,8 @@ different places:
 
 - **Operator/bootstrap intent** — the fleet-replicated `InferenceBackend`
   document's `enabled` and `probe_status`. The startup ratchet promotes
-  `unknown → healthy` for reachable backends, the scheduled prober keeps that
-  promotion recurring (stamping `last_probe`), and
+  `unknown → healthy` for reachable backends and stamps `last_probe`; the
+  scheduled prober keeps that promotion recurring with fresh `last_probe`, and
   `defra-agent config backend set --probe-status ...` remains the manual
   override. Nothing ever writes `unhealthy` here: reachability is
   observer-relative, and 16 runtimes stomping one document would replicate
