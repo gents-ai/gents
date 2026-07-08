@@ -27,8 +27,10 @@
 
 ## File Structure
 
-- `crates/defra-agent/proofs/Proofs/ScopeTemplates/State.lean` — add `appCollectionsTemplate` + extend `builtinCatalog` (Task 1).
-- `crates/defra-agent/proofs/Proofs/ScopeTemplates/Derivation.lean` — add catalog-membership theorem (Task 1).
+- `crates/defra-agent/proofs/Proofs/ScopeTemplates/State.lean` — add `appCollectionsTemplate` + extend `builtinCatalog` (Task 1a).
+- `crates/defra-agent/proofs/Proofs/ScopeTemplates/Derivation.lean` — add catalog-membership theorem (Task 1a).
+- `crates/defra-agent/proofs/Proofs/PairingReconcile/Layering.lean` — **new**: model `mergeLayered` + the delivery-aware subscription rule; prove app-collections subscription survives, push data-plane subscription is cleared (no unfiltered gossip), control-plane base preserved (Task 1b).
+- `crates/defra-agent/proofs/Proofs/PairingReconcile.lean` — add `import Proofs.PairingReconcile.Layering` to the barrel (Task 1b).
 - `crates/defra-agent/tests/conformance/scope_templates.rs` — conformance: app-collections resolves as Unscoped/Replicate/empty template set (Task 2).
 - `crates/defra-agent/src/agent/p2p_reconcile/templates.rs` — new template + const + fix two unit tests (Task 3).
 - `crates/defra-agent/src/agent/p2p_reconcile/engine.rs` — `load_desired` query; `data_plane_desired_from_pairing_row` (honor row collections, soft-skip, `Result<Option<..>>`); `desired_from_pairing_row` (reject app-collections, `Result<Option<..>>`); `merge_layered_desired` conditional subscription preservation (Tasks 4–7).
@@ -39,14 +41,32 @@
 
 ---
 
-## Task 1: Lean — add `app-collections` to the template catalog
+## Task 1: Lean — catalog entry + layered-merge subscription model
+
+Two Lean model changes proven together under one `lake build`: **1a** adds the
+`app-collections` template to the catalog; **1b** models `mergeLayered` and proves
+the delivery-aware subscription rule that the Rust `merge_layered_desired` change
+(Task 5) implements. 1b exists because the "data-plane push layers do not extend
+the subscription set, so conversation data never gossips unfiltered" property is
+safety-relevant, and this change makes an app-collections exception to it — that
+is exactly a "what invariants hold" change, which starts in Lean (CLAUDE.md).
+
+**Scope boundary (stated deliberately):** the *source* of a data-plane layer's
+collection set (row vs template) and the *soft-skip* of a malformed row are
+input-validation plumbing below the machine boundary — the reconcile machine
+consumes an abstract desired state and proves nothing about where its Finsets
+originate, and "malformed input → no layer" is not a safety property. Those are
+fenced by Rust unit/conformance (Tasks 6–7), not Lean. Only the subscription
+rule — which governs what may gossip — is modeled here.
 
 **Files:**
 - Modify: `crates/defra-agent/proofs/Proofs/ScopeTemplates/State.lean:157-165` (builtinCatalog) + add a def near line 155
 - Modify: `crates/defra-agent/proofs/Proofs/ScopeTemplates/Derivation.lean` (add theorem near line 188)
+- Create: `crates/defra-agent/proofs/Proofs/PairingReconcile/Layering.lean`
+- Modify: `crates/defra-agent/proofs/Proofs/PairingReconcile.lean` (barrel import)
 
 **Interfaces:**
-- Produces: `ScopeTemplates.appCollectionsTemplate : Template`; `builtinCatalog` now has 8 entries; theorem `appCollections_in_catalog`.
+- Produces: `ScopeTemplates.appCollectionsTemplate : Template`; `builtinCatalog` now has 8 entries; theorem `appCollections_in_catalog`. `PairingReconcile.Layering.{Layer, clampDataPlane, mergeLayered}` + subscription-rule theorems mirrored by Rust conformance in Task 5.
 
 - [ ] **Step 1: Add the template def and catalog entry**
 
@@ -97,16 +117,111 @@ theorem appCollections_unscoped_no_filter (collections : List String) (peerDid l
     scopeFilter appCollectionsTemplate.scope collections peerDid localDid = [] := rfl
 ```
 
-- [ ] **Step 3: Build the proofs and verify zero sorries**
+- [ ] **Step 3 (1b): Create the layered-merge model**
+
+Create `crates/defra-agent/proofs/Proofs/PairingReconcile/Layering.lean`:
+
+```lean
+import Proofs.Basic
+import Mathlib.Data.Finset.Basic
+
+/-!
+# Pairing Reconcile — Layered merge (subscription rule)
+
+A pure derivation beside the reconcile machine (the ScopeTemplates pattern: a
+derivation below the machine, not a new machine). Models Rust
+`merge_layered_desired`: a control-plane base desired layer is merged with an
+optional data-plane layer. A data-plane layer's *subscriptions* are dropped
+UNLESS it is the app-collections (whole-collection Replicate) policy — push
+data-plane layers must not extend the subscription set, so conversation data
+never gossips unfiltered; app-collections is Unscoped Replicate and must
+subscribe on both sides for the merged doc to be observable. Replicator
+collection sets always union (the machine keys replicator identity on them).
+-/
+
+namespace PairingReconcile.Layering
+
+/-- The fields of Rust `PairingDesired` that the merge rule reads. -/
+structure Layer where
+  subscriptions : Finset String
+  replicatorCollections : Finset String
+  /-- `template_ids.contains "app-collections"` in Rust. -/
+  isAppCollections : Bool
+  deriving DecidableEq, Repr
+
+/-- Drop a data-plane layer's subscriptions unless it is app-collections. -/
+def clampDataPlane (l : Layer) : Layer :=
+  if l.isAppCollections then l else { l with subscriptions := (∅ : Finset String) }
+
+/-- Merge a control-plane base with an optional data-plane layer. Mirrors Rust
+`merge_layered_desired`: clamp the data-plane layer, then union. -/
+def mergeLayered (base : Option Layer) (dataPlane : Option Layer) : Option Layer :=
+  match base, dataPlane.map clampDataPlane with
+  | none, none => none
+  | some b, none => some b
+  | none, some d => some d
+  | some b, some d =>
+      some { subscriptions := b.subscriptions ∪ d.subscriptions
+           , replicatorCollections := b.replicatorCollections ∪ d.replicatorCollections
+           , isAppCollections := b.isAppCollections }
+
+/-- An app-collections data-plane layer's subscriptions survive the merge, so an
+`InstallCollection` op can reach the diff. -/
+theorem appCollections_subscription_survives
+    (base : Option Layer) (d : Layer) (h : d.isAppCollections = true)
+    (m : Layer) (hm : mergeLayered base (some d) = some m) :
+    d.subscriptions ⊆ m.subscriptions := by
+  cases base with
+  | none => simp [mergeLayered, clampDataPlane, h] at hm; subst hm; exact subset_rfl
+  | some b =>
+      simp [mergeLayered, clampDataPlane, h] at hm; subst hm; exact Finset.subset_union_right
+
+/-- A non-app-collections data-plane layer contributes NO subscriptions: with an
+empty base the merged subscription set is empty (push data never gossips
+unfiltered). -/
+theorem nonApp_none_base_no_subscription
+    (d : Layer) (h : d.isAppCollections = false) :
+    mergeLayered none (some d) = some { d with subscriptions := (∅ : Finset String) } := by
+  simp [mergeLayered, clampDataPlane, h]
+
+/-- A non-app-collections data-plane layer does not add to a base's subscriptions:
+the merged subscription set equals the base's. -/
+theorem nonApp_subscription_eq_base
+    (b d : Layer) (h : d.isAppCollections = false)
+    (m : Layer) (hm : mergeLayered (some b) (some d) = some m) :
+    m.subscriptions = b.subscriptions := by
+  simp [mergeLayered, clampDataPlane, h] at hm; subst hm; simp
+
+/-- The control-plane base is always preserved (subscriptions and replicator
+collections are supersets of the base's), regardless of the data-plane layer. -/
+theorem base_preserved
+    (b : Layer) (dp : Option Layer) (m : Layer)
+    (hm : mergeLayered (some b) dp = some m) :
+    b.subscriptions ⊆ m.subscriptions ∧ b.replicatorCollections ⊆ m.replicatorCollections := by
+  cases dp with
+  | none => simp [mergeLayered] at hm; subst hm; exact ⟨subset_rfl, subset_rfl⟩
+  | some d =>
+      simp [mergeLayered, clampDataPlane] at hm
+      subst hm
+      exact ⟨Finset.subset_union_left, Finset.subset_union_left⟩
+```
+
+Add to the barrel `crates/defra-agent/proofs/Proofs/PairingReconcile.lean`:
+
+```lean
+import Proofs.PairingReconcile.Layering
+```
+
+- [ ] **Step 4: Build the proofs and verify zero sorries**
 
 Run: `cd crates/defra-agent/proofs && lake build`
-Expected: builds clean, no errors, no `sorry` warnings. (If a fresh worktree, first symlink the parent's mathlib `.lake/build` per the reference note, then `lake build`.)
+Expected: builds clean, no errors, no `sorry` warnings. (If a fresh worktree, first symlink the parent's mathlib `.lake/build` per the reference note, then `lake build`.) If a `simp`/`subst` tactic above does not close a goal, adjust it (e.g. add the relevant `Finset.subset_union_left`/`Finset.mem_union` lemma or `cases`/`rfl`) until the goal is discharged — the statements are exact; only the proof term may need tuning. Zero `sorry` is the gate.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add crates/defra-agent/proofs/Proofs/ScopeTemplates/State.lean crates/defra-agent/proofs/Proofs/ScopeTemplates/Derivation.lean
-git commit -m "proof(scope-templates): add app-collections to builtin catalog (#657)"
+git add crates/defra-agent/proofs/Proofs/ScopeTemplates/State.lean crates/defra-agent/proofs/Proofs/ScopeTemplates/Derivation.lean crates/defra-agent/proofs/Proofs/PairingReconcile/Layering.lean crates/defra-agent/proofs/Proofs/PairingReconcile.lean
+git commit -m "proof: app-collections catalog + layered-merge subscription rule (#657)"
 ```
 
 ---
@@ -301,10 +416,11 @@ git commit -m "feat(p2p): read DataPlanePairingDesired.collections in load_desir
 Append to `pairing_reconcile.rs` (uses the existing `set(&[...])` helper in that file):
 
 ```rust
-/// An `app-collections` data-plane layer's subscription set survives
-/// `merge_layered_desired`, so an `InstallCollection` op can reach the diff.
-/// A network-control-only data-plane layer's subscription is still cleared
-/// (conversation data must never gossip unfiltered).
+/// Mirrors Lean `PairingReconcile.Layering.appCollections_subscription_survives`
+/// / `nonApp_none_base_no_subscription`: an `app-collections` data-plane layer's
+/// subscription set survives `merge_layered_desired`, so an `InstallCollection`
+/// op can reach the diff; a network-control-only data-plane layer's subscription
+/// is still cleared (conversation data must never gossip unfiltered).
 #[test]
 fn merge_preserves_app_collections_subscription_only() {
     use defra_agent::agent::p2p_reconcile::diff::PairingDesired;
@@ -339,9 +455,10 @@ fn merge_preserves_app_collections_subscription_only() {
     );
 }
 
-/// Spec conformance case (iii): an app-collections data-plane layer merges with a
-/// co-existing control (network-control) base pairing without cross-contaminating
-/// their subscriptions or replicator filters — the control pairing is undisturbed.
+/// Spec conformance case (iii); mirrors Lean `PairingReconcile.Layering.base_preserved`:
+/// an app-collections data-plane layer merges with a co-existing control
+/// (network-control) base pairing without cross-contaminating their subscriptions
+/// or replicator filters — the control pairing is undisturbed.
 #[test]
 fn app_collections_coexists_with_control_pairing() {
     use defra_agent::agent::p2p_reconcile::diff::PairingDesired;
@@ -432,83 +549,67 @@ git commit -m "feat(p2p): preserve app-collections subscription through merge_la
 - Consumes: `templates::APP_COLLECTIONS_TEMPLATE`, `PairingStateRow.collections` (Task 4).
 - Produces: signature changes to `fn data_plane_desired_from_pairing_row(row, signed_endpoint, self_did) -> Result<Option<PairingDesired>>`. For `template == "app-collections"`: `replicator_collections` and `collections` (subscription) both = trimmed row collections, filter Unscoped (`{}`); empty trimmed set → `Ok(None)` (soft-skip). For other templates → `Ok(Some(..))` unchanged. Foreign `agent_did` still `Err`.
 
-- [ ] **Step 1: Write the failing conformance tests**
+- [ ] **Step 1: Write the failing unit tests (in-crate, no feature seam)**
 
-Append to `pairing_reconcile.rs`. These call the real resolver via a thin store or the function directly — expose it. First, ensure `data_plane_desired_from_pairing_row` is reachable: it is currently private. Add `pub(crate)` and re-export via a test-visible path, or test through `GraphqlPairingStateStore::load_desired` with a seeded node. **Chosen approach:** make `data_plane_desired_from_pairing_row` `pub` and its input `PairingStateRow` constructor reachable by adding a `#[doc(hidden)] pub fn new_for_test(...)`. To avoid widening the API, instead test the two behaviors through the existing `merge_layered_desired` + a small pure helper. **Simplest that matches repo style:** promote `data_plane_desired_from_pairing_row` to `pub(crate)` and add a conformance test in an in-crate test module.
-
-Given the repo tests the resolver via conformance calling public seams, expose a focused public wrapper in `engine.rs`:
+`data_plane_desired_from_pairing_row` is private; the repo already tests it directly from the in-crate `#[cfg(test)] mod tests` in `engine.rs` (see `data_plane_desired_uses_signed_endpoint_address_and_self_did` at ~engine.rs:1073, which constructs `PairingStateRow` + `NetworkEndpointEntry` inline). Add the two new tests to **that same module** — do NOT invent a `conformance-seams` feature: integration tests compile `defra-agent` as a normal dependency, so a `#[cfg(any(test, feature=...))]` `pub` seam is invisible to `tests/conformance/*` unless the feature is declared in `Cargo.toml` AND the test run enables it. In-crate `#[cfg(test)]` is the idiomatic home here. Append inside the `#[cfg(test)] mod tests` block:
 
 ```rust
-/// Test/conformance seam: resolve a data-plane desired layer from explicit
-/// inputs (mirrors what `load_desired` does per row). Keeps the row struct
-/// private while letting conformance exercise the app-collections resolution.
-#[cfg(any(test, feature = "conformance-seams"))]
-pub fn resolve_data_plane_layer_for_test(
-    agent_did: Option<&str>,
-    collections: &[&str],
-    template: &str,
-    signed_address: &str,
-    signed_peer_did: &str,
-    signed_peer_id: &str,
-    self_did: &str,
-) -> anyhow::Result<Option<PairingDesired>> {
-    let row = PairingStateRow {
-        agent_did: agent_did.map(str::to_string),
-        collections: Some(collections.iter().map(|s| s.to_string()).collect()),
-        replicator_addresses: None,
-        template: Some(template.to_string()),
-        replicator_filter: None,
-    };
-    let entry = NetworkEndpointEntry {
-        peer_id: signed_peer_id.to_string(),
-        agent_did: signed_peer_did.to_string(),
-        address: signed_address.to_string(),
-    };
-    data_plane_desired_from_pairing_row(row, &entry, self_did)
-}
-```
+    #[test]
+    fn app_collections_row_resolves_row_collections_as_subscription_and_replicator() {
+        let signed_endpoint = NetworkEndpointEntry {
+            peer_id: "peer-b".to_string(),
+            agent_did: "did:key:peer-b".to_string(),
+            address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        };
+        let layer = data_plane_desired_from_pairing_row(
+            PairingStateRow {
+                agent_did: Some("did:key:self".to_string()), // == self_did (allowed)
+                collections: Some(vec!["ChangeProposed".to_string()]),
+                replicator_addresses: None,
+                template: Some("app-collections".to_string()),
+                replicator_filter: None,
+            },
+            &signed_endpoint,
+            "did:key:self",
+        )
+        .expect("resolve ok")
+        .expect("some layer");
+        assert!(layer.replicator_collections.contains("ChangeProposed"));
+        assert!(
+            layer.collections.contains("ChangeProposed"),
+            "app-collections must subscribe (Replicate)"
+        );
+        assert!(layer.replicator_filter.is_empty(), "unscoped => no filter");
+        assert!(layer.template_ids.contains("app-collections"));
+    }
 
-If the `conformance-seams` feature does not exist, use `#[cfg(test)]` plus an in-crate `#[cfg(test)] mod` conformance instead; confirm how sibling resolvers are exercised (grep `resolve.*_for_test` / existing `pub(crate)` seams in `engine.rs`) and match that convention rather than inventing a feature. Then the conformance test:
-
-```rust
-#[test]
-fn app_collections_row_resolves_row_collections_as_subscription_and_replicator() {
-    use defra_agent::agent::p2p_reconcile::engine::resolve_data_plane_layer_for_test;
-    let layer = resolve_data_plane_layer_for_test(
-        Some("did:key:self"),           // agent_did == self (allowed)
-        &["ChangeProposed"],
-        "app-collections",
-        "addr-b", "did:key:peer", "peer-b",
-        "did:key:self",
-    )
-    .expect("resolve ok")
-    .expect("some layer");
-    assert!(layer.replicator_collections.contains("ChangeProposed"));
-    assert!(layer.collections.contains("ChangeProposed"),
-        "app-collections must subscribe (Replicate)");
-    assert!(layer.replicator_filter.is_empty(), "unscoped => no filter");
-    assert!(layer.template_ids.contains("app-collections"));
-}
-
-#[test]
-fn app_collections_empty_collections_soft_skips() {
-    use defra_agent::agent::p2p_reconcile::engine::resolve_data_plane_layer_for_test;
-    let out = resolve_data_plane_layer_for_test(
-        Some("did:key:self"),
-        &["   "],                        // blank-only after trim
-        "app-collections",
-        "addr-b", "did:key:peer", "peer-b",
-        "did:key:self",
-    )
-    .expect("resolve ok (soft-skip is Ok(None), not Err)");
-    assert!(out.is_none(), "empty/blank app-collections set must soft-skip to None");
-}
+    #[test]
+    fn app_collections_empty_collections_soft_skips() {
+        let signed_endpoint = NetworkEndpointEntry {
+            peer_id: "peer-b".to_string(),
+            agent_did: "did:key:peer-b".to_string(),
+            address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        };
+        let out = data_plane_desired_from_pairing_row(
+            PairingStateRow {
+                agent_did: Some("did:key:self".to_string()),
+                collections: Some(vec!["   ".to_string()]), // blank-only after trim
+                replicator_addresses: None,
+                template: Some("app-collections".to_string()),
+                replicator_filter: None,
+            },
+            &signed_endpoint,
+            "did:key:self",
+        )
+        .expect("resolve ok (soft-skip is Ok(None), not Err)");
+        assert!(out.is_none(), "empty/blank app-collections set must soft-skip to None");
+    }
 ```
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `cargo test -p defra-agent --test conformance app_collections_row_resolves`
-Expected: FAIL — the resolver currently ignores `row.collections` and returns `Result<PairingDesired>` (won't compile against `.expect("some layer")` on an `Option`).
+Run: `cargo test -p defra-agent --lib p2p_reconcile::engine::tests::app_collections`
+Expected: FAIL to COMPILE — the resolver currently returns `Result<PairingDesired>`, so `.expect("resolve ok").expect("some layer")` (a double unwrap through `Option`) does not type-check. This compile failure is the red state; Step 3 changes the signature to `Result<Option<..>>`.
 
 - [ ] **Step 3: Change the signature to `Result<Option<PairingDesired>>` and honor row collections**
 
@@ -618,17 +719,17 @@ At lines 513-523, the match arm already unwraps with `?`. Because the function n
 
 (The soft-skip `Ok(None)` now flows through as `data_plane = None`, leaving `base` intact in `merge_layered_desired`.)
 
-- [ ] **Step 5: Run the conformance tests + full engine tests**
+- [ ] **Step 5: Run the in-crate tests + full engine tests**
 
-Run: `cargo test -p defra-agent --test conformance app_collections_row`
+Run: `cargo test -p defra-agent --lib p2p_reconcile::engine::tests::app_collections`
 Expected: PASS (both resolution + soft-skip).
 Run: `cargo test -p defra-agent --lib p2p_reconcile`
-Expected: PASS.
+Expected: PASS (existing resolver/merge unit tests unaffected).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/defra-agent/src/agent/p2p_reconcile/engine.rs crates/defra-agent/tests/conformance/pairing_reconcile.rs
+git add crates/defra-agent/src/agent/p2p_reconcile/engine.rs
 git commit -m "feat(p2p): honor app-collections row collections + soft-skip malformed rows (#657)"
 ```
 
@@ -638,60 +739,44 @@ git commit -m "feat(p2p): honor app-collections row collections + soft-skip malf
 
 **Files:**
 - Modify: `crates/defra-agent/src/agent/p2p_reconcile/engine.rs:671-736` (`desired_from_pairing_row`) + its `load_desired` call site (lines 506-508)
-- Test: `crates/defra-agent/tests/conformance/pairing_reconcile.rs`
+- Test: in-crate `#[cfg(test)] mod tests` in `engine.rs`
 
 **Interfaces:**
 - Produces: `fn desired_from_pairing_row(row, local_did) -> Result<Option<PairingDesired>>`. A `PeerPairingDesired`/base row whose resolved template is `app-collections` → `Ok(None)` + warn (no wiring). All other templates unchanged.
 
-- [ ] **Step 1: Write the failing conformance test**
+- [ ] **Step 1: Write the failing in-crate unit test**
 
-Append to `pairing_reconcile.rs` (mirror the seam approach from Task 6; add a base-path wrapper if needed):
-
-```rust
-/// A base/PeerPairingDesired row that names the app-collections template has no
-/// way to supply row collections; it must resolve to no wiring (soft-skip),
-/// never an empty-collection replicator.
-#[test]
-fn app_collections_on_control_plane_path_soft_skips() {
-    use defra_agent::agent::p2p_reconcile::engine::resolve_control_plane_desired_for_test;
-    let out = resolve_control_plane_desired_for_test(
-        Some("did:key:peer"),
-        &["addr-b"],
-        "app-collections",
-        "did:key:self",
-    )
-    .expect("resolve ok");
-    assert!(out.is_none(), "app-collections is invalid for a control-plane row");
-}
-```
-
-Add the seam wrapper in `engine.rs` beside the Task 6 one:
+Append to the same in-crate `#[cfg(test)] mod tests` in `engine.rs`, calling the private `desired_from_pairing_row` directly (as the Task 6 tests do):
 
 ```rust
-#[cfg(any(test, feature = "conformance-seams"))]
-pub fn resolve_control_plane_desired_for_test(
-    agent_did: Option<&str>,
-    replicator_addresses: &[&str],
-    template: &str,
-    local_did: &str,
-) -> anyhow::Result<Option<PairingDesired>> {
-    let row = PairingStateRow {
-        agent_did: agent_did.map(str::to_string),
-        collections: None,
-        replicator_addresses: Some(replicator_addresses.iter().map(|s| s.to_string()).collect()),
-        template: Some(template.to_string()),
-        replicator_filter: None,
-    };
-    desired_from_pairing_row(row, local_did)
-}
+    #[test]
+    fn app_collections_on_control_plane_path_soft_skips() {
+        // A base/PeerPairingDesired row naming app-collections has no way to
+        // supply row collections; it must resolve to no wiring (soft-skip),
+        // never an empty-collection replicator.
+        let out = desired_from_pairing_row(
+            PairingStateRow {
+                agent_did: Some("did:key:peer".to_string()),
+                collections: None,
+                replicator_addresses: Some(vec!["addr-b".to_string()]),
+                template: Some("app-collections".to_string()),
+                replicator_filter: None,
+            },
+            "did:key:self",
+        )
+        .expect("resolve ok");
+        assert!(out.is_none(), "app-collections is invalid for a control-plane row");
+    }
 ```
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test -p defra-agent --test conformance app_collections_on_control_plane_path_soft_skips`
-Expected: FAIL — `desired_from_pairing_row` returns `Result<PairingDesired>` (won't compile against `.is_none()`), and today resolves app-collections to empty-collection wiring.
+Run: `cargo test -p defra-agent --lib p2p_reconcile::engine::tests::app_collections_on_control_plane_path_soft_skips`
+Expected: FAIL to COMPILE — `desired_from_pairing_row` returns `Result<PairingDesired>`, so `.expect("resolve ok")` then `.is_none()` does not type-check; today it also resolves app-collections to empty-collection wiring.
 
 - [ ] **Step 3: Change signature + add the reject**
+
+First, make `APP_COLLECTIONS_TEMPLATE` usable unqualified in `engine.rs`: add it to the existing `use super::templates::{ resolve_template, scope_filter, Delivery, DidSource, PairingFilters, Scope };` import (engine.rs:18) — i.e. append `APP_COLLECTIONS_TEMPLATE`. (Task 5's `merge_layered_desired` edit may reference it as `super::templates::APP_COLLECTIONS_TEMPLATE`; either form is fine, but with the import both Tasks 5-7 can use the bare name consistently.)
 
 In `desired_from_pairing_row` (line 671), change the return type to `Result<Option<PairingDesired>>`. After the template is resolved (around line 697), add:
 
@@ -723,9 +808,9 @@ At lines 506-508, the base currently does `.map(|row| desired_from_pairing_row(r
             .flatten();
 ```
 
-- [ ] **Step 5: Run conformance + full lib tests**
+- [ ] **Step 5: Run the in-crate test + full lib tests**
 
-Run: `cargo test -p defra-agent --test conformance app_collections_on_control_plane_path_soft_skips`
+Run: `cargo test -p defra-agent --lib p2p_reconcile::engine::tests::app_collections_on_control_plane_path_soft_skips`
 Expected: PASS.
 Run: `cargo test -p defra-agent --lib p2p_reconcile`
 Expected: PASS.
@@ -733,7 +818,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/defra-agent/src/agent/p2p_reconcile/engine.rs crates/defra-agent/tests/conformance/pairing_reconcile.rs
+git add crates/defra-agent/src/agent/p2p_reconcile/engine.rs
 git commit -m "feat(p2p): reject app-collections template on the control-plane path (#657)"
 ```
 
@@ -863,7 +948,9 @@ async fn seed_makes_peer_materializable() {
         db.node.clone(), Arc::new(admin_clone),
     );
     let entries = store.load_materializable_entries().await.unwrap();
-    assert!(entries.iter().any(|e| e.node_id == "peer-node"),
+    // NetworkEndpointEntry exposes { peer_id, agent_did, address } (network.rs:28);
+    // the endpoint doc's node_id becomes the entry's peer_id (network.rs:141).
+    assert!(entries.iter().any(|e| e.peer_id == "peer-node"),
         "seeded peer must be materializable: {entries:?}");
 }
 ```
@@ -969,14 +1056,17 @@ Append a second `#[tokio::test]` (or extend the first after the happy-path asser
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn empty_app_collection_row_does_not_stall_control_pairing() {
     // Boot one agent node with a control pairing already applied; write a
-    // DataPlanePairingDesired with collections: null (empty) + template
+    // DataPlanePairingDesired with collections: ["   "] (blank-only) + template
     // app-collections; assert the next reconcile tick is NOT desired_read_failed
     // (fetch_runtime_snapshot / last_reconcile_result stays "applied") and the
     // control pairing's applied collections are unchanged.
 }
 ```
 
-To write an empty-collections row, emit `collections: null` (never `[]` — Global Constraints).
+`DataPlanePairingDesired.collections` is declared `[String!]!` (non-null) in the
+SDL, so the malformed vector must be a valid **blank-only list** `["   "]` — which
+the resolver trims to empty and soft-skips. Do NOT use `collections: null` (schema
+rejects it) nor `[]` (Global Constraints: corrupts nillable array columns).
 
 - [ ] **Step 4: Run the full e2e module**
 
@@ -1046,7 +1136,7 @@ EOF
 
 ## Notes for the executor
 
-- **Test-visibility seam (Tasks 6-7):** the plan exposes `resolve_data_plane_layer_for_test` / `resolve_control_plane_desired_for_test` behind `#[cfg(any(test, feature = "conformance-seams"))]`. Before adopting a new cargo feature, grep `engine.rs` for how sibling resolvers are already exercised by conformance (`pub(crate)`, existing seams). Match the repo's convention; do not invent a feature if one isn't already the pattern.
+- **Resolver tests live in-crate (Tasks 6-7).** `data_plane_desired_from_pairing_row` / `desired_from_pairing_row` are private; test them from the existing `#[cfg(test)] mod tests` in `engine.rs` (which already calls the former directly), NOT from `tests/conformance/*` — integration tests compile `defra-agent` as a normal dependency and cannot see private items or `#[cfg(test)]`/unfeatured-`pub` seams. Do not add a `conformance-seams` feature. Merge-rule conformance (Task 5) is different: it uses the already-`pub` `merge_layered_desired`, so it can (and does) live in `tests/conformance/pairing_reconcile.rs`.
 - **e2e target name:** integration tests under `tests/e2e_triggers/` compile as one binary; find its harness entry (`grep -rn "mod event_trigger_p2p_e2e" crates/defra-agent/tests/`) and use that `--test <name>` for the run commands above.
 - **`data_plane_scope_filter` for app-collections** returns `{}` (Unscoped), so the replicator is unfiltered — correct for whole-collection sync. Confirm `apply_op`'s `InstallReplicator` passes an empty `PairingFilters` (it reads `desired.replicator_filter`).
 - **Ordering invariant** is enforced by test sequencing (trigger reconciled before the data-plane rows are written), matching `event_trigger_p2p_e2e.rs`.
