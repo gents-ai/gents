@@ -234,16 +234,41 @@ pub struct ToolSelectionDocument {
     pub enable_bash: Option<bool>,
     pub bash_mode: Option<String>,
     pub command_execution_policy: Option<String>,
+    /// Argv-prefix allow gate on top of (or instead of pure allowlist admission
+    /// for) read-only bash. Empty/absent means no prefix gate.
+    ///
+    /// When non-empty, **every** command must match an allowed prefix (global
+    /// gate). In `ReadOnly` mode a matching prefix also admits commands that
+    /// are not on the base allowlist, at subcommand precision (e.g.
+    /// `systemctl is-active` without `systemctl stop`). Pairs with
+    /// [`Self::command_forbidden_argv_prefixes`] (forbidden wins).
+    ///
+    /// Prefer this field to **extend** the surface with argv-precise families.
+    /// Prefer [`Self::read_only_command_allowlist`] to **replace or narrow** the
+    /// whole-executable base list. See `docs/macos-bash-sandbox.md`.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
     )]
     pub command_allowed_argv_prefixes: Option<Vec<String>>,
+    /// Argv prefixes that are always denied (takes precedence over allowed
+    /// prefixes and the read-only allowlist).
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
     )]
     pub command_forbidden_argv_prefixes: Option<Vec<String>>,
+    /// Optional **replacement** for the hardcoded `default_read_only_commands()`
+    /// base used in `ReadOnly` bash mode. Whole-executable heads only (e.g.
+    /// `cat`, `journalctl`) — not argv-prefix precise.
+    ///
+    /// Present **and non-empty** replaces the default base wholesale. Absent or
+    /// empty is "no override" (keep the hardcoded default); empty must not
+    /// become a deny-all surface.
+    ///
+    /// Unique vs [`Self::command_allowed_argv_prefixes`]: can **narrow** the
+    /// default set (drop `sudo` / `curl`) without re-expressing every kept
+    /// command as an argv prefix. See `docs/macos-bash-sandbox.md`.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"

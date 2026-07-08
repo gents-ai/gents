@@ -599,10 +599,22 @@ pub struct ToolSelectionRow {
     pub bash_mode: Option<String>,
     #[serde(default)]
     pub command_execution_policy: Option<String>,
+    /// Argv-prefix allow gate. Empty = no gate. Non-empty = every command must
+    /// match a prefix; in ReadOnly mode a match also admits heads outside the
+    /// base allowlist (subcommand-precise). Prefer for **extending** the
+    /// surface. See `docs/macos-bash-sandbox.md` and the related
+    /// `read_only_command_allowlist` field (replace/narrow the base).
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub command_allowed_argv_prefixes: Vec<String>,
+    /// Argv prefixes that are always denied (wins over allowed prefixes and
+    /// the read-only allowlist).
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub command_forbidden_argv_prefixes: Vec<String>,
+    /// When non-empty, **replaces** the hardcoded default read-only command
+    /// heads wholesale (whole-executable granularity). Empty = no override.
+    /// Prefer for **narrowing** or fully customizing the base allowlist; use
+    /// `command_allowed_argv_prefixes` to extend with subcommand precision.
+    /// See `docs/macos-bash-sandbox.md`.
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub read_only_command_allowlist: Vec<String>,
     #[serde(default)]

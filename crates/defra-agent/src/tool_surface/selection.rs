@@ -277,10 +277,12 @@ fn command_policy_from_document(
     } else {
         CommandExecutionPolicy::write_capable()
     };
-    // A per-agent read-only allowlist overrides the hardcoded default only when
-    // it is present AND non-empty; an empty list is treated as "no override" and
-    // falls back to the default, matching the command_allowed_argv_prefixes idiom
-    // (Some(vec![]) must not become a deny-all read-only surface).
+    // read_only_command_allowlist REPLACES the hardcoded default base when
+    // present AND non-empty (whole-executable heads). Empty/absent = no
+    // override — never a deny-all surface. This is orthogonal to
+    // command_allowed_argv_prefixes, which is an argv-prefix gate for
+    // subcommand-precise extension (not base replacement). See #629 and
+    // docs/macos-bash-sandbox.md.
     let base = match (mode, selection.read_only_command_allowlist.as_deref()) {
         (CommandExecutionMode::ReadOnly, Some(list)) if !list.is_empty() => {
             base.with_read_only_allowlist(list.to_vec())

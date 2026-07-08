@@ -9,8 +9,15 @@ type ToolSelection {
     enable_bash: Boolean
     bash_mode: String
     command_execution_policy: String
+    # Argv-prefix allow gate (extend / subcommand-precise). Non-empty = global
+    # gate; matching prefix also admits heads outside the base allowlist in
+    # ReadOnly mode. Prefer for extending. See docs/macos-bash-sandbox.md.
     command_allowed_argv_prefixes: [String]
+    # Argv prefixes always denied (wins over allowed + read-only allowlist).
     command_forbidden_argv_prefixes: [String]
+    # When non-empty, replaces default_read_only_commands() wholesale
+    # (whole-executable). Prefer for narrowing/customizing the base.
+    # See docs/macos-bash-sandbox.md.
     read_only_command_allowlist: [String]
     command_network_mode: String
     cli_tool_names: [String]

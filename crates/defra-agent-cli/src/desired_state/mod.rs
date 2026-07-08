@@ -133,10 +133,20 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) bash_mode: String,
     #[serde(default)]
     pub(crate) command_execution_policy: Option<String>,
+    /// Argv-prefix allow gate (extend / subcommand-precise). Empty = no gate;
+    /// non-empty requires every command to match a prefix. Prefer over
+    /// `read_only_command_allowlist` when adding diagnostic families without
+    /// replacing the base. See `docs/macos-bash-sandbox.md`.
     #[serde(default)]
     pub(crate) command_allowed_argv_prefixes: Vec<String>,
+    /// Argv prefixes always denied (wins over allowed prefixes and the
+    /// read-only allowlist).
     #[serde(default)]
     pub(crate) command_forbidden_argv_prefixes: Vec<String>,
+    /// When non-empty, **replaces** the hardcoded default read-only command
+    /// heads (whole-executable). Use to narrow or fully customize the base;
+    /// use `command_allowed_argv_prefixes` to extend with argv precision.
+    /// See `docs/macos-bash-sandbox.md`.
     #[serde(default)]
     pub(crate) read_only_command_allowlist: Vec<String>,
     #[serde(default)]

@@ -329,6 +329,12 @@ pub(crate) fn validate_command_policy(
         ));
     }
 
+    // Allowed argv prefixes are a global gate when non-empty (every command
+    // must match). In ReadOnly mode a match also admits heads outside
+    // `read_only_allowlist` (subcommand-precise extension). That list is the
+    // *base* set of whole-executable heads and is replaced wholesale by
+    // ToolSelection.read_only_command_allowlist when configured — it is not an
+    // alternate spelling of this prefix field. See docs/macos-bash-sandbox.md.
     let allowed_prefix_matched =
         first_matching_prefix(&argv, &policy.allowed_argv_prefixes).is_some();
     if !policy.allowed_argv_prefixes.is_empty() && !allowed_prefix_matched {

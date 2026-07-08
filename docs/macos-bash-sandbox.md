@@ -54,7 +54,32 @@ Manifest or direct DefraDB document:
 }
 ```
 
-## Read-Only Diagnostic Extensions
+## Read-only allowlist knobs (which field when)
+
+`ToolSelection` has two related fields that shape the ReadOnly bash surface.
+They are not aliases — pick by use case:
+
+| Field | Effect on the base allowlist | Granularity | Reach for when |
+| --- | --- | --- | --- |
+| `command_allowed_argv_prefixes` | Does **not** replace the base. When non-empty, every command must match a prefix (global gate). In ReadOnly mode a matching prefix also admits heads **outside** the base. | Argv prefix (subcommand-precise) | **Extend** the surface with a diagnostic family, or require a precise argv shape; pairs with `command_forbidden_argv_prefixes` |
+| `read_only_command_allowlist` | When present **and non-empty**, **replaces** `default_read_only_commands()` wholesale. Absent or empty = keep the hardcoded default (never deny-all). | Whole executable head (`cat`, `journalctl`) | **Narrow** or fully customize the base (e.g. drop `sudo` / `curl`) — prefixes alone cannot remove a default head |
+
+Validation (see `validate_command_policy` / `validate_read_only_command_inner` in
+`crates/defra-agent/src/toolset/shared/command.rs`):
+
+1. Forbidden prefixes always win.
+2. If `command_allowed_argv_prefixes` is non-empty, the command must match one
+   (global gate) — re-include prefixes for every built-in shape you still want.
+3. In ReadOnly mode, the command head must be on the base allowlist **or** match
+   an allowed prefix; known tools still get argument-level read-only checks
+   (`git`, `sed`, `find`, `curl`, …).
+
+Keep both fields: extension-via-prefixes and replace/narrow-base are different
+operator needs. Do not use `read_only_command_allowlist` only to add one head
+when argv precision matters — prefer prefixes. Do not use prefixes alone when
+you need to strip defaults from the base.
+
+### Extend with argv prefixes
 
 Read-only bash has built-in host diagnostics for common steward commands such
 as `date`, `hostname`, `uptime`, `df`, `vm_stat`, `ps`, `lsof`, `curl`,
@@ -91,6 +116,31 @@ as JSON when an argument contains spaces:
   ]
 }
 ```
+
+### Replace or narrow the base allowlist
+
+To run ReadOnly bash with a custom executable set (including a strict subset of
+the defaults), set `read_only_command_allowlist` to the full desired head list:
+
+```json
+{
+  "enable_bash": true,
+  "bash_mode": "ReadOnly",
+  "command_execution_policy": "read_only",
+  "read_only_command_allowlist": [
+    "ls",
+    "cat",
+    "git",
+    "journalctl"
+  ]
+}
+```
+
+That replaces the default base (so `sudo`, `curl`, `launchctl`, etc. are no
+longer admit-by-head unless listed). Leave the field absent or empty to keep
+the built-in default. Combine with `command_allowed_argv_prefixes` only when you
+also need argv-precise admission; remember a non-empty prefix list is a global
+gate.
 
 ## macOS Seatbelt Profile
 
