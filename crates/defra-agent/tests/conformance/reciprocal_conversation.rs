@@ -12,7 +12,8 @@ use std::sync::Mutex;
 use anyhow::Result;
 use async_trait::async_trait;
 use defra_agent::agent::p2p_reconcile::{
-    NetworkEndpointEntry, ReciprocalStore, derive_reciprocal_desired, reconcile_reciprocal_tick,
+    derive_reciprocal_desired, reconcile_reciprocal_tick, NetworkEndpointEntry, ReciprocalRowState,
+    ReciprocalStore, ReciprocalTickOutcome,
 };
 
 fn endpoint(did: &str, peer: &str, address: &str) -> NetworkEndpointEntry {
@@ -66,7 +67,7 @@ fn reciprocal_derivation_is_idempotent_and_convergent() {
 struct ReciprocalPartitionStore {
     intents: BTreeSet<String>,
     endpoints: BTreeMap<String, NetworkEndpointEntry>,
-    reciprocal_owned: Mutex<BTreeSet<String>>,
+    reciprocal_owned: Mutex<BTreeMap<String, ReciprocalRowState>>,
     operator_owned: BTreeSet<String>,
     upserts: Mutex<Vec<(String, String, String)>>,
     deletes: Mutex<Vec<String>>,
@@ -76,7 +77,7 @@ impl ReciprocalPartitionStore {
     fn new(
         intents: &[&str],
         endpoints: Vec<NetworkEndpointEntry>,
-        reciprocal_owned: &[&str],
+        reciprocal_owned: &[(&str, &str)],
         operator_owned: &[&str],
     ) -> Self {
         Self {
@@ -88,7 +89,14 @@ impl ReciprocalPartitionStore {
             reciprocal_owned: Mutex::new(
                 reciprocal_owned
                     .iter()
-                    .map(|value| value.to_string())
+                    .map(|&(peer, address)| {
+                        (
+                            peer.to_string(),
+                            ReciprocalRowState {
+                                address: address.to_string(),
+                            },
+                        )
+                    })
                     .collect(),
             ),
             operator_owned: operator_owned
@@ -117,10 +125,12 @@ impl ReciprocalStore for ReciprocalPartitionStore {
         agent_did: &str,
         address: &str,
     ) -> Result<()> {
-        self.reciprocal_owned
-            .lock()
-            .unwrap()
-            .insert(peer_id.to_string());
+        self.reciprocal_owned.lock().unwrap().insert(
+            peer_id.to_string(),
+            ReciprocalRowState {
+                address: address.to_string(),
+            },
+        );
         self.upserts.lock().unwrap().push((
             peer_id.to_string(),
             agent_did.to_string(),
@@ -135,18 +145,29 @@ impl ReciprocalStore for ReciprocalPartitionStore {
         Ok(())
     }
 
-    async fn list_reciprocal_data_plane_peers(&self) -> Result<BTreeSet<String>> {
+    async fn list_reciprocal_data_plane_rows(
+        &self,
+    ) -> Result<BTreeMap<String, ReciprocalRowState>> {
         Ok(self.reciprocal_owned.lock().unwrap().clone())
+    }
+
+    async fn list_non_reciprocal_data_plane_peers(&self) -> Result<BTreeSet<String>> {
+        Ok(self.operator_owned.clone())
     }
 }
 
 /// Mirrors Lean `deriveReciprocal_ownership_safe`: the reciprocal sweep mutates
-/// only the reciprocal-owned partition, never operator-authored data-plane rows.
+/// only the reciprocal-owned partition, never operator-authored data-plane rows
+/// — including when an operator-owned row exists for the very peer the
+/// derivation would otherwise wire.
 #[tokio::test]
 async fn reciprocal_reconcile_is_ownership_safe() {
     let store = ReciprocalPartitionStore::new(
-        &["did:key:phone"],
-        vec![endpoint("did:key:phone", "peer-phone", "/ticket/phone")],
+        &["did:key:phone", "did:key:taken"],
+        vec![
+            endpoint("did:key:phone", "peer-phone", "/ticket/phone"),
+            endpoint("did:key:taken", "peer-operator", "/ticket/taken"),
+        ],
         &[],
         &["peer-operator"],
     );
@@ -156,6 +177,7 @@ async fn reciprocal_reconcile_is_ownership_safe() {
         .expect("tick");
 
     assert_eq!(outcome.upserted, BTreeSet::from(["peer-phone".to_string()]));
+    assert!(outcome.refreshed.is_empty());
     assert!(outcome.retracted.is_empty());
     let touched = {
         let upserts = store.upserts.lock().unwrap();
@@ -174,6 +196,49 @@ async fn reciprocal_reconcile_is_ownership_safe() {
     }
 }
 
+/// Mirrors Lean `ReciprocalState.settled` + `deriveReciprocal_convergent`:
+/// `settled` is full-row equality with the derived set, not peer-id membership,
+/// so a drifted address converges in one sweep and a settled state is a
+/// fixpoint (no writes — the reconciler sweeps on Update events, so a settled
+/// sweep must not itself produce another Update).
+#[tokio::test]
+async fn reciprocal_reconcile_converges_row_contents_then_quiesces() {
+    let store = ReciprocalPartitionStore::new(
+        &["did:key:phone"],
+        vec![endpoint("did:key:phone", "peer-phone", "/ticket/phone-new")],
+        &[("peer-phone", "/ticket/phone-old")],
+        &[],
+    );
+
+    let first = reconcile_reciprocal_tick(&store, "did:key:server")
+        .await
+        .expect("first tick");
+    assert_eq!(
+        first.refreshed,
+        BTreeSet::from(["peer-phone".to_string()]),
+        "drifted address must converge to the derived row"
+    );
+    assert_eq!(
+        store
+            .reciprocal_owned
+            .lock()
+            .unwrap()
+            .get("peer-phone")
+            .expect("row present")
+            .address,
+        "/ticket/phone-new"
+    );
+
+    let second = reconcile_reciprocal_tick(&store, "did:key:server")
+        .await
+        .expect("second tick");
+    assert_eq!(
+        second,
+        ReciprocalTickOutcome::default(),
+        "settled state must be a write-free fixpoint"
+    );
+}
+
 /// Mirrors Lean `deriveReciprocal_retraction_sound_*`: removing an intent or
 /// endpoint retracts exactly the reciprocal-owned row it derived and leaves
 /// unrelated/operator-owned rows untouched.
@@ -182,7 +247,7 @@ async fn reciprocal_retraction_removes_only_derived_rows() {
     let store = ReciprocalPartitionStore::new(
         &["did:key:phone-b"],
         vec![endpoint("did:key:phone-b", "peer-b", "/ticket/b")],
-        &["peer-a", "peer-b"],
+        &[("peer-a", "/ticket/a"), ("peer-b", "/ticket/b")],
         &["peer-operator"],
     );
 
@@ -192,18 +257,14 @@ async fn reciprocal_retraction_removes_only_derived_rows() {
 
     assert_eq!(outcome.retracted, BTreeSet::from(["peer-a".to_string()]));
     assert_eq!(*store.deletes.lock().unwrap(), vec!["peer-a".to_string()]);
-    assert!(
-        !store
-            .deletes
-            .lock()
-            .unwrap()
-            .contains(&"peer-b".to_string())
-    );
-    assert!(
-        !store
-            .deletes
-            .lock()
-            .unwrap()
-            .contains(&"peer-operator".to_string())
-    );
+    assert!(!store
+        .deletes
+        .lock()
+        .unwrap()
+        .contains(&"peer-b".to_string()));
+    assert!(!store
+        .deletes
+        .lock()
+        .unwrap()
+        .contains(&"peer-operator".to_string()));
 }

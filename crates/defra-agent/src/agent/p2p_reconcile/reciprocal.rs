@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
 use defra_agent_protocol::network_token::EndpointRecord;
@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use crate::graphql::escape_graphql_string;
 use crate::identity::AgentIdentity;
 
-use super::network::{NetworkEndpointEntry, endpoint_is_fresh};
+use super::network::{endpoint_is_fresh, NetworkEndpointEntry};
 use super::templates::resolve_template;
 
 pub const RECIPROCAL_CONVERSATION_TEMPLATE: &str = "conversation";
@@ -37,9 +37,20 @@ pub fn derive_reciprocal_desired<'a>(
         .collect()
 }
 
+/// Reciprocal-owned `DataPlanePairingDesired` state the tick reconciles. The
+/// engine always materializes from the live signed endpoint, but the row must
+/// still converge to the derived value (Lean `settled` is full-row equality,
+/// not peer-id membership) — a drifted address would otherwise warn on every
+/// engine sweep forever.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReciprocalRowState {
+    pub address: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReciprocalTickOutcome {
     pub upserted: BTreeSet<String>,
+    pub refreshed: BTreeSet<String>,
     pub retracted: BTreeSet<String>,
 }
 
@@ -54,7 +65,14 @@ pub trait ReciprocalStore: Send + Sync {
         address: &str,
     ) -> Result<()>;
     async fn delete_reciprocal_data_plane(&self, peer_id: &str) -> Result<()>;
-    async fn list_reciprocal_data_plane_peers(&self) -> Result<BTreeSet<String>>;
+    async fn list_reciprocal_data_plane_rows(&self)
+        -> Result<BTreeMap<String, ReciprocalRowState>>;
+    /// Peers whose `DataPlanePairingDesired` row is owned by another source
+    /// (operator/manual/legacy-null). Mirrors the network reconciler's blocked
+    /// set: these peers are excluded from the desired set up front so the tick
+    /// neither re-attempts a guarded upsert every sweep nor reports it as
+    /// upserted.
+    async fn list_non_reciprocal_data_plane_peers(&self) -> Result<BTreeSet<String>>;
 }
 
 pub async fn reconcile_reciprocal_tick(
@@ -76,38 +94,52 @@ pub async fn reconcile_reciprocal_tick(
         }
     }
 
-    let derived = derive_reciprocal_desired(&intent_dids, &endpoints);
-    let desired = derived
-        .iter()
-        .map(|entry| entry.peer_id.clone())
-        .collect::<BTreeSet<_>>();
-    let entry_by_peer = derived
-        .iter()
-        .map(|entry| (entry.peer_id.as_str(), *entry))
+    let blocked = store
+        .list_non_reciprocal_data_plane_peers()
+        .await
+        .context("list non-reciprocal data-plane desired peers")?;
+    let desired = derive_reciprocal_desired(&intent_dids, &endpoints)
+        .into_iter()
+        .filter(|entry| !blocked.contains(&entry.peer_id))
+        .map(|entry| (entry.peer_id.clone(), entry))
         .collect::<BTreeMap<_, _>>();
     let existing = store
-        .list_reciprocal_data_plane_peers()
+        .list_reciprocal_data_plane_rows()
         .await
-        .context("list reciprocal data-plane desired peers")?;
+        .context("list reciprocal data-plane desired rows")?;
 
     let mut outcome = ReciprocalTickOutcome::default();
-    for peer in desired.difference(&existing) {
-        let entry = entry_by_peer
-            .get(peer.as_str())
-            .copied()
-            .with_context(|| format!("derived reciprocal peer {peer} missing endpoint entry"))?;
-        store
-            .upsert_reciprocal_data_plane(&entry.peer_id, self_did, &entry.address)
-            .await
-            .with_context(|| format!("upsert reciprocal data-plane desired row for {peer}"))?;
-        outcome.upserted.insert(peer.clone());
+    for (peer, entry) in &desired {
+        match existing.get(peer) {
+            Some(row) if row.address == entry.address => {}
+            Some(_) => {
+                store
+                    .upsert_reciprocal_data_plane(&entry.peer_id, self_did, &entry.address)
+                    .await
+                    .with_context(|| {
+                        format!("refresh reciprocal data-plane desired row for {peer}")
+                    })?;
+                outcome.refreshed.insert(peer.clone());
+            }
+            None => {
+                store
+                    .upsert_reciprocal_data_plane(&entry.peer_id, self_did, &entry.address)
+                    .await
+                    .with_context(|| {
+                        format!("upsert reciprocal data-plane desired row for {peer}")
+                    })?;
+                outcome.upserted.insert(peer.clone());
+            }
+        }
     }
-    for peer in existing.difference(&desired) {
-        store
-            .delete_reciprocal_data_plane(peer)
-            .await
-            .with_context(|| format!("delete reciprocal data-plane desired row for {peer}"))?;
-        outcome.retracted.insert(peer.clone());
+    for peer in existing.keys() {
+        if !desired.contains_key(peer) {
+            store
+                .delete_reciprocal_data_plane(peer)
+                .await
+                .with_context(|| format!("delete reciprocal data-plane desired row for {peer}"))?;
+            outcome.retracted.insert(peer.clone());
+        }
     }
     Ok(outcome)
 }
@@ -151,9 +183,13 @@ pub async fn run_reciprocal_reconciler(
 async fn sweep_reciprocal(store: &GraphqlReciprocalStore, self_did: &str) {
     match reconcile_reciprocal_tick(store, self_did).await {
         Ok(outcome) => {
-            if !outcome.upserted.is_empty() || !outcome.retracted.is_empty() {
+            if !outcome.upserted.is_empty()
+                || !outcome.refreshed.is_empty()
+                || !outcome.retracted.is_empty()
+            {
                 tracing::info!(
                     upserted = ?outcome.upserted,
+                    refreshed = ?outcome.refreshed,
                     retracted = ?outcome.retracted,
                     "reconciled reciprocal conversation data-plane desired rows"
                 );
@@ -256,7 +292,7 @@ impl ReciprocalStore for GraphqlReciprocalStore {
             if !endpoint_is_fresh(
                 &record.updated_at,
                 Utc::now(),
-                super::intervals::stale_after(),
+                super::intervals::reciprocal_stale_after(),
             ) {
                 continue;
             }
@@ -302,21 +338,58 @@ impl ReciprocalStore for GraphqlReciprocalStore {
         ensure_no_errors(&response, "delete reciprocal DataPlanePairingDesired")
     }
 
-    async fn list_reciprocal_data_plane_peers(&self) -> Result<BTreeSet<String>> {
+    async fn list_reciprocal_data_plane_rows(
+        &self,
+    ) -> Result<BTreeMap<String, ReciprocalRowState>> {
         let query = r#"{
             DataPlanePairingDesired(filter: { source: { _eq: "reciprocal" } }) {
                 peer_id
+                replicator_addresses
             }
         }"#;
         let response = self.node.execute(query).await;
-        ensure_no_errors(&response, "query reciprocal DataPlanePairingDesired peers")?;
-        Ok(rows::<PeerIdRow>(&response, "DataPlanePairingDesired")?
+        ensure_no_errors(&response, "query reciprocal DataPlanePairingDesired rows")?;
+        Ok(rows::<DataPlaneRow>(&response, "DataPlanePairingDesired")?
             .into_iter()
             .filter_map(|row| {
                 let peer_id = row.peer_id.trim().to_string();
-                (!peer_id.is_empty()).then_some(peer_id)
+                if peer_id.is_empty() {
+                    return None;
+                }
+                let address = row
+                    .replicator_addresses
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|value| value.trim().to_string())
+                    .find(|value| !value.is_empty())
+                    .unwrap_or_default();
+                Some((peer_id, ReciprocalRowState { address }))
             })
             .collect())
+    }
+
+    async fn list_non_reciprocal_data_plane_peers(&self) -> Result<BTreeSet<String>> {
+        let query = r#"{
+            DataPlanePairingDesired {
+                peer_id
+                source
+            }
+        }"#;
+        let response = self.node.execute(query).await;
+        ensure_no_errors(
+            &response,
+            "query non-reciprocal DataPlanePairingDesired peers",
+        )?;
+        Ok(
+            rows::<DataPlaneOwnershipRow>(&response, "DataPlanePairingDesired")?
+                .into_iter()
+                .filter(|row| !data_plane_source_is_reciprocal(row.source.as_deref()))
+                .filter_map(|row| {
+                    let peer_id = row.peer_id.trim().to_string();
+                    (!peer_id.is_empty()).then_some(peer_id)
+                })
+                .collect(),
+        )
     }
 }
 
@@ -485,13 +558,22 @@ struct EndpointRow {
     node_id: Option<String>,
     address: Option<String>,
     updated_at: Option<String>,
-    #[serde(default, alias = "binding_sig")]
+    #[serde(default)]
     binding_sig: Option<String>,
 }
 
 #[derive(Deserialize)]
-struct PeerIdRow {
+struct DataPlaneRow {
     peer_id: String,
+    #[serde(default)]
+    replicator_addresses: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct DataPlaneOwnershipRow {
+    peer_id: String,
+    #[serde(default)]
+    source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -556,9 +638,19 @@ mod tests {
     struct MockReciprocalStore {
         intents: BTreeSet<String>,
         endpoints: BTreeMap<String, NetworkEndpointEntry>,
-        existing: BTreeSet<String>,
+        existing: BTreeMap<String, ReciprocalRowState>,
+        blocked: BTreeSet<String>,
         upserts: Mutex<Vec<(String, String, String)>>,
         deletes: Mutex<Vec<String>>,
+    }
+
+    fn existing_row(peer_id: &str, address: &str) -> (String, ReciprocalRowState) {
+        (
+            peer_id.to_string(),
+            ReciprocalRowState {
+                address: address.to_string(),
+            },
+        )
     }
 
     #[async_trait]
@@ -590,8 +682,14 @@ mod tests {
             Ok(())
         }
 
-        async fn list_reciprocal_data_plane_peers(&self) -> Result<BTreeSet<String>> {
+        async fn list_reciprocal_data_plane_rows(
+            &self,
+        ) -> Result<BTreeMap<String, ReciprocalRowState>> {
             Ok(self.existing.clone())
+        }
+
+        async fn list_non_reciprocal_data_plane_peers(&self) -> Result<BTreeSet<String>> {
+            Ok(self.blocked.clone())
         }
     }
 
@@ -627,7 +725,7 @@ mod tests {
     async fn reconcile_reciprocal_tick_deletes_when_endpoint_disappears() {
         let store = MockReciprocalStore {
             intents: BTreeSet::from(["did:key:phone".to_string()]),
-            existing: BTreeSet::from(["peer-phone".to_string()]),
+            existing: BTreeMap::from([existing_row("peer-phone", "/ticket/phone")]),
             ..Default::default()
         };
 
@@ -645,6 +743,84 @@ mod tests {
             vec!["peer-phone".to_string()]
         );
         assert!(store.upserts.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reconcile_reciprocal_tick_refreshes_row_when_endpoint_address_drifts() {
+        let store = MockReciprocalStore {
+            intents: BTreeSet::from(["did:key:phone".to_string()]),
+            endpoints: BTreeMap::from([(
+                "did:key:phone".to_string(),
+                endpoint("did:key:phone", "peer-phone", "/ticket/phone-new"),
+            )]),
+            existing: BTreeMap::from([existing_row("peer-phone", "/ticket/phone-old")]),
+            ..Default::default()
+        };
+
+        let outcome = reconcile_reciprocal_tick(&store, "did:key:server")
+            .await
+            .unwrap();
+
+        assert!(outcome.upserted.is_empty());
+        assert!(outcome.retracted.is_empty());
+        assert_eq!(
+            outcome.refreshed,
+            BTreeSet::from(["peer-phone".to_string()])
+        );
+        assert_eq!(
+            *store.upserts.lock().unwrap(),
+            vec![(
+                "peer-phone".to_string(),
+                "did:key:server".to_string(),
+                "/ticket/phone-new".to_string()
+            )]
+        );
+        assert!(store.deletes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reconcile_reciprocal_tick_is_quiescent_when_row_matches_endpoint() {
+        let store = MockReciprocalStore {
+            intents: BTreeSet::from(["did:key:phone".to_string()]),
+            endpoints: BTreeMap::from([(
+                "did:key:phone".to_string(),
+                endpoint("did:key:phone", "peer-phone", "/ticket/phone"),
+            )]),
+            existing: BTreeMap::from([existing_row("peer-phone", "/ticket/phone")]),
+            ..Default::default()
+        };
+
+        let outcome = reconcile_reciprocal_tick(&store, "did:key:server")
+            .await
+            .unwrap();
+
+        // Quiescence matters: the reconciler sweeps on every Update event, so a
+        // settled state must produce zero writes or each sweep would trigger the
+        // next one.
+        assert_eq!(outcome, ReciprocalTickOutcome::default());
+        assert!(store.upserts.lock().unwrap().is_empty());
+        assert!(store.deletes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reconcile_reciprocal_tick_skips_peers_owned_by_other_sources() {
+        let store = MockReciprocalStore {
+            intents: BTreeSet::from(["did:key:phone".to_string()]),
+            endpoints: BTreeMap::from([(
+                "did:key:phone".to_string(),
+                endpoint("did:key:phone", "peer-phone", "/ticket/phone"),
+            )]),
+            blocked: BTreeSet::from(["peer-phone".to_string()]),
+            ..Default::default()
+        };
+
+        let outcome = reconcile_reciprocal_tick(&store, "did:key:server")
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, ReciprocalTickOutcome::default());
+        assert!(store.upserts.lock().unwrap().is_empty());
+        assert!(store.deletes.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
