@@ -174,6 +174,37 @@ impl GraphqlReciprocalStore {
     pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn AgentIdentity>) -> Self {
         Self { node, identity }
     }
+
+    pub async fn load_materializable_entries(&self) -> Result<Vec<NetworkEndpointEntry>> {
+        let intent_dids = <Self as ReciprocalStore>::load_intent_dids(self).await?;
+        let mut endpoints = Vec::new();
+        for did in intent_dids {
+            if let Some(endpoint) =
+                <Self as ReciprocalStore>::load_endpoint_for_did(self, &did).await?
+            {
+                endpoints.push(endpoint);
+            }
+        }
+        Ok(endpoints)
+    }
+
+    async fn existing_data_plane_ownership(&self, peer_id: &str) -> Result<DataPlaneOwnership> {
+        let peer_id = escape_graphql_string(peer_id);
+        let query = format!(
+            r#"{{
+                DataPlanePairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}, limit: 1) {{
+                    source
+                }}
+            }}"#
+        );
+        let response = self.node.execute(&query).await;
+        ensure_no_errors(&response, "query DataPlanePairingDesired ownership")?;
+        let Some(row) = first_row::<DataPlaneSourceRow>(&response, "DataPlanePairingDesired")?
+        else {
+            return Ok(DataPlaneOwnership::Absent);
+        };
+        Ok(data_plane_ownership_for_existing_row(row.source.as_deref()))
+    }
 }
 
 #[async_trait]
@@ -251,6 +282,14 @@ impl ReciprocalStore for GraphqlReciprocalStore {
         agent_did: &str,
         address: &str,
     ) -> Result<()> {
+        if should_skip_reciprocal_upsert(self.existing_data_plane_ownership(peer_id).await?) {
+            tracing::warn!(
+                peer_id = %peer_id,
+                "skipping reciprocal DataPlanePairingDesired upsert because a non-reciprocal row already owns this peer"
+            );
+            return Ok(());
+        }
+
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let mutation = upsert_reciprocal_data_plane_mutation(peer_id, agent_did, address, &now)?;
         let response = self.node.execute(&mutation).await;
@@ -299,7 +338,7 @@ pub fn upsert_reciprocal_data_plane_mutation(
     Ok(format!(
         r#"mutation {{
             upsert_DataPlanePairingDesired(
-                filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
+                filter: {{ peer_id: {{ _eq: "{peer_id}" }}, source: {{ _eq: "{source}" }} }},
                 add: {{
                     peer_id: "{peer_id}",
                     agent_did: "{agent_did}",
@@ -340,6 +379,8 @@ async fn verify_endpoint(identity: &dyn AgentIdentity, record: &EndpointRecord) 
         Ok(true) => Ok(true),
         Ok(false) => Ok(false),
         Err(error) => {
+            // Best-effort swallow: a transient verifier failure skips this row now
+            // and retries on the next sweep instead of halting reconciliation.
             tracing::warn!(error = %error, did = %record.did, "PeerEndpoint signature verification errored");
             Ok(false)
         }
@@ -385,6 +426,29 @@ fn graphql_string_list_literal<'a>(values: impl IntoIterator<Item = &'a str>) ->
     }
 }
 
+fn data_plane_source_is_reciprocal(source: Option<&str>) -> bool {
+    source.map(str::trim) == Some(SOURCE_RECIPROCAL)
+}
+
+fn data_plane_ownership_for_existing_row(source: Option<&str>) -> DataPlaneOwnership {
+    if data_plane_source_is_reciprocal(source) {
+        DataPlaneOwnership::Reciprocal
+    } else {
+        DataPlaneOwnership::NonReciprocal
+    }
+}
+
+fn should_skip_reciprocal_upsert(existing: DataPlaneOwnership) -> bool {
+    matches!(existing, DataPlaneOwnership::NonReciprocal)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DataPlaneOwnership {
+    Absent,
+    Reciprocal,
+    NonReciprocal,
+}
+
 fn ensure_no_errors(response: &QueryResponse, label: &str) -> Result<()> {
     if response.has_errors() {
         bail!("{label} failed: {:?}", response.errors);
@@ -400,6 +464,13 @@ where
         return Ok(Vec::new());
     };
     serde_json::from_value(value.clone()).with_context(|| format!("decode {field} rows"))
+}
+
+fn first_row<T>(response: &QueryResponse, field: &str) -> Result<Option<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    Ok(rows::<T>(response, field)?.into_iter().next())
 }
 
 #[derive(Deserialize)]
@@ -421,6 +492,12 @@ struct EndpointRow {
 #[derive(Deserialize)]
 struct PeerIdRow {
     peer_id: String,
+}
+
+#[derive(Deserialize)]
+struct DataPlaneSourceRow {
+    #[serde(default)]
+    source: Option<String>,
 }
 
 #[cfg(test)]
@@ -591,6 +668,39 @@ mod tests {
     }
 
     #[test]
+    fn reciprocal_data_plane_source_guard_preserves_operator_rows() {
+        assert_eq!(
+            data_plane_ownership_for_existing_row(Some("reciprocal")),
+            DataPlaneOwnership::Reciprocal
+        );
+        assert_eq!(
+            data_plane_ownership_for_existing_row(Some(" reciprocal ")),
+            DataPlaneOwnership::Reciprocal
+        );
+        assert_eq!(
+            data_plane_ownership_for_existing_row(None),
+            DataPlaneOwnership::NonReciprocal
+        );
+        assert_eq!(
+            data_plane_ownership_for_existing_row(Some("")),
+            DataPlaneOwnership::NonReciprocal
+        );
+        assert_eq!(
+            data_plane_ownership_for_existing_row(Some("operator")),
+            DataPlaneOwnership::NonReciprocal
+        );
+
+        assert!(!should_skip_reciprocal_upsert(DataPlaneOwnership::Absent));
+        assert!(!should_skip_reciprocal_upsert(
+            DataPlaneOwnership::Reciprocal
+        ));
+        assert!(
+            should_skip_reciprocal_upsert(DataPlaneOwnership::NonReciprocal),
+            "existing source=null/operator DataPlanePairingDesired rows must survive reciprocal intents"
+        );
+    }
+
+    #[test]
     fn reciprocal_data_plane_upsert_uses_conversation_template_and_self_scope() {
         let mutation = upsert_reciprocal_data_plane_mutation(
             "peer-phone",
@@ -601,6 +711,9 @@ mod tests {
         .unwrap();
 
         assert!(mutation.contains("upsert_DataPlanePairingDesired"));
+        assert!(mutation.contains(
+            "filter: { peer_id: { _eq: \"peer-phone\" }, source: { _eq: \"reciprocal\" } }"
+        ));
         assert!(mutation.contains("peer_id: \"peer-phone\""));
         assert!(mutation.contains("agent_did: \"did:key:server\""));
         assert!(mutation.contains("template: \"conversation\""));

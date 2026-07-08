@@ -108,6 +108,8 @@ mod process;
 mod prompt_template;
 #[path = "conformance/r5_cross_deployment.rs"]
 mod r5_cross_deployment;
+#[path = "conformance/reciprocal_conversation.rs"]
+mod reciprocal_conversation;
 #[path = "conformance/recovery_sweeps.rs"]
 mod recovery_sweeps;
 #[path = "conformance/request_lifecycle.rs"]
