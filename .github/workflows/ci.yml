@@ -104,6 +104,11 @@ jobs:
       - name: Compile all targets
         run: cargo check --workspace --all-targets
 
+      # Guards the noq 1.0.1 active_connections underflow fix (defra-agent#634 /
+      # n0-computer/noq#743). Vendored under third_party/; not a workspace member.
+      - name: noq-proto double-reset regression
+        run: cargo test --manifest-path third_party/noq-proto/Cargo.toml regression_double_stateless_reset_single_draining
+
       - name: Run PR smoke tests
         if: github.event_name == 'pull_request'
         run: |

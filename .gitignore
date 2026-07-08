@@ -11,3 +11,7 @@
 /crates/defra-agent/proofs/tla/states/
 /crates/defra-agent/proofs/tla/MCReversePairing_TTrace_*.tla
 /crates/defra-agent/proofs/tla/MCReversePairing_TTrace_*.bin
+
+# Standalone third_party package builds
+/third_party/*/target/
+/third_party/*/Cargo.lock
