@@ -655,7 +655,17 @@ impl State {
                 // A global zero-guard alone is not enough: a duplicate Draining for
                 // one connection while others are still active would still
                 // decrement the shared counter and can notify all_draining early.
-                if !self.recv_state.connections.note_draining(ch) {
+                //
+                // Also reject Draining for handles already removed from `senders`
+                // (post-Drained). Combined with retaining `draining_reported`
+                // until `insert` reuses the handle, the bad order
+                // Draining → Drained → stale Draining cannot undercount again.
+                if !self.recv_state.connections.senders.contains_key(&ch) {
+                    tracing::warn!(
+                        ?ch,
+                        "ignoring Draining endpoint event for unknown or already-removed connection"
+                    );
+                } else if !self.recv_state.connections.note_draining(ch) {
                     tracing::warn!(
                         ?ch,
                         "ignoring duplicate Draining endpoint event for connection"
@@ -675,7 +685,10 @@ impl State {
                 }
             } else if event.is_drained() {
                 self.recv_state.connections.senders.remove(&ch);
-                self.recv_state.connections.draining_reported.remove(&ch);
+                // Do not clear draining_reported here. A late/stale Draining after
+                // Drained must still be recognized as already-accounted (or as
+                // unknown via the senders check above). The marker is cleared when
+                // ConnectionSet::insert reuses the handle for a new connection.
                 if self.recv_state.connections.is_empty() {
                     shared.idle.notify_waiters();
                 }
@@ -785,6 +798,10 @@ struct ConnectionSet {
     /// Handles that have already reported `Draining` (active_connections already
     /// decremented for them). Dedups duplicate Draining endpoint events so one
     /// connection cannot undercount the global counter (n0-computer/noq#743).
+    ///
+    /// Retained after `Drained` removes the sender so a late Draining for the
+    /// same handle is not treated as first-time. Cleared only on
+    /// [`ConnectionSet::insert`] when the handle is reused.
     draining_reported: FxHashSet<ConnectionHandle>,
 }
 
