@@ -1,0 +1,11 @@
+# Reciprocal conversation pairing intent: the server's declaration that it will
+# push its own conversation documents back to a dapair-invited member DID once
+# that member's signed PeerEndpoint appears. Distinct from fleet network-control
+# membership: only a `conversation` invite creates one, so the reconciler never
+# auto-wires conversation edges for mesh subagents (fleet no-crosswise invariant).
+type ReciprocalConversationIntent {
+    member_did: String @index(unique: true)
+    template: String @index
+    created_at: DateTime @index(direction: DESC)
+    updated_at: DateTime @index(direction: DESC)
+}
