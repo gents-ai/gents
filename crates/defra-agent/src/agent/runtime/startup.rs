@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
@@ -17,7 +17,7 @@ use crate::admission::{AdmissionRegistry, BackendAdmissionConfig, InferenceCall}
 use crate::agent::reconcile::GenerationSupervisor;
 use crate::agent::{DefraAgent, DocumentResolveContext, ProcessLifecycleState};
 use crate::backend_registry;
-use crate::health_checker::{ServiceHealthMap, spawn_health_checker};
+use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
 use crate::lifecycle::RequestLifecycle;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime_status::{ReconcilePhase, RuntimeStatusHandle};

@@ -481,12 +481,9 @@ impl GraphqlPairingStateStore {
                 network.load_materializable_entries().await?
             }
         };
-        if let Some(entry) = data_plane_materialized_entry_from_sources(
-            &entries,
-            &[],
-            peer_id,
-            self.identity.did(),
-        ) {
+        if let Some(entry) =
+            data_plane_materialized_entry_from_sources(&entries, &[], peer_id, self.identity.did())
+        {
             return Ok(Some(entry));
         }
 

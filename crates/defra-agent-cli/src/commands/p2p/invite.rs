@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
-use defra_agent::{AgentIdentity, KeyIdentity, graphql::escape_graphql_string};
+use defra_agent::{graphql::escape_graphql_string, AgentIdentity, KeyIdentity};
 use defra_agent_protocol::network_token::{MembershipRecord, NetworkRecord};
-use defra_agent_protocol::pairing_token::{InviteToken, encode as encode_invite, signing_payload};
+use defra_agent_protocol::pairing_token::{encode as encode_invite, signing_payload, InviteToken};
 use serde_json::json;
 
 use crate::cli::args::P2pInviteArgs;
@@ -347,7 +347,7 @@ pub(super) fn resolve_home_identity(home: Option<&Path>) -> Result<Arc<dyn Agent
 #[cfg(test)]
 mod tests {
     use defra_agent_protocol::network_token::{MembershipRecord, NetworkRecord};
-    use defra_agent_protocol::pairing_token::{TOKEN_PREFIX, decode, encode};
+    use defra_agent_protocol::pairing_token::{decode, encode, TOKEN_PREFIX};
 
     use super::*;
 
