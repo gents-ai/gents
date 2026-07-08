@@ -250,6 +250,11 @@ pub(crate) async fn save_inference_profile_config(
             stream_batch_ms: None,
             stream_liveness_timeout_secs: None,
             deadline_duration_secs: None,
+            retry_max_transport: None,
+            retry_backoff_ms: None,
+            retry_max_resample: None,
+            retry_allow_repair: None,
+            retry_interactive_max: None,
         });
     row.display_name = Some(display_name);
     row.context_window = request.context_window;
@@ -293,7 +298,6 @@ pub(crate) async fn save_tool_selection_config(
             read_only_command_allowlist: Vec::new(),
             command_allowed_argv_prefixes: Vec::new(),
             command_forbidden_argv_prefixes: Vec::new(),
-            read_only_command_allowlist: Vec::new(),
             command_network_mode: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: Some(false),
