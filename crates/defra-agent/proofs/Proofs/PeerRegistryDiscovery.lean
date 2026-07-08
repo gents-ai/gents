@@ -3,6 +3,7 @@ import Proofs.PeerRegistryDiscovery.Transition
 import Proofs.PeerRegistryDiscovery.Derivation
 import Proofs.PeerRegistryDiscovery.Executable
 import Proofs.PeerRegistryDiscovery.NetworkMembership
+import Proofs.PeerRegistryDiscovery.ReciprocalConversation
 
 /-!
 # Peer Registry Discovery Model
