@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use defra_agent::{CommandExecutionMode, CommandNetworkMode, ToolSelectionDocument};
 use serde_json::json;
 
@@ -6,6 +6,20 @@ use crate::cli::*;
 use crate::config_writes::{write_tool_selection_document_with_clear_fields, ConfigAccess};
 use crate::normalize_optional_string;
 use crate::print_json;
+
+/// Builds a single `--subagent-target` JSON entry from its parts and prints
+/// it to stdout, so it composes as `--subagent-target "$(... subagent-target-entry ...)"`
+/// with real flag validation instead of a hand-typed JSON parse error.
+pub(super) fn subagent_target_entry_command(args: SubagentTargetEntryArgs) -> Result<()> {
+    let entry = defra_agent::subagent_target_entry(
+        args.name,
+        args.agent_did,
+        args.behavior_id,
+        args.description,
+    );
+    println!("{entry}");
+    Ok(())
+}
 
 pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<()> {
     let plan = tool_selection_command_plan(&args)?;
@@ -341,8 +355,53 @@ fn subagent_targets_update(args: &ToolSelectionUpsertArgs) -> Result<Option<Vec<
     } else if args.subagent_targets.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(args.subagent_targets.clone()))
+        let mut entries = Vec::new();
+        for raw in &args.subagent_targets {
+            entries.extend(expand_subagent_target_value(raw)?);
+        }
+        Ok(Some(entries))
     }
+}
+
+/// Expands one `--subagent-target` value. A plain value is passed through
+/// unchanged (the existing inline-JSON behavior). A `@path`/`@-` value reads
+/// the file (or stdin, for `-`) and accepts either a single JSON object or a
+/// JSON array of objects, expanding an array into multiple entries.
+fn expand_subagent_target_value(raw: &str) -> Result<Vec<String>> {
+    let Some(source) = raw.strip_prefix('@') else {
+        return Ok(vec![raw.to_string()]);
+    };
+    let contents = if source == "-" {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+            .context("reading --subagent-target entries from stdin")?;
+        buf
+    } else {
+        std::fs::read_to_string(source)
+            .with_context(|| format!("reading --subagent-target entries from {source}"))?
+    };
+    parse_subagent_target_contents(&contents, raw)
+}
+
+/// Parses the contents of a `@path`/`@-` `--subagent-target` source: either a
+/// single JSON object or a JSON array of objects. Split out from
+/// [`expand_subagent_target_value`] so the parsing/expansion logic is
+/// testable without touching the filesystem or stdin.
+fn parse_subagent_target_contents(contents: &str, raw_for_error: &str) -> Result<Vec<String>> {
+    let value: serde_json::Value = serde_json::from_str(contents)
+        .with_context(|| format!("parsing --subagent-target JSON from {raw_for_error}"))?;
+    let items = match value {
+        serde_json::Value::Array(items) => items,
+        other => vec![other],
+    };
+    items
+        .into_iter()
+        .map(|item| {
+            serde_json::to_string(&item).with_context(|| {
+                format!("re-serializing --subagent-target entry from {raw_for_error}")
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -570,5 +629,128 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("--clear-allowed-mcp-service-ids"));
+    }
+
+    #[test]
+    fn subagent_target_entry_command_prints_valid_json() {
+        let args = SubagentTargetEntryArgs {
+            name: "researcher".to_string(),
+            agent_did: "did:key:z-test".to_string(),
+            behavior_id: "did:key:z-test:default".to_string(),
+            description: Some("A helper instance for delegated sub-tasks".to_string()),
+        };
+        // subagent_target_entry_command only prints; exercise the same
+        // construction it delegates to and confirm it round-trips through
+        // SubagentTarget::parse (the same parser used at write time).
+        let entry = defra_agent::subagent_target_entry(
+            args.name.clone(),
+            args.agent_did.clone(),
+            args.behavior_id.clone(),
+            args.description.clone(),
+        );
+        let parsed = defra_agent::SubagentTarget::parse(&entry).unwrap();
+        assert_eq!(parsed.name, "researcher");
+        assert_eq!(parsed.agent_did, "did:key:z-test");
+        assert_eq!(parsed.behavior_id, "did:key:z-test:default");
+        assert!(parsed.is_structurally_valid());
+    }
+
+    #[test]
+    fn expand_subagent_target_value_passes_through_inline_json() {
+        let inline = r#"{"name":"worker","agent_did":"did:key:z-test","behavior_id":"worker"}"#;
+        assert_eq!(
+            expand_subagent_target_value(inline).unwrap(),
+            vec![inline.to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_subagent_target_contents_expands_single_object() {
+        let contents = r#"{"name":"worker","agent_did":"did:key:z-test","behavior_id":"worker"}"#;
+        let entries = parse_subagent_target_contents(contents, "@irrelevant").unwrap();
+        assert_eq!(entries.len(), 1);
+        let parsed = defra_agent::SubagentTarget::parse(&entries[0]).unwrap();
+        assert_eq!(parsed.name, "worker");
+    }
+
+    #[test]
+    fn parse_subagent_target_contents_expands_array() {
+        let contents = r#"[
+            {"name":"worker-a","agent_did":"did:key:z-test","behavior_id":"a"},
+            {"name":"worker-b","agent_did":"did:key:z-test","behavior_id":"b"}
+        ]"#;
+        let entries = parse_subagent_target_contents(contents, "@irrelevant").unwrap();
+        assert_eq!(entries.len(), 2);
+        let names: Vec<String> = entries
+            .iter()
+            .map(|entry| defra_agent::SubagentTarget::parse(entry).unwrap().name)
+            .collect();
+        assert_eq!(names, vec!["worker-a".to_string(), "worker-b".to_string()]);
+    }
+
+    #[test]
+    fn parse_subagent_target_contents_rejects_malformed_json() {
+        let error = parse_subagent_target_contents("not json", "@bad.json").unwrap_err();
+        assert!(error.to_string().contains("@bad.json"));
+    }
+
+    #[test]
+    fn expand_subagent_target_value_reads_single_object_from_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("target.json");
+        std::fs::write(
+            &path,
+            r#"{"name":"worker","agent_did":"did:key:z-test","behavior_id":"worker"}"#,
+        )
+        .unwrap();
+        let raw = format!("@{}", path.display());
+        let entries = expand_subagent_target_value(&raw).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            defra_agent::SubagentTarget::parse(&entries[0]).unwrap().name,
+            "worker"
+        );
+    }
+
+    #[test]
+    fn expand_subagent_target_value_reads_array_from_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("targets.json");
+        std::fs::write(
+            &path,
+            r#"[
+                {"name":"worker-a","agent_did":"did:key:z-test","behavior_id":"a"},
+                {"name":"worker-b","agent_did":"did:key:z-test","behavior_id":"b"}
+            ]"#,
+        )
+        .unwrap();
+        let raw = format!("@{}", path.display());
+        let entries = expand_subagent_target_value(&raw).unwrap();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn expand_subagent_target_value_reports_missing_file() {
+        let raw = "@/nonexistent/path/targets.json";
+        let error = expand_subagent_target_value(raw).unwrap_err();
+        assert!(error.to_string().contains("targets.json"));
+    }
+
+    #[test]
+    fn subagent_targets_update_expands_file_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("targets.json");
+        std::fs::write(
+            &path,
+            r#"[
+                {"name":"worker-a","agent_did":"did:key:z-test","behavior_id":"a"},
+                {"name":"worker-b","agent_did":"did:key:z-test","behavior_id":"b"}
+            ]"#,
+        )
+        .unwrap();
+        let mut args = default_args();
+        args.subagent_targets = vec![format!("@{}", path.display())];
+        let updated = subagent_targets_update(&args).unwrap().unwrap();
+        assert_eq!(updated.len(), 2);
     }
 }

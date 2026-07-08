@@ -45,6 +45,9 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             ToolSelectionCommand::Rm(args) => {
                 crud::config_rm(crud::TOOL_SELECTION_SPEC, args).await
             }
+            ToolSelectionCommand::SubagentTargetEntry(args) => {
+                tools::subagent_target_entry_command(args)
+            }
         },
         ConfigCommand::Profile { command } => match command {
             InferenceProfileCommand::Set(args) => profile::inference_profile_set(args).await,
