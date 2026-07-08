@@ -16,6 +16,7 @@ use super::network::{NetworkEndpointEntry, endpoint_is_fresh};
 use super::templates::resolve_template;
 
 pub const RECIPROCAL_CONVERSATION_TEMPLATE: &str = "conversation";
+pub const SOURCE_RECIPROCAL: &str = "reciprocal";
 
 /// Select endpoints that can materialize a reciprocal conversation data-plane
 /// edge for a previously invited member DID.
@@ -264,7 +265,7 @@ impl ReciprocalStore for GraphqlReciprocalStore {
 
     async fn list_reciprocal_data_plane_peers(&self) -> Result<BTreeSet<String>> {
         let query = r#"{
-            DataPlanePairingDesired {
+            DataPlanePairingDesired(filter: { source: { _eq: "reciprocal" } }) {
                 peer_id
             }
         }"#;
@@ -293,6 +294,7 @@ pub fn upsert_reciprocal_data_plane_mutation(
     let peer_id = escape_graphql_string(peer_id);
     let agent_did = escape_graphql_string(agent_did);
     let template = escape_graphql_string(template.id);
+    let source = escape_graphql_string(SOURCE_RECIPROCAL);
     let now = escape_graphql_string(now);
     Ok(format!(
         r#"mutation {{
@@ -302,6 +304,7 @@ pub fn upsert_reciprocal_data_plane_mutation(
                     peer_id: "{peer_id}",
                     agent_did: "{agent_did}",
                     template: "{template}",
+                    source: "{source}",
                     collections: {collections},
                     replicator_addresses: {addresses},
                     created_at: "{now}",
@@ -310,6 +313,7 @@ pub fn upsert_reciprocal_data_plane_mutation(
                 update: {{
                     agent_did: "{agent_did}",
                     template: "{template}",
+                    source: "{source}",
                     collections: {collections},
                     replicator_addresses: {addresses},
                     updated_at: "{now}"
@@ -323,7 +327,7 @@ pub fn delete_reciprocal_data_plane_mutation(peer_id: &str) -> String {
     let peer_id = escape_graphql_string(peer_id);
     format!(
         r#"mutation {{
-            delete_DataPlanePairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID }}
+            delete_DataPlanePairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }}, source: {{ _eq: "reciprocal" }} }}) {{ _docID }}
         }}"#
     )
 }
@@ -600,6 +604,7 @@ mod tests {
         assert!(mutation.contains("peer_id: \"peer-phone\""));
         assert!(mutation.contains("agent_did: \"did:key:server\""));
         assert!(mutation.contains("template: \"conversation\""));
+        assert!(mutation.contains("source: \"reciprocal\""));
         assert!(mutation.contains("replicator_addresses: [\"/ticket/phone\"]"));
         assert!(mutation.contains("AgentRequest"));
         assert!(mutation.contains("AgentResponse"));

@@ -139,6 +139,10 @@ const ADD_PEER_PAIRING_DESIRED_TEMPLATE_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"template","Kind":11}}
 ]"#;
 
+const ADD_DATA_PLANE_PAIRING_DESIRED_SOURCE_PATCH: &str = r#"[
+    {"op":"add","path":"/DataPlanePairingDesired/Fields/-","value":{"Name":"source","Kind":11}}
+]"#;
+
 const ADD_PEER_PAIRING_APPLIED_REPLICATOR_FILTER_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingApplied/Fields/-","value":{"Name":"replicator_filter","Kind":11}}
 ]"#;
@@ -899,11 +903,26 @@ pub async fn ensure_peer_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> 
 /// exists. Fresh stores get it from `schemas::ALL`; upgraded stores add it at
 /// startup before the pairing reconciler reads desired state.
 pub async fn ensure_data_plane_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
-    if node
+    if let Some(collection) = node
         .get_collection("DataPlanePairingDesired")
         .context("get DataPlanePairingDesired collection")?
-        .is_some()
     {
+        if !collection_has_field(&collection, "source") {
+            let next = node
+                .patch_collection(
+                    "DataPlanePairingDesired",
+                    ADD_DATA_PLANE_PAIRING_DESIRED_SOURCE_PATCH,
+                )
+                .await
+                .context("patch_collection DataPlanePairingDesired source")?;
+            node.set_active_collection_version(&next.version_id)
+                .await
+                .context("set_active_collection_version DataPlanePairingDesired source")?;
+            tracing::info!(
+                version = %next.version_id,
+                "DataPlanePairingDesired patched with source field"
+            );
+        }
         return Ok(());
     }
 
