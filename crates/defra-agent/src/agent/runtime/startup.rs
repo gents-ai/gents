@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
@@ -17,7 +17,7 @@ use crate::admission::{AdmissionRegistry, BackendAdmissionConfig, InferenceCall}
 use crate::agent::reconcile::GenerationSupervisor;
 use crate::agent::{DefraAgent, DocumentResolveContext, ProcessLifecycleState};
 use crate::backend_registry;
-use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
+use crate::health_checker::{ServiceHealthMap, spawn_health_checker};
 use crate::lifecycle::RequestLifecycle;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime_status::{ReconcilePhase, RuntimeStatusHandle};
@@ -36,6 +36,7 @@ enum BackgroundTaskResult {
     RegistryHeartbeat(Result<()>),
     EndpointHeartbeat(Result<()>),
     NetworkReconcile(Result<()>),
+    ReciprocalReconcile(Result<()>),
     DiscoveryReconcile(Result<()>),
 }
 
@@ -345,6 +346,20 @@ pub(in crate::agent) async fn run_agent(
         )
     });
 
+    let reciprocal_node = agent.node.clone();
+    let reciprocal_identity = agent.principal_arc().identity.clone();
+    let reciprocal_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::ReciprocalReconcile(
+            crate::agent::p2p_reconcile::run_reciprocal_reconciler(
+                reciprocal_node,
+                reciprocal_identity,
+                reciprocal_cancel,
+            )
+            .await,
+        )
+    });
+
     // Discovery reconciler: materializes registry-owned PeerPairingDesired rows
     // from PeerRegistry. Idles unless `discovery_auto_pair` is enabled (default
     // OFF, gated by DEFRA_AGENT_DISCOVERY_AUTO_PAIR) — the registry still
@@ -456,6 +471,7 @@ pub(in crate::agent) async fn run_agent(
             Ok(BackgroundTaskResult::RegistryHeartbeat(result)) => (result, false),
             Ok(BackgroundTaskResult::EndpointHeartbeat(result)) => (result, false),
             Ok(BackgroundTaskResult::NetworkReconcile(result)) => (result, false),
+            Ok(BackgroundTaskResult::ReciprocalReconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::DiscoveryReconcile(result)) => (result, false),
             Err(error) => (Err(anyhow!("background task join failed: {error}")), false),
         },

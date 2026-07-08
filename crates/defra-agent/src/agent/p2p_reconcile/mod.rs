@@ -39,7 +39,7 @@ pub use network::{
 pub use profiles::{P2pCollectionProfile, expand_p2p_collection_profile_ids};
 pub use reciprocal::{
     GraphqlReciprocalStore, ReciprocalStore, ReciprocalTickOutcome, derive_reciprocal_desired,
-    reconcile_reciprocal_tick,
+    reconcile_reciprocal_tick, run_reciprocal_reconciler,
 };
 pub use registry::{
     DEFAULT_NETWORK_ID, NETWORK_ID_ENV, REGISTRY_HEARTBEAT_INTERVAL, RegistryEntry, UpsertKind,

@@ -5,8 +5,9 @@ use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
 use defra_agent_protocol::network_token::EndpointRecord;
-use defra_node::{EmbeddedNode, QueryResponse};
+use defra_node::{EmbeddedNode, EventName, QueryResponse};
 use serde::Deserialize;
+use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
 use crate::identity::AgentIdentity;
@@ -108,6 +109,59 @@ pub async fn reconcile_reciprocal_tick(
         outcome.retracted.insert(peer.clone());
     }
     Ok(outcome)
+}
+
+pub async fn run_reciprocal_reconciler(
+    node: Arc<EmbeddedNode>,
+    identity: Arc<dyn AgentIdentity>,
+    cancel: CancellationToken,
+) -> Result<()> {
+    if node.p2p_arc().is_none() {
+        tracing::debug!("reciprocal reconciler idle because embedded node has no P2P transport");
+        cancel.cancelled().await;
+        return Ok(());
+    }
+
+    let store = GraphqlReciprocalStore::new(node.clone(), identity.clone());
+    let mut subscription = node.subscribe(&[EventName::Update]);
+    let mut interval = tokio::time::interval(super::intervals::sweep_interval());
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    sweep_reciprocal(&store, identity.did()).await;
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => return Ok(()),
+            _ = interval.tick() => sweep_reciprocal(&store, identity.did()).await,
+            message = subscription.recv() => {
+                if message.is_none() {
+                    tracing::warn!("reciprocal reconciler update subscription closed; continuing with periodic sweeps");
+                    continue;
+                }
+                let dropped = subscription.check_and_reset_dropped();
+                if dropped > 0 {
+                    tracing::warn!(dropped, "reciprocal reconciler update subscription dropped messages");
+                }
+                sweep_reciprocal(&store, identity.did()).await;
+            }
+        }
+    }
+}
+
+async fn sweep_reciprocal(store: &GraphqlReciprocalStore, self_did: &str) {
+    match reconcile_reciprocal_tick(store, self_did).await {
+        Ok(outcome) => {
+            if !outcome.upserted.is_empty() || !outcome.retracted.is_empty() {
+                tracing::info!(
+                    upserted = ?outcome.upserted,
+                    retracted = ?outcome.retracted,
+                    "reconciled reciprocal conversation data-plane desired rows"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "reciprocal conversation reconcile sweep failed")
+        }
+    }
 }
 
 pub struct GraphqlReciprocalStore {
