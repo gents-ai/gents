@@ -154,6 +154,14 @@ def subagentHostTemplate : Template :=
   , scope := .perCollection subagentHostRules
   , delivery := .push }
 
+/-- Bring-your-own collection set: policy only (Unscoped Replicate); the
+`DataPlanePairingDesired` row supplies the collections. -/
+def appCollectionsTemplate : Template :=
+  { id := "app-collections"
+  , collections := (∅ : Finset String)
+  , scope := .unscoped
+  , delivery := .replicate }
+
 /-- Concrete catalog mirroring Rust `BUILTIN_TEMPLATES`. -/
 def builtinCatalog : Catalog :=
   [ conversationTemplate
@@ -162,6 +170,7 @@ def builtinCatalog : Catalog :=
   , discoveryTemplate
   , networkControlTemplate
   , subagentCoordinatorTemplate
-  , subagentHostTemplate ]
+  , subagentHostTemplate
+  , appCollectionsTemplate ]
 
 end ScopeTemplates

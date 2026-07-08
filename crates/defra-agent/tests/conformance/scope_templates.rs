@@ -127,3 +127,27 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
         );
     }
 }
+
+/// Mirrors Lean `appCollections_in_catalog` / `appCollections_collections_empty`
+/// / `appCollections_unscoped_no_filter`: the app-collections "bring-your-own"
+/// template resolves, is Unscoped + Replicate, and carries no fixed collections
+/// (the DataPlanePairingDesired row supplies them).
+#[test]
+fn app_collections_template_is_unscoped_replicate_byo() {
+    let t = resolve_template("app-collections").expect("app-collections in catalog");
+    assert_eq!(t.id, "app-collections");
+    assert!(matches!(t.delivery, Delivery::Replicate));
+    assert!(matches!(t.scope, Scope::Unscoped));
+    assert!(
+        t.collections.is_empty(),
+        "app-collections carries no fixed collections; the row supplies them"
+    );
+    // Unscoped yields no filters even over a supplied collection list.
+    let f = scope_filter(
+        &t.scope,
+        &["ChangeProposed"],
+        "did:key:bob",
+        "did:key:alice",
+    );
+    assert!(f.is_empty(), "unscoped app-collections must not filter");
+}

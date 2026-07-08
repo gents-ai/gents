@@ -220,6 +220,7 @@ const SUBAGENT_HOST_RULES: &[CollectionRule] = &[
 pub const NETWORK_CONTROL_TEMPLATE: &str = "network-control";
 pub const SUBAGENT_COORDINATOR_TEMPLATE: &str = "subagent-coordinator";
 pub const SUBAGENT_HOST_TEMPLATE: &str = "subagent-host";
+pub const APP_COLLECTIONS_TEMPLATE: &str = "app-collections";
 
 static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     ScopeTemplate {
@@ -263,6 +264,13 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
         collections: CONVERSATION_COLLECTIONS,
         scope: Scope::PerCollection(SUBAGENT_HOST_RULES),
         delivery: Delivery::Push,
+    },
+    ScopeTemplate {
+        id: APP_COLLECTIONS_TEMPLATE,
+        // Bring-your-own: the DataPlanePairingDesired row supplies the set.
+        collections: &[],
+        scope: Scope::Unscoped,
+        delivery: Delivery::Replicate,
     },
 ];
 
@@ -385,6 +393,15 @@ mod tests {
     #[test]
     fn all_builtin_templates_have_nonempty_collections() {
         for t in builtin_templates() {
+            // app-collections is the one bring-your-own template: its collection
+            // set is supplied by the DataPlanePairingDesired row, not the catalog.
+            if t.id == APP_COLLECTIONS_TEMPLATE {
+                assert!(
+                    t.collections.is_empty(),
+                    "app-collections must carry no fixed collections"
+                );
+                continue;
+            }
             assert!(
                 !t.collections.is_empty(),
                 "template {} has no collections",
@@ -394,8 +411,16 @@ mod tests {
     }
 
     #[test]
-    fn builtin_template_count_is_seven() {
-        assert_eq!(builtin_templates().len(), 7);
+    fn builtin_template_count_is_eight() {
+        assert_eq!(builtin_templates().len(), 8);
+    }
+
+    #[test]
+    fn app_collections_is_byo_unscoped_replicate() {
+        let t = resolve_template(APP_COLLECTIONS_TEMPLATE).unwrap();
+        assert_eq!(t.delivery, Delivery::Replicate);
+        assert!(matches!(t.scope, Scope::Unscoped));
+        assert!(t.collections.is_empty());
     }
 
     #[test]
