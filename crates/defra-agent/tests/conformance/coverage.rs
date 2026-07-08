@@ -281,6 +281,7 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.event-delivery.rescan-doc-cap",
         "boundary.streaming-response.idle-timeout-deadline",
         "boundary.prompt-assembly.provider-input-sanitization",
+        "boundary.model.nat-typed-ids-time",
     ]
     .into_iter()
     .map(str::to_string)

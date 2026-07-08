@@ -118,7 +118,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, and cancellation properties |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/StorageObservation.lean` | Daemon-visible storage observation model and persistence bridge |
-| `Proofs/CrossMachineComposed.lean` | Cross-machine composition and guards |
+| `Proofs/CrossMachineComposed.lean` | Cross-machine composition and guards; global `WellFormed` (list-level coherence, detached persistence/linkage, unique call ids, no early tools, invFG) established at `initial` and preserved by every transition (#555) |
 | `Proofs/Scheduling.lean` | Scheduler/backend slot state |
 | `Proofs/Fleet.lean` | Barrel for fleet state, transitions, executable semantics, and slot accounting |
 | `Proofs/SessionRecovery.lean` | Retry/reissue model for session-linked requests |
@@ -429,23 +429,44 @@ Local observation theorems also record the daemon assumptions Rust relies on:
 `failClosed_failed_mutation_retry_path`, `failOpen_failed_mutation_lost_path`,
 `staleRead_eventual_visibility_path`, and `staleEvent_eventual_visibility_path`.
 
+### Liveness taxonomy
+
+"Liveness" theorems in this suite fall into four tiers. **Almost all Lean
+results are tier 1.** Reading an `*_eventually_*` or `*_convergence` name as
+fair-scheduler or wall-clock progress is a misread (#557).
+
+| Tier | Meaning | Where it lives |
+|------|---------|----------------|
+| **1. Existential reachability** | There exists a finite legal path from pre to a good post (`∃ post, Trace …` / `∃ actions, …`) | Lean (default): `claimed_eventually_terminal`, `recovery_convergence`, `accepted_work_eventually_releases`, `D1_delivery_convergence`, `streamIdle_eventually_terminal`, … |
+| **2. Fair-scheduler liveness** | Under weak/strong fairness, enabled progress steps fire | Primarily `tla/` (WF/SF annotations); Lean does not assume a fair scheduler |
+| **3. Bounded phase / measure progress** | Each relevant step decreases a `Nat` measure (or is otherwise step-bounded) — not wall-clock latency | Rare in Lean; example: L1 `phase_change_decreases_measure` (termination measure on phase change). Not distributed N-tick latency. |
+| **4. Operational watchdog** | Runtime-enforced deadline/timeout/recovery | Rust (request deadlines, stream idle timeouts, recovery sweeps) — not Lean |
+
+Naming convention going forward: prefer `*_reachable` for pure tier-1 results;
+keep historical `*_eventually_*` names for continuity. Cross-node temporal
+load (pairing, transport, reverse-pairing) is carried by `tla/`, not by
+per-node Lean machines.
+
 ### Request/Process Liveness
 
-| ID | Property | Why it matters | Theorem |
-|----|----------|----------------|---------|
-| L1 | Real current-product phase changes decrease a termination measure | The model rules out endless phase churn that never gets closer to terminal state | `phase_change_decreases_measure` |
-| L2 | Claimed work has a constructive path to terminal state | A claimed request is not modeled as stuck forever before inference begins | `claimed_eventually_terminal` |
-| L3 | Recovery converges | A finite set of stuck requests can be driven to terminal outcomes in finite steps | `recovery_convergence` |
+| ID | Property | Tier | Why it matters | Theorem |
+|----|----------|------|----------------|---------|
+| L1 | Real current-product phase changes decrease a termination measure | 3 (bounded phase progress) | The model rules out endless phase churn that never gets closer to terminal state | `phase_change_decreases_measure` |
+| L2 | Claimed work has a constructive path to terminal state | 1 (`∃ post, Trace`) | A claimed request is not modeled as stuck forever before inference begins | `claimed_eventually_terminal` |
+| L3 | Recovery has a same-length terminal-result list | 1′ (list witness, **not** a Trace) | For any stuck list there exists a same-length list of terminal contexts; does *not* prove a transition path from each stuck input to its result | `recovery_convergence` |
 
 ### Scheduler Safety and Liveness
 
-| ID | Property | Why it matters | Theorem |
-|----|----------|----------------|---------|
-| S7 | Capacity invariants are preserved | Running-slot counts stay within backend limits | `capacity_invariant_preserved`, `reconstructedSlotCount_bounded_by_max_concurrent` |
-| S8 | Slot accounting is preserved | Scheduler running counts stay aligned with per-request admission state and persisted running call rows | `slot_accounting_preserved`, `scheduler_running_reconstructed_from_inference_calls` |
-| S9 | Terminal work releases capacity; unavailable backends cannot acquire | Slots are not leaked and unrunnable backends do not accept new work | `terminal_implies_released`, `permitDrop_terminalization_not_counted`, `unavailable_blocks_acquire` |
-| L | Capacity-available work can acquire | A waiting request is not artificially blocked when slots exist | `acquire_when_capacity_available` |
-| L | Accepted work eventually releases | The model has a constructive path from accepted work to released capacity | `accepted_work_eventually_releases` |
+Numeric tiers (1–4) apply to **liveness** rows only. Safety invariants are marked
+`— (safety)` rather than assigned a liveness tier.
+
+| ID | Property | Tier | Why it matters | Theorem |
+|----|----------|------|----------------|---------|
+| S7 | Capacity invariants are preserved | — (safety) | Running-slot counts stay within backend limits | `capacity_invariant_preserved`, `reconstructedSlotCount_bounded_by_max_concurrent` |
+| S8 | Slot accounting is preserved | — (safety) | Scheduler running counts stay aligned with per-request admission state and persisted running call rows | `slot_accounting_preserved`, `scheduler_running_reconstructed_from_inference_calls` |
+| S9 | Terminal work releases capacity; unavailable backends cannot acquire | — (safety) | Slots are not leaked and unrunnable backends do not accept new work | `terminal_implies_released`, `permitDrop_terminalization_not_counted`, `unavailable_blocks_acquire` |
+| L | Capacity-available work can acquire | 1 | A waiting request is not artificially blocked when slots exist | `acquire_when_capacity_available` |
+| L | Accepted work eventually releases | 1 | The model has a constructive path from accepted work to released capacity | `accepted_work_eventually_releases` |
 
 The scheduling-liveness theorem was intentionally renamed to
 `accepted_work_eventually_releases`; the old name used the previous acceptance
@@ -779,6 +800,12 @@ These proofs do not establish:
 - MCP or external tool availability
 - desktop rendering correctness
 - OS sandbox behavior
+- wall-clock skew / real-time monotonicity (`Time := Nat` is abstract; #558)
+- ID-namespace collision freedom or cross-node identity uniqueness for
+  `RequestId` / `PeerId` / `AgentDid` collapsed to `Nat` (#558;
+  `boundary.model.nat-typed-ids-time`)
+- fair-scheduler or bounded-latency temporal liveness for distributed
+  delivery (tier 2/3; see § Liveness taxonomy and `tla/`)
 
 Those are handled through explicit assumptions, Rust integration tests,
-operational diagnostics, or platform-specific tests.
+operational diagnostics, TLA+ specs, or platform-specific tests.

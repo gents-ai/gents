@@ -267,6 +267,9 @@ def boundaryStreamingResponseIdleTimeoutDeadlineId : String :=
 def boundaryPromptAssemblyProviderInputSanitizationId : String :=
   "boundary.prompt-assembly.provider-input-sanitization"
 
+def boundaryModelNatTypedIdsTimeId : String :=
+  "boundary.model.nat-typed-ids-time"
+
 def boundaries : List Boundary :=
   [ { id := boundaryRequestInputRequiredReservedId
     , domain := "RequestLifecycle"
@@ -407,6 +410,16 @@ def boundaries : List Boundary :=
     , subject := "provider input sanitization"
     , statement :=
         "Durable transcripts may contain unpaired assistant tool-call rows while tool execution is interrupted, failed, or in flight; provider sends must narrow loaded history through sanitize_history_for_provider so no dangling tool call reaches the backend."
+    }
+  , { id := boundaryModelNatTypedIdsTimeId
+    , domain := "CoreTypes"
+    , subject := "Nat-typed IDs and Time"
+    , statement :=
+        "Core identifiers and Time are Nat abbreviations (Proofs/Basic and friends). Lifecycle and ordering proofs only need decidable equality and ordering. The abstraction deliberately omits wall-clock skew, UUID/string parse/serialize failures, ID-namespace collisions, and cross-node identity mismatches (AgentDid/PeerId/RequestId across deployments)."
+    , acceptedFailureMode :=
+        some "Collapsing distinct real identities to the same Nat equality could mask a cross-node identity bug class the distributed system can hit."
+    , acceptedFollowUp :=
+        some "Cross-node identity uniqueness is not claimed in Lean; load-bearing distributed identity/membership obligations live in tla/ (pairing/transport) and Rust integration tests. Targeted models only if a load-bearing collision class appears outside those fences (#558)."
     }
   ]
 

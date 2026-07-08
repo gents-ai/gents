@@ -5,7 +5,30 @@ open RequestState RequestContext ComposedState
 /-!
 # Liveness Properties L1-L3
 
-Liveness modeled as constructive reachability to terminal states.
+## Liveness taxonomy (#557)
+
+This file mixes two tiers — do not read every theorem as the same strength:
+
+| ID | Theorem | Tier | Shape |
+|----|---------|------|--------|
+| **L1** | `phase_change_decreases_measure` | **3** (bounded phase progress) | Conditional termination-measure decrease on real phase changes — not an existential trace. Closest cousin is a progress/safety-style ranking argument: each current-product phase change moves strictly closer to a terminal measure. |
+| **L2** | `claimed_eventually_terminal` | **1** (existential reachability) | `∃ post, Trace …` — a finite legal composed path exists. |
+| **L3** | `recovery_convergence` | **1′** (existential *list* witness, not a Trace) | `∃ results, results.length = stuck.length ∧ ∀ r ∈ results, isTerminal` — a same-length list of terminal contexts exists. Does **not** prove a `Transition`/`Trace` from each stuck input to its result (the stuck-state hypothesis is unused in the proof). Weaker than L2; do not cite as recovery path existence. |
+
+The wider suite's `*_eventually_*` / `*_convergence` names are almost always
+**tier 1**, not fair-scheduler or wall-clock guarantees:
+
+They are **not**:
+- **tier 2** fair-scheduler liveness (progress under weak/strong fairness), or
+- **tier 4** operational watchdog guarantees (runtime-enforced timeouts).
+
+**Tier 3** in Lean is rare and local (measures/`Nat` bounds on a step), not
+distributed latency. Tier-2 load for delivery/pairing lives in `tla/`. Tier-4
+is enforced by the Rust runtime (deadlines, idle timeouts, recovery sweeps).
+
+Naming note: historical `*_eventually_*` names are kept for continuity; new
+work should prefer `*_reachable` when the theorem is purely existential.
+See `crates/defra-agent/proofs/README.md` § Liveness taxonomy.
 -/
 
 /-- Termination measure: maximum remaining steps to terminal state. -/
@@ -21,6 +44,9 @@ def terminationMeasure (r : RequestContext) : Nat :=
   | .processing => (r.maxRetries - r.retryCount) + 2
   | .inputRequired => (r.maxRetries - r.retryCount) + 2
 
+/-- **L1 (tier 3):** a real current-product phase change strictly decreases the
+    termination measure. This is a ranking/measure argument, not an existential
+    reachability witness — contrast L2/L3 below. -/
 theorem phase_change_decreases_measure
     {pre post : RequestContext}
     (h_trans : RequestContext.Transition pre post)
@@ -101,6 +127,11 @@ theorem claimed_eventually_terminal
           simp [post, postRequest] at h_proc
   refine ⟨post, ComposedState.Trace.step h_step ComposedState.Trace.refl, failed_is_terminal⟩
 
+/-- **L3 (tier 1′):** for any list of contexts, a same-length list of
+    *terminal* contexts exists. This is an existential list witness only —
+    it does **not** construct a `Transition`/`Trace` linking each stuck input
+    to its output, and the stuck-state hypothesis is unused. Stronger
+    recovery-path claims need a separate theorem; do not over-read this one. -/
 theorem recovery_convergence
     (stuck : List RequestContext)
     (_h_all_stuck : ∀ r, r ∈ stuck → r.state = .processing ∨ r.state = .claimed) :
