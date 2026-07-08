@@ -89,12 +89,6 @@ pub(crate) fn execution_origin_for_trigger_kind(trigger_kind: TriggerKind) -> Ex
     }
 }
 
-/// Upper bound on rows the serial gate inspects for one trigger tuple. The
-/// gate needs a boolean; an agent with more than this many simultaneously
-/// active requests for ONE trigger is broken in some other way, and treating
-/// the tuple as gated (any live row within the cap) stays conservative.
-const ACTIVE_GATE_ROW_CAP: usize = 100;
-
 /// Grace added to a persisted claim `deadline` before the serial gate treats
 /// a claimed/processing row as terminal-in-effect. The owning loop can finish
 /// an attempt started just inside the deadline and still be writing the
@@ -225,7 +219,9 @@ impl MaterializerHandle for ProductionMaterializer {
             // whose store was rebuilt — can sit past-deadline in an active
             // state, and such a row would otherwise gate forever. Expiry is
             // evaluated here rather than in the filter to avoid relying on
-            // lexicographic string comparison over RFC3339 in the store.
+            // lexicographic string comparison over RFC3339 in the store. Do
+            // not cap this result: a pile-up of expired orphan rows must not
+            // hide a later live row and let Serial double-fire.
             let query = format!(
                 r#"query {{
                     AgentRequest(
@@ -234,14 +230,12 @@ impl MaterializerHandle for ProductionMaterializer {
                             caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
                             caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }},
                             lifecycle_state: {{ _in: {active_runtime_states} }}
-                        }},
-                        limit: {row_cap}
+                        }}
                     ) {{ _docID lifecycle_state deadline }}
                 }}"#,
                 agent_did = escaped_agent_did,
                 trigger_id = escaped_trigger_id,
                 trigger_kind = trigger_kind_str,
-                row_cap = ACTIVE_GATE_ROW_CAP,
             );
             let resp = node.execute(&query).await;
             if resp.has_errors() {

@@ -78,6 +78,7 @@ async fn latest_only_supersedes_prior_fire() {
 
     let superseded = supersede_active_runtime_requests_for_trigger(
         db.node.as_ref(),
+        AGENT_DID,
         "trigger-event-latest",
         "event",
     )

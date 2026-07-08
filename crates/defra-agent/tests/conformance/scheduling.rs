@@ -376,8 +376,7 @@ async fn has_active_runtime_request_for_trigger(
                     caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }},
                     caused_by_trigger_kind: {{ _eq: "{escaped_trigger_kind}" }},
                     lifecycle_state: {{ _in: ["pending", "claimed", "processing"] }}
-                }},
-                limit: 100
+                }}
             ) {{ _docID lifecycle_state deadline }}
         }}"#
     );
