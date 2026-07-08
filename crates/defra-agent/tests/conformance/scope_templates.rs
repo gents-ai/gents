@@ -143,6 +143,11 @@ fn app_collections_template_is_unscoped_replicate_byo() {
         "app-collections carries no fixed collections; the row supplies them"
     );
     // Unscoped yields no filters even over a supplied collection list.
-    let f = scope_filter(&t.scope, &["ChangeProposed"], "did:key:bob", "did:key:alice");
+    let f = scope_filter(
+        &t.scope,
+        &["ChangeProposed"],
+        "did:key:bob",
+        "did:key:alice",
+    );
     assert!(f.is_empty(), "unscoped app-collections must not filter");
 }

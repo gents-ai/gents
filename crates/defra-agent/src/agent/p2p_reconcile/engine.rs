@@ -2028,7 +2028,10 @@ mod tests {
             "did:key:self",
         )
         .expect("resolve ok");
-        assert!(out.is_none(), "app-collections is invalid for a control-plane row");
+        assert!(
+            out.is_none(),
+            "app-collections is invalid for a control-plane row"
+        );
     }
 
     #[test]
@@ -2079,7 +2082,10 @@ mod tests {
             "did:key:self",
         )
         .expect("resolve ok (soft-skip is Ok(None), not Err)");
-        assert!(out.is_none(), "empty/blank app-collections set must soft-skip to None");
+        assert!(
+            out.is_none(),
+            "empty/blank app-collections set must soft-skip to None"
+        );
     }
 
     /// Residual (documented, not softened in #657): a foreign `agent_did` on a

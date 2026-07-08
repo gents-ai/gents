@@ -757,18 +757,12 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     // Co-existing control pairing: network reconciler materializes PeerPairingDesired
     // (source=network, template=network-control) from the seeded membership docs.
     // Do NOT create_PeerPairingDesired ourselves — peer_id is unique and would conflict.
-    let control_a = wait_for_control_pairing_applied(
-        db_a.node.as_ref(),
-        &peer_b,
-        Duration::from_secs(60),
-    )
-    .await;
-    let control_b = wait_for_control_pairing_applied(
-        db_b.node.as_ref(),
-        &peer_a,
-        Duration::from_secs(60),
-    )
-    .await;
+    let control_a =
+        wait_for_control_pairing_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60))
+            .await;
+    let control_b =
+        wait_for_control_pairing_applied(db_b.node.as_ref(), &peer_a, Duration::from_secs(60))
+            .await;
 
     // App-collections data-plane rows on both sides.
     write_app_collection_pairing(
@@ -822,8 +816,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
         );
     }
 
-    let source_doc_id =
-        write_change_proposed(db_a.node.as_ref(), EXTERNAL_ID, "signup").await;
+    let source_doc_id = write_change_proposed(db_a.node.as_ref(), EXTERNAL_ID, "signup").await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let requests = loop {
@@ -978,12 +971,9 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     .await;
 
     // Network reconciler installs control pairing from seeded membership.
-    let control = wait_for_control_pairing_applied(
-        db_a.node.as_ref(),
-        &peer_b,
-        Duration::from_secs(60),
-    )
-    .await;
+    let control =
+        wait_for_control_pairing_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60))
+            .await;
     let before = fetch_pairing_applied(db_a.node.as_ref(), &peer_b)
         .await
         .expect("control applied");
