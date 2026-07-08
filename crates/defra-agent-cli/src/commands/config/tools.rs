@@ -707,7 +707,9 @@ mod tests {
         let entries = expand_subagent_target_value(&raw).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(
-            defra_agent::SubagentTarget::parse(&entries[0]).unwrap().name,
+            defra_agent::SubagentTarget::parse(&entries[0])
+                .unwrap()
+                .name,
             "worker"
         );
     }
