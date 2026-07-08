@@ -20,6 +20,9 @@ with the whole edge declared in config.
 
 ## Verified current behavior
 
+(All `p2p_reconcile/*` and `templates.rs` paths below are under
+`crates/defra-agent/src/agent/`; CLI paths under `crates/defra-agent-cli/src/`.)
+
 - The reconciler derives `replicator_collections` from `template.collections`
   (`p2p_reconcile/engine.rs:713` for network-control rows, `:813` for data-plane
   rows), keyed off the row's `template`.
@@ -39,7 +42,21 @@ with the whole edge declared in config.
 - Data-plane rows currently produce `collections: BTreeSet::new()` (no gossip
   subscription) — a replicator-only channel. The subscription set for a
   `Delivery::Replicate` template comes from `replicator_collections`
-  (`engine.rs:721–727`), but the data-plane path hardcodes the empty set.
+  (`engine.rs:721–727`), but the data-plane path hardcodes the empty set —
+  **and `merge_layered_desired` (`engine.rs:902–905`) then unconditionally
+  `.collections.clear()`s the data-plane layer** so no data-plane subscription
+  ever survives to the diff. Any subscription for a data-plane pairing must
+  therefore be re-enabled at *both* the resolver and the merge.
+- **Existing writers already populate `DataPlanePairingDesired.collections` with
+  template expansion**, not with an app-defined set: `demo/fleet.rs:260`
+  (`data_plane_collections_literal` expands `template.collections`) and
+  `cli_fleet_delegation_live.rs:2126` (`CONVERSATION_COLLECTIONS`). So a
+  *non-empty* `collections` is **not** a reliable signal of an explicit custom
+  set — legacy rows are non-empty. The new behavior must be gated on the
+  **template id** (`data-plane`), not on non-emptiness.
+- `resolve_pairing_template` (`p2p/pairings.rs:173`) accepts any built-in
+  template for the generic `PeerPairingDesired` path, which has no way to supply
+  row collections. A `data-plane` template must be rejected there.
 
 ## Chosen approach: (b) honor the existing `collections` field
 
@@ -91,30 +108,70 @@ ScopeTemplate {
 A `pub const DATA_PLANE_TEMPLATE: &str = "data-plane";` mirrors the existing
 `NETWORK_CONTROL_TEMPLATE` / `SUBAGENT_*_TEMPLATE` constants.
 
+Two `templates.rs` unit tests must move with the new entry:
+`all_builtin_templates_have_nonempty_collections` (exempt `data-plane`) and
+`builtin_template_count_is_seven` (now eight).
+
 ### 2. Read `collections` in `load_desired`
 
 Add `collections` to the `DataPlanePairingDesired` sub-query in
 `GraphqlPairingStateStore::load_desired` (`engine.rs:497`) so the row's explicit
 set reaches `data_plane_desired_from_pairing_row`.
 
-### 3. Honor `row.collections` in `data_plane_desired_from_pairing_row`
+### 3. Honor `row.collections` in `data_plane_desired_from_pairing_row` — gated on `template == "data-plane"`
 
-When `row.collections` is **non-empty** (the explicit app-defined set):
+The new behavior is gated on the **template id**, not on `collections` being
+non-empty (legacy rows are non-empty — see Verified current behavior).
 
-- Use it as `replicator_collections` and as the collection list the scope filter
-  is built over — instead of `template.collections`.
-- For `Delivery::Replicate`, populate the subscription `collections` set from it
-  as well (so both nodes `add_collections` + `add_replicator`, mirroring the
-  manual `install_one_way_replicator`). For `Delivery::Push`, keep the empty
-  subscription set (unchanged).
+When `template_id == "data-plane"`:
 
-When `row.collections` is **empty**: current behavior exactly
-(`template.collections`, empty subscription set). Fully backward compatible — the
-existing network-control / subagent data-plane pairings are provably undisturbed.
+- Require `row.collections`, after trim/dedupe of blanks, to contain **at least
+  one** collection. An empty set is a hard error for this template (the template
+  supplies none), so we never install an empty-collection replicator. Mirror the
+  existing blank-`agent_did` `anyhow::bail!` skip in this function (`engine.rs:797`),
+  so the peer is skipped per-sweep rather than mis-wired.
+- Use the trimmed `row.collections` as `replicator_collections` and as the
+  collection list the scope filter is built over — instead of
+  `template.collections` (which is `&[]`).
+- Because `data-plane` is `Delivery::Replicate`, populate the subscription
+  `collections` set from the same trimmed set, so both nodes `add_collections` +
+  `add_replicator` (mirroring the manual `install_one_way_replicator`).
+
+For every **other** template id: current behavior exactly — `template.collections`
+drives, subscription set stays empty. Fully backward compatible; the existing
+network-control / subagent / any template-expanded data-plane rows are provably
+undisturbed because none of them use the `data-plane` template.
 
 The template continues to supply scope + delivery; a blank `template` still
-defaults to `conversation` for backward compatibility, but the intended pairing
-carries `template: "data-plane"`.
+defaults to `conversation` for backward compatibility. The custom pairing carries
+`template: "data-plane"` explicitly.
+
+### 3b. Preserve the data-plane subscription through `merge_layered_desired`
+
+`merge_layered_desired` (`engine.rs:894–919`) currently clears the entire
+data-plane subscription set (`desired.collections.clear()`) so conversation docs
+never gossip unfiltered. That blanket clear must become conditional: **preserve
+the data-plane layer's subscription set only when the layer is a `data-plane`
+pairing** (detected via `template_ids.contains("data-plane")`). All other
+data-plane layers keep the existing clear. This is the single point that lets an
+`InstallCollection("ChangeProposed")` op reach the diff; without it, step 3's
+resolver change is inert. A conformance test fences exactly this: a `data-plane`
+layer's subscription survives the merge, a network-control-only data-plane layer's
+does not.
+
+### 3c. Guard the generic pairing CLI against the `data-plane` template
+
+`resolve_pairing_template` (`p2p/pairings.rs:173`) feeds the generic
+`PeerPairingDesired` path, which cannot supply row collections. Reject
+`data-plane` there with a clear "data-plane-only template; use the data-plane
+pairing path with an explicit `--collections`" error, so a `data-plane`
+`PeerPairingDesired` (which would resolve to no collections) is impossible to
+write. The data-plane writer path (`demo/fleet.rs:234 upsert_data_plane`) must,
+for the `data-plane` template, take the collection set from an explicit argument
+rather than `data_plane_collections_literal` (whose template expansion is `[]`
+for `data-plane`). #657's e2e writes rows directly and does not exercise these CLI
+paths; the guards exist so the new template cannot be misused. Full
+`config apply` ownership of `DataPlanePairingDesired.collections` is #607.
 
 ### 4. `@branchable` is the operator's responsibility
 
@@ -140,19 +197,25 @@ model concern. Per the foundation flow (CLAUDE.md), start in the Lean spec:
 
 - `PairingReconcile` already models `ReplicatorId = (address, ReplicatorFilter,
   ReplicatorCollections)` and the merge boundary. Extend the data-plane
-  resolution so the effective `ReplicatorCollections` is the explicit per-pairing
-  set when present, else the template set. Prove the existing safety/liveness
+  resolution so that for the `data-plane` policy the effective
+  `ReplicatorCollections` **and** the subscription set are the row-supplied set,
+  while every other template resolves exactly as today (template set,
+  subscription cleared at the merge). Prove the existing safety/liveness
   properties (idempotence, filter-change-forces-reinstall,
-  co-existing-pairing-non-interference) still hold under a row-supplied set.
-- Mirror into `tests/conformance/pairing_reconcile.rs`: a data-plane row with an
-  explicit `collections` set resolves to that set as `replicator_collections`
-  (and, for `Replicate`, as the subscription set), and merges with a co-existing
-  control pairing without cross-contaminating filters.
+  co-existing-pairing-non-interference) still hold, and prove the new merge
+  property: a `data-plane` layer's subscription survives, a non-`data-plane`
+  data-plane layer's does not.
+- Mirror into `tests/conformance/pairing_reconcile.rs`: (i) a `data-plane` row
+  resolves its row `collections` as both `replicator_collections` and the
+  subscription set; (ii) that subscription survives `merge_layered_desired`
+  while a network-control-only data-plane layer's subscription is still cleared;
+  (iii) the `data-plane` layer merges with a co-existing control pairing without
+  cross-contaminating filters or subscriptions.
 - Zero `sorry`s.
 
-If the resolution is a pure function over already-modeled quantities (explicit
-set vs template set), the proof obligation is light; if it is not, that is
-information (CLAUDE.md) and we stop to reconsider.
+If the resolution is a pure function over already-modeled quantities
+(template-id-gated row set vs template set), the proof obligation is light; if it
+is not, that is information (CLAUDE.md) and we stop to reconsider.
 
 ## Acceptance e2e (TDD — written first, must fail first)
 
@@ -199,7 +262,10 @@ a signal to reconsider harness shape (e.g. CLI-subprocess like
 
 ## Reversibility
 
-The change is additive: one new template entry, one query field, one branch in
-`data_plane_desired_from_pairing_row` guarded on `row.collections` non-empty.
-Reverting restores exact prior behavior; empty-`collections` rows already behave
-as today.
+The change is additive and gated on the `data-plane` template id: one new
+template entry, one query field, one `template == "data-plane"` branch in
+`data_plane_desired_from_pairing_row`, one conditional in `merge_layered_desired`,
+and two CLI guards. Reverting restores exact prior behavior. Because every branch
+keys on `template_ids`/`template == "data-plane"` — a template no existing row
+uses — rows on all other templates behave byte-for-byte as today, regardless of
+whether their `collections` field is populated.
