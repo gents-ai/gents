@@ -1137,6 +1137,66 @@ fn read_only_policy_allows_operator_configured_diagnostic_prefix() {
     .is_err());
 }
 
+/// Fence the operator docs in `docs/macos-bash-sandbox.md` (#629): the two
+/// ToolSelection knobs are not aliases — prefixes gate/extend by argv; the
+/// allowlist field replaces the whole-executable base.
+#[test]
+fn read_only_allowlist_knobs_match_operator_docs() {
+    let defaults = default_read_only_commands();
+
+    // Base defaults admit built-in heads; unknown heads are denied.
+    let default_policy = CommandExecutionPolicy::read_only(defaults.clone());
+    validate_command_policy("date", &[], &default_policy).unwrap();
+    assert!(
+        validate_command_policy("journalctl", &[], &default_policy).is_err(),
+        "unknown head must not pass the default base allowlist"
+    );
+
+    // read_only_command_allowlist REPLACES the base (narrow / customize).
+    let narrowed = CommandExecutionPolicy::read_only(vec![
+        "ls".to_string(),
+        "cat".to_string(),
+        "git".to_string(),
+        "journalctl".to_string(),
+    ]);
+    validate_command_policy("cat", &[], &narrowed).unwrap();
+    validate_command_policy("journalctl", &[], &narrowed).unwrap();
+    assert!(
+        validate_command_policy("date", &[], &narrowed).is_err(),
+        "replace/narrow must drop unlisted default heads (e.g. date)"
+    );
+    assert!(
+        validate_command_policy("sudo", &[], &narrowed).is_err(),
+        "replace/narrow must drop unlisted default heads (e.g. sudo)"
+    );
+
+    // Non-empty command_allowed_argv_prefixes is a global gate: a single
+    // diagnostic prefix admits matching argv outside the base, but also
+    // blocks default heads that do not match any prefix.
+    let prefix_only =
+        CommandExecutionPolicy::read_only(defaults).with_allowed_argv_prefixes(vec![vec![
+            "spctl".to_string(),
+            "--assess".to_string(),
+            "--type".to_string(),
+            "execute".to_string(),
+        ]]);
+    validate_command_policy(
+        "spctl",
+        &[
+            String::from("--assess"),
+            String::from("--type"),
+            String::from("execute"),
+            String::from("/Applications/Defra Agent.app"),
+        ],
+        &prefix_only,
+    )
+    .unwrap();
+    assert!(
+        validate_command_policy("date", &[], &prefix_only).is_err(),
+        "non-empty allowed prefixes must gate out default heads that do not match (docs global-gate caveat)"
+    );
+}
+
 #[test]
 fn read_only_policy_forbidden_prefix_overrides_configured_diagnostic_prefix() {
     let policy = CommandExecutionPolicy::read_only(default_read_only_commands())

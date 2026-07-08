@@ -54,18 +54,48 @@ Manifest or direct DefraDB document:
 }
 ```
 
-## Read-Only Diagnostic Extensions
+## Read-only allowlist knobs (which field when)
+
+`ToolSelection` has two related fields that shape the ReadOnly bash surface.
+They are not aliases — pick by use case:
+
+| Field | Effect on the base allowlist | Granularity | Reach for when |
+| --- | --- | --- | --- |
+| `command_allowed_argv_prefixes` | Does **not** rewrite the base list. When non-empty, every command must match a prefix (global gate — can drop default heads that do not match). In ReadOnly mode a matching prefix also admits heads **outside** the base. | Argv prefix (subcommand-precise) | Require a precise argv shape / admit a non-default diagnostic family; pairs with `command_forbidden_argv_prefixes` |
+| `read_only_command_allowlist` | When present **and non-empty**, **replaces** `default_read_only_commands()` wholesale. Absent or empty = keep the hardcoded default (never deny-all). | Whole executable head (`cat`, `journalctl`) | **Narrow** or fully customize the base under allowlist admission (empty prefixes). Prefixes cannot surgically edit that base list. |
+
+Validation (see `validate_command_policy` / `validate_read_only_command_inner` in
+`crates/defra-agent/src/toolset/shared/command.rs`):
+
+1. Forbidden prefixes always win.
+2. If `command_allowed_argv_prefixes` is non-empty, the command must match one
+   (global gate) — re-include prefixes for every built-in shape you still want.
+3. In ReadOnly mode, the command head must be on the base allowlist **or** match
+   an allowed prefix; known tools still get argument-level read-only checks
+   (`git`, `sed`, `find`, `curl`, …).
+
+Keep both fields: extension-via-prefixes and replace/narrow-base are different
+operator needs. Do not use `read_only_command_allowlist` only to add one head
+when argv precision matters — prefer prefixes. Do not use prefixes alone when
+you need to strip defaults from the base.
+
+### Extend with argv prefixes
 
 Read-only bash has built-in host diagnostics for common steward commands such
 as `date`, `hostname`, `uptime`, `df`, `vm_stat`, `ps`, `lsof`, `curl`,
 `launchctl`, and `tailscale`.
 
-Operators can add another read-only diagnostic command family by configuring an
-allowed argv prefix on the tool selection. A matching allowed prefix authorizes
-that command for read-only bash without granting `bash_mode: Unrestricted`.
-The allowed-prefix list is still a global argv gate: when it is non-empty,
-include prefixes for every built-in read-only command shape the behavior should
-keep using. Forbidden prefixes still take precedence.
+Operators can authorize another read-only diagnostic command family with an
+allowed argv prefix — without granting `bash_mode: Unrestricted`. A matching
+prefix admits that argv shape even when the executable is not on the base
+allowlist. Forbidden prefixes still take precedence.
+
+**Global-gate caveat:** a non-empty `command_allowed_argv_prefixes` list
+requires **every** command to match a prefix. The snippet below alone does
+**not** mean “defaults plus `spctl`”; it admits only matching `spctl` argv and
+drops default heads like `date` / `ls` that do not match. To keep built-ins,
+either leave this field empty (and use `read_only_command_allowlist` to change
+the base), or re-include prefixes for every built-in shape you still want.
 
 ```json
 {
@@ -91,6 +121,37 @@ as JSON when an argument contains spaces:
   ]
 }
 ```
+
+### Replace or narrow the base allowlist
+
+To run ReadOnly bash with a custom executable set (including a strict subset of
+the defaults), set `read_only_command_allowlist` to the **full** desired head
+list — this replaces the hardcoded default wholesale:
+
+```json
+{
+  "enable_bash": true,
+  "bash_mode": "ReadOnly",
+  "command_execution_policy": "read_only",
+  "read_only_command_allowlist": [
+    "ls",
+    "cat",
+    "git",
+    "journalctl"
+  ]
+}
+```
+
+With that document, `ls` / `cat` / `git` / `journalctl` are admit-by-head;
+default heads not listed (`sudo`, `curl`, `date`, `launchctl`, …) are not.
+Leave the field absent or empty to keep the built-in default (empty never
+means deny-all).
+
+To add a whole-executable head while keeping most defaults, copy the default
+set into `read_only_command_allowlist` and append the new head — do not set a
+lone prefix unless you also intend the global prefix gate. Combine with
+`command_allowed_argv_prefixes` only when you also need argv-precise admission
+on top of that base.
 
 ## macOS Seatbelt Profile
 

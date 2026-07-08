@@ -1414,11 +1414,17 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) command_network_mode: Option<String>,
     #[arg(long, default_value_t = false)]
     pub(crate) clear_command_network_mode: bool,
-    #[arg(long = "command-allowed-argv-prefix")]
+    #[arg(
+        long = "command-allowed-argv-prefix",
+        help = "Argv prefix allowed for bash (subcommand-precise). When set, every command must match a prefix; also admits heads outside the read-only base allowlist. Prefer over replacing the base when extending. See docs/macos-bash-sandbox.md"
+    )]
     pub(crate) command_allowed_argv_prefixes: Vec<String>,
     #[arg(long, default_value_t = false)]
     pub(crate) clear_command_allowed_argv_prefixes: bool,
-    #[arg(long = "command-forbidden-argv-prefix")]
+    #[arg(
+        long = "command-forbidden-argv-prefix",
+        help = "Argv prefix always denied for bash (wins over allowed prefixes and the read-only allowlist)"
+    )]
     pub(crate) command_forbidden_argv_prefixes: Vec<String>,
     #[arg(long, default_value_t = false)]
     pub(crate) clear_command_forbidden_argv_prefixes: bool,
