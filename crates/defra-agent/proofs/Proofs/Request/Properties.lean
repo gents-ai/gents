@@ -43,39 +43,41 @@ theorem terminal_implies_released_local
             cases admission <;> simp [coherent, coherentStateAdmission] at h_coherent
             rfl
 
+/-- Fields that no `RequestContext.Transition` constructor rewrites.
+
+Every constructor is a pure `{ pre with ... }` update that only touches
+lifecycle/admission/clock/persistence progress fields. Identity-bearing and
+submitter-owned fields are therefore preserved uniformly. Proving them once
+avoids 11-arm `cases h_trans` copies whenever a constructor is added (#556). -/
+theorem identity_fields_preserved
+    {pre post : RequestContext}
+    (h_trans : Transition pre post) :
+    post.origin = pre.origin ∧
+    post.backend = pre.backend ∧
+    post.maxRetries = pre.maxRetries ∧
+    post.messageSeq = pre.messageSeq ∧
+    post.isLatest = pre.isLatest ∧
+    post.interruptRequestedAt = pre.interruptRequestedAt ∧
+    post.validUntil = pre.validUntil ∧
+    post.subagentDepth = pre.subagentDepth ∧
+    post.causedByParentRequestId = pre.causedByParentRequestId ∧
+    post.causedByParentToolCallId = pre.causedByParentToolCallId ∧
+    post.requestDeadline = pre.requestDeadline ∧
+    post.retryCount = pre.retryCount ∧
+    post.currentTime = pre.currentTime := by
+  cases h_trans <;> simp_all
+
 theorem backend_binding_preserved
     {pre post : RequestContext}
     (h_trans : Transition pre post) :
-    post.backend = pre.backend := by
-  cases h_trans with
-  | claim _ _ _ h_post => rw [h_post]
-  | dedup_lose _ _ h_post => rw [h_post]
-  | begin_inference _ _ h_post => rw [h_post]
-  | advance _ _ h_post => rw [h_post]
-  | finish _ _ h_post => rw [h_post]
-  | fail _ _ h_post => rw [h_post]
-  | fail_before_stream _ _ h_post => rw [h_post]
-  | expire _ _ _ _ h_post => rw [h_post]
-  | interrupt_before_claim _ _ _ h_post => rw [h_post]
-  | interrupt_claimed _ _ _ h_post => rw [h_post]
-  | interrupt_processing _ _ _ h_post => rw [h_post]
+    post.backend = pre.backend :=
+  (identity_fields_preserved h_trans).2.1
 
 theorem origin_preserved
     {pre post : RequestContext}
     (h_trans : Transition pre post) :
-    post.origin = pre.origin := by
-  cases h_trans with
-  | claim _ _ _ h_post => rw [h_post]
-  | dedup_lose _ _ h_post => rw [h_post]
-  | begin_inference _ _ h_post => rw [h_post]
-  | advance _ _ h_post => rw [h_post]
-  | finish _ _ h_post => rw [h_post]
-  | fail _ _ h_post => rw [h_post]
-  | fail_before_stream _ _ h_post => rw [h_post]
-  | expire _ _ _ _ h_post => rw [h_post]
-  | interrupt_before_claim _ _ _ h_post => rw [h_post]
-  | interrupt_claimed _ _ _ h_post => rw [h_post]
-  | interrupt_processing _ _ _ h_post => rw [h_post]
+    post.origin = pre.origin :=
+  (identity_fields_preserved h_trans).1
 
 theorem transition_produces_coherent
     {pre post : RequestContext}

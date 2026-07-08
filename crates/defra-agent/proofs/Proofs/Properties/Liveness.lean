@@ -5,7 +5,24 @@ open RequestState RequestContext ComposedState
 /-!
 # Liveness Properties L1-L3
 
-Liveness modeled as constructive reachability to terminal states.
+## Liveness taxonomy (tier 1 — #557)
+
+Theorems in this file (and the wider suite's `*_eventually_*` /
+`*_convergence` names) are **tier-1 existential reachability**:
+
+> there exists a finite legal trace from the pre-state to a good post-state.
+
+They are **not**:
+- **tier 2** fair-scheduler liveness (progress under weak/strong fairness), or
+- **tier 3** bounded-latency guarantees (progress within N ticks/steps), or
+- **tier 4** operational watchdog guarantees (runtime-enforced timeouts).
+
+Tier-2/3 load for distributed delivery and pairing lives in `tla/`. Tier-4 is
+enforced by the Rust runtime (deadlines, idle timeouts, recovery sweeps).
+
+Naming note: historical `*_eventually_*` names are kept for continuity; new
+work should prefer `*_reachable` when the theorem is purely existential.
+See `crates/defra-agent/proofs/README.md` § Liveness taxonomy.
 -/
 
 /-- Termination measure: maximum remaining steps to terminal state. -/

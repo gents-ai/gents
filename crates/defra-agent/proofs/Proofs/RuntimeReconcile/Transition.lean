@@ -90,47 +90,18 @@ inductive Transition : RuntimeState → RuntimeState → Prop where
         } →
       Transition pre post
 
+/-- Active generation is non-decreasing under every transition.
+
+Most constructors leave `active` untouched. Only `publish` advances generation;
+that arm is the sole non-uniform case. Discharged with a single `cases` +
+`simp_all` so adding a constructor that preserves `active` does not require a
+new proof arm (#556). -/
 theorem transition_generation_monotone
     {pre post : RuntimeState}
     (h_trans : Transition pre post) :
     pre.active.generation ≤ post.active.generation := by
-  cases h_trans with
-  | ack_write _ h_post =>
-      cases h_post
-      simp
-  | observe_doc _ _ _ h_post =>
-      cases h_post
-      simp
-  | start_resolve _ h_post =>
-      cases h_post
-      simp
-  | resolve_visible _ _ _ _ h_post =>
-      cases h_post
-      simp
-  | diff_noop _ _ _ _ h_post =>
-      cases h_post
-      simp
-  | begin_apply _ _ _ _ h_post =>
-      cases h_post
-      simp
-  | publish _ _ _ _ h_post =>
-      cases h_post
-      simp [ResolvedSnapshot.activate, Nat.le_succ pre.active.generation]
-  | apply_failed _ h_post =>
-      cases h_post
-      simp
-  | router_observe _ h_post =>
-      cases h_post
-      simp
-  | accept_request _ _ _ h_post =>
-      cases h_post
-      simp
-  | finish_request _ _ h_post =>
-      cases h_post
-      simp
-  | retire_generation _ _ _ _ _ h_post =>
-      cases h_post
-      simp
+  cases h_trans <;>
+    simp_all [ResolvedSnapshot.activate, Nat.le_succ]
 
 theorem coherent_preserved
     {pre post : RuntimeState}
