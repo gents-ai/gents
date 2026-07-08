@@ -1173,14 +1173,13 @@ fn read_only_allowlist_knobs_match_operator_docs() {
     // Non-empty command_allowed_argv_prefixes is a global gate: a single
     // diagnostic prefix admits matching argv outside the base, but also
     // blocks default heads that do not match any prefix.
-    let prefix_only = CommandExecutionPolicy::read_only(defaults).with_allowed_argv_prefixes(vec![
-        vec![
+    let prefix_only =
+        CommandExecutionPolicy::read_only(defaults).with_allowed_argv_prefixes(vec![vec![
             "spctl".to_string(),
             "--assess".to_string(),
             "--type".to_string(),
             "execute".to_string(),
-        ],
-    ]);
+        ]]);
     validate_command_policy(
         "spctl",
         &[
