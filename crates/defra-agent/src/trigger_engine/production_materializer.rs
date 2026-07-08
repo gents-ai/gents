@@ -89,6 +89,46 @@ pub(crate) fn execution_origin_for_trigger_kind(trigger_kind: TriggerKind) -> Ex
     }
 }
 
+/// Grace added to a persisted claim `deadline` before the serial gate treats
+/// a claimed/processing row as terminal-in-effect. The owning loop can finish
+/// an attempt started just inside the deadline and still be writing the
+/// terminal state moments after it; the margin keeps that window from
+/// double-firing while still unblocking hours-wedged orphans within a tick
+/// or two.
+const EXPIRED_CLAIM_GRACE_SECS: i64 = 60;
+
+/// Whether one fetched active-state row actually gates a serial fire at
+/// `now`. Pending rows always gate (they are claimable and will run).
+/// Claimed/processing rows gate unless their persisted claim `deadline` plus
+/// grace has passed — the owning runtime enforces the same deadline
+/// in-memory, so a row past it is a wedged orphan, not an in-flight run.
+/// Missing or unparseable deadlines gate (conservative).
+fn row_gates_serial_fire(row: &serde_json::Value, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let state = row
+        .get("lifecycle_state")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if state != "claimed" && state != "processing" {
+        return true;
+    }
+    let Some(deadline) = row
+        .get("deadline")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return true;
+    };
+    match chrono::DateTime::parse_from_rfc3339(deadline) {
+        Ok(deadline) => {
+            let expired_at = deadline.with_timezone(&chrono::Utc)
+                + chrono::Duration::seconds(EXPIRED_CLAIM_GRACE_SECS);
+            now <= expired_at
+        }
+        Err(_) => true,
+    }
+}
+
 impl MaterializerHandle for ProductionMaterializer {
     fn materialize(
         &self,
@@ -155,28 +195,45 @@ impl MaterializerHandle for ProductionMaterializer {
 
     fn has_active_runtime_request_for_trigger(
         &self,
+        agent_did: &str,
         trigger_id: &str,
         trigger_kind: TriggerKind,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<bool>> + Send + '_>> {
         let node = self.node.clone();
+        let escaped_agent_did = escape_graphql_string(agent_did);
         let escaped_trigger_id = escape_graphql_string(trigger_id);
         let trigger_kind_str = trigger_kind.as_str();
         let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
         Box::pin(async move {
-            // Strict tuple match on `(caused_by_trigger_id, caused_by_trigger_kind)`
-            // + active runtime `lifecycle_state`. Limit 1 is sufficient: we
-            // only need a boolean signal for the concurrency gate.
+            // Strict tuple match on `(agent_did, caused_by_trigger_id,
+            // caused_by_trigger_kind)` + active runtime `lifecycle_state`.
+            // The DID scope is load-bearing (#605): the replicated store also
+            // holds other agents' requests for the same human-chosen trigger
+            // id, and those must never gate this agent's fires.
+            //
+            // Rows are fetched (not just existence-checked) because a claimed
+            // or processing row past its persisted claim deadline is
+            // terminal-in-effect and must not gate: the owning loop enforces
+            // the same deadline in-memory (`await_with_request_deadline`
+            // aborts the attempt), so only a wedged orphan — e.g. an owner
+            // whose store was rebuilt — can sit past-deadline in an active
+            // state, and such a row would otherwise gate forever. Expiry is
+            // evaluated here rather than in the filter to avoid relying on
+            // lexicographic string comparison over RFC3339 in the store. Do
+            // not cap this result: a pile-up of expired orphan rows must not
+            // hide a later live row and let Serial double-fire.
             let query = format!(
                 r#"query {{
                     AgentRequest(
                         filter: {{
+                            agent_did: {{ _eq: "{agent_did}" }},
                             caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
                             caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }},
                             lifecycle_state: {{ _in: {active_runtime_states} }}
-                        }},
-                        limit: 1
-                    ) {{ _docID }}
+                        }}
+                    ) {{ _docID lifecycle_state deadline }}
                 }}"#,
+                agent_did = escaped_agent_did,
                 trigger_id = escaped_trigger_id,
                 trigger_kind = trigger_kind_str,
             );
@@ -187,12 +244,13 @@ impl MaterializerHandle for ProductionMaterializer {
                     resp.errors
                 );
             }
+            let now = chrono::Utc::now();
             let found = resp
                 .data
                 .as_ref()
                 .and_then(|data| data.get("AgentRequest"))
                 .and_then(|rows| rows.as_array())
-                .map(|rows| !rows.is_empty())
+                .map(|rows| rows.iter().any(|row| row_gates_serial_fire(row, now)))
                 .unwrap_or(false);
             Ok(found)
         })
@@ -200,15 +258,21 @@ impl MaterializerHandle for ProductionMaterializer {
 
     fn supersede_active_runtime_requests_for_trigger(
         &self,
+        agent_did: &str,
         trigger_id: &str,
         trigger_kind: TriggerKind,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<usize>> + Send + '_>> {
         let node = self.node.clone();
+        let escaped_agent_did = escape_graphql_string(agent_did);
         let escaped_trigger_id = escape_graphql_string(trigger_id);
         let trigger_kind_str = trigger_kind.as_str();
         let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
         Box::pin(async move {
-            // Single bulk update against the active runtime tuple match.
+            // Single bulk update against the active runtime tuple match,
+            // scoped to this agent's own requests (#605): without the DID
+            // filter a LatestOnly fire would locally rewrite OTHER agents'
+            // replicated requests. Expired claims are deliberately included —
+            // superseding this agent's own wedged orphan is desirable.
             // DefraDB returns the list of updated documents in the mutation
             // response so we can count how many requests were transitioned;
             // the engine's `LatestOnly` path treats this count as
@@ -218,6 +282,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 r#"mutation {{
                     update_AgentRequest(
                         filter: {{
+                            agent_did: {{ _eq: "{agent_did}" }},
                             caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
                             caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }},
                             lifecycle_state: {{ _in: {active_runtime_states} }}
@@ -228,6 +293,7 @@ impl MaterializerHandle for ProductionMaterializer {
                         }}
                     ) {{ _docID }}
                 }}"#,
+                agent_did = escaped_agent_did,
                 trigger_id = escaped_trigger_id,
                 trigger_kind = trigger_kind_str,
             );
@@ -247,6 +313,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 .unwrap_or(0);
             if count > 0 {
                 tracing::info!(
+                    agent_did = %escaped_agent_did,
                     trigger_id = %escaped_trigger_id,
                     trigger_kind = %trigger_kind_str,
                     count,

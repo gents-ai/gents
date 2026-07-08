@@ -282,6 +282,8 @@ pub struct AgentResponseRow {
     #[serde(default)]
     pub progress_seq: Option<i64>,
     #[serde(default)]
+    pub reasoning_progress_seq: Option<i64>,
+    #[serde(default)]
     pub materialized_message_sequence: Option<i64>,
     #[serde(default)]
     pub materialized_at: Option<String>,

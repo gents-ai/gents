@@ -8,12 +8,14 @@ use defra_agent::graphql::escape_graphql_string;
 use defra_agent::CancelBackgroundToolCallOutcome;
 use defra_agent::UpdateSubscriptionSource;
 use serde_json::Value;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 
 use super::command_projection::{
     command_execution_item, command_output_payload, tool_projection_status, ToolProjectionStatus,
 };
 use super::progress::{
-    decode_defra_tool_call_progress, defra_turn_progress_query, DefraToolCallProgress,
+    decode_defra_tool_call_progress, defra_tool_progress_query, DefraToolCallProgress,
 };
 use super::protocol::{now_millis, send_notification};
 use super::store::query_node_json;
@@ -27,18 +29,39 @@ pub(super) fn spawn_background_tool_watcher(
     thread_id: String,
     turn_id: String,
     cwd: PathBuf,
-    mut running: BTreeMap<String, codex::CommandExecutionStatus>,
+    running: BTreeMap<String, codex::CommandExecutionStatus>,
 ) {
+    let _ = spawn_background_tool_watcher_handle(
+        connection, state, request_id, session_id, thread_id, turn_id, cwd, running, None,
+    );
+}
+
+fn spawn_background_tool_watcher_handle(
+    connection: ConnectionState,
+    state: ShimState,
+    request_id: String,
+    session_id: String,
+    thread_id: String,
+    turn_id: String,
+    cwd: PathBuf,
+    mut running: BTreeMap<String, codex::CommandExecutionStatus>,
+    mut first_query_observed: Option<oneshot::Sender<()>>,
+) -> Option<JoinHandle<()>> {
     if running.is_empty() {
-        return;
+        return None;
     }
 
-    tokio::spawn(async move {
+    Some(tokio::spawn(async move {
         let mut updates = state.node.subscribe_updates();
         while !running.is_empty() {
+            if connection.outbound.is_closed() {
+                tracing::debug!("Codex shim background tool watcher stopped after outbound closed");
+                break;
+            }
+
             let response = match query_node_json(
                 state.node.as_ref(),
-                &defra_turn_progress_query(&request_id, &session_id),
+                &defra_tool_progress_query(&request_id, &session_id),
             )
             .await
             {
@@ -48,6 +71,9 @@ pub(super) fn spawn_background_tool_watcher(
                     break;
                 }
             };
+            if let Some(observed) = first_query_observed.take() {
+                let _ = observed.send(());
+            }
 
             let tool_rows = response
                 .pointer("/data/AgentToolCall")
@@ -116,6 +142,10 @@ pub(super) fn spawn_background_tool_watcher(
             }
 
             tokio::select! {
+                _ = connection.outbound.closed() => {
+                    tracing::debug!("Codex shim background tool watcher stopped after outbound closed");
+                    break;
+                }
                 _ = tokio::time::sleep(state.poll_interval) => {}
                 msg = updates.recv() => {
                     if msg.is_none() {
@@ -128,7 +158,7 @@ pub(super) fn spawn_background_tool_watcher(
                 }
             }
         }
-    });
+    }))
 }
 
 async fn send_background_tool_completion(
@@ -244,4 +274,115 @@ fn decode_background_terminal_row(row: &Value) -> Option<BackgroundTerminalRow> 
     Some(BackgroundTerminalRow {
         tool_call_key: row.get("tool_call_key")?.as_str()?.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use codex_app_server_protocol as codex;
+    use tokio::sync::{mpsc, oneshot, Mutex};
+
+    use super::super::{CodexSidecar, ConnectionState, ShimState};
+    use super::*;
+
+    #[tokio::test]
+    async fn background_tool_watcher_exits_when_outbound_closes_while_tool_is_running() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(tempdir.path().join("node"))
+                .build()
+                .await
+                .expect("embedded node"),
+        );
+        defra_agent::schema::ensure_runtime_schemas(&node)
+            .await
+            .expect("runtime schemas");
+
+        let request_id = "req-background-disconnect";
+        let session_id = "session-background-disconnect";
+        let tool_call_id = "call-background-disconnect";
+        let tool_call_key = format!("{session_id}:{tool_call_id}");
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "{tool_call_key}",
+                    request_id: "{request_id}",
+                    session_id: "{session_id}",
+                    message_sequence: 1,
+                    tool_name: "bash",
+                    tool_call_id: "{tool_call_id}",
+                    args: "{{\"command\":\"sleep 600\"}}",
+                    result: "",
+                    status: "called",
+                    lifecycle_state: "running",
+                    started_at: "2026-07-07T12:00:00Z",
+                    await_mode: "background"
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = node.execute(&mutation).await;
+        assert!(
+            !response.has_errors(),
+            "seed AgentToolCall failed: {:?}",
+            response.errors
+        );
+
+        let (outbound, outbound_rx) = mpsc::unbounded_channel::<String>();
+        let connection = ConnectionState {
+            outbound,
+            turn_streams: Arc::new(Mutex::new(BTreeMap::new())),
+            fuzzy_file_search_sessions: Arc::new(Mutex::new(BTreeMap::new())),
+            pending_steering_inputs: Arc::new(Mutex::new(BTreeMap::new())),
+        };
+        let state = ShimState {
+            codex_home: tempdir.path().join("codex-home"),
+            trace_path: tempdir
+                .path()
+                .join("codex-home/log/codex-shim-events.jsonl"),
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            fs_root: None,
+            node,
+            background_execution_registry: defra_agent::BackgroundExecutionRegistry::default(),
+            graphql: Arc::from("http://127.0.0.1/graphql"),
+            agent_did: Arc::from("did:defra-agent:background-disconnect-test"),
+            behavior_id: Arc::from("did:defra-agent:background-disconnect-test:default"),
+            id_counter: Arc::new(AtomicU64::new(1)),
+            timeout: Duration::from_secs(5),
+            poll_interval: Duration::from_secs(60),
+            sidecar: Arc::new(Mutex::new(CodexSidecar::default())),
+        };
+
+        let mut running = BTreeMap::new();
+        running.insert(tool_call_key, codex::CommandExecutionStatus::InProgress);
+        let (observed_tx, observed_rx) = oneshot::channel();
+        let handle = spawn_background_tool_watcher_handle(
+            connection,
+            state,
+            request_id.to_string(),
+            session_id.to_string(),
+            session_id.to_string(),
+            request_id.to_string(),
+            tempdir.path().to_path_buf(),
+            running,
+            Some(observed_tx),
+        )
+        .expect("watcher should spawn for running tool");
+
+        tokio::time::timeout(Duration::from_secs(5), observed_rx)
+            .await
+            .expect("watcher should query running background tool before disconnect")
+            .expect("watcher should signal first query");
+        drop(outbound_rx);
+
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("watcher should exit promptly when outbound closes")
+            .expect("watcher task should not panic");
+    }
 }

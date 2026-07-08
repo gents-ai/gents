@@ -335,6 +335,36 @@ pub async fn set_backend_probe_status(
     Ok(())
 }
 
+/// Persist a backend's `probe_status` and stamp `last_probe` in one write.
+/// Used by both the startup ratchet and the scheduled prober's recurring
+/// `unknown → healthy` promotion path.
+pub async fn set_backend_probe_status_with_last_probe(
+    node: &EmbeddedNode,
+    backend_id: &str,
+    probe_status: &str,
+    last_probe: chrono::DateTime<chrono::Utc>,
+) -> Result<()> {
+    let mutation = format!(
+        r#"mutation {{
+            update_InferenceBackend(
+                filter: {{ backend_id: {{ _eq: "{}" }} }},
+                input: {{ probe_status: "{}", last_probe: "{}" }}
+            ) {{ _docID }}
+        }}"#,
+        escape_graphql_string(backend_id),
+        escape_graphql_string(probe_status),
+        last_probe.to_rfc3339(),
+    );
+    let resp = node.execute(&mutation).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "update InferenceBackend probe_status/last_probe for {backend_id} failed: {:?}",
+            resp.errors
+        );
+    }
+    Ok(())
+}
+
 /// Probe each enabled backend that is not already healthy and promote the
 /// reachable ones to `healthy`.
 ///
@@ -347,8 +377,8 @@ pub async fn set_backend_probe_status(
 /// Probe failures are intentionally non-destructive: the backend is left at its
 /// current status (typically `unknown`) and logged, so a transiently-unreachable
 /// backend degrades rather than being marked `unhealthy` and flapping. Recurring
-/// re-probing and unhealthy demotion are a separate concern (the admission path
-/// handles live request failures).
+/// re-probing and unhealthy demotion are handled by the scheduled backend prober
+/// (`crate::backend_health`), whose measured state is merged into admission.
 pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
     let backends = match list_enabled_backends(node).await {
         Ok(backends) => backends,
@@ -394,18 +424,23 @@ pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
             {
                 Ok(models) => {
                     tracing::Span::current().record("model_count", models.len() as i64);
-                    match set_backend_probe_status(node, &backend.backend_id, HEALTHY_PROBE_STATUS)
-                        .await
+                    match set_backend_probe_status_with_last_probe(
+                        node,
+                        &backend.backend_id,
+                        HEALTHY_PROBE_STATUS,
+                        chrono::Utc::now(),
+                    )
+                    .await
                     {
                         Ok(()) => tracing::info!(
                             backend_id = %backend.backend_id,
                             endpoint = %backend.endpoint,
-                            "startup backend probe: promoted to healthy"
+                            "startup backend probe: promoted to healthy and stamped last_probe"
                         ),
                         Err(error) => tracing::warn!(
                             backend_id = %backend.backend_id,
                             error = %error,
-                            "startup backend probe: reachable but failed to persist healthy status"
+                            "startup backend probe: reachable but failed to persist healthy status and last_probe"
                         ),
                     }
                 }

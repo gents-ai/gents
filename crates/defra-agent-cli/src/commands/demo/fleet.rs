@@ -400,7 +400,9 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
         &worker.did,
         &[
             "--enable-defra-query",
-            "false",
+            "true",
+            "--defra-query-collection",
+            "agent-config",
             "--subagent-allow-cross-deployment",
             "true",
         ],
@@ -421,7 +423,9 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
         &fleet.did_a,
         &[
             "--enable-defra-query",
-            "false",
+            "true",
+            "--defra-query-collection",
+            "agent-config",
             "--subagent-spawn-enabled",
             "true",
             "--subagent-background-enabled",

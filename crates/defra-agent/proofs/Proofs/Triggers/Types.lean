@@ -190,14 +190,33 @@ structure AgentRequest where
   causedBy : Option TriggerKey
   concurrency : ConcurrencyMode
   /-- Mirror of `RequestState`-level terminality without forcing the
-      trigger layer to unfold the full lifecycle state. -/
+      trigger layer to unfold the full lifecycle state.
+
+      **Projection boundary (#605, deadline expiry):** the Rust gate maps a
+      persisted `claimed`/`processing` row whose claim `deadline` (plus a
+      fixed grace) has passed to `isTerminal = true`. This is sound because
+      the owning loop enforces the same deadline in-memory
+      (`await_with_request_deadline` aborts the attempt at the deadline), so
+      a past-deadline row can only be a wedged orphan whose owner will never
+      terminate it — the projection performs the `lifecycleTerminateStep`
+      the dead owner cannot. Conformance:
+      `scheduling.rs::serial_gate_ignores_expired_claims`. -/
   isTerminal : Bool
   /-- Execution origin inherited from the trigger engine. -/
   executionOrigin : ExecutionOrigin
   deriving Repr
 
 /-- Aggregate system state observed by the trigger engine for
-    cross-request reasoning. -/
+    cross-request reasoning.
+
+    **Projection boundary (#605, agent scope):** `requests` is ONE agent's
+    request view. `TriggerKey` is only unique per agent — replicated fleets
+    share human-chosen schedule ids — so the Rust materialization of this
+    state scopes every query by the dispatching behavior's `agent_did`;
+    without that scope, T2's per-tuple bound would be enforced fleet-wide
+    across unrelated agents (the observed #605 outage). Conformance:
+    `scheduling.rs::serial_gate_is_scoped_by_agent_did` /
+    `supersede_only_touches_own_agent_requests`. -/
 structure SystemState where
   requests : List AgentRequest
   deriving Repr

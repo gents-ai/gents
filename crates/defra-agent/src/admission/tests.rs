@@ -41,6 +41,7 @@ fn config(
         max_queue_depth,
         enabled: true,
         probe_status: "healthy".to_string(),
+        measured_unhealthy: false,
         config_fingerprint: format!("{backend_id}:{max_concurrent}:{max_queue_depth}"),
     }
 }

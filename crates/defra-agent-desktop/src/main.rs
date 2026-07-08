@@ -1,5 +1,7 @@
+use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, Stdio};
+use std::time::Duration;
 use std::{fs::OpenOptions, path::Path};
 
 use clap::{Parser, Subcommand};
@@ -114,6 +116,25 @@ fn run_command(command: Command) -> anyhow::Result<()> {
 fn launch_desktop() -> anyhow::Result<()> {
     let tauri_binary = resolve_tauri_binary()?;
     tracing::info!(path = %tauri_binary.display(), "launching tauri desktop shell");
+
+    // This check allows for a helpful error message to be shown to the user on the
+    // command line, as opposed to opening a blank Tauri window with a more generic
+    // "Connection refused" message.
+    if is_debug_build(&tauri_binary) && !dev_server_reachable() {
+        anyhow::bail!(
+            "{} is a debug build, which loads its UI from the Vite dev server \
+             (http://localhost:1420) instead of bundled assets, but nothing is \
+             listening there right now.\n\n\
+             You can fix this in one of the following ways:\n  \
+             - Start the dev server first: `npm --prefix apps/desktop-tauri run dev`, \
+             then run `defra-agent-desktop` again.\n  \
+             - Launch via `make desktop-native-dev`, which starts both for you.\n  \
+             - Build a standalone binary with `make desktop-native-build` (release \
+             mode; no dev server needed).",
+            tauri_binary.display()
+        );
+    }
+
     if desktop_console_log_enabled() {
         ProcessCommand::new(&tauri_binary)
             .spawn()
@@ -162,6 +183,24 @@ fn open_log_writer(path: &Path) -> anyhow::Result<std::fs::File> {
         .append(true)
         .open(path)
         .map_err(|error| anyhow::anyhow!("failed to open desktop log {}: {error}", path.display()))
+}
+
+/// True if `binary`'s path runs through a `debug` build directory (e.g.
+/// `target/debug/...`), the standard cargo layout for a non-release profile.
+fn is_debug_build(binary: &Path) -> bool {
+    binary
+        .components()
+        .any(|component| component.as_os_str() == "debug")
+}
+
+/// True if something is listening on the Vite dev server port
+/// (`tauri.conf.json`'s `build.devUrl`, `http://localhost:1420`).
+fn dev_server_reachable() -> bool {
+    TcpStream::connect_timeout(
+        &"127.0.0.1:1420".parse().expect("valid socket address"),
+        Duration::from_millis(300),
+    )
+    .is_ok()
 }
 
 fn resolve_tauri_binary() -> anyhow::Result<PathBuf> {

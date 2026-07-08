@@ -49,7 +49,7 @@ fn snapshot_with_event_triggers(
 ) -> Arc<ActiveRuntimeSnapshot> {
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         "general".to_string(),
-        Vec::new(),
+        vec![integration_test_behavior("general")],
         HashMap::new(),
         HashMap::new(),
         HashMap::new(),

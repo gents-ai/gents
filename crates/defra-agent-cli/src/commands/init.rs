@@ -498,7 +498,11 @@ async fn initialize_runtime_home(
     };
     write_inference_backend_document(access, &backend_doc).await?;
 
-    let enable_defra_query = init_enable_defra_query(tool_package, args.disable_defra_query);
+    let enable_defra_query = init_enable_defra_query(
+        tool_package,
+        args.enable_defra_query,
+        args.disable_defra_query,
+    );
     let tool_selection = tool_selection_for_package(
         agent_did,
         &tool_selection_id,
@@ -717,26 +721,32 @@ fn resolve_init_tool_package(
 fn validate_init_tool_flags(args: &InitArgs, tool_package: ToolPackageArg) -> Result<()> {
     if args.identity_only
         && (args.enable_memory
+            || args.enable_defra_query
             || args.disable_defra_query
             || !args.defra_query_collections.is_empty())
     {
         anyhow::bail!(
-            "--enable-memory, --disable-defra-query, and --defra-query-collection cannot be used with --identity-only because no ToolSelection document is written"
+            "--enable-memory, --enable-defra-query, --disable-defra-query, and --defra-query-collection cannot be used with --identity-only because no ToolSelection document is written"
         );
     }
     if !args.defra_query_collections.is_empty() {
         let profile = tool_package_profile(tool_package);
-        if args.disable_defra_query || !profile.enable_defra_query {
+        if args.disable_defra_query || !(profile.enable_defra_query || args.enable_defra_query) {
             anyhow::bail!(
-                "--defra-query-collection requires a tool package with defra_query enabled and cannot be combined with --disable-defra-query"
+                "--defra-query-collection requires defra_query to be enabled — pass --enable-defra-query or a tool package that enables it, and do not combine with --disable-defra-query"
             );
         }
     }
     Ok(())
 }
 
-fn init_enable_defra_query(tool_package: ToolPackageArg, disable_defra_query: bool) -> bool {
-    tool_package_profile(tool_package).enable_defra_query && !disable_defra_query
+fn init_enable_defra_query(
+    tool_package: ToolPackageArg,
+    enable_defra_query: bool,
+    disable_defra_query: bool,
+) -> bool {
+    (tool_package_profile(tool_package).enable_defra_query || enable_defra_query)
+        && !disable_defra_query
 }
 
 fn tool_ceiling_for_package(tool_package: ToolPackageArg) -> ToolCeilingArg {
@@ -898,6 +908,7 @@ mod tests {
             tool_root: None,
             enable_memory: false,
             disable_defra_query: false,
+            enable_defra_query: false,
             defra_query_collections: Vec::new(),
         }
     }
@@ -998,7 +1009,7 @@ mod tests {
                 "default-tools",
                 case.package,
                 false,
-                init_enable_defra_query(case.package, false),
+                init_enable_defra_query(case.package, false, false),
                 Vec::new(),
             );
 
@@ -1034,7 +1045,7 @@ mod tests {
             "default-tools",
             ToolPackageArg::Write,
             false,
-            init_enable_defra_query(ToolPackageArg::Write, true),
+            init_enable_defra_query(ToolPackageArg::Write, false, true),
             Vec::new(),
         );
 
@@ -1092,7 +1103,7 @@ mod tests {
             "default-tools",
             ToolPackageArg::Introspection,
             true,
-            init_enable_defra_query(ToolPackageArg::Introspection, false),
+            init_enable_defra_query(ToolPackageArg::Introspection, false, false),
             scoped_introspection.defra_query_collections.clone(),
         );
         assert_eq!(selection.enable_memory, Some(true));
@@ -1110,7 +1121,7 @@ mod tests {
             "default-tools",
             ToolPackageArg::Yolo,
             false,
-            init_enable_defra_query(ToolPackageArg::Yolo, false),
+            init_enable_defra_query(ToolPackageArg::Yolo, false, false),
             Vec::new(),
         );
         assert_eq!(selection.enable_file_tools, Some(true));
@@ -1152,6 +1163,16 @@ mod tests {
         identity_only.enable_memory = true;
         assert!(
             validate_init_tool_flags(&identity_only, ToolPackageArg::Readonly)
+                .unwrap_err()
+                .to_string()
+                .contains("--identity-only")
+        );
+
+        let mut identity_only_query = init_args();
+        identity_only_query.identity_only = true;
+        identity_only_query.enable_defra_query = true;
+        assert!(
+            validate_init_tool_flags(&identity_only_query, ToolPackageArg::Readonly)
                 .unwrap_err()
                 .to_string()
                 .contains("--identity-only")

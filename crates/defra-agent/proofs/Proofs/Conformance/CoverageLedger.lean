@@ -235,7 +235,7 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := []
     }
   , { feature := "backend-health"
-    , required := [Surface.runtimeInternal, Surface.operatorUi]
+    , required := [Surface.runtimeInternal, Surface.operatorCli, Surface.operatorUi]
     , deferred := []
     }
   ]
@@ -510,6 +510,21 @@ def caseCoverage : List CoverageEntry :=
       "BackendHealthAdmissionCases"
       "backend_registry::tests::display_state_matches_every_lean_backend_health_admission_case")
       "backend-health" [Surface.operatorUi]
+  -- #640: the scheduled prober's transition machine (Proofs/BackendHealth) —
+  -- the Rust consumer drives step_backend over the full K ∈ {1,2,3} domain
+  -- including the blocksRouting projection the admission merge consumes.
+  , tagged (consumerCoverage
+      "backend_health_cases"
+      "BackendHealthTransitionCases"
+      "backend_health::tests::generated_backend_health_cases_match_prober_transitions")
+      "backend-health" [Surface.runtimeInternal]
+  -- #640: the /metrics overlay — measured state drives the probe-status
+  -- sample value (1 iff healthy, 0 otherwise) and last_probe freshness.
+  , tagged (consumerCoverage
+      "backend_health_cases"
+      "BackendHealthTransitionCases"
+      "http::prometheus::tests::backend_probe_status_metric_reflects_measured_health")
+      "backend-health" [Surface.operatorCli]
   , tagged (consumerCoverage
       "native_filesystem_boundary_cases"
       "NativeFilesystemBoundaryCases"

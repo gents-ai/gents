@@ -161,6 +161,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "display_state_matches_every_lean_backend_health_admission_case",
         },
         ConformanceConsumer::RustTest {
+            id: "backend_health::tests::generated_backend_health_cases_match_prober_transitions",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/src/backend_health.rs",
+            module_path: "backend_health::tests",
+            function: "generated_backend_health_cases_match_prober_transitions",
+        },
+        ConformanceConsumer::RustTest {
+            id: "http::prometheus::tests::backend_probe_status_metric_reflects_measured_health",
+            package: "defra-agent-cli",
+            source_path: "crates/defra-agent-cli/src/http/prometheus.rs",
+            module_path: "http::prometheus::tests",
+            function: "backend_probe_status_metric_reflects_measured_health",
+        },
+        ConformanceConsumer::RustTest {
             id: "cli_server::server_exposes_fleet_slot_snapshot_endpoint",
             package: "defra-agent-cli",
             source_path: "crates/defra-agent-cli/tests/cli_server.rs",

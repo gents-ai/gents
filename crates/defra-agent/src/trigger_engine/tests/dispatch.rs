@@ -498,3 +498,57 @@ async fn dispatch_latest_only_serializes_parallel_fires() {
          per-trigger serialization, got {elapsed:?}"
     );
 }
+
+#[tokio::test]
+async fn dispatch_scopes_concurrency_by_the_behaviors_agent_did() {
+    // #605: the trigger tuple is only unique per agent. Both the serial gate
+    // and LatestOnly supersede must receive the DID of the fire's behavior so
+    // replicated foreign requests for the same trigger id can never gate (or
+    // be superseded by) this agent's fires.
+    let task = resolved_task("tick");
+    let schedule = resolved_schedule("sched-did", task.clone());
+    let snapshot = snapshot_with_schedules(HashMap::from([("sched-did".to_string(), schedule)]));
+    let expected_did = snapshot
+        .behavior("general")
+        .expect("test snapshot resolves the general behavior")
+        .agent_did()
+        .to_string();
+    assert!(!expected_did.is_empty());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    let engine = TriggerEngine::new(rx, materializer.clone());
+
+    let serial = FireIntent {
+        trigger_id: Some("sched-did".to_string()),
+        trigger_kind: TriggerKind::Schedule,
+        task: task.clone(),
+        concurrency: ConcurrencyMode::Serial,
+        event_vars: serde_json::json!({}),
+        doc_vars: None,
+        args_vars: None,
+        pre_materialized_request_id: None,
+        on_result: Box::new(|_| {}),
+    };
+    assert!(matches!(
+        engine.dispatch(serial).await,
+        FireResult::Fired { .. }
+    ));
+    assert_eq!(materializer.gate_dids(), vec![expected_did.clone()]);
+
+    let latest_only = FireIntent {
+        trigger_id: Some("sched-did".to_string()),
+        trigger_kind: TriggerKind::Schedule,
+        task,
+        concurrency: ConcurrencyMode::LatestOnly,
+        event_vars: serde_json::json!({}),
+        doc_vars: None,
+        args_vars: None,
+        pre_materialized_request_id: None,
+        on_result: Box::new(|_| {}),
+    };
+    assert!(matches!(
+        engine.dispatch(latest_only).await,
+        FireResult::Fired { .. }
+    ));
+    assert_eq!(materializer.supersede_dids(), vec![expected_did]);
+}

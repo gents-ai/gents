@@ -26,8 +26,12 @@
 //!   what `ScheduleSource::on_result` writes on a render failure.
 //! * `serial_skips_when_prior_active_runtime` — the engine's
 //!   `has_active_runtime_request_for_trigger` query returns `true` exactly when a
-//!   request carrying the `(trigger_id, trigger_kind)` tuple is in an active
-//!   runtime lifecycle state.
+//!   request carrying the `(agent_did, trigger_id, trigger_kind)` tuple is in
+//!   an active runtime lifecycle state.
+//! * `serial_gate_is_scoped_by_agent_did` / `serial_gate_ignores_expired_claims`
+//!   / `supersede_only_touches_own_agent_requests` — the #605 projection: the
+//!   gate and supersede never see other agents' replicated requests, and a
+//!   claimed row past its claim deadline (+grace) is terminal-in-effect.
 //! * `serial_advances_next_run_at_on_skip` — the Schedule writeback path
 //!   advances `next_run_at` by `interval_secs` on skip while leaving
 //!   apply-owned fields untouched.
@@ -63,6 +67,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
 use defra_agent::{AgentIdentity, DefraAgent, DocumentRuntimeOptions, KeyIdentity, ToolCeiling};
+use serde_json::Value;
 
 use crate::support::fixtures::bind_default_behavior_backend;
 use crate::support::mock_endpoint::MockModelEndpoint;
@@ -350,25 +355,29 @@ async fn fetch_schedule_row(
 }
 
 /// Query the same shape `ProductionMaterializer::has_active_runtime_request_for_trigger`
-/// uses — filters by `(caused_by_trigger_id, caused_by_trigger_kind)` and the
-/// active runtime lifecycle state set — and returns whether any row matches.
+/// uses — filters by `(agent_did, caused_by_trigger_id, caused_by_trigger_kind)`
+/// and the active runtime lifecycle state set, then applies the gate's expiry
+/// rule: claimed/processing rows whose persisted claim `deadline` is more than
+/// the grace past are terminal-in-effect and do not gate (#605).
 async fn has_active_runtime_request_for_trigger(
     node: &defra_agent::defra_node::EmbeddedNode,
+    agent_did: &str,
     trigger_id: &str,
     trigger_kind: &str,
 ) -> bool {
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_trigger_id = escape_graphql_string(trigger_id);
     let escaped_trigger_kind = escape_graphql_string(trigger_kind);
     let query = format!(
         r#"query {{
             AgentRequest(
                 filter: {{
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
                     caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }},
                     caused_by_trigger_kind: {{ _eq: "{escaped_trigger_kind}" }},
                     lifecycle_state: {{ _in: ["pending", "claimed", "processing"] }}
-                }},
-                limit: 1
-            ) {{ _docID }}
+                }}
+            ) {{ _docID lifecycle_state deadline }}
         }}"#
     );
     let resp = node.execute(&query).await;
@@ -377,12 +386,38 @@ async fn has_active_runtime_request_for_trigger(
         "has_active_runtime_request_for_trigger query failed: {:?}",
         resp.errors
     );
+    let now = Utc::now();
     resp.data
         .as_ref()
         .and_then(|d| d.get("AgentRequest"))
         .and_then(|v| v.as_array())
-        .map(|rows| !rows.is_empty())
+        .map(|rows| rows.iter().any(|row| row_gates_serial_fire(row, now)))
         .unwrap_or(false)
+}
+
+/// Mirrors `production_materializer::row_gates_serial_fire`: pending rows
+/// always gate; claimed/processing rows gate unless their claim `deadline`
+/// plus the 60s grace has passed; missing/unparseable deadlines gate.
+fn row_gates_serial_fire(row: &Value, now: DateTime<Utc>) -> bool {
+    let state = row
+        .get("lifecycle_state")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if state != "claimed" && state != "processing" {
+        return true;
+    }
+    let Some(deadline) = row
+        .get("deadline")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return true;
+    };
+    match DateTime::parse_from_rfc3339(deadline) {
+        Ok(deadline) => now <= deadline.with_timezone(&Utc) + ChronoDuration::seconds(60),
+        Err(_) => true,
+    }
 }
 
 /// Mirrors `ProductionMaterializer::supersede_active_runtime_requests_for_trigger`:
@@ -391,15 +426,18 @@ async fn has_active_runtime_request_for_trigger(
 /// number of documents updated.
 async fn supersede_active_runtime_requests_for_trigger(
     node: &defra_agent::defra_node::EmbeddedNode,
+    agent_did: &str,
     trigger_id: &str,
     trigger_kind: &str,
 ) -> usize {
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_trigger_id = escape_graphql_string(trigger_id);
     let escaped_trigger_kind = escape_graphql_string(trigger_kind);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
                 filter: {{
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
                     caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }},
                     caused_by_trigger_kind: {{ _eq: "{escaped_trigger_kind}" }},
                     lifecycle_state: {{ _in: ["pending", "claimed", "processing"] }}
@@ -884,8 +922,13 @@ async fn serial_skips_when_prior_active_runtime() {
     );
     // The engine's gating query must see it.
     assert!(
-        has_active_runtime_request_for_trigger(db.node.as_ref(), "sched-serial-skip", "schedule")
-            .await,
+        has_active_runtime_request_for_trigger(
+            db.node.as_ref(),
+            AGENT_DID,
+            "sched-serial-skip",
+            "schedule"
+        )
+        .await,
         "gating query must see the in-flight request"
     );
 
@@ -1025,6 +1068,7 @@ async fn latest_only_supersedes_prior_fire() {
     // Step 1: supersede (what the LatestOnly path does before materializing).
     let superseded_count = supersede_active_runtime_requests_for_trigger(
         db.node.as_ref(),
+        AGENT_DID,
         "sched-latest-only",
         "schedule",
     )
@@ -1074,8 +1118,13 @@ async fn latest_only_supersedes_prior_fire() {
     // The gating query must NOT see the superseded prior (it's terminal);
     // it DOES see the newly claimed fire.
     assert!(
-        has_active_runtime_request_for_trigger(db.node.as_ref(), "sched-latest-only", "schedule")
-            .await,
+        has_active_runtime_request_for_trigger(
+            db.node.as_ref(),
+            AGENT_DID,
+            "sched-latest-only",
+            "schedule"
+        )
+        .await,
         "after materialize, the new claimed request must be visible to the gating query"
     );
 
@@ -1170,4 +1219,176 @@ async fn generation_bump_reconfigures_active_schedules() {
     );
 
     agent.shutdown().await;
+}
+
+/// #605 projection soundness: the serial gate is scoped by `agent_did`. A
+/// replicated foreign agent's in-flight request for the SAME human-chosen
+/// trigger id must not gate the local agent — and must still gate its own.
+#[tokio::test]
+async fn serial_gate_is_scoped_by_agent_did() {
+    let db = test_db("schedule-conformance-serial-did-scope").await;
+    const FOREIGN_DID: &str = "did:defra-agent:conformance-foreign-steward";
+
+    let lineage = TriggerLineage {
+        trigger_id: Some("host-check".to_string()),
+        trigger_kind: Some("schedule".to_string()),
+    };
+    // The foreign steward's in-flight run, as replication would deliver it.
+    RequestLifecycle::materialize_claimed_with_execution_binding(
+        db.node.clone(),
+        "foreign-steward",
+        FOREIGN_DID,
+        "foreign in-flight",
+        DEADLINE_SECS,
+        ExecutionOrigin::Scheduled,
+        BACKEND_ID,
+        lineage,
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        !has_active_runtime_request_for_trigger(
+            db.node.as_ref(),
+            AGENT_DID,
+            "host-check",
+            "schedule"
+        )
+        .await,
+        "a foreign agent's in-flight request must not gate the local agent"
+    );
+    assert!(
+        has_active_runtime_request_for_trigger(
+            db.node.as_ref(),
+            FOREIGN_DID,
+            "host-check",
+            "schedule"
+        )
+        .await,
+        "the owning agent's own gate must still see its in-flight request"
+    );
+}
+
+/// #605 liveness relaxation: a claimed request whose persisted claim
+/// `deadline` (+grace) has passed is terminal-in-effect — the owning loop
+/// enforces the same deadline in-memory, so only a wedged orphan can look
+/// like this, and it must not gate the schedule forever.
+#[tokio::test]
+async fn serial_gate_ignores_expired_claims() {
+    let db = test_db("schedule-conformance-serial-expired-claim").await;
+
+    let lineage = TriggerLineage {
+        trigger_id: Some("sched-expired".to_string()),
+        trigger_kind: Some("schedule".to_string()),
+    };
+    let orphan = RequestLifecycle::materialize_claimed_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        "wedged orphan",
+        DEADLINE_SECS,
+        ExecutionOrigin::Scheduled,
+        BACKEND_ID,
+        lineage,
+    )
+    .await
+    .unwrap();
+    let orphan_request_id = orphan.request().request_id.clone();
+
+    // A fresh claim (deadline in the future) gates.
+    assert!(
+        has_active_runtime_request_for_trigger(
+            db.node.as_ref(),
+            AGENT_DID,
+            "sched-expired",
+            "schedule"
+        )
+        .await,
+        "an in-deadline claim must gate"
+    );
+
+    // Backdate the claim deadline beyond the 60s grace: the orphan shape from
+    // the incident (owner's store rebuilt, nothing will ever finish it).
+    let expired = (Utc::now() - ChronoDuration::seconds(120)).to_rfc3339();
+    let escaped_request_id = escape_graphql_string(&orphan_request_id);
+    let escaped_expired = escape_graphql_string(&expired);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                input: {{ deadline: "{escaped_expired}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = db.node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "backdating deadline failed: {:?}",
+        resp.errors
+    );
+
+    assert!(
+        !has_active_runtime_request_for_trigger(
+            db.node.as_ref(),
+            AGENT_DID,
+            "sched-expired",
+            "schedule"
+        )
+        .await,
+        "a deadline-expired claim must not gate"
+    );
+}
+
+/// #605: LatestOnly supersede must only rewrite the firing agent's own
+/// requests — never a replicated foreign agent's rows.
+#[tokio::test]
+async fn supersede_only_touches_own_agent_requests() {
+    let db = test_db("schedule-conformance-supersede-did-scope").await;
+    const FOREIGN_DID: &str = "did:defra-agent:conformance-foreign-steward";
+
+    for (name, did, content) in [
+        (AGENT_NAME, AGENT_DID, "own in-flight"),
+        ("foreign-steward", FOREIGN_DID, "foreign in-flight"),
+    ] {
+        let lineage = TriggerLineage {
+            trigger_id: Some("host-check".to_string()),
+            trigger_kind: Some("schedule".to_string()),
+        };
+        RequestLifecycle::materialize_claimed_with_execution_binding(
+            db.node.clone(),
+            name,
+            did,
+            content,
+            DEADLINE_SECS,
+            ExecutionOrigin::Scheduled,
+            BACKEND_ID,
+            lineage,
+        )
+        .await
+        .unwrap();
+    }
+
+    let superseded = supersede_active_runtime_requests_for_trigger(
+        db.node.as_ref(),
+        AGENT_DID,
+        "host-check",
+        "schedule",
+    )
+    .await;
+    assert_eq!(
+        superseded, 1,
+        "supersede must transition exactly the own-agent row"
+    );
+
+    // The foreign row is untouched and still gates its own agent.
+    assert!(
+        has_active_runtime_request_for_trigger(
+            db.node.as_ref(),
+            FOREIGN_DID,
+            "host-check",
+            "schedule"
+        )
+        .await,
+        "the foreign agent's request must survive the local supersede"
+    );
 }

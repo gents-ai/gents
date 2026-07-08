@@ -23,6 +23,8 @@ use queries::{
     PersistedResponseState,
 };
 
+const MAX_LIVE_REASONING_BYTES: usize = 64 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamStatus {
     Streaming,
@@ -104,6 +106,7 @@ struct StreamBuffer {
     content: String,
     reasoning: String,
     token_count: usize,
+    reasoning_progress_seq: usize,
     last_flush_at: Instant,
 }
 
@@ -112,6 +115,7 @@ struct StreamBufferSnapshot {
     content: String,
     reasoning: String,
     token_count: usize,
+    reasoning_progress_seq: usize,
 }
 
 impl DefraStreamWriter {
@@ -142,13 +146,15 @@ impl DefraStreamWriter {
                     input: {{
                         content: "{content}",
                         reasoning: "{reasoning}",
-                        token_count: {token_count}
+                        token_count: {token_count},
+                        reasoning_progress_seq: {reasoning_progress_seq}
                     }}
                 ) {{ _docID }}
             }}"#,
             content = escape_graphql_string(&snapshot.content),
             reasoning = escape_graphql_string(&snapshot.reasoning),
             token_count = snapshot.token_count,
+            reasoning_progress_seq = snapshot.reasoning_progress_seq,
         );
 
         let resp =
@@ -192,6 +198,7 @@ impl DefraStreamWriter {
             content: buf.content.clone(),
             reasoning: buf.reasoning.clone(),
             token_count: buf.token_count,
+            reasoning_progress_seq: buf.reasoning_progress_seq,
         }))
     }
 
@@ -364,6 +371,7 @@ impl DefraStreamWriter {
                 content: buf.content.clone(),
                 reasoning: buf.reasoning.clone(),
                 token_count: buf.token_count,
+                reasoning_progress_seq: buf.reasoning_progress_seq,
             })
         };
         let request_id = existing
@@ -548,6 +556,7 @@ impl StreamWriter for DefraStreamWriter {
                     error_message: "",
                     token_count: 0,
                     progress_seq: 0,
+                    reasoning_progress_seq: 0,
                     created_at: "{now}",
                     completed_at: ""
                 }}) {{ _docID }}
@@ -572,6 +581,7 @@ impl StreamWriter for DefraStreamWriter {
                 content: String::new(),
                 reasoning: String::new(),
                 token_count: 0,
+                reasoning_progress_seq: 0,
                 last_flush_at: Instant::now(),
             },
         );
@@ -613,7 +623,8 @@ impl StreamWriter for DefraStreamWriter {
             let buf = buffers
                 .get_mut(doc_id)
                 .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
-            buf.reasoning.push_str(reasoning);
+            append_live_reasoning_preview(&mut buf.reasoning, reasoning);
+            buf.reasoning_progress_seq = buf.reasoning_progress_seq.saturating_add(1);
         }
 
         let snapshot = self.pending_snapshot(doc_id, false).await?;
@@ -639,6 +650,40 @@ impl StreamWriter for DefraStreamWriter {
         self.finalize_inner(doc_id, status, None, RequestFinalizeMode::UpdateRequest)
             .await
     }
+}
+
+fn append_live_reasoning_preview(buffer: &mut String, reasoning: &str) {
+    if reasoning.len() >= MAX_LIVE_REASONING_BYTES {
+        buffer.clear();
+        buffer.push_str(tail_window(reasoning, MAX_LIVE_REASONING_BYTES));
+        return;
+    }
+
+    trim_string_to_tail_bytes(buffer, MAX_LIVE_REASONING_BYTES - reasoning.len());
+    buffer.push_str(reasoning);
+}
+
+fn trim_string_to_tail_bytes(buffer: &mut String, max_bytes: usize) {
+    if buffer.len() <= max_bytes {
+        return;
+    }
+
+    let mut start = buffer.len() - max_bytes;
+    while !buffer.is_char_boundary(start) {
+        start += 1;
+    }
+    buffer.drain(..start);
+}
+
+fn tail_window(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut start = value.len() - max_bytes;
+    while !value.is_char_boundary(start) {
+        start += 1;
+    }
+    &value[start..]
 }
 
 fn build_finalize_mutation(

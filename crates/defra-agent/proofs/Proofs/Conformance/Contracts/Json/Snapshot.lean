@@ -148,6 +148,9 @@ def snapshotJson : String :=
     ++ "\"mcp_health_cases\":"
       ++ jsonArray
         (Proofs.MCPHealth.transitionCases.map mcpHealthCaseJson) ++ ","
+    ++ "\"backend_health_cases\":"
+      ++ jsonArray
+        (Proofs.BackendHealth.transitionCases.map backendHealthCaseJson) ++ ","
     ++ "\"follow_up_hooks\":"
       ++ followUpHooksJson ++ ","
     ++ "\"event_delivery_transition_case_count\":"

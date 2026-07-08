@@ -33,6 +33,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
     BTreeMap::from([
         ("ApplyReconcile", Module("conformance/apply_reconcile.rs")),
         ("Background", Module("conformance/background.rs")),
+        ("BackendHealth", Module("conformance/backend_health.rs")),
         ("Client", Module("conformance/client_runtime.rs")),
         (
             "ClientShell",

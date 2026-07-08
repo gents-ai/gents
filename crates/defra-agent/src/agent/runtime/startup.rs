@@ -98,6 +98,20 @@ pub(in crate::agent) async fn run_agent(
         agent.health_checker_options.clone(),
         agent.agent_did().to_string(),
     );
+    // Scheduled backend prober (#640): measures endpoint reachability on an
+    // interval and vetoes routing after K consecutive failures. Transitions
+    // nudge the control watcher through this channel so the snapshot
+    // re-resolves without waiting for a document update. The startup ratchet
+    // above stays: it promotes unknown backends BEFORE behavior resolution;
+    // the prober keeps that promotion recurring afterwards.
+    let (backend_health_events_tx, backend_health_events_rx) = mpsc::channel::<()>(1);
+    let _backend_prober = crate::backend_health::spawn_backend_prober(
+        agent.node.clone(),
+        agent.backend_health.clone(),
+        agent.backend_prober_options.clone(),
+        backend_health_events_tx,
+        cancel.child_token(),
+    );
 
     log_recovery(
         agent.node.as_ref(),
@@ -420,6 +434,7 @@ pub(in crate::agent) async fn run_agent(
                     control_context,
                     control_tx,
                     control_runtime_status,
+                    backend_health_events_rx,
                     control_shutdown,
                 )
                 .await,

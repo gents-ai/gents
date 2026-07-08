@@ -431,6 +431,13 @@ pub(crate) struct InitArgs {
     )]
     pub(crate) disable_defra_query: bool,
     #[arg(
+        long,
+        default_value_t = false,
+        conflicts_with = "disable_defra_query",
+        help = "Enable the read-only defra_query tool regardless of the tool package (pair with --defra-query-collection to scope it, e.g. the \"agent-config\" preset)"
+    )]
+    pub(crate) enable_defra_query: bool,
+    #[arg(
         long = "defra-query-collection",
         help = "Restrict the defra_query tool to these collections when a package enables it (repeatable); omit for all collections"
     )]

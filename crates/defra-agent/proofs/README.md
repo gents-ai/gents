@@ -51,7 +51,7 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 
 ## What Is Proven
 
-The current proof suite covers thirteen practical areas:
+The current proof suite covers fourteen practical areas:
 
 1. Request/process/persistence state transitions
 2. Daemon storage-observation assumptions that refine persistence
@@ -69,6 +69,10 @@ The current proof suite covers thirteen practical areas:
     eligibility before future idempotent tool retries are enabled
 13. Managed native executor liveness: deadline/cancel transitions signal the
     executor and compose to a terminal timed-out/cancelled tool outcome
+14. Backend probe health (#640): the scheduled prober's per-runtime hysteresis
+    machine — demotion at exactly K consecutive failures, no flap below K,
+    single-success promotion, and effective availability as
+    intent ∧ ¬measured-unhealthy
 
 The proof boundary matters:
 
@@ -156,6 +160,7 @@ Semantic submodules:
 | `Proofs.CommandPolicy` | `Types`, `Validation`, `Sandbox`, `Env`, `Theorems` |
 | `Proofs.ToolExecution` | standalone health/schema preflight and retry eligibility model |
 | `Proofs.ManagedExec` | `State`, `Transition`, `Executable`, `Properties`, `Composed` |
+| `Proofs.BackendHealth` | `State`, `Transition`, `Properties`, `Executable` |
 | `Proofs.Fleet` | `State`, `Transition`, `Executable`, `Properties` |
 | `Proofs.CompletionRetry` | `State`, `Transition`, `Executable`, `Properties` |
 | `Proofs.Conformance.Triggers` | `Lifecycle`, `Materialization`, `Trace` |
@@ -572,6 +577,17 @@ Operational trigger-source behavior remains covered in Rust: DefraDB event
 delivery, control-watcher debounce, schedule tick cadence, subscription
 reconciliation timing, template parser failures, and persistence writeback
 shapes are integration/persistence concerns rather than Lean dispatch facts.
+
+**Projection boundary (#605):** `SystemState.requests` is a single agent's
+view — `TriggerKey` is only unique per agent, so the Rust queries that
+materialize it scope by the dispatching behavior's `agent_did`, and a
+claimed/processing row past its claim deadline (+grace) projects as terminal
+(the owning loop enforces the same deadline in-memory, so such a row is a
+wedged orphan, not an in-flight run). Both halves are fenced by the
+scheduling conformance tests (`serial_gate_is_scoped_by_agent_did`,
+`serial_gate_ignores_expired_claims`,
+`supersede_only_touches_own_agent_requests`); see the docstrings on
+`Proofs/Triggers/Types.lean`'s `AgentRequest.isTerminal` and `SystemState`.
 
 ### Client Turn Projection
 
