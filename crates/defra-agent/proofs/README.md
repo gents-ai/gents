@@ -439,7 +439,7 @@ fair-scheduler or wall-clock progress is a misread (#557).
 |------|---------|----------------|
 | **1. Existential reachability** | There exists a finite legal path from pre to a good post (`∃ post, Trace …` / `∃ actions, …`) | Lean (default): `claimed_eventually_terminal`, `recovery_convergence`, `accepted_work_eventually_releases`, `D1_delivery_convergence`, `streamIdle_eventually_terminal`, … |
 | **2. Fair-scheduler liveness** | Under weak/strong fairness, enabled progress steps fire | Primarily `tla/` (WF/SF annotations); Lean does not assume a fair scheduler |
-| **3. Bounded latency** | Progress within N steps/ticks | Rare; only when a concrete measure/`Nat` bound is part of the theorem statement |
+| **3. Bounded phase / measure progress** | Each relevant step decreases a `Nat` measure (or is otherwise step-bounded) — not wall-clock latency | Rare in Lean; example: L1 `phase_change_decreases_measure` (termination measure on phase change). Not distributed N-tick latency. |
 | **4. Operational watchdog** | Runtime-enforced deadline/timeout/recovery | Rust (request deadlines, stream idle timeouts, recovery sweeps) — not Lean |
 
 Naming convention going forward: prefer `*_reachable` for pure tier-1 results;
