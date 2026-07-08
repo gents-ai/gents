@@ -171,6 +171,19 @@ impl CompletionRetryPolicy {
             allow_repair: true,
         }
     }
+
+    /// No retry at all: an empty transport ladder, no resample, no repair. For
+    /// internal sub-completions (compaction, title generation) that are not a
+    /// user execution origin — they fail fast and are re-driven, if at all, by
+    /// their own caller, and must not inherit the scheduled ladder's
+    /// minutes-scale, deadline-less backoff (#648).
+    pub fn no_retry() -> Self {
+        Self {
+            transport_backoff: Vec::new(),
+            max_resample: 0,
+            allow_repair: false,
+        }
+    }
 }
 
 fn backoff_from_profile(values: &[i64]) -> Option<Vec<Duration>> {
