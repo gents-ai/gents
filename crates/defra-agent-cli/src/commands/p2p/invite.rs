@@ -3,12 +3,13 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
-use defra_agent::{AgentIdentity, KeyIdentity};
+use defra_agent::{AgentIdentity, KeyIdentity, graphql::escape_graphql_string};
 use defra_agent_protocol::network_token::{MembershipRecord, NetworkRecord};
-use defra_agent_protocol::pairing_token::{encode as encode_invite, signing_payload, InviteToken};
+use defra_agent_protocol::pairing_token::{InviteToken, encode as encode_invite, signing_payload};
 use serde_json::json;
 
 use crate::cli::args::P2pInviteArgs;
+use crate::config_writes::ConfigAccess;
 use crate::{
     http_get_json, normalize_optional_string, print_json, read_init_config, read_runtime_state,
     resolve_agent_did, resolve_config_access, resolve_graphql_endpoint, resolve_home_dir,
@@ -56,6 +57,7 @@ pub(super) async fn p2p_invite(args: P2pInviteArgs) -> Result<()> {
         network,
     )
     .await?;
+    record_reciprocal_conversation_intent(&access, member_did, &template).await?;
     let encoded = encode_invite(&token)?;
 
     print_json(&json!({
@@ -224,6 +226,56 @@ async fn build_live_token(
     })
 }
 
+async fn record_reciprocal_conversation_intent(
+    access: &ConfigAccess,
+    member_did: &str,
+    template: &str,
+) -> Result<()> {
+    if template != "conversation" {
+        return Ok(());
+    }
+
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let mutation = reciprocal_conversation_intent_upsert_mutation(member_did, template, &now);
+    access
+        .execute(&mutation)
+        .await
+        .context("recording ReciprocalConversationIntent for conversation invite")?;
+    tracing::debug!(
+        member_did = %member_did,
+        template = %template,
+        "recorded reciprocal conversation intent for invite"
+    );
+    Ok(())
+}
+
+fn reciprocal_conversation_intent_upsert_mutation(
+    member_did: &str,
+    template: &str,
+    now: &str,
+) -> String {
+    let member_did = escape_graphql_string(member_did);
+    let template = escape_graphql_string(template);
+    let now = escape_graphql_string(now);
+    format!(
+        r#"mutation {{
+            upsert_ReciprocalConversationIntent(
+                filter: {{ member_did: {{ _eq: "{member_did}" }} }},
+                add: {{
+                    member_did: "{member_did}",
+                    template: "{template}",
+                    created_at: "{now}",
+                    updated_at: "{now}"
+                }},
+                update: {{
+                    template: "{template}",
+                    updated_at: "{now}"
+                }}
+            ) {{ _docID }}
+        }}"#
+    )
+}
+
 fn validate_invite_grant(
     network: &NetworkRecord,
     grant: &MembershipRecord,
@@ -295,7 +347,7 @@ pub(super) fn resolve_home_identity(home: Option<&Path>) -> Result<Arc<dyn Agent
 #[cfg(test)]
 mod tests {
     use defra_agent_protocol::network_token::{MembershipRecord, NetworkRecord};
-    use defra_agent_protocol::pairing_token::{decode, encode, TOKEN_PREFIX};
+    use defra_agent_protocol::pairing_token::{TOKEN_PREFIX, decode, encode};
 
     use super::*;
 
@@ -377,6 +429,25 @@ mod tests {
             err.contains("decoding pairing invite token")
                 || err.contains("parsing pairing invite token"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn reciprocal_intent_upsert_mutation_escapes_member_template_and_timestamps() {
+        let mutation = reciprocal_conversation_intent_upsert_mutation(
+            "did:key:phone\"quoted",
+            "conversation",
+            "2026-07-08T00:00:00Z",
+        );
+
+        assert!(mutation.contains("upsert_ReciprocalConversationIntent"));
+        assert!(mutation.contains("member_did: { _eq: \"did:key:phone\\\"quoted\" }"));
+        assert!(mutation.contains("template: \"conversation\""));
+        assert!(mutation.contains("created_at: \"2026-07-08T00:00:00Z\""));
+        assert!(mutation.contains("updated_at: \"2026-07-08T00:00:00Z\""));
+        assert!(
+            !mutation.contains("[]"),
+            "mutation must not emit empty GraphQL list literals"
         );
     }
 
