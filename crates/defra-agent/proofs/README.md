@@ -543,6 +543,17 @@ delivery, control-watcher debounce, schedule tick cadence, subscription
 reconciliation timing, template parser failures, and persistence writeback
 shapes are integration/persistence concerns rather than Lean dispatch facts.
 
+**Projection boundary (#605):** `SystemState.requests` is a single agent's
+view — `TriggerKey` is only unique per agent, so the Rust queries that
+materialize it scope by the dispatching behavior's `agent_did`, and a
+claimed/processing row past its claim deadline (+grace) projects as terminal
+(the owning loop enforces the same deadline in-memory, so such a row is a
+wedged orphan, not an in-flight run). Both halves are fenced by the
+scheduling conformance tests (`serial_gate_is_scoped_by_agent_did`,
+`serial_gate_ignores_expired_claims`,
+`supersede_only_touches_own_agent_requests`); see the docstrings on
+`Proofs/Triggers/Types.lean`'s `AgentRequest.isTerminal` and `SystemState`.
+
 ### Client Turn Projection
 
 `Proofs/Client.lean` models how clients derive a turn state from replicated

@@ -107,6 +107,10 @@ struct SpyMaterializer {
     materialize_calls: Arc<Mutex<Vec<MaterializeCall>>>,
     next_request_id: AtomicUsize,
     nonterminal_for: Arc<Mutex<HashMap<(String, TriggerKind), Vec<String>>>>,
+    /// DIDs the engine passed to the concurrency gate / supersede, in call
+    /// order. The gate's DID scope is the subject of #605.
+    gate_dids: Arc<Mutex<Vec<String>>>,
+    supersede_dids: Arc<Mutex<Vec<String>>>,
     supersede_calls: Arc<Mutex<Vec<SupersedeCall>>>,
     superseded_request_ids: Arc<Mutex<Vec<String>>>,
     materialize_delay: Mutex<Option<Duration>>,
@@ -120,6 +124,8 @@ impl SpyMaterializer {
             materialize_calls: Arc::new(Mutex::new(Vec::new())),
             next_request_id: AtomicUsize::new(0),
             nonterminal_for: Arc::new(Mutex::new(HashMap::new())),
+            gate_dids: Arc::new(Mutex::new(Vec::new())),
+            supersede_dids: Arc::new(Mutex::new(Vec::new())),
             supersede_calls: Arc::new(Mutex::new(Vec::new())),
             superseded_request_ids: Arc::new(Mutex::new(Vec::new())),
             materialize_delay: Mutex::new(None),
@@ -134,6 +140,14 @@ impl SpyMaterializer {
 
     fn supersede_calls(&self) -> Vec<SupersedeCall> {
         self.supersede_calls.lock().unwrap().clone()
+    }
+
+    fn gate_dids(&self) -> Vec<String> {
+        self.gate_dids.lock().unwrap().clone()
+    }
+
+    fn supersede_dids(&self) -> Vec<String> {
+        self.supersede_dids.lock().unwrap().clone()
     }
 
     fn superseded_request_ids(&self) -> Vec<String> {
@@ -245,12 +259,16 @@ impl MaterializerHandle for SpyMaterializer {
 
     fn has_active_runtime_request_for_trigger(
         &self,
+        agent_did: &str,
         trigger_id: &str,
         trigger_kind: TriggerKind,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
         let set = self.nonterminal_for.clone();
+        let gate_dids = self.gate_dids.clone();
+        let agent_did = agent_did.to_owned();
         let key = (trigger_id.to_owned(), trigger_kind);
         Box::pin(async move {
+            gate_dids.lock().unwrap().push(agent_did);
             Ok(set
                 .lock()
                 .unwrap()
@@ -262,14 +280,18 @@ impl MaterializerHandle for SpyMaterializer {
 
     fn supersede_active_runtime_requests_for_trigger(
         &self,
+        agent_did: &str,
         trigger_id: &str,
         trigger_kind: TriggerKind,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + '_>> {
         let nonterm = self.nonterminal_for.clone();
         let supersede_calls = self.supersede_calls.clone();
+        let supersede_dids = self.supersede_dids.clone();
         let superseded_request_ids = self.superseded_request_ids.clone();
+        let agent_did = agent_did.to_owned();
         let key = (trigger_id.to_owned(), trigger_kind);
         Box::pin(async move {
+            supersede_dids.lock().unwrap().push(agent_did);
             supersede_calls.lock().unwrap().push(key.clone());
             // Mirror a real terminal transition: the tuple is no longer
             // in-flight after supersede.
@@ -287,9 +309,11 @@ impl MaterializerHandle for SpyMaterializer {
 fn snapshot_with_schedules(
     schedules: HashMap<String, ResolvedSchedule>,
 ) -> Arc<ActiveRuntimeSnapshot> {
+    // The "general" behavior must resolve: the concurrency gate scopes
+    // serial/latestOnly coordination by the behavior's agent DID (#605).
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         "general".to_string(),
-        Vec::new(),
+        vec![integration_test_behavior("general")],
         HashMap::new(),
         HashMap::new(),
         HashMap::new(),
@@ -400,7 +424,7 @@ fn snapshot_from_trigger_contract(
         .collect();
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         "general".to_string(),
-        Vec::new(),
+        vec![integration_test_behavior("general")],
         HashMap::new(),
         HashMap::new(),
         HashMap::new(),
