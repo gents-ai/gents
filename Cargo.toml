@@ -13,6 +13,13 @@ members = [
     "crates/defra-agent-protocol",
     "crates/defra-agent-schemas",
 ]
+# Patched noq 1.0.1 (defra-agent#634) is pulled only via [patch.crates-io].
+# Keep it out of the workspace so `cargo fmt --all` / workspace tests don't own
+# upstream style; each crate has a local empty [workspace] for standalone tests.
+exclude = [
+    "third_party/noq",
+    "third_party/noq-proto",
+]
 # Exclude the WASM lens crate from default workspace builds. Its cdylib target
 # relies on `lens_sdk::define!` which imports an `extern "C" fn next()` only
 # resolvable at WASM-load time by the lens host runtime. Build it explicitly
@@ -129,6 +136,13 @@ tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev 
 # `reasoning` vs `reasoning_content` mismatch on Chat Completions). Without the
 # fork our Responses-API reasoning capture is silently empty.
 rig-core = { git = "https://github.com/sourcenetwork/rig", rev = "81c34131627e1331f02d36bd12742155d1fa9865" }
+# noq 1.0.1 crash-fixes until n0-computer/noq ships a release with #743 + #723:
+# - proto: edge-trigger Draining on terminal state (duplicate stateless reset)
+# - endpoint: don't panic in EndpointDriver::Drop on a poisoned mutex
+# - endpoint: fence active_connections underflow on duplicate Draining
+# See third_party/README.md and defra-agent#634.
+noq = { path = "third_party/noq" }
+noq-proto = { path = "third_party/noq-proto" }
 
 [patch."ssh://git@github.com/openai-oss-forks/tungstenite-rs.git"]
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
