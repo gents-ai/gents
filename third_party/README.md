@@ -11,7 +11,8 @@ fmt/test targets of the main workspace.
 | --- | --- | --- |
 | [n0-computer/noq#743](https://github.com/n0-computer/noq/issues/743) | Duplicate `Draining` endpoint events from a second stateless reset underflows `active_connections` (panic with overflow checks; silent hang on `wait_all_draining` without them) | `noq-proto`: edge-trigger `Draining` on `!was_drained` for the Reset/AEAD arm |
 | [n0-computer/noq#723](https://github.com/n0-computer/noq/issues/723) | `EndpointDriver::drop` `unwrap()`s a poisoned mutex → process abort | `noq`: recover with `PoisonError::into_inner` |
-| (defense) | Same underflow site if another path reintroduces duplicate Draining | `noq`: skip decrement when `active_connections == 0` |
+| (defense) | Same underflow site if another path reintroduces duplicate Draining | `noq`: per-connection `draining_reported` set before decrementing |
+| (defense) | Poisoned Drop abort via `EndpointRef` after driver | `noq`: `EndpointRef::drop` also recovers from poison |
 
 ### Why this is in defra-agent
 

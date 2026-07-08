@@ -32,7 +32,7 @@ use proto::{
     self as proto, ClientConfig, ConnectError, ConnectionError, ConnectionHandle, DatagramEvent,
     EndpointEvent, FourTuple, NetworkChangeHint, ServerConfig,
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 #[cfg(all(
     not(wasm_browser),
     any(feature = "runtime-tokio", feature = "runtime-smol"),
@@ -495,13 +495,15 @@ impl Drop for EndpointDriver {
         // Recover from a poisoned mutex rather than panicking in Drop. A prior
         // panic in poll (e.g. active_connections underflow) poisons this lock; a
         // second panic here would abort the whole process (n0-computer/noq#723,
-        // defra-agent#634).
+        // defra-agent#634). Clearing the poison so subsequent Drop impls on the
+        // same Arc (EndpointRef) also see a clean lock.
         let mut endpoint = self.0.state.lock().unwrap_or_else(PoisonError::into_inner);
         endpoint.driver_lost = true;
         self.0.shared.incoming.notify_waiters();
         // Drop all outgoing channels, signaling the termination of the endpoint to the associated
         // connections.
         endpoint.recv_state.connections.senders.clear();
+        endpoint.recv_state.connections.draining_reported.clear();
         endpoint.recv_state.connections.active_connections = 0;
     }
 }
@@ -649,13 +651,21 @@ impl State {
             };
 
             if event.is_draining() {
-                // Fence duplicate Draining events (n0-computer/noq#743). A bare
-                // saturating_sub would wrap the counter into a hang on
-                // wait_all_draining; skip when already zero so all_draining
-                // waiters stay correctly notified once.
-                if self.recv_state.connections.active_connections == 0 {
+                // Per-connection edge-trigger (n0-computer/noq#743 / defra-agent#634).
+                // A global zero-guard alone is not enough: a duplicate Draining for
+                // one connection while others are still active would still
+                // decrement the shared counter and can notify all_draining early.
+                if !self.recv_state.connections.note_draining(ch) {
                     tracing::warn!(
-                        "ignoring duplicate Draining endpoint event with active_connections == 0"
+                        ?ch,
+                        "ignoring duplicate Draining endpoint event for connection"
+                    );
+                } else if self.recv_state.connections.active_connections == 0 {
+                    // First report for this handle but counter already zero
+                    // (insert/decrement asymmetry). Never underflow.
+                    tracing::warn!(
+                        ?ch,
+                        "Draining event with active_connections == 0 (accounting imbalance)"
                     );
                 } else {
                     self.recv_state.connections.active_connections -= 1;
@@ -665,6 +675,7 @@ impl State {
                 }
             } else if event.is_drained() {
                 self.recv_state.connections.senders.remove(&ch);
+                self.recv_state.connections.draining_reported.remove(&ch);
                 if self.recv_state.connections.is_empty() {
                     shared.idle.notify_waiters();
                 }
@@ -771,6 +782,10 @@ struct ConnectionSet {
     /// This counter is updated when new connections are added ([`ConnectionSet::insert`]) and when
     /// a connection informs us about entering the draining state ([`State::handle_events`]).
     active_connections: u64,
+    /// Handles that have already reported `Draining` (active_connections already
+    /// decremented for them). Dedups duplicate Draining endpoint events so one
+    /// connection cannot undercount the global counter (n0-computer/noq#743).
+    draining_reported: FxHashSet<ConnectionHandle>,
 }
 
 impl ConnectionSet {
@@ -790,8 +805,16 @@ impl ConnectionSet {
             .unwrap();
         }
         self.senders.insert(handle, send);
+        self.draining_reported.remove(&handle);
         self.active_connections += 1;
         Connecting::new(handle, conn, self.sender.clone(), recv, sender, runtime)
+    }
+
+    /// Record that `handle` entered draining. Returns `true` on the first report
+    /// for this handle (caller should decrement `active_connections`), `false`
+    /// if a Draining event was already accounted for.
+    fn note_draining(&mut self, handle: ConnectionHandle) -> bool {
+        self.draining_reported.insert(handle)
     }
 
     fn is_empty(&self) -> bool {
@@ -896,7 +919,14 @@ impl Drop for EndpointRef {
             return;
         }
 
-        let endpoint = &mut *self.0.state.lock().unwrap();
+        // Same poison-recovery as EndpointDriver::drop: if the driver panicked
+        // while holding this lock, unwrapping here during unwind aborts the
+        // process (n0-computer/noq#723, defra-agent#634).
+        let endpoint = &mut *self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         // If the driver is about to be on its own, ensure it can shut down if the last
         // connection is gone.
         if let Some(task) = endpoint.driver.take() {
@@ -938,6 +968,7 @@ impl RecvState {
                 sender,
                 close: None,
                 active_connections: 0,
+                draining_reported: FxHashSet::default(),
             },
             incoming: VecDeque::new(),
             recv_buf: recv_buf.into(),
