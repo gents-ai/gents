@@ -16,7 +16,6 @@ use crate::config::AgentBehavior;
 use crate::hook::FailurePolicy;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::prompt::LayeredPromptBuilder;
-use crate::retry::RetryPolicy;
 use crate::runtime_trace::{
     record_current_claim_outcome, record_current_failure_class, record_current_request_outcome,
     RequestTraceAttrs,
@@ -40,7 +39,6 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
     stream_writer: DefraStreamWriter,
     compactor: DefraCompactor<M>,
     compaction_options: CompactionOptions,
-    retry_policy: RetryPolicy,
     hook_failure_policy: FailurePolicy,
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
@@ -63,7 +61,6 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         preamble: String,
         loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
         prompt_builder: LayeredPromptBuilder,
-        retry_policy: RetryPolicy,
         hook_failure_policy: FailurePolicy,
         rendered_request_capture_factory: Option<
             crate::rendered_request::RenderedRequestCaptureFactory,
@@ -98,7 +95,6 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             stream_writer,
             compactor,
             compaction_options,
-            retry_policy,
             hook_failure_policy,
             rendered_request_capture_factory,
             background_tool_registry,

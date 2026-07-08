@@ -126,6 +126,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.runtimeInternal]
     , deferred := []
     }
+  , { feature := "completion-retry"
+    , required := [Surface.agentFacing, Surface.runtimeInternal]
+    , deferred := []
+    }
   , { feature := "tool-call"
     , required := [Surface.agentFacing, Surface.runtimeInternal]
     , deferred := []
@@ -231,7 +235,7 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := []
     }
   , { feature := "backend-health"
-    , required := [Surface.runtimeInternal, Surface.operatorUi]
+    , required := [Surface.runtimeInternal, Surface.operatorCli, Surface.operatorUi]
     , deferred := []
     }
   ]
@@ -287,6 +291,11 @@ def vocabularyCoverage : List CoverageEntry :=
       "InferenceCallTerminalReason"
       "admission::tests::rust_inference_call_terminal_reason_vocabulary_matches_lean_model")
       "inference-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "vocabulary"
+      "CompletionRetryFailureClass"
+      "conformance::completion_retry_lean_witness_cases_hold")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "vocabulary"
       "ToolRetryDisposition"
@@ -462,6 +471,11 @@ def caseCoverage : List CoverageEntry :=
       "InferenceCallSlotAccounting"
       "conformance::generated_inference_slot_accounting_cases_drive_db_backed_reconstruction")
       "inference-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "completion_retry_cases"
+      "completionRetry"
+      "conformance::completion_retry_lean_witness_cases_hold")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "fleet_cases"
       "FleetSlotAccounting"
@@ -496,6 +510,21 @@ def caseCoverage : List CoverageEntry :=
       "BackendHealthAdmissionCases"
       "backend_registry::tests::display_state_matches_every_lean_backend_health_admission_case")
       "backend-health" [Surface.operatorUi]
+  -- #640: the scheduled prober's transition machine (Proofs/BackendHealth) —
+  -- the Rust consumer drives step_backend over the full K ∈ {1,2,3} domain
+  -- including the blocksRouting projection the admission merge consumes.
+  , tagged (consumerCoverage
+      "backend_health_cases"
+      "BackendHealthTransitionCases"
+      "backend_health::tests::generated_backend_health_cases_match_prober_transitions")
+      "backend-health" [Surface.runtimeInternal]
+  -- #640: the /metrics overlay — measured state drives the probe-status
+  -- sample value (1 iff healthy, 0 otherwise) and last_probe freshness.
+  , tagged (consumerCoverage
+      "backend_health_cases"
+      "BackendHealthTransitionCases"
+      "http::prometheus::tests::backend_probe_status_metric_reflects_measured_health")
+      "backend-health" [Surface.operatorCli]
   , tagged (consumerCoverage
       "native_filesystem_boundary_cases"
       "NativeFilesystemBoundaryCases"

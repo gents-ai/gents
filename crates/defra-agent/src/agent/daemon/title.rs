@@ -36,6 +36,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         title_config.temperature = Some(0.0);
         title_config.max_tokens = Some(24);
         title_config.max_turns = 1;
+        // Title generation already retries at its own layer
+        // (generate_title_with_fallback); the inner completion must not also
+        // inherit the parent's retry ladder (#648).
+        title_config.retry_policy =
+            crate::agent::completion_retry::CompletionRetryPolicy::no_retry();
 
         tokio::spawn(async move {
             if let Err(error) = admission::scope_request(admission_context, async move {

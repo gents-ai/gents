@@ -28,6 +28,23 @@ pub(super) fn graphql_optional_bool_field(name: &str, value: Option<bool>) -> Op
     value.map(|value| format!("{name}: {}", graphql_bool(value)))
 }
 
+pub(super) fn graphql_int_list_field(name: &str, value: Option<&[i64]>) -> Option<String> {
+    let values = value?;
+    // Empty lists serialize as `null`, never `[]`: a bare `[]` literal is typed
+    // by DefraDB as JsonArray and corrupts nillable array columns.
+    if values.is_empty() {
+        return Some(format!("{name}: null"));
+    }
+    Some(format!(
+        "{name}: [{}]",
+        values
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+}
+
 pub(super) fn graphql_string_list_field(name: &str, value: Option<&[String]>) -> Option<String> {
     let values = value?;
     // Empty lists serialize as `null`, never `[]`: a bare `[]` literal is typed

@@ -1,5 +1,6 @@
 //! First-run setup and resume: locate the persistent demo home, read the saved
-//! agent DID, initialize a curated agent (read-only tools, `defra_query` off),
+//! agent DID, initialize a curated agent (read-only tools, `defra_query`
+//! scoped to the agent-config preset),
 //! and seed the demo skills.
 
 use std::path::{Path, PathBuf};
@@ -45,7 +46,12 @@ pub(super) async fn init_agent(
         agent_name.into(),
         "--tool-root".into(),
         path_arg(work),
-        "--disable-defra-query".into(),
+        // The demo agent is a learning environment: it can read (never
+        // write) its own configuration surface, so "how am I configured?"
+        // and "why doesn't X work?" are answerable in chat.
+        "--enable-defra-query".into(),
+        "--defra-query-collection".into(),
+        "agent-config".into(),
     ];
     init_args.extend(backend.init_args.iter().cloned());
     let init = run_cli_json(bin, &init_args).await?;
@@ -70,7 +76,11 @@ pub(super) async fn seed_demo_skills(bin: &Path, graphql: &str, agent_did: &str)
             "Explain this defra-agent demo and suggest what to try next.",
             "You are running inside `defra-agent demo`, an agent whose state lives in a DefraDB \
              control plane. Explain P2P pairing and cross-node subagent delegation in plain \
-             terms, and suggest the user try `pair` then `delegate` in the demo shell.",
+             terms, and suggest the user try `pair` then `delegate` in the demo shell. You can \
+             read your own configuration with the defra_query tool (behaviors, tool selections, \
+             backends, schedules, pairings) — use it to answer questions like \"how am I \
+             configured?\" or to diagnose why something is not working, and to teach the user \
+             what each piece does.",
         ),
     ];
     for (id, name, description, instructions) in skills {

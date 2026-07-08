@@ -10,25 +10,15 @@ use tracing::Instrument;
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, CallKind};
 use crate::config::AgentBehavior;
-use crate::error::classify_completion_error;
 use crate::hook::DefraSessionHook;
 use crate::llm::message::Message;
 use crate::streaming::{StreamStatus, StreamWriter};
 use crate::watcher::AgentRequest;
 
-enum InferenceAttemptOutcome {
-    Retry(crate::error::InferenceError),
-    Finished(HandleRequestOutcome),
-}
-
 type RequestDeadline = Option<DateTime<Utc>>;
 
 fn terminal_response_has_visible_output(streamed_text: &str, final_text: Option<&str>) -> bool {
     !streamed_text.trim().is_empty() || final_text.is_some_and(|text| !text.trim().is_empty())
-}
-
-fn is_stream_liveness_timeout(error: &rig::agent::StreamingError) -> bool {
-    error.to_string().contains("stream liveness timeout")
 }
 
 fn request_deadline_remaining(deadline: RequestDeadline) -> Option<Duration> {
@@ -142,7 +132,7 @@ where
 
 impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     // Threads request, admission, shutdown, and interrupt state into a single
-    // inference attempt loop. Splitting further would require re-threading the
+    // inference drive. Splitting further would require re-threading the
     // same receivers through private helpers with no readability gain.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_inference(
@@ -166,61 +156,29 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             .to_string();
         let has_deadline = !deadline_at.is_empty();
         let workspace_cwd_set = workspace_cwd.is_some();
-        let max_attempts = self.retry_policy.max_retries + 1;
-        let mut last_inference_error: Option<crate::error::InferenceError> = None;
 
-        // Render the per-request <context> message ONCE, before the retry loop.
-        // Rendering per attempt would (a) recompute ctx.now so each retry's
-        // persisted/visible context diverges from what the model consumed, and
-        // (b) defeat exactly-once persistence. A render error here is permanent
-        // (not transient), so failing before the first attempt is correct.
+        // Render the per-request <context> message ONCE, before the loop-owned
+        // retry machinery. Rendering per provider attempt would recompute
+        // ctx.now, diverging from the persisted/visible request context.
         let request_context_message =
             render_request_context_message(self.node.as_ref(), &self.behavior, request)?;
 
-        for attempt in 0..max_attempts {
-            ensure_request_deadline_open(request_deadline, "starting inference attempt")?;
-            if *shutdown.borrow() {
-                return Err(anyhow!("shutdown requested during inference"));
-            }
-            if interrupt_rx.borrow().is_some() {
-                request_token.cancel();
-                return Err(anyhow!("request interrupted during inference"));
-            }
-            if attempt > 0 {
-                let delay = self.retry_policy.delay_for_attempt(attempt - 1);
-                tracing::info!(
-                    behavior_id = %self.behavior.behavior_id,
-                    attempt,
-                    delay_ms = delay.as_millis() as u64,
-                    request_id = %request.request_id,
-                    "retrying inference after transient failure"
-                );
-                tokio::select! {
-                    biased;
-                    _ = shutdown.changed() => {
-                        return Err(anyhow!("shutdown requested during inference retry backoff"));
-                    }
-                    _ = interrupt_rx.changed() => {
-                        request_token.cancel();
-                        return Err(anyhow!("request interrupted during inference"));
-                    }
-                    result = await_with_request_deadline(
-                        request_deadline,
-                        tokio::time::sleep(delay),
-                        "waiting for inference retry backoff",
-                    ) => {
-                        result?;
-                    }
-                }
-            }
+        ensure_request_deadline_open(request_deadline, "starting inference")?;
+        if *shutdown.borrow() {
+            return Err(anyhow!("shutdown requested during inference"));
+        }
+        if interrupt_rx.borrow().is_some() {
+            request_token.cancel();
+            return Err(anyhow!("request interrupted during inference"));
+        }
 
-            let attempt_index = attempt + 1;
-            let request_id = request.request_id.clone();
-            let session_id = request.session_id.clone();
-            let behavior_id = self.behavior.behavior_id.clone();
-            let backend_id = lifecycle.backend_id().to_string();
-            let model_name = self.behavior.model_name.clone();
-            let attempt_result = async {
+        let attempt_index = 1_i64;
+        let request_id = request.request_id.clone();
+        let session_id = request.session_id.clone();
+        let behavior_id = self.behavior.behavior_id.clone();
+        let backend_id = lifecycle.backend_id().to_string();
+        let model_name = self.behavior.model_name.clone();
+        let outcome = async {
                 let hook = DefraSessionHook::resume_or_create_with_identity_policy(
                     self.node.clone(),
                     &request.session_id,
@@ -246,6 +204,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     request,
                     self.loop_tools.len(),
                 );
+                loop_config.deadline = request_deadline;
                 if let Some(factory) = self.rendered_request_capture_factory.as_ref() {
                     let context = crate::rendered_request::RenderedRequestContext::for_request(
                         request,
@@ -260,7 +219,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     );
                     let sink = factory(context.clone());
                     loop_config.on_rendered_request = Some(std::sync::Arc::new(
-                        move |turn_index, completion_request| {
+                        move |turn_index, attempt, completion_request| {
                             let context = context.clone();
                             let sink = sink.clone();
                             Box::pin(async move {
@@ -268,6 +227,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                     crate::llm::rig_compat::rendered_completion_request(
                                         &context,
                                         turn_index,
+                                        attempt,
                                         &completion_request,
                                     )?;
                                 sink(rendered).await
@@ -289,7 +249,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 let hook_for_start_interrupt = persistence_hook.clone();
                 let mut stream = admission::scope_call_with_token_and_failure_reason(
                     CallKind::Inference,
-                    attempt_index as i64,
+                    attempt_index,
                     inference_token.clone(),
                     terminal_failure_reason.clone(),
                     async {
@@ -326,7 +286,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 
                 admission::scope_call_with_token_and_failure_reason(
                     CallKind::Inference,
-                    attempt_index as i64,
+                    attempt_index,
                     inference_token.clone(),
                     terminal_failure_reason.clone(),
                     async {
@@ -339,6 +299,15 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             doc_id,
                         );
                         let mut stream_error = None;
+                        // A retry's backoff sleep runs *inside* the loop
+                        // generator, spanning the next `stream.next()` poll. The
+                        // liveness timeout wraps that poll, so a backoff longer
+                        // than `liveness_timeout` would otherwise be misread as a
+                        // dead stream and turned into a spurious terminal
+                        // "stream liveness timeout", defeating the retry (#648).
+                        // Carry the pending backoff forward and add it to the
+                        // next poll's liveness budget.
+                        let mut pending_backoff = std::time::Duration::ZERO;
 
                         loop {
                             let item = match tokio::select! {
@@ -393,7 +362,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                         request_deadline,
                                         request_token.clone(),
                                         workspace_cwd.clone(),
-                                        tokio::time::timeout(liveness_timeout, stream.next()),
+                                        tokio::time::timeout(
+                                            liveness_timeout.saturating_add(pending_backoff),
+                                            stream.next(),
+                                        ),
                                     ),
                                     "waiting for inference stream item",
                                 ) => {
@@ -448,6 +420,21 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                     break;
                                 }
                             };
+                            // The generator sleeps this backoff before its next
+                            // yield, so extend the *next* poll's liveness budget
+                            // by it (reset to zero for any non-retry item).
+                            pending_backoff = match &item {
+                                Ok(crate::agent::loop_stream::LoopStreamItem::AttemptFailed {
+                                    backoff,
+                                    will_retry: true,
+                                    ..
+                                })
+                                | Ok(crate::agent::loop_stream::LoopStreamItem::TurnRetracted {
+                                    backoff,
+                                    ..
+                                }) => *backoff,
+                                _ => std::time::Duration::ZERO,
+                            };
                             match processor.process_item(item).await {
                                 Ok(crate::agent::stream_processor::StreamAction::Continue) => {}
                                 Ok(crate::agent::stream_processor::StreamAction::Done) => break,
@@ -459,19 +446,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             }
                         }
 
-                        let had_observable_activity = processor.has_observable_activity();
-
                         if let Some(error) = stream_error {
-                            let classified = classify_completion_error(&error);
-                            let can_retry = classified.is_retryable()
-                                && !is_stream_liveness_timeout(&error)
-                                && !had_observable_activity
-                                && attempt_index < max_attempts;
-
-                            if can_retry {
-                                return Ok(InferenceAttemptOutcome::Retry(classified));
-                            }
-
                             let _ = processor
                                 .persist_partial_turn("persist errored assistant turn")
                                 .await?;
@@ -501,9 +476,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 .finalize(doc_id, StreamStatus::Error)
                                 .await?;
 
-                            return Ok(InferenceAttemptOutcome::Finished(
-                                HandleRequestOutcome::FailedAfterResponse(anyhow!(error_reason)),
-                            ));
+                            return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
+                                error_reason
+                            )));
                         }
 
                         let mut streamed_text = std::mem::take(&mut processor.streamed_text);
@@ -535,9 +510,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 .finalize(doc_id, StreamStatus::Error)
                                 .await?;
 
-                            return Ok(InferenceAttemptOutcome::Finished(
-                                HandleRequestOutcome::FailedAfterResponse(anyhow!(error_reason)),
-                            ));
+                            return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
+                                error_reason
+                            )));
                         }
 
                         ensure_request_deadline_open(
@@ -548,9 +523,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             .finalize(doc_id, StreamStatus::Complete)
                             .await?;
 
-                        Ok(InferenceAttemptOutcome::Finished(
-                            HandleRequestOutcome::Completed,
-                        ))
+                        Ok(HandleRequestOutcome::Completed)
                     },
                 )
                 .await
@@ -571,38 +544,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     || request.caused_by_parent_tool_call_id.is_some(),
                 workspace_cwd_set,
                 attempt = attempt_index,
-                retry_attempt = attempt > 0,
-                max_attempts,
+                retry_attempt = false,
             ))
             .await?;
 
-            match attempt_result {
-                InferenceAttemptOutcome::Retry(classified) => {
-                    last_inference_error = Some(classified);
-                    continue;
-                }
-                InferenceAttemptOutcome::Finished(outcome) => return Ok(outcome),
-            }
-        }
-
-        let last_error = last_inference_error
-            .map(|error| error.to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-        let error_text = format!(
-            "Inference failed after {} attempts: {}",
-            max_attempts, last_error
-        );
-        self.stream_writer
-            .set_error_message(doc_id, &error_text)
-            .await?;
-        let _ = self.stream_writer.write_tokens(doc_id, &error_text).await?;
-        self.stream_writer
-            .finalize(doc_id, StreamStatus::Error)
-            .await?;
-
-        Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
-            "inference retries exhausted"
-        )))
+        Ok(outcome)
     }
 
     pub(super) async fn write_error_response(
@@ -634,8 +580,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 #[cfg(test)]
 mod tests {
     use super::{
-        await_with_request_deadline, ensure_request_deadline_open, is_stream_liveness_timeout,
-        request_deadline_remaining, terminal_response_has_visible_output,
+        await_with_request_deadline, ensure_request_deadline_open, request_deadline_remaining,
+        terminal_response_has_visible_output,
     };
     use std::time::Duration;
 
@@ -646,17 +592,6 @@ mod tests {
         assert!(!terminal_response_has_visible_output("", Some("   ")));
         assert!(terminal_response_has_visible_output("hello", None));
         assert!(terminal_response_has_visible_output("", Some("hello")));
-    }
-
-    #[test]
-    fn detects_stream_liveness_timeout_errors() {
-        let error = rig::agent::StreamingError::Completion(
-            rig::completion::CompletionError::ProviderError(
-                "stream liveness timeout: no data received for 30s".into(),
-            ),
-        );
-
-        assert!(is_stream_liveness_timeout(&error));
     }
 
     #[test]
@@ -682,28 +617,6 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn retry_backoff_wait_is_cut_off_by_request_deadline() {
-        let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(20);
-        let started = std::time::Instant::now();
-
-        let result = await_with_request_deadline(
-            Some(deadline),
-            tokio::time::sleep(Duration::from_secs(5)),
-            "waiting for inference retry backoff",
-        )
-        .await;
-
-        let error = result.expect_err("backoff wait should be bounded by request deadline");
-        assert!(error
-            .to_string()
-            .contains("waiting for inference retry backoff"));
-        assert!(
-            started.elapsed() < Duration::from_secs(1),
-            "deadline-bounded retry backoff must not wait for the full retry delay"
-        );
     }
 
     #[tokio::test]

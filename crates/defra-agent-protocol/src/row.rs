@@ -282,6 +282,8 @@ pub struct AgentResponseRow {
     #[serde(default)]
     pub progress_seq: Option<i64>,
     #[serde(default)]
+    pub reasoning_progress_seq: Option<i64>,
+    #[serde(default)]
     pub materialized_message_sequence: Option<i64>,
     #[serde(default)]
     pub materialized_at: Option<String>,
@@ -732,6 +734,16 @@ pub struct InferenceProfileRow {
     pub stream_liveness_timeout_secs: Option<i64>,
     #[serde(default)]
     pub deadline_duration_secs: Option<i64>,
+    #[serde(default)]
+    pub retry_max_transport: Option<i64>,
+    #[serde(default)]
+    pub retry_backoff_ms: Option<Vec<i64>>,
+    #[serde(default)]
+    pub retry_max_resample: Option<i64>,
+    #[serde(default)]
+    pub retry_allow_repair: Option<bool>,
+    #[serde(default)]
+    pub retry_interactive_max: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

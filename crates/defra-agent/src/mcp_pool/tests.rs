@@ -170,6 +170,7 @@ async fn list_tools_transport_failure_retries_generated_safe_read_case() {
                     agent_did_header,
                     trace_context_headers: trace_headers,
                     last_used: super::fresh_last_used(),
+                    resume_policy: SessionResumePolicy::detached("read-service"),
                     list_tools_fn: Box::new(move || {
                         let list_calls = Arc::clone(&list_calls);
                         Box::pin(async move {
@@ -226,6 +227,7 @@ async fn assert_call_tool_transport_no_retry(case: &LeanToolRetryCase) {
                 agent_did_header: None,
                 trace_context_headers: HashMap::new(),
                 last_used: super::fresh_last_used(),
+                resume_policy: SessionResumePolicy::detached(&service_id),
                 list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
                 call_tool_fn: Box::new(move |_params| {
                     let calls = Arc::clone(&calls_for_fn);
@@ -803,6 +805,7 @@ async fn hung_connect_does_not_wedge_other_services() {
                     Box::pin(async { anyhow::bail!("call_tool was not expected") })
                 }),
                 last_used: super::fresh_last_used(),
+                resume_policy: SessionResumePolicy::detached(&service_id),
             })
         },
     );
@@ -833,4 +836,583 @@ async fn hung_connect_does_not_wedge_other_services() {
     );
 
     hung.abort();
+}
+
+// --- #639: dead-session resume must be terminal, re-init must be bounded ----
+
+/// Builds a pool whose connector counts connect attempts and records every
+/// created connection's resume policy, so tests can poison sessions and
+/// observe replacement.
+fn counting_pool(
+    connect_attempts: Arc<AtomicUsize>,
+    policies: Arc<Mutex<Vec<Arc<SessionResumePolicy>>>>,
+    poison_at_creation: bool,
+) -> McpPool {
+    McpPool::new_with_connector(move |service_id, endpoint, agent_did, trace_headers| {
+        let connect_attempts = Arc::clone(&connect_attempts);
+        let policies = Arc::clone(&policies);
+        async move {
+            connect_attempts.fetch_add(1, Ordering::SeqCst);
+            let resume_policy = SessionResumePolicy::detached(&service_id);
+            if poison_at_creation {
+                resume_policy.poison_for_test();
+            }
+            policies
+                .lock()
+                .expect("policies lock")
+                .push(Arc::clone(&resume_policy));
+            Ok(McpConnection {
+                endpoint,
+                agent_did_header: agent_did,
+                trace_context_headers: trace_headers,
+                last_used: super::fresh_last_used(),
+                resume_policy,
+                list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
+                call_tool_fn: Box::new(|_params| {
+                    Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                }),
+            })
+        }
+    })
+}
+
+/// Required behavior 1: a session whose resume went terminal (poisoned) must
+/// be dropped and re-initialized fresh on next use — never reused.
+#[tokio::test]
+async fn poisoned_session_is_replaced_on_next_use() {
+    let connect_attempts = Arc::new(AtomicUsize::new(0));
+    let policies = Arc::new(Mutex::new(Vec::new()));
+    let pool = counting_pool(Arc::clone(&connect_attempts), Arc::clone(&policies), false);
+
+    pool.list_tools("resume-service", "http://mcp.test/mcp")
+        .await
+        .expect("first list_tools should succeed");
+    assert_eq!(connect_attempts.load(Ordering::SeqCst), 1);
+
+    policies.lock().expect("policies lock")[0].poison_for_test();
+
+    pool.list_tools("resume-service", "http://mcp.test/mcp")
+        .await
+        .expect("list_tools after poisoning should succeed on a fresh session");
+    assert_eq!(
+        connect_attempts.load(Ordering::SeqCst),
+        2,
+        "a poisoned session must be replaced, not reused"
+    );
+
+    pool.list_tools("resume-service", "http://mcp.test/mcp")
+        .await
+        .expect("healthy fresh session should be reused");
+    assert_eq!(
+        connect_attempts.load(Ordering::SeqCst),
+        2,
+        "the healthy replacement must be reused, not churned"
+    );
+
+    assert_eq!(
+        pool.resume_stats("resume-service")
+            .session_reinits
+            .load(Ordering::SeqCst),
+        1,
+        "the poison-triggered replacement must be counted"
+    );
+}
+
+/// Required behavior 3 (test c): re-init failures park the service with an
+/// escalating horizon — bounded connect attempts over simulated time instead
+/// of one attempt per call.
+#[tokio::test(start_paused = true)]
+async fn repeated_connect_failures_park_the_service() {
+    let connect_attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_fn = Arc::clone(&connect_attempts);
+    let pool =
+        McpPool::new_with_connector(move |_service_id, _endpoint, _agent_did, _trace_headers| {
+            let attempts = Arc::clone(&attempts_for_fn);
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                anyhow::bail!("connection refused")
+            }
+        });
+
+    let mut parked_failures = 0usize;
+    // Two simulated hours of a caller retrying every 30 seconds.
+    for _ in 0..240 {
+        let error = pool
+            .list_tools("down-service", "http://mcp.test/mcp")
+            .await
+            .expect_err("connects to a dead service must fail");
+        if format!("{error:#}").contains("parked") {
+            parked_failures += 1;
+        }
+        tokio::time::advance(std::time::Duration::from_secs(30)).await;
+    }
+
+    let attempts = connect_attempts.load(Ordering::SeqCst);
+    assert!(
+        attempts <= 30,
+        "connect attempts must be park-bounded over simulated time, got {attempts} in 240 calls"
+    );
+    assert!(
+        parked_failures >= 200,
+        "most calls to a parked service must fail fast without a connect \
+         attempt, got {parked_failures} parked failures"
+    );
+}
+
+/// Required behavior 3: a server that accepts the handshake but kills every
+/// fresh session (each new session poisons immediately) must also converge
+/// to parked — a resume hot-loop must not become an init hot-loop.
+#[tokio::test(start_paused = true)]
+async fn server_that_kills_every_fresh_session_gets_parked() {
+    let connect_attempts = Arc::new(AtomicUsize::new(0));
+    let policies = Arc::new(Mutex::new(Vec::new()));
+    let pool = counting_pool(Arc::clone(&connect_attempts), policies, true);
+
+    // 100 simulated minutes of a caller retrying every 10 seconds against a
+    // server that poisons every session it hands out.
+    for _ in 0..600 {
+        let _ = pool
+            .list_tools("flapping-service", "http://mcp.test/mcp")
+            .await;
+        tokio::time::advance(std::time::Duration::from_secs(10)).await;
+    }
+
+    // Steady state is two connects per park horizon: the call that detects a
+    // poisoned session strikes *and* reconnects (the park gate deliberately
+    // uses the pre-strike horizon so a one-off server restart recovers
+    // seamlessly), then the horizon blocks everything until it expires.
+    // Ramp (~11 doubling strikes) ≈ 22, plus ~4 capped horizons ≈ 8.
+    let attempts = connect_attempts.load(Ordering::SeqCst);
+    assert!(
+        attempts <= 35,
+        "session re-inits against a flapping server must be park-bounded, \
+         got {attempts} connects in 600 calls"
+    );
+}
+
+/// The park bound must hold under concurrency, not just sequentially: once a
+/// service has strike history, callers racing past an expired horizon must
+/// share ONE dial (a per-service in-flight reservation), not stampede — a
+/// stampede of N dials records N strikes and N warns before the first
+/// failure re-parks, breaking the ≤2-connects-per-horizon property.
+#[tokio::test(start_paused = true)]
+async fn concurrent_callers_to_struck_service_share_one_dial() {
+    let connect_attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_fn = Arc::clone(&connect_attempts);
+    let pool =
+        McpPool::new_with_connector(move |_service_id, _endpoint, _agent_did, _trace_headers| {
+            let attempts = Arc::clone(&attempts_for_fn);
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                // Slow failing dial: concurrent callers arrive while this is
+                // in flight.
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                anyhow::bail!("connection refused")
+            }
+        });
+
+    // Establish strike history (strike 1, park 1s), then let the horizon
+    // expire.
+    let _ = pool
+        .list_tools("struck-service", "http://mcp.test/mcp")
+        .await;
+    assert_eq!(connect_attempts.load(Ordering::SeqCst), 1);
+    tokio::time::advance(std::time::Duration::from_secs(2)).await;
+
+    // Eight callers race in while the leader's dial is in flight.
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let pool = pool.clone();
+        handles.push(tokio::spawn(async move {
+            pool.list_tools("struck-service", "http://mcp.test/mcp")
+                .await
+        }));
+    }
+    let mut fast_failures = 0usize;
+    for handle in handles {
+        let error = handle
+            .await
+            .expect("task join")
+            .expect_err("dials to a dead service must fail");
+        let message = format!("{error:#}");
+        if message.contains("parked") || message.contains("already in flight") {
+            fast_failures += 1;
+        }
+    }
+
+    assert_eq!(
+        connect_attempts.load(Ordering::SeqCst),
+        2,
+        "concurrent callers past an expired horizon must share one dial"
+    );
+    assert_eq!(
+        fast_failures, 7,
+        "the seven followers must fail fast without dialing"
+    );
+}
+
+/// Services with NO strike history keep the documented benign concurrent
+/// connects (racing duplicate handshakes, last insert wins) — the in-flight
+/// reservation must not serialize or fail healthy cold starts.
+#[tokio::test(start_paused = true)]
+async fn healthy_service_concurrent_cold_connects_stay_benign() {
+    let connect_attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_fn = Arc::clone(&connect_attempts);
+    let pool =
+        McpPool::new_with_connector(move |service_id, endpoint, agent_did, trace_headers| {
+            let attempts = Arc::clone(&attempts_for_fn);
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                Ok(McpConnection {
+                    endpoint,
+                    agent_did_header: agent_did,
+                    trace_context_headers: trace_headers,
+                    last_used: super::fresh_last_used(),
+                    resume_policy: SessionResumePolicy::detached(&service_id),
+                    list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
+                    call_tool_fn: Box::new(|_params| {
+                        Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                    }),
+                })
+            }
+        });
+
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        let pool = pool.clone();
+        handles.push(tokio::spawn(async move {
+            pool.list_tools("cold-service", "http://mcp.test/mcp").await
+        }));
+    }
+    for handle in handles {
+        handle
+            .await
+            .expect("task join")
+            .expect("concurrent cold connects to a healthy service must all succeed");
+    }
+    assert_eq!(
+        connect_attempts.load(Ordering::SeqCst),
+        4,
+        "healthy cold starts keep benign duplicate connects (no reservation)"
+    );
+}
+
+/// A poison-driven reconnect happens before the safe-read `list_tools` call.
+/// If that first call fails, the existing one-shot safe-read retry must still
+/// be allowed through the just-recorded poison park horizon.
+#[tokio::test(start_paused = true)]
+async fn poison_recovery_preserves_list_tools_safe_read_retry() {
+    let connect_attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_fn = Arc::clone(&connect_attempts);
+    let policies = Arc::new(Mutex::new(Vec::new()));
+    let policies_for_fn = Arc::clone(&policies);
+    let pool =
+        McpPool::new_with_connector(move |service_id, endpoint, agent_did, trace_headers| {
+            let attempts = Arc::clone(&attempts_for_fn);
+            let policies = Arc::clone(&policies_for_fn);
+            async move {
+                let attempt = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                let resume_policy = SessionResumePolicy::detached(&service_id);
+                policies
+                    .lock()
+                    .expect("policies lock")
+                    .push(Arc::clone(&resume_policy));
+                Ok(McpConnection {
+                    endpoint,
+                    agent_did_header: agent_did,
+                    trace_context_headers: trace_headers,
+                    last_used: super::fresh_last_used(),
+                    resume_policy,
+                    list_tools_fn: Box::new(move || {
+                        Box::pin(async move {
+                            if attempt == 2 {
+                                anyhow::bail!("transport dropped after poison recovery")
+                            }
+                            Ok(ListToolsResult::default())
+                        })
+                    }),
+                    call_tool_fn: Box::new(|_params| {
+                        Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                    }),
+                })
+            }
+        });
+
+    pool.list_tools("retry-service", "http://mcp.test/mcp")
+        .await
+        .expect("first list_tools should succeed");
+    policies.lock().expect("policies lock")[0].poison_for_test();
+
+    pool.list_tools("retry-service", "http://mcp.test/mcp")
+        .await
+        .expect("safe-read retry after poison recovery must not be blocked by parking");
+
+    assert_eq!(
+        connect_attempts.load(Ordering::SeqCst),
+        3,
+        "poison recovery should connect once, then safe-read retry once"
+    );
+}
+
+/// Parking is endpoint-scoped: a dynamic endpoint change for the same
+/// service id must be allowed through instead of inheriting the previous
+/// endpoint's park horizon.
+#[tokio::test(start_paused = true)]
+async fn parked_endpoint_does_not_block_different_endpoint_for_same_service() {
+    let connect_attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_fn = Arc::clone(&connect_attempts);
+    let pool =
+        McpPool::new_with_connector(move |_service_id, _endpoint, _agent_did, _trace_headers| {
+            let attempts = Arc::clone(&attempts_for_fn);
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                anyhow::bail!("connection refused")
+            }
+        });
+
+    let _ = pool
+        .list_tools("dynamic-service", "http://old-endpoint.test/mcp")
+        .await;
+    assert_eq!(connect_attempts.load(Ordering::SeqCst), 1);
+
+    let error = pool
+        .list_tools("dynamic-service", "http://new-endpoint.test/mcp")
+        .await
+        .expect_err("new endpoint still fails in this test connector");
+
+    assert!(
+        format!("{error:#}").contains("connection refused"),
+        "new endpoint should dial and surface connector error, not inherit old endpoint park: {error:#}"
+    );
+    assert_eq!(
+        connect_attempts.load(Ordering::SeqCst),
+        2,
+        "parking one endpoint must not block a different endpoint"
+    );
+}
+
+/// Parking is also principal-scoped: a shared pool may legitimately connect to
+/// the same service and endpoint with different bound agent DIDs, and a failure
+/// for one principal must not park the other.
+#[tokio::test(start_paused = true)]
+async fn parked_agent_did_does_not_block_different_agent_did_for_same_service_endpoint() {
+    let connect_attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_fn = Arc::clone(&connect_attempts);
+    let pool =
+        McpPool::new_with_connector(move |_service_id, _endpoint, _agent_did, _trace_headers| {
+            let attempts = Arc::clone(&attempts_for_fn);
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                anyhow::bail!("connection refused")
+            }
+        });
+
+    let _ = pool
+        .list_tools_with_agent_did(
+            "multi-principal-service",
+            "http://mcp.test/mcp",
+            Some("did:key:agent-a"),
+        )
+        .await;
+    assert_eq!(connect_attempts.load(Ordering::SeqCst), 1);
+
+    let error = pool
+        .list_tools_with_agent_did(
+            "multi-principal-service",
+            "http://mcp.test/mcp",
+            Some("did:key:agent-b"),
+        )
+        .await
+        .expect_err("second principal still fails in this test connector");
+
+    assert!(
+        format!("{error:#}").contains("connection refused"),
+        "different agent DID should dial and surface connector error, not inherit principal-a park: {error:#}"
+    );
+    assert_eq!(
+        connect_attempts.load(Ordering::SeqCst),
+        2,
+        "parking one bound agent DID must not block a different bound agent DID"
+    );
+}
+
+/// Strikes decay after a quiet period: a service that flapped long ago must
+/// not inherit a huge park horizon for its next transient failure.
+#[tokio::test(start_paused = true)]
+async fn park_strikes_decay_after_quiet_period() {
+    let connect_attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_fn = Arc::clone(&connect_attempts);
+    let pool =
+        McpPool::new_with_connector(move |_service_id, _endpoint, _agent_did, _trace_headers| {
+            let attempts = Arc::clone(&attempts_for_fn);
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                anyhow::bail!("connection refused")
+            }
+        });
+
+    // Five failures far enough apart that none is blocked by the park
+    // horizon, close enough that strikes accumulate (park grows to 16s).
+    for _ in 0..5 {
+        let _ = pool
+            .list_tools("blippy-service", "http://mcp.test/mcp")
+            .await;
+        tokio::time::advance(std::time::Duration::from_secs(1000)).await;
+    }
+    assert_eq!(connect_attempts.load(Ordering::SeqCst), 5);
+
+    // A quiet period longer than the decay window resets the strike count…
+    tokio::time::advance(std::time::Duration::from_secs(31 * 60)).await;
+    let _ = pool
+        .list_tools("blippy-service", "http://mcp.test/mcp")
+        .await;
+    assert_eq!(connect_attempts.load(Ordering::SeqCst), 6);
+
+    // …so the follow-up failure parks with a fresh (tiny) horizon instead of
+    // the escalated pre-quiet one (32s would still be parked 3s later).
+    tokio::time::advance(std::time::Duration::from_secs(3)).await;
+    let _ = pool
+        .list_tools("blippy-service", "http://mcp.test/mcp")
+        .await;
+    assert_eq!(
+        connect_attempts.load(Ordering::SeqCst),
+        7,
+        "decayed strikes must not inherit the pre-quiet park horizon"
+    );
+}
+
+/// End-to-end against a real rmcp transport (required test a): a server that
+/// answers SSE GETs with 200 + an immediately-closed empty stream — the
+/// dead-session signature from the 2026-07-06/07 incidents — must get exactly
+/// one resume attempt, then the session is poisoned, and the next pool use
+/// re-initializes a fresh session (DELETE-ing the old one, #626).
+#[tokio::test]
+async fn empty_stream_resume_is_terminal_and_reinitializes() {
+    let (endpoint, http_log) = spawn_empty_sse_stream_mcp_server().await;
+    let pool = McpPool::new();
+
+    pool.list_tools("resume-storm-service", &endpoint)
+        .await
+        .expect("first mock MCP list_tools should succeed");
+
+    // The transport's standalone GET stream comes back empty, closes, and is
+    // resumed once; that resume also comes back empty → session poisoned.
+    let stats = pool.resume_stats("resume-storm-service");
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while stats.sessions_poisoned.load(Ordering::SeqCst) == 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "session should have been poisoned after the empty-stream resume; log: {:?}",
+            http_log.lock().expect("http log lock")
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    // Quiet period: with the hot loop, GETs arrive ~1/s; after poisoning
+    // there must be no further resume traffic at all.
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    {
+        let log = http_log.lock().expect("http log lock");
+        let gets = log.iter().filter(|e| e.http_method == "GET").count();
+        assert_eq!(
+            gets, 2,
+            "expected exactly the initial GET plus one resume attempt, got {gets}: {log:?}"
+        );
+    }
+
+    // Next use replaces the poisoned session: fresh initialize + DELETE of
+    // the dead session.
+    pool.list_tools("resume-storm-service", &endpoint)
+        .await
+        .expect("list_tools after poisoning should succeed on a fresh session");
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        {
+            let log = http_log.lock().expect("http log lock");
+            let initializes = log
+                .iter()
+                .filter(|e| e.rpc_method.as_deref() == Some("initialize"))
+                .count();
+            let deleted = log
+                .iter()
+                .any(|e| e.http_method == "DELETE" && e.session_id.as_deref() == Some("session-1"));
+            if initializes >= 2 && deleted {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "expected a second initialize and a DELETE for session-1 after \
+                     the poisoned session was replaced. log: {log:?}"
+                );
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        stats.session_reinits.load(Ordering::SeqCst),
+        1,
+        "the poison-triggered re-initialization must be counted"
+    );
+}
+
+/// Mock MCP server whose SSE GET endpoint always answers 200 +
+/// `text/event-stream` and immediately closes the connection — an empty
+/// stream, the rmcp dead-session resume signature. POSTs keep working so the
+/// test isolates the resume path.
+async fn spawn_empty_sse_stream_mcp_server() -> (String, Arc<Mutex<Vec<SessionHttpLogEntry>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock MCP server");
+    let addr = listener.local_addr().expect("mock MCP server address");
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let log_for_server = Arc::clone(&log);
+    let session_counter = Arc::new(AtomicUsize::new(0));
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let log = Arc::clone(&log_for_server);
+            let session_counter = Arc::clone(&session_counter);
+            tokio::spawn(async move {
+                let Ok(request) = read_mcp_http_request(&mut stream).await else {
+                    return;
+                };
+                log.lock()
+                    .expect("http log lock")
+                    .push(SessionHttpLogEntry {
+                        http_method: request.http_method.clone(),
+                        session_id: request.session_id_header.clone(),
+                        rpc_method: (!request.method.is_empty()).then(|| request.method.clone()),
+                    });
+                let response = match request.http_method.as_str() {
+                    "DELETE" => "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .to_string(),
+                    // 200 + empty SSE stream, closed immediately: the
+                    // dead-session resume answer this issue is about.
+                    "GET" => "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n"
+                        .to_string(),
+                    _ => {
+                        let session_header = if request.method == "initialize" {
+                            let n = session_counter.fetch_add(1, Ordering::SeqCst) + 1;
+                            Some(format!("session-{n}"))
+                        } else {
+                            None
+                        };
+                        mcp_http_response_with_session(
+                            &request.method,
+                            request.id,
+                            session_header.as_deref(),
+                        )
+                    }
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+
+    (format!("http://{addr}/mcp"), log)
 }

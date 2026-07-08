@@ -51,7 +51,7 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 
 ## What Is Proven
 
-The current proof suite covers thirteen practical areas:
+The current proof suite covers fourteen practical areas:
 
 1. Request/process/persistence state transitions
 2. Daemon storage-observation assumptions that refine persistence
@@ -69,6 +69,10 @@ The current proof suite covers thirteen practical areas:
     eligibility before future idempotent tool retries are enabled
 13. Managed native executor liveness: deadline/cancel transitions signal the
     executor and compose to a terminal timed-out/cancelled tool outcome
+14. Backend probe health (#640): the scheduled prober's per-runtime hysteresis
+    machine — demotion at exactly K consecutive failures, no flap below K,
+    single-success promotion, and effective availability as
+    intent ∧ ¬measured-unhealthy
 
 The proof boundary matters:
 
@@ -118,6 +122,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Scheduling.lean` | Scheduler/backend slot state |
 | `Proofs/Fleet.lean` | Barrel for fleet state, transitions, executable semantics, and slot accounting |
 | `Proofs/SessionRecovery.lean` | Retry/reissue model for session-linked requests |
+| `Proofs/CompletionRetry.lean` | Barrel for per-completion retry state, transitions, executable semantics, and budget/deadline/effects properties |
 | `Proofs/RuntimeReconcile.lean` | Barrel for runtime reconcile state, relational transitions, and executable semantics |
 | `Proofs/ApplyReconcile.lean` | Barrel for desired-state apply, prefix safety, runtime bridge, and convergence |
 | `Proofs/Triggers.lean` | Barrel for trigger types, dispatch, reachability, serial, latest-only, and lineage proofs |
@@ -155,7 +160,9 @@ Semantic submodules:
 | `Proofs.CommandPolicy` | `Types`, `Validation`, `Sandbox`, `Env`, `Theorems` |
 | `Proofs.ToolExecution` | standalone health/schema preflight and retry eligibility model |
 | `Proofs.ManagedExec` | `State`, `Transition`, `Executable`, `Properties`, `Composed` |
+| `Proofs.BackendHealth` | `State`, `Transition`, `Properties`, `Executable` |
 | `Proofs.Fleet` | `State`, `Transition`, `Executable`, `Properties` |
+| `Proofs.CompletionRetry` | `State`, `Transition`, `Executable`, `Properties` |
 | `Proofs.Conformance.Triggers` | `Lifecycle`, `Materialization`, `Trace` |
 
 The top-level barrel imports remain the stable entry points for downstream code.
@@ -464,6 +471,39 @@ session boundary:
 This is the formal version of "retry creates a new request without corrupting
 session history."
 
+### Completion Retry
+
+`Proofs/CompletionRetry.lean` models retry of a single request's completion
+inside the owned loop: transport backoff, resample and one-shot repair on
+vLLM parse-400s, turn-close-and-continue after effects, and budget/deadline
+exhaustion. It is executable in Lean through
+`Proofs/CompletionRetry/Executable.lean`, which defines `Action`, `step?`,
+`step_sound`, and `transition_complete`; a `preStreamFail` action carries the
+observed `FailureClass` and the selected wake time, so `step?` genuinely
+consumes both the classification and the fail-fast (overshoot) decision.
+
+The key guarantees (`Proofs/CompletionRetry/Properties.lean`) are:
+
+- **N1** — a re-issued or repaired completion never faces un-accounted tool
+  executions, so retry never re-executes tools
+  (`n1_reissue_requires_no_open_effects`, carried by `ReissueInv` /
+  `reissue_inv_preserved`)
+- **N2** — a partial render is retracted only before any effect this turn;
+  closing-and-continuing starts a new turn rather than retracting the old one
+  (`n2_retract_only_before_effects`)
+- **N3** — retry budgets advance monotonically and stay within their ladders,
+  and repair happens at most once
+  (`n3_budget_monotone_bounded`, `n3_repair_at_most_once`)
+- **N4** — every backoff wake fits the claimed deadline, never moves the clock
+  backwards, and retry never extends the deadline
+  (`n4_backoff_fits_deadline`)
+- **N5** — a turn retains at most one rendered instance
+  (`n5_rendered_at_most_one`)
+
+This is the formal reason retrying a failed completion is safe: tools are not
+re-run, renders are not double-counted, and a retry can neither exceed its
+budget nor sleep past its deadline.
+
 ### Runtime Reconcile
 
 `Proofs/RuntimeReconcile.lean` is the model for live runtime generation swaps.
@@ -537,6 +577,17 @@ Operational trigger-source behavior remains covered in Rust: DefraDB event
 delivery, control-watcher debounce, schedule tick cadence, subscription
 reconciliation timing, template parser failures, and persistence writeback
 shapes are integration/persistence concerns rather than Lean dispatch facts.
+
+**Projection boundary (#605):** `SystemState.requests` is a single agent's
+view — `TriggerKey` is only unique per agent, so the Rust queries that
+materialize it scope by the dispatching behavior's `agent_did`, and a
+claimed/processing row past its claim deadline (+grace) projects as terminal
+(the owning loop enforces the same deadline in-memory, so such a row is a
+wedged orphan, not an in-flight run). Both halves are fenced by the
+scheduling conformance tests (`serial_gate_is_scoped_by_agent_did`,
+`serial_gate_ignores_expired_claims`,
+`supersede_only_touches_own_agent_requests`); see the docstrings on
+`Proofs/Triggers/Types.lean`'s `AgentRequest.isTerminal` and `SystemState`.
 
 ### Client Turn Projection
 

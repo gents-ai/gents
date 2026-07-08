@@ -3,14 +3,6 @@ use defra_agent::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone)]
-pub(super) struct DefraTurnProgress {
-    pub(super) content: String,
-    pub(super) reasoning: String,
-    pub(super) error_message: Option<String>,
-    pub(super) status: String,
-}
-
-#[derive(Debug, Clone)]
 pub(super) struct DefraToolCallProgress {
     pub(super) tool_call_key: String,
     pub(super) tool_name: String,
@@ -41,13 +33,16 @@ pub(super) fn defra_turn_progress_query(request_id: &str, session_id: &str) -> S
                 order: {{ created_at: DESC }},
                 limit: 1
             ) {{
+                _docID
                 request_id
                 session_id
                 status
                 content
                 reasoning
                 error_message
+                token_count
                 progress_seq
+                reasoning_progress_seq
                 materialized_message_sequence
                 materialized_at
                 completed_at
@@ -77,25 +72,31 @@ pub(super) fn defra_turn_progress_query(request_id: &str, session_id: &str) -> S
     )
 }
 
-pub(super) fn decode_defra_turn_progress(row: &Value) -> Option<DefraTurnProgress> {
-    Some(DefraTurnProgress {
-        content: row
-            .get("content")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        reasoning: row
-            .get("reasoning")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        error_message: row
-            .get("error_message")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned),
-        status: row.get("status")?.as_str()?.to_string(),
-    })
+pub(super) fn defra_tool_progress_query(request_id: &str, session_id: &str) -> String {
+    format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    session_id: {{ _eq: "{session_id}" }},
+                    request_id: {{ _eq: "{request_id}" }}
+                }},
+                order: {{ started_at: ASC }}
+            ) {{
+                tool_call_key
+                tool_name
+                status
+                lifecycle_state
+                await_mode
+                child_request_id
+                args
+                result
+                started_at
+                completed_at
+            }}
+        }}"#,
+        request_id = escape_graphql_string(request_id),
+        session_id = escape_graphql_string(session_id),
+    )
 }
 
 pub(super) fn decode_defra_tool_call_progress(row: &Value) -> Option<DefraToolCallProgress> {

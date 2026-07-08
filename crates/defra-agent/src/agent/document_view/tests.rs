@@ -160,6 +160,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     let resolve_context = DocumentResolveContext {
         identity: identity.clone(),
         tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
     };
     let mut view = load_document_runtime_view(node.as_ref(), identity.did())
         .await
@@ -317,6 +318,7 @@ async fn resolve_composes_principal_scoped_skill_into_prompt() {
     let resolve_context = DocumentResolveContext {
         identity: identity.clone(),
         tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
     };
     let view = load_document_runtime_view(node.as_ref(), identity.did())
         .await
@@ -538,6 +540,7 @@ async fn runtime_snapshot_uses_pairing_agent_did_not_peer_id() {
     let resolve_context = DocumentResolveContext {
         identity: identity.clone(),
         tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
     };
     let view = load_document_runtime_view(node.as_ref(), identity.did())
         .await
@@ -612,6 +615,7 @@ async fn runtime_snapshot_excludes_own_did_from_paired_peers() {
     let resolve_context = DocumentResolveContext {
         identity: identity.clone(),
         tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
     };
     let view = load_document_runtime_view(node.as_ref(), identity.did())
         .await
@@ -1027,6 +1031,7 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
     let resolve_context = DocumentResolveContext {
         identity: identity.clone(),
         tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
     };
     let view = load_document_runtime_view(node.as_ref(), identity.did())
         .await
@@ -1096,6 +1101,7 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
     let resolve_context = DocumentResolveContext {
         identity: identity.clone(),
         tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
     };
     let view = load_document_runtime_view(node.as_ref(), identity.did())
         .await
@@ -1176,6 +1182,7 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
     let resolve_context = DocumentResolveContext {
         identity: identity.clone(),
         tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
     };
     let view = load_document_runtime_view(node.as_ref(), identity.did())
         .await
@@ -1250,6 +1257,7 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
     let resolve_context = DocumentResolveContext {
         identity: identity.clone(),
         tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
     };
     let view = load_document_runtime_view(node.as_ref(), identity.did())
         .await
@@ -1329,6 +1337,7 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
     let resolve_context = DocumentResolveContext {
         identity: identity.clone(),
         tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
     };
     let view = load_document_runtime_view(node.as_ref(), identity.did())
         .await
@@ -1459,6 +1468,7 @@ async fn chatgpt_codex_behavior_without_credential_is_unavailable() {
     let resolve_context = DocumentResolveContext {
         identity: identity.clone(),
         tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
     };
     let view = load_document_runtime_view(node.as_ref(), identity.did())
         .await
@@ -1496,6 +1506,7 @@ async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
     let resolve_context = DocumentResolveContext {
         identity: identity.clone(),
         tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
     };
     let view = load_document_runtime_view(node.as_ref(), identity.did())
         .await
@@ -1523,6 +1534,7 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
     let resolve_context = DocumentResolveContext {
         identity: identity.clone(),
         tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
     };
 
     let mut view = load_document_runtime_view(node.as_ref(), identity.did())

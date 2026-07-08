@@ -210,6 +210,11 @@ async fn seed_live_behavior_documents(
         stream_batch_ms: Some(250),
         stream_liveness_timeout_secs: Some(300),
         deadline_duration_secs: Some(300),
+        retry_max_transport: None,
+        retry_backoff_ms: None,
+        retry_max_resample: None,
+        retry_allow_repair: None,
+        retry_interactive_max: None,
     })
     .await?;
     core.save_behavior(&AgentBehaviorRow {

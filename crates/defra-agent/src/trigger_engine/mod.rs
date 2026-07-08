@@ -24,7 +24,10 @@ pub mod subscription_source;
 #[cfg(test)]
 mod tests;
 
-type TriggerLockKey = (String, TriggerKind);
+/// `(agent_did, trigger_id, trigger_kind)`: the trigger tuple is only unique
+/// per agent — replicated fleets share human-chosen schedule ids, and one
+/// runtime can host two agents with same-named schedules (#605).
+type TriggerLockKey = (String, String, TriggerKind);
 type TriggerLock = Arc<Mutex<()>>;
 type TriggerLockMap = HashMap<TriggerLockKey, TriggerLock>;
 
@@ -135,20 +138,28 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         rendered_prompt: &str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>;
 
-    /// Check whether any active runtime `AgentRequest` is currently bound to
-    /// this trigger. Used by the concurrency gate to decide whether a new
-    /// fire should skip or supersede.
+    /// Check whether any active runtime `AgentRequest` of `agent_did` is
+    /// currently bound to this trigger. Used by the concurrency gate to
+    /// decide whether a new fire should skip or supersede.
+    ///
+    /// The DID scope is load-bearing: on a replicated fleet the store also
+    /// holds OTHER agents' requests for the same human-chosen trigger id, and
+    /// those must never gate this agent's fires (#605).
     fn has_active_runtime_request_for_trigger(
         &self,
+        agent_did: &str,
         trigger_id: &str,
         trigger_kind: TriggerKind,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>;
 
-    /// Supersede any active runtime requests bound to this trigger. Returns
-    /// the number of requests transitioned. Invoked by `LatestOnly`
-    /// concurrency before materializing the new fire.
+    /// Supersede any active runtime requests of `agent_did` bound to this
+    /// trigger. Returns the number of requests transitioned. Invoked by
+    /// `LatestOnly` concurrency before materializing the new fire. Scoped by
+    /// DID for the same reason as the gate — superseding would otherwise
+    /// locally rewrite other agents' replicated requests (#605).
     fn supersede_active_runtime_requests_for_trigger(
         &self,
+        agent_did: &str,
         trigger_id: &str,
         trigger_kind: TriggerKind,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<usize>> + Send + '_>>;
@@ -322,8 +333,27 @@ impl TriggerEngine {
 
         // 3. Concurrency gate. `Parallel` skips the check entirely. `Serial`
         // queries the materializer for an active runtime request bound to the
-        // same `(trigger_id, trigger_kind)` tuple; matching on the tuple is
-        // load-bearing because trigger_id alone is not unique across kinds.
+        // same `(agent_did, trigger_id, trigger_kind)` tuple; the full tuple
+        // is load-bearing: trigger_id alone is not unique across kinds, and
+        // `(trigger_id, kind)` alone is not unique across agents on a
+        // replicated fleet (#605).
+        //
+        // The DID is resolved from the same snapshot the materializer will
+        // use, so the gate and materialize agree on the fire's identity; an
+        // unresolvable behavior errors here exactly as materialize would.
+        let concurrency_agent_did = || {
+            snapshot
+                .behavior(&intent.task.behavior_id)
+                .map(|behavior| behavior.agent_did().to_string())
+                .ok_or_else(|| {
+                    snapshot
+                        .unavailable_reason(&intent.task.behavior_id)
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| {
+                            format!("behavior {} is not loaded", intent.task.behavior_id)
+                        })
+                })
+        };
         use crate::runtime_snapshot::ConcurrencyMode;
         match intent.concurrency {
             ConcurrencyMode::Parallel => {
@@ -334,9 +364,23 @@ impl TriggerEngine {
                 // Serial-vs-Parallel in practice; bypass the in-flight check
                 // if there's no trigger id to key on.
                 if let Some(trigger_id) = intent.trigger_id.as_deref() {
+                    let agent_did = match concurrency_agent_did() {
+                        Ok(did) => did,
+                        Err(reason) => {
+                            let result = FireResult::Errored {
+                                error: format!("concurrency gate: {reason}"),
+                            };
+                            (intent.on_result)(result.clone());
+                            return result;
+                        }
+                    };
                     match self
                         .materializer
-                        .has_active_runtime_request_for_trigger(trigger_id, intent.trigger_kind)
+                        .has_active_runtime_request_for_trigger(
+                            &agent_did,
+                            trigger_id,
+                            intent.trigger_kind,
+                        )
                         .await
                     {
                         Ok(true) => {
@@ -362,11 +406,25 @@ impl TriggerEngine {
                 // key a lock on); fall through to materialize without
                 // serialization rather than error.
                 if let Some(trigger_id) = intent.trigger_id.as_deref() {
+                    let agent_did = match concurrency_agent_did() {
+                        Ok(did) => did,
+                        Err(reason) => {
+                            let result = FireResult::Errored {
+                                error: format!("concurrency gate: {reason}"),
+                            };
+                            (intent.on_result)(result.clone());
+                            return result;
+                        }
+                    };
                     // Acquire (or create) the per-trigger async mutex. The
                     // outer `per_trigger_locks` mutex is held only long enough
-                    // to clone the `Arc<Mutex<()>>` for this `(trigger_id,
-                    // trigger_kind)` tuple.
-                    let lock_key = (trigger_id.to_owned(), intent.trigger_kind);
+                    // to clone the `Arc<Mutex<()>>` for this `(agent_did,
+                    // trigger_id, trigger_kind)` tuple.
+                    let lock_key = (
+                        agent_did.clone(),
+                        trigger_id.to_owned(),
+                        intent.trigger_kind,
+                    );
                     let lock = {
                         let mut map = self.per_trigger_locks.lock().await;
                         map.entry(lock_key)
@@ -380,6 +438,7 @@ impl TriggerEngine {
                     match self
                         .materializer
                         .supersede_active_runtime_requests_for_trigger(
+                            &agent_did,
                             trigger_id,
                             intent.trigger_kind,
                         )
@@ -475,6 +534,7 @@ pub async fn run_subagent_source_for_test(
 
         fn has_active_runtime_request_for_trigger(
             &self,
+            _agent_did: &str,
             _trigger_id: &str,
             _trigger_kind: TriggerKind,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>
@@ -484,6 +544,7 @@ pub async fn run_subagent_source_for_test(
 
         fn supersede_active_runtime_requests_for_trigger(
             &self,
+            _agent_did: &str,
             _trigger_id: &str,
             _trigger_kind: TriggerKind,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<usize>> + Send + '_>>

@@ -33,6 +33,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
     BTreeMap::from([
         ("ApplyReconcile", Module("conformance/apply_reconcile.rs")),
         ("Background", Module("conformance/background.rs")),
+        ("BackendHealth", Module("conformance/backend_health.rs")),
         ("Client", Module("conformance/client_runtime.rs")),
         (
             "ClientShell",
@@ -41,6 +42,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("CodexShim", Module("conformance/codex_shim.rs")),
         ("CommandPolicy", Module("conformance/command_policy.rs")),
         ("Compaction", Module("conformance/streaming_compaction.rs")),
+        ("CompletionRetry", Module("conformance/completion_retry.rs")),
         (
             "CancelPropagation",
             Module("conformance/cancel_propagation.rs"),

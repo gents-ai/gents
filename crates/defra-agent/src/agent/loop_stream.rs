@@ -9,10 +9,9 @@
 //! execute them, thread their results back into the history, and loop. When a
 //! turn produces no tool calls, it yields a terminal `FinalResponse`.
 //!
-//! The generator yields rig's own `MultiTurnStreamItem` (kept per decision D3),
-//! so the existing `StreamProcessor` consumer and the `inference.rs` lifecycle
-//! envelope around it consume the owned loop with no changes — only the stream
-//! *source* moves from `Agent::stream_prompt` to `run_loop_stream`.
+//! The generator yields a native `LoopStreamItem` envelope around rig's
+//! `MultiTurnStreamItem`, keeping provider payloads at the rig boundary while
+//! giving the runtime a place to carry retry-control events.
 //!
 //! Tool side-effects (lifecycle tracking, truncation/spill, persistence) are
 //! NOT reimplemented here: the generator calls the existing
@@ -27,7 +26,15 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::llm::message::{Message, ToolCall, ToolResult, ToolResultContent, UserContent};
+use chrono::{DateTime, Utc};
+
+use crate::agent::completion_retry::{
+    CompletionRetryPolicy, CompletionRetryState, MidStreamDirective, PreStreamDirective,
+};
+use crate::error::InferenceError;
+use crate::llm::message::{
+    AssistantContent, Message, ToolCall, ToolResult, ToolResultContent, UserContent,
+};
 use crate::llm::rig_compat;
 use crate::llm::{HookAction, ToolCallHookAction};
 use async_stream::try_stream;
@@ -53,10 +60,36 @@ use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLi
 mod tests;
 
 pub(crate) type RenderedRequestSink = Arc<
-    dyn Fn(usize, CompletionRequest) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
+    dyn Fn(
+            usize,
+            u32,
+            CompletionRequest,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
         + Send
         + Sync,
 >;
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(crate) enum LoopStreamItem<R> {
+    Item(MultiTurnStreamItem<R>),
+    TurnRetracted {
+        turn: usize,
+        attempt: u32,
+        /// Backoff the generator sleeps before the resample. Carried so the
+        /// daemon can extend the next poll's liveness budget by it, exactly as
+        /// for `AttemptFailed` — otherwise a retract backoff longer than the
+        /// liveness timeout is misread as a dead stream (#648).
+        backoff: std::time::Duration,
+    },
+    AttemptFailed {
+        turn: usize,
+        attempt: u32,
+        error: InferenceError,
+        will_retry: bool,
+        backoff: std::time::Duration,
+    },
+}
 
 /// Per-request configuration for the loop, mirroring the agent-builder knobs we
 /// previously handed to rig (`completion_factory::configure_agent_builder`).
@@ -69,6 +102,8 @@ pub(crate) struct LoopConfig {
     pub(crate) additional_params: Option<serde_json::Value>,
     pub(crate) tool_choice: Option<ToolChoice>,
     pub(crate) on_rendered_request: Option<RenderedRequestSink>,
+    pub(crate) retry_policy: CompletionRetryPolicy,
+    pub(crate) deadline: Option<DateTime<Utc>>,
     /// Maximum number of tool round-trips before the loop fails with a
     /// max-turns error. Matches rig's `default_max_turns` semantics: a turn
     /// that produces a text response (no tool calls) always gets to run.
@@ -108,7 +143,7 @@ pub(crate) fn is_request_context_message(message: &Message) -> bool {
     trimmed.starts_with("<context>") && trimmed.ends_with("</context>")
 }
 
-/// Drive the owned multi-turn loop, producing a stream of `MultiTurnStreamItem`s.
+/// Drive the owned multi-turn loop, producing a stream of `LoopStreamItem`s.
 ///
 /// `prompt` is the new user message; `history` is the prior conversation
 /// (without the new prompt). `tools` are dispatched by name when the model
@@ -121,7 +156,7 @@ pub(crate) fn run_loop_stream<M>(
     history: Vec<Message>,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     config: LoopConfig,
-) -> impl Stream<Item = Result<MultiTurnStreamItem<M::StreamingResponse>, StreamingError>>
+) -> impl Stream<Item = Result<LoopStreamItem<M::StreamingResponse>, StreamingError>>
 where
     M: CompletionModel + 'static,
     M::StreamingResponse: 'static,
@@ -156,8 +191,9 @@ where
             assemble_new_messages(config.context_message.clone(), prompt);
         let mut aggregated_usage = Usage::new();
         let mut current_turn: usize = 0;
+        let mut retry = CompletionRetryState::new(config.retry_policy.clone());
 
-        loop {
+        'turns: loop {
             // rig semantics: `max_turns` is the number of tool round-trips, so up
             // to `max_turns + 1` completions are allowed (the extra one produces
             // the final text answer after the last tool call). Matches rig's
@@ -216,21 +252,97 @@ where
                 }
             }
 
-            let request = build_request(&model, current_prompt, &history, prior, tools.as_slice(), &config).await?;
-            if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
-                on_rendered_request(current_turn - 1, request.clone())
-                    .await
-                    .map_err(|error| {
-                        StreamingError::Completion(CompletionError::ProviderError(format!(
-                            "capturing rendered completion request failed: {error:#}"
-                        )))
-                    })?;
-            }
+            let turn_index = current_turn - 1;
+            let mut attempt = 0_u32;
+            let mut request = build_request(&model, current_prompt, &history, prior, tools.as_slice(), &config).await?;
+            'attempts: loop {
+                let mut stream = loop {
+                    if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
+                        on_rendered_request(turn_index, attempt, request.clone())
+                            .await
+                            .map_err(|error| {
+                                StreamingError::Completion(CompletionError::ProviderError(format!(
+                                    "capturing rendered completion request failed: {error:#}"
+                                )))
+                            })?;
+                    }
 
-            let mut stream = model
-                .stream(request)
-                .await
-                .map_err(StreamingError::Completion)?;
+                    match model.stream(request.clone()).await {
+                        Ok(stream) => break stream,
+                        Err(completion_error) => {
+                            let streaming_error = StreamingError::Completion(completion_error);
+                            let classified = crate::error::classify_completion_error(&streaming_error);
+                            let error_text = streaming_error.to_string();
+                            match retry.on_pre_stream_failure(
+                                &classified,
+                                &error_text,
+                                Utc::now(),
+                                config.deadline,
+                            ) {
+                                PreStreamDirective::RetryAfter { delay, kind } => {
+                                    yield LoopStreamItem::AttemptFailed {
+                                        turn: turn_index,
+                                        attempt,
+                                        error: classified,
+                                        will_retry: true,
+                                        backoff: delay,
+                                    };
+                                    tracing::warn!(
+                                        turn = turn_index,
+                                        attempt,
+                                        kind = ?kind,
+                                        delay_ms = delay.as_millis() as u64,
+                                        error = %error_text,
+                                        "retrying completion after transient failure"
+                                    );
+                                    tokio::time::sleep(delay).await;
+                                    attempt += 1;
+                                }
+                                PreStreamDirective::Repair => {
+                                    retry.mark_repair_used();
+                                    yield LoopStreamItem::AttemptFailed {
+                                        turn: turn_index,
+                                        attempt,
+                                        error: classified,
+                                        will_retry: true,
+                                        backoff: std::time::Duration::ZERO,
+                                    };
+                                    repair_provider_input(&mut new_messages);
+                                    let repaired_prompt = new_messages
+                                        .last()
+                                        .cloned()
+                                        .expect("new_messages remains non-empty after repair");
+                                    let repaired_prior = &new_messages[..new_messages.len() - 1];
+                                    request = build_request(
+                                        &model,
+                                        repaired_prompt,
+                                        &history,
+                                        repaired_prior,
+                                        tools.as_slice(),
+                                        &config,
+                                    )
+                                    .await?;
+                                    attempt += 1;
+                                }
+                                PreStreamDirective::Fail { reason } => {
+                                    let terminal_reason =
+                                        terminal_pre_stream_retry_reason(&classified, attempt, reason);
+                                    yield LoopStreamItem::AttemptFailed {
+                                        turn: turn_index,
+                                        attempt,
+                                        error: classified,
+                                        will_retry: false,
+                                        backoff: std::time::Duration::ZERO,
+                                    };
+                                    Err(StreamingError::Completion(
+                                        CompletionError::ProviderError(terminal_reason),
+                                    ))?;
+                                    unreachable!("Err(..)? above ends the stream");
+                                }
+                            }
+                        }
+                    }
+                };
 
             // Accumulate assistant content twice over: `accumulator` builds the
             // assistant message we thread back into `new_messages` for the next
@@ -242,21 +354,185 @@ where
             let mut accumulator = AssistantTurnAccumulator::default();
             let mut pending_results: Vec<(ToolCall, String, String)> = Vec::new();
             let mut turn_text = String::new();
+            let mut saw_stream_item = false;
 
             while let Some(item) = stream.next().await {
-                match item.map_err(StreamingError::Completion)? {
+                let item = match item {
+                    Ok(item) => {
+                        saw_stream_item = true;
+                        item
+                    }
+                    Err(completion_error) if pending_results.is_empty() => {
+                        let streaming_error = StreamingError::Completion(completion_error);
+                        let classified = crate::error::classify_completion_error(&streaming_error);
+                        let error_text = streaming_error.to_string();
+                        if !saw_stream_item {
+                            match retry.on_pre_stream_failure(
+                                &classified,
+                                &error_text,
+                                Utc::now(),
+                                config.deadline,
+                            ) {
+                                PreStreamDirective::RetryAfter { delay, kind } => {
+                                    yield LoopStreamItem::AttemptFailed {
+                                        turn: turn_index,
+                                        attempt,
+                                        error: classified,
+                                        will_retry: true,
+                                        backoff: delay,
+                                    };
+                                    tracing::warn!(
+                                        turn = turn_index,
+                                        attempt,
+                                        kind = ?kind,
+                                        delay_ms = delay.as_millis() as u64,
+                                        error = %error_text,
+                                        "retrying completion after first stream item failed"
+                                    );
+                                    tokio::time::sleep(delay).await;
+                                    attempt += 1;
+                                    continue 'attempts;
+                                }
+                                PreStreamDirective::Repair => {
+                                    retry.mark_repair_used();
+                                    yield LoopStreamItem::AttemptFailed {
+                                        turn: turn_index,
+                                        attempt,
+                                        error: classified,
+                                        will_retry: true,
+                                        backoff: std::time::Duration::ZERO,
+                                    };
+                                    repair_provider_input(&mut new_messages);
+                                    let repaired_prompt = new_messages.last().cloned().expect(
+                                        "new_messages remains non-empty after repair",
+                                    );
+                                    let repaired_prior = &new_messages[..new_messages.len() - 1];
+                                    request = build_request(
+                                        &model,
+                                        repaired_prompt,
+                                        &history,
+                                        repaired_prior,
+                                        tools.as_slice(),
+                                        &config,
+                                    )
+                                    .await?;
+                                    attempt += 1;
+                                    continue 'attempts;
+                                }
+                                PreStreamDirective::Fail { reason } => {
+                                    let terminal_reason = terminal_pre_stream_retry_reason(
+                                        &classified,
+                                        attempt,
+                                        reason,
+                                    );
+                                    yield LoopStreamItem::AttemptFailed {
+                                        turn: turn_index,
+                                        attempt,
+                                        error: classified,
+                                        will_retry: false,
+                                        backoff: std::time::Duration::ZERO,
+                                    };
+                                    Err(StreamingError::Completion(
+                                        CompletionError::ProviderError(terminal_reason),
+                                    ))?;
+                                    unreachable!("Err(..)? above ends the stream");
+                                }
+                            }
+                        }
+                        match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
+                            MidStreamDirective::RetractAndResample { delay } => {
+                                yield LoopStreamItem::TurnRetracted {
+                                    turn: turn_index,
+                                    attempt,
+                                    backoff: delay,
+                                };
+                                tracing::warn!(
+                                    turn = turn_index,
+                                    attempt,
+                                    delay_ms = delay.as_millis() as u64,
+                                    error = %error_text,
+                                    "retracting partial completion turn after mid-stream failure"
+                                );
+                                tokio::time::sleep(delay).await;
+                                attempt += 1;
+                                continue 'attempts;
+                            }
+                            MidStreamDirective::CloseAndContinue { .. } => {
+                                unreachable!(
+                                    "no-effect mid-stream failure cannot close and continue"
+                                );
+                            }
+                            MidStreamDirective::Fail { reason } => {
+                                let terminal_reason =
+                                    terminal_pre_stream_retry_reason(&classified, attempt, reason);
+                                Err(StreamingError::Completion(
+                                    CompletionError::ProviderError(terminal_reason),
+                                ))?;
+                                unreachable!("Err(..)? above ends the stream");
+                            }
+                        }
+                    }
+                    Err(completion_error) => {
+                        let streaming_error = StreamingError::Completion(completion_error);
+                        let classified = crate::error::classify_completion_error(&streaming_error);
+                        let error_text = streaming_error.to_string();
+                        match retry.on_mid_stream_failure(true, Utc::now(), config.deadline) {
+                            MidStreamDirective::CloseAndContinue { delay } => {
+                                for item in close_streaming_turn(
+                                    &mut new_messages,
+                                    &mut accumulator,
+                                    stream.message_id.clone(),
+                                    pending_results,
+                                ) {
+                                    yield item;
+                                }
+                                yield LoopStreamItem::AttemptFailed {
+                                    turn: turn_index,
+                                    attempt,
+                                    error: classified,
+                                    will_retry: true,
+                                    backoff: delay,
+                                };
+                                tracing::warn!(
+                                    turn = turn_index,
+                                    attempt,
+                                    delay_ms = delay.as_millis() as u64,
+                                    error = %error_text,
+                                    "closing completion turn after mid-stream failure with tool effects"
+                                );
+                                tokio::time::sleep(delay).await;
+                                continue 'turns;
+                            }
+                            MidStreamDirective::RetractAndResample { .. } => {
+                                unreachable!(
+                                    "effectful mid-stream failure cannot retract and resample"
+                                );
+                            }
+                            MidStreamDirective::Fail { reason } => {
+                                let terminal_reason =
+                                    terminal_pre_stream_retry_reason(&classified, attempt, reason);
+                                Err(StreamingError::Completion(
+                                    CompletionError::ProviderError(terminal_reason),
+                                ))?;
+                                unreachable!("Err(..)? above ends the stream");
+                            }
+                        }
+                    }
+                };
+
+                match item {
                     StreamedAssistantContent::Text(text) => {
                         turn_text.push_str(&text.text);
                         accumulator.push_text(&text.text);
-                        yield MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text));
+                        yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text)));
                     }
                     StreamedAssistantContent::Reasoning(reasoning) => {
                         accumulator.push_reasoning(rig_compat::from_rig_reasoning(&reasoning));
-                        yield MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(reasoning));
+                        yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(reasoning)));
                     }
                     StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
                         accumulator.push_reasoning_delta(id.clone(), &reasoning);
-                        yield MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta { id, reasoning });
+                        yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta { id, reasoning }));
                     }
                     StreamedAssistantContent::ToolCall { tool_call, internal_call_id } => {
                         accumulator.push_tool_call(rig_compat::from_rig_tool_call(&tool_call));
@@ -271,12 +547,12 @@ where
                         // result is threaded and yielded only after the loop, so
                         // the assistant turn (all its tool calls) still persists as
                         // one message ahead of its results.
-                        yield MultiTurnStreamItem::StreamAssistantItem(
+                        yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
                             StreamedAssistantContent::ToolCall {
                                 tool_call: tool_call.clone(),
                                 internal_call_id: internal_call_id.clone(),
                             },
-                        );
+                        ));
 
                         let tool_name = tool_call.function.name.clone();
                         let tool_args = value_to_json_string(&tool_call.function.arguments);
@@ -384,53 +660,145 @@ where
             }
 
             if pending_results.is_empty() {
-                yield MultiTurnStreamItem::final_response(&turn_text, aggregated_usage);
-                break;
+                yield LoopStreamItem::Item(MultiTurnStreamItem::final_response(&turn_text, aggregated_usage));
+                break 'turns;
             }
 
-            // Thread the assistant turn (text + reasoning + tool calls) ahead of
-            // its tool results, matching rig's history ordering. Carry the
-            // provider message id (captured into `stream.message_id` from the
-            // stream's `MessageId` event) onto the threaded message — rig threads
-            // this same id, and OpenAI Responses / ChatGPT Codex follow-up
-            // requests reference prior `msg_` ids, so dropping it breaks them.
-            if let Some(mut assistant_message) = accumulator.take_message() {
-                if let Message::Assistant { id, .. } = &mut assistant_message {
-                    *id = stream.message_id.clone();
-                }
-                new_messages.push(assistant_message);
+            for item in close_streaming_turn(
+                &mut new_messages,
+                &mut accumulator,
+                stream.message_id.clone(),
+                pending_results,
+            ) {
+                yield item;
             }
-
-            // The tools already ran inline as their ToolCalls arrived; now that the
-            // assistant turn is complete, thread each bounded result into history
-            // and forward it to the consumer (which persists the assistant turn on
-            // the first tool result, so results must trail the whole turn).
-            for (tool_call, internal_call_id, bounded_result) in pending_results {
-                let content = ToolResultContent::from_tool_output(bounded_result);
-                let user_content = match tool_call.call_id.clone() {
-                    Some(call_id) => UserContent::tool_result_with_call_id(
-                        tool_call.id.clone(),
-                        call_id,
-                        content.clone(),
-                    ),
-                    None => UserContent::tool_result(tool_call.id.clone(), content.clone()),
-                };
-                new_messages.push(Message::User {
-                    content: vec![user_content],
-                });
-
-                let tool_result = ToolResult {
-                    id: tool_call.id.clone(),
-                    call_id: tool_call.call_id.clone(),
-                    content,
-                };
-                yield MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
-                    tool_result: rig_compat::to_rig_tool_result(&tool_result),
-                    internal_call_id,
-                });
-            }
+            break 'attempts;
+        }
         }
     }
+}
+
+fn close_streaming_turn<R>(
+    new_messages: &mut Vec<Message>,
+    accumulator: &mut AssistantTurnAccumulator,
+    message_id: Option<String>,
+    pending_results: Vec<(ToolCall, String, String)>,
+) -> Vec<LoopStreamItem<R>> {
+    // Thread the assistant turn (text + reasoning + tool calls) ahead of its
+    // tool results, matching rig's history ordering. Carry the provider
+    // message id (captured into `stream.message_id` from the stream's
+    // `MessageId` event) onto the threaded message — rig threads this same id,
+    // and OpenAI Responses / ChatGPT Codex follow-up requests reference prior
+    // `msg_` ids, so dropping it breaks them.
+    if let Some(mut assistant_message) = accumulator.take_message() {
+        if let Message::Assistant { id, .. } = &mut assistant_message {
+            *id = message_id;
+        }
+        new_messages.push(assistant_message);
+    }
+
+    // The tools already ran inline as their ToolCalls arrived; now that the
+    // assistant turn is complete, thread each bounded result into history and
+    // forward it to the consumer (which persists the assistant turn on the
+    // first tool result, so results must trail the whole turn).
+    pending_results
+        .into_iter()
+        .map(|(tool_call, internal_call_id, bounded_result)| {
+            let content = ToolResultContent::from_tool_output(bounded_result);
+            let user_content = match tool_call.call_id.clone() {
+                Some(call_id) => UserContent::tool_result_with_call_id(
+                    tool_call.id.clone(),
+                    call_id,
+                    content.clone(),
+                ),
+                None => UserContent::tool_result(tool_call.id.clone(), content.clone()),
+            };
+            new_messages.push(Message::User {
+                content: vec![user_content],
+            });
+
+            let tool_result = ToolResult {
+                id: tool_call.id.clone(),
+                call_id: tool_call.call_id.clone(),
+                content,
+            };
+            LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
+                StreamedUserContent::ToolResult {
+                    tool_result: rig_compat::to_rig_tool_result(&tool_result),
+                    internal_call_id,
+                },
+            ))
+        })
+        .collect()
+}
+
+fn terminal_pre_stream_retry_reason(
+    classified: &InferenceError,
+    attempt: u32,
+    reason: String,
+) -> String {
+    if !classified.is_retryable() {
+        reason
+    } else {
+        format!(
+            "completion retry budget exhausted after {} attempts: {reason}; last error: {classified}",
+            attempt + 1
+        )
+    }
+}
+
+pub(crate) fn repair_provider_input(new_messages: &mut Vec<Message>) {
+    for message in new_messages.iter_mut() {
+        let Message::Assistant { content, .. } = message else {
+            continue;
+        };
+        for item in content {
+            let AssistantContent::ToolCall(tool_call) = item else {
+                continue;
+            };
+            let mut repaired = crate::llm::tool::normalize_tool_call_arguments(
+                "repair",
+                &tool_call.function.name,
+                &tool_call.function.arguments,
+            );
+            sanitize_json_string_leaves(&mut repaired);
+            tool_call.function.arguments = repaired;
+        }
+    }
+
+    *new_messages = crate::compaction::sanitize_history_for_provider(std::mem::take(new_messages));
+}
+
+fn sanitize_json_string_leaves(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                sanitize_json_string_leaves(value);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for value in map.values_mut() {
+                sanitize_json_string_leaves(value);
+            }
+        }
+        serde_json::Value::String(text) => {
+            *text = sanitize_provider_arg_string(text);
+        }
+        _ => {}
+    }
+}
+
+fn sanitize_provider_arg_string(text: &str) -> String {
+    let mut sanitized = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\n' => sanitized.push_str("\\n"),
+            '\t' => sanitized.push_str("\\t"),
+            ch if ch.is_control() => {}
+            ch => sanitized.push(ch),
+        }
+    }
+    sanitized
 }
 
 /// Drive the owned loop to completion and return the final assistant text, for
@@ -462,67 +830,91 @@ where
     futures::pin_mut!(stream);
     let mut accumulator = AssistantTurnAccumulator::default();
     let mut final_text = String::new();
+    let mut last_attempt_error: Option<InferenceError> = None;
 
     while let Some(item) = stream.next().await {
-        match item.map_err(|error| anyhow::anyhow!("one-shot loop stream error: {error}"))? {
-            MultiTurnStreamItem::StreamAssistantItem(content) => match content {
-                StreamedAssistantContent::Text(text) => accumulator.push_text(&text.text),
-                StreamedAssistantContent::Reasoning(reasoning) => {
-                    accumulator.push_reasoning(rig_compat::from_rig_reasoning(&reasoning))
-                }
-                StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
-                    accumulator.push_reasoning_delta(id, &reasoning)
-                }
-                StreamedAssistantContent::ToolCall {
-                    tool_call,
-                    internal_call_id,
-                } => {
-                    if let Some(hook) = hook.as_ref() {
-                        hook.register_stream_tool_call_identity(
-                            &internal_call_id,
-                            &tool_call.id,
-                            tool_call.call_id.as_deref(),
-                        )
-                        .await;
+        let item = item.map_err(|error| match last_attempt_error.as_ref() {
+            Some(last_error) => {
+                anyhow::anyhow!(
+                    "one-shot loop stream error after retry failure ({last_error}): {error}"
+                )
+            }
+            None => anyhow::anyhow!("one-shot loop stream error: {error}"),
+        })?;
+        match item {
+            LoopStreamItem::TurnRetracted { .. } => {
+                // Discard the retracted turn's accumulated content so the
+                // resample renders as the sole turn for this index. Mirrors
+                // `StreamProcessor`'s reset on the daemon path; without it the
+                // retracted partial concatenates into the persisted assistant
+                // message on the one-shot persisting path (#648).
+                accumulator = AssistantTurnAccumulator::default();
+                continue;
+            }
+            LoopStreamItem::AttemptFailed { error, .. } => {
+                last_attempt_error = Some(error);
+                continue;
+            }
+            LoopStreamItem::Item(item) => match item {
+                MultiTurnStreamItem::StreamAssistantItem(content) => match content {
+                    StreamedAssistantContent::Text(text) => accumulator.push_text(&text.text),
+                    StreamedAssistantContent::Reasoning(reasoning) => {
+                        accumulator.push_reasoning(rig_compat::from_rig_reasoning(&reasoning))
                     }
-                    accumulator.push_tool_call(rig_compat::from_rig_tool_call(&tool_call));
+                    StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
+                        accumulator.push_reasoning_delta(id, &reasoning)
+                    }
+                    StreamedAssistantContent::ToolCall {
+                        tool_call,
+                        internal_call_id,
+                    } => {
+                        if let Some(hook) = hook.as_ref() {
+                            hook.register_stream_tool_call_identity(
+                                &internal_call_id,
+                                &tool_call.id,
+                                tool_call.call_id.as_deref(),
+                            )
+                            .await;
+                        }
+                        accumulator.push_tool_call(rig_compat::from_rig_tool_call(&tool_call));
+                    }
+                    _ => {}
+                },
+                MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
+                    tool_result,
+                    internal_call_id,
+                }) => {
+                    if let Some(hook) = hook.as_ref() {
+                        if let Some(message) = accumulator.take_message() {
+                            hook.apply_persistence_policy(
+                                hook.persist_message(&message).await.map(|_| ()),
+                                "persist one-shot assistant turn",
+                            )?;
+                        }
+                        hook.apply_persistence_policy(
+                            hook.persist_stream_tool_result_message(
+                                &rig_compat::from_rig_tool_result(&tool_result),
+                                &internal_call_id,
+                            )
+                            .await,
+                            "persist one-shot tool result",
+                        )?;
+                    }
+                }
+                MultiTurnStreamItem::FinalResponse(final_response) => {
+                    accumulator.reconcile_text(final_response.response());
+                    if let Some(hook) = hook.as_ref() {
+                        if let Some(message) = accumulator.take_message() {
+                            hook.apply_persistence_policy(
+                                hook.persist_message(&message).await.map(|_| ()),
+                                "persist one-shot final assistant turn",
+                            )?;
+                        }
+                    }
+                    final_text = final_response.response().to_string();
                 }
                 _ => {}
             },
-            MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
-                tool_result,
-                internal_call_id,
-            }) => {
-                if let Some(hook) = hook.as_ref() {
-                    if let Some(message) = accumulator.take_message() {
-                        hook.apply_persistence_policy(
-                            hook.persist_message(&message).await.map(|_| ()),
-                            "persist one-shot assistant turn",
-                        )?;
-                    }
-                    hook.apply_persistence_policy(
-                        hook.persist_stream_tool_result_message(
-                            &rig_compat::from_rig_tool_result(&tool_result),
-                            &internal_call_id,
-                        )
-                        .await,
-                        "persist one-shot tool result",
-                    )?;
-                }
-            }
-            MultiTurnStreamItem::FinalResponse(final_response) => {
-                accumulator.reconcile_text(final_response.response());
-                if let Some(hook) = hook.as_ref() {
-                    if let Some(message) = accumulator.take_message() {
-                        hook.apply_persistence_policy(
-                            hook.persist_message(&message).await.map(|_| ()),
-                            "persist one-shot final assistant turn",
-                        )?;
-                    }
-                }
-                final_text = final_response.response().to_string();
-            }
-            _ => {}
         }
     }
     Ok(final_text)

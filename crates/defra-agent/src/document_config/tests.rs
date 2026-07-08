@@ -627,6 +627,129 @@ async fn agent_behavior_description_and_summary_round_trip() {
     );
 }
 
+#[tokio::test]
+async fn inference_profile_completion_retry_fields_round_trip() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let profile = InferenceProfile {
+        profile_id: "retry-profile".to_string(),
+        display_name: Some("Retry Profile".to_string()),
+        context_window: None,
+        max_output_tokens: None,
+        max_turns: None,
+        temperature: None,
+        stream_batch_ms: None,
+        stream_liveness_timeout_secs: None,
+        deadline_duration_secs: None,
+        retry_max_transport: Some(4),
+        retry_backoff_ms: Some(vec![1_000, 5_000, 30_000]),
+        retry_max_resample: Some(2),
+        retry_allow_repair: Some(false),
+        retry_interactive_max: Some(2),
+    };
+
+    upsert_inference_profile(&node, &profile)
+        .await
+        .expect("upsert should persist retry fields");
+
+    let loaded = load_inference_profile(&node, "retry-profile")
+        .await
+        .expect("load should succeed")
+        .expect("profile should exist");
+    assert_eq!(loaded.retry_max_transport, Some(4));
+    assert_eq!(loaded.retry_backoff_ms, Some(vec![1_000, 5_000, 30_000]));
+    assert_eq!(loaded.retry_max_resample, Some(2));
+    assert_eq!(loaded.retry_allow_repair, Some(false));
+    assert_eq!(loaded.retry_interactive_max, Some(2));
+}
+
+#[test]
+fn inference_profile_empty_retry_backoff_serializes_null_and_resolves_defaults() {
+    let fields = crate::agent::completion_retry::CompletionRetryProfileFields {
+        retry_backoff_ms: Some(Vec::new()),
+        ..Default::default()
+    };
+    let resolved = crate::agent::completion_retry::CompletionRetryPolicy::resolve(
+        &fields,
+        crate::lifecycle::ExecutionOrigin::Scheduled,
+    );
+    assert_eq!(
+        resolved,
+        crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default()
+    );
+
+    let profile = InferenceProfile {
+        profile_id: "empty-backoff".to_string(),
+        display_name: None,
+        context_window: None,
+        max_output_tokens: None,
+        max_turns: None,
+        temperature: None,
+        stream_batch_ms: None,
+        stream_liveness_timeout_secs: None,
+        deadline_duration_secs: None,
+        retry_max_transport: None,
+        retry_backoff_ms: Some(Vec::new()),
+        retry_max_resample: None,
+        retry_allow_repair: None,
+        retry_interactive_max: None,
+    };
+    let mutation = super::inference_profile::upsert_inference_profile_mutation(&profile);
+    assert!(
+        mutation.contains("retry_backoff_ms: null"),
+        "empty retry_backoff_ms must render as null, not []; mutation was {mutation}"
+    );
+    assert!(
+        !mutation.contains("retry_backoff_ms: []"),
+        "DefraDB mutations must never emit [] for retry_backoff_ms"
+    );
+}
+
+#[test]
+fn completion_retry_policy_resolution_uses_origin_and_profile_fields() {
+    let scheduled = crate::agent::completion_retry::CompletionRetryPolicy::resolve(
+        &crate::agent::completion_retry::CompletionRetryProfileFields::default(),
+        crate::lifecycle::ExecutionOrigin::Scheduled,
+    );
+    assert_eq!(
+        scheduled,
+        crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default()
+    );
+
+    let interactive_fields = crate::agent::completion_retry::CompletionRetryProfileFields {
+        retry_interactive_max: Some(2),
+        ..Default::default()
+    };
+    let interactive = crate::agent::completion_retry::CompletionRetryPolicy::resolve(
+        &interactive_fields,
+        crate::lifecycle::ExecutionOrigin::Interactive,
+    );
+    assert_eq!(
+        interactive.transport_backoff,
+        vec![
+            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(2)
+        ]
+    );
+
+    let scheduled_fields = crate::agent::completion_retry::CompletionRetryProfileFields {
+        retry_backoff_ms: Some(vec![1_000, 5_000]),
+        ..Default::default()
+    };
+    let scheduled = crate::agent::completion_retry::CompletionRetryPolicy::resolve(
+        &scheduled_fields,
+        crate::lifecycle::ExecutionOrigin::Scheduled,
+    );
+    assert_eq!(
+        scheduled.transport_backoff,
+        vec![
+            std::time::Duration::from_millis(1_000),
+            std::time::Duration::from_millis(5_000)
+        ]
+    );
+}
+
 #[test]
 fn validate_accepts_well_formed_subagent_targets() {
     // Bare behavior-id strings like "amy-code" are NOT valid SubagentTarget

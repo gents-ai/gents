@@ -14,6 +14,7 @@ use super::{
     ProcessLifecycleObserver,
 };
 use crate::admission::BackendAdmissionConfig;
+use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::backend_provider::BackendProviderKind;
 use crate::backend_registry::lookup_backend;
 use crate::compaction::CompactionStrategy;
@@ -225,6 +226,8 @@ impl DefraAgentBuilder {
             hook_failure_policy: self.hook_failure_policy,
             background_execution_registry: BackgroundExecutionRegistry::default(),
             health_checker_options: self.health_checker_options,
+            backend_prober_options: crate::backend_health::BackendProberOptions::default(),
+            backend_health: crate::backend_health::BackendHealthMap::new(),
             process_state_observer: self.process_state_observer,
             rendered_request_capture_factory: self.rendered_request_capture_factory,
             manual_trigger_handle: Arc::new(tokio::sync::OnceCell::new()),
@@ -603,6 +606,7 @@ impl PendingAgentBehavior {
             stream_batch_ms: self.stream_batch_ms,
             stream_liveness_timeout: self.stream_liveness_timeout,
             deadline_duration: self.deadline_duration,
+            completion_retry: CompletionRetryProfileFields::default(),
             sampling: self.sampling,
             skills: self.skills,
         })

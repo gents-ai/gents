@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
+use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::backend_provider::BackendProviderKind;
 use crate::compaction::CompactionStrategy;
 use crate::identity::{AgentIdentity, AgentPrincipal};
@@ -48,6 +49,7 @@ pub struct AgentBehavior {
     pub stream_batch_ms: u64,
     pub stream_liveness_timeout: Duration,
     pub deadline_duration: Duration,
+    pub completion_retry: CompletionRetryProfileFields,
     pub sampling: SamplingConfig,
     /// Effective skill set for this behavior (decision D5), resolved at
     /// snapshot-build time. Their instructions compose into the prompt
@@ -111,6 +113,7 @@ impl std::fmt::Debug for AgentBehavior {
             .field("stream_batch_ms", &self.stream_batch_ms)
             .field("stream_liveness_timeout", &self.stream_liveness_timeout)
             .field("deadline_duration", &self.deadline_duration)
+            .field("completion_retry", &self.completion_retry)
             .field("sampling", &self.sampling)
             // Included so the runtime configuration fingerprint (which hashes
             // `{behavior:?}`) changes when a behavior's effective skills change,
@@ -231,6 +234,7 @@ mod tests {
             stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
             stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
             deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
+            completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
         }

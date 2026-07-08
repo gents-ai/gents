@@ -22,6 +22,11 @@ pub struct InferenceProfile {
     pub stream_batch_ms: Option<i64>,
     pub stream_liveness_timeout_secs: Option<i64>,
     pub deadline_duration_secs: Option<i64>,
+    pub retry_max_transport: Option<i64>,
+    pub retry_backoff_ms: Option<Vec<i64>>,
+    pub retry_max_resample: Option<i64>,
+    pub retry_allow_repair: Option<bool>,
+    pub retry_interactive_max: Option<i64>,
 }
 
 const DEFAULT_INFERENCE_PROFILE_LABEL: &str = "Default";
@@ -41,6 +46,11 @@ pub(super) fn default_inference_profile_for_behavior(behavior_id: &str) -> Infer
         stream_batch_ms: Some(DEFAULT_STREAM_BATCH_MS as i64),
         stream_liveness_timeout_secs: Some(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
         deadline_duration_secs: Some(DEFAULT_DEADLINE_DURATION_SECS as i64),
+        retry_max_transport: None,
+        retry_backoff_ms: None,
+        retry_max_resample: None,
+        retry_allow_repair: None,
+        retry_interactive_max: None,
     }
 }
 
@@ -83,6 +93,11 @@ pub(crate) async fn load_inference_profile_record(
                 stream_batch_ms
                 stream_liveness_timeout_secs
                 deadline_duration_secs
+                retry_max_transport
+                retry_backoff_ms
+                retry_max_resample
+                retry_allow_repair
+                retry_interactive_max
             }}
         }}"#
     );
@@ -119,6 +134,11 @@ pub(crate) async fn load_inference_profile_by_doc_id(
                 stream_batch_ms
                 stream_liveness_timeout_secs
                 deadline_duration_secs
+                retry_max_transport
+                retry_backoff_ms
+                retry_max_resample
+                retry_allow_repair
+                retry_interactive_max
             }}
         }}"#
     );
@@ -149,6 +169,11 @@ pub async fn list_inference_profile_records(
                 stream_batch_ms
                 stream_liveness_timeout_secs
                 deadline_duration_secs
+                retry_max_transport
+                retry_backoff_ms
+                retry_max_resample
+                retry_allow_repair
+                retry_interactive_max
             }
         }"#;
 
@@ -167,6 +192,17 @@ pub async fn upsert_inference_profile(
     node: &EmbeddedNode,
     profile: &InferenceProfile,
 ) -> Result<()> {
+    let mutation = upsert_inference_profile_mutation(profile);
+
+    let resp =
+        execute_graphql_with_conflict_retry(node, &mutation, "upsert InferenceProfile").await;
+    if resp.has_errors() {
+        anyhow::bail!("upsert InferenceProfile failed: {:?}", resp.errors);
+    }
+    Ok(())
+}
+
+pub(crate) fn upsert_inference_profile_mutation(profile: &InferenceProfile) -> String {
     let escaped_profile_id = escape_graphql_string(&profile.profile_id);
 
     let add_fields = vec![
@@ -184,6 +220,26 @@ pub async fn upsert_inference_profile(
         graphql_fields::graphql_optional_int_field(
             "deadline_duration_secs",
             profile.deadline_duration_secs,
+        ),
+        graphql_fields::graphql_optional_int_field(
+            "retry_max_transport",
+            profile.retry_max_transport,
+        ),
+        graphql_fields::graphql_int_list_field(
+            "retry_backoff_ms",
+            profile.retry_backoff_ms.as_deref(),
+        ),
+        graphql_fields::graphql_optional_int_field(
+            "retry_max_resample",
+            profile.retry_max_resample,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "retry_allow_repair",
+            profile.retry_allow_repair,
+        ),
+        graphql_fields::graphql_optional_int_field(
+            "retry_interactive_max",
+            profile.retry_interactive_max,
         ),
     ]
     .into_iter()
@@ -206,13 +262,33 @@ pub async fn upsert_inference_profile(
             "deadline_duration_secs",
             profile.deadline_duration_secs,
         ),
+        graphql_fields::graphql_optional_int_field(
+            "retry_max_transport",
+            profile.retry_max_transport,
+        ),
+        graphql_fields::graphql_int_list_field(
+            "retry_backoff_ms",
+            profile.retry_backoff_ms.as_deref(),
+        ),
+        graphql_fields::graphql_optional_int_field(
+            "retry_max_resample",
+            profile.retry_max_resample,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "retry_allow_repair",
+            profile.retry_allow_repair,
+        ),
+        graphql_fields::graphql_optional_int_field(
+            "retry_interactive_max",
+            profile.retry_interactive_max,
+        ),
     ]
     .into_iter()
     .flatten()
     .collect::<Vec<_>>()
     .join(",\n                    ");
 
-    let mutation = format!(
+    format!(
         r#"mutation {{
             upsert_InferenceProfile(
                 filter: {{ profile_id: {{ _eq: "{escaped_profile_id}" }} }},
@@ -224,12 +300,5 @@ pub async fn upsert_inference_profile(
                 }}
             ) {{ _docID }}
         }}"#
-    );
-
-    let resp =
-        execute_graphql_with_conflict_retry(node, &mutation, "upsert InferenceProfile").await;
-    if resp.has_errors() {
-        anyhow::bail!("upsert InferenceProfile failed: {:?}", resp.errors);
-    }
-    Ok(())
+    )
 }

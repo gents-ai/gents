@@ -56,6 +56,8 @@ fn build_stub_behavior_factory(
             deadline_duration: std::time::Duration::from_secs(
                 defra_agent::DEFAULT_DEADLINE_DURATION_SECS,
             ),
+            completion_retry:
+                defra_agent::agent::completion_retry::CompletionRetryProfileFields::default(),
             sampling: defra_agent::SamplingConfig::default(),
         })
     })

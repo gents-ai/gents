@@ -138,6 +138,11 @@ async fn upsert_helpers_roundtrip_behavior_and_profile() {
             stream_batch_ms: Some(500),
             stream_liveness_timeout_secs: Some(45),
             deadline_duration_secs: Some(120),
+            retry_max_transport: None,
+            retry_backoff_ms: None,
+            retry_max_resample: None,
+            retry_allow_repair: None,
+            retry_interactive_max: None,
         },
     )
     .await

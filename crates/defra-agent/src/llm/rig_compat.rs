@@ -35,6 +35,7 @@ pub(crate) fn to_rig_tool_choice(choice: &ToolChoice) -> rig::message::ToolChoic
 pub(crate) fn rendered_completion_request(
     context: &crate::rendered_request::RenderedRequestContext,
     turn_index: usize,
+    attempt: u32,
     request: &rig::completion::CompletionRequest,
 ) -> Result<crate::rendered_request::RenderedCompletionRequest> {
     let request_json = provider_request_json(
@@ -61,6 +62,7 @@ pub(crate) fn rendered_completion_request(
     crate::rendered_request::build_rendered_completion_request(
         context,
         turn_index,
+        attempt,
         request_json,
         messages_json,
         tools_json,
@@ -682,9 +684,9 @@ mod tests {
     #[test]
     fn responses_capture_normalizes_prior_assistant_items_only_when_enabled() {
         let request = sample_request_with_assistant_turn();
-        let rendered_on = rendered_completion_request(&responses_context(true), 0, &request)
+        let rendered_on = rendered_completion_request(&responses_context(true), 0, 0, &request)
             .expect("render normalized");
-        let rendered_off = rendered_completion_request(&responses_context(false), 0, &request)
+        let rendered_off = rendered_completion_request(&responses_context(false), 0, 0, &request)
             .expect("render raw");
 
         // The gating boolean must have an observable effect on the captured body.
@@ -848,10 +850,11 @@ mod tests {
         };
 
         let rendered =
-            rendered_completion_request(&context, 0, &sample_request()).expect("render request");
+            rendered_completion_request(&context, 0, 0, &sample_request()).expect("render request");
 
         assert_eq!(rendered.request_id, "req-1");
         assert_eq!(rendered.turn_index, 0);
+        assert_eq!(rendered.attempt, 0);
         assert_eq!(
             rendered.source,
             crate::rendered_request::RenderedRequestSource::OpenAiChatCompletions

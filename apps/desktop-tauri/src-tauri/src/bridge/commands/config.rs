@@ -250,6 +250,11 @@ pub(crate) async fn save_inference_profile_config(
             stream_batch_ms: None,
             stream_liveness_timeout_secs: None,
             deadline_duration_secs: None,
+            retry_max_transport: None,
+            retry_backoff_ms: None,
+            retry_max_resample: None,
+            retry_allow_repair: None,
+            retry_interactive_max: None,
         });
     row.display_name = Some(display_name);
     row.context_window = request.context_window;

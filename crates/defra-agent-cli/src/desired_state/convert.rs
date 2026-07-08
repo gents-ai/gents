@@ -203,6 +203,11 @@ pub(crate) fn manifest_from_export_bundle(
                         "stream_batch_ms",
                         "stream_liveness_timeout_secs",
                         "deadline_duration_secs",
+                        "retry_max_transport",
+                        "retry_backoff_ms",
+                        "retry_max_resample",
+                        "retry_allow_repair",
+                        "retry_interactive_max",
                     ],
                 )
             })

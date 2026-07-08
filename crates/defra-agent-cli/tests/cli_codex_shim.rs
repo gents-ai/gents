@@ -1996,6 +1996,149 @@ async fn codex_shim_turn_steer_queues_defra_request_on_active_turn() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-codex-shim-bg-interrupt-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start_hanging(&model_name)?;
+
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-codex-shim-bg-interrupt-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "50",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    initialize_config_and_thread(&mut ws, &home_dir).await?;
+    let thread_id = start_thread(&mut ws, &home_dir).await?;
+
+    let prompt = format!(
+        "start background interrupt repro {}",
+        Uuid::new_v4().simple()
+    );
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnStart {
+            request_id: request_id(220),
+            params: codex::TurnStartParams {
+                thread_id: thread_id.clone(),
+                input: vec![codex::UserInput::Text {
+                    text: prompt.clone(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let turn_start: codex::TurnStartResponse =
+        read_typed_response(&mut ws, request_id(220)).await?;
+    let started = read_turn_started(&mut ws).await?;
+    assert_eq!(started.turn.id, turn_start.turn.id);
+
+    let (defra_request_id, session_id, _behavior_id) =
+        wait_for_request(&graphql, &agent_did, &prompt).await?;
+    assert_eq!(session_id, thread_id);
+    let tool_call_key = format!("{session_id}:codex-bg-interrupt");
+    seed_running_background_tool(&graphql, &defra_request_id, &session_id, &tool_call_key).await?;
+
+    let started_process = tokio::time::timeout(
+        Duration::from_secs(15),
+        read_background_command_started(&mut ws, &tool_call_key),
+    )
+    .await
+    .context("timed out waiting for shim to project running background tool")??;
+    assert_eq!(started_process, tool_call_key);
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnInterrupt {
+            request_id: request_id(221),
+            params: codex::TurnInterruptParams {
+                thread_id: thread_id.clone(),
+                turn_id: turn_start.turn.id.clone(),
+            },
+        },
+    )
+    .await?;
+    let interrupted_turn = tokio::time::timeout(
+        Duration::from_secs(15),
+        read_interrupt_response_and_completed_turn(&mut ws, request_id(221)),
+    )
+    .await
+    .context("timed out waiting for interrupted turn with running background tool")??;
+    assert_eq!(interrupted_turn.status, codex::TurnStatus::Interrupted);
+
+    wait_for_request_lifecycle_state(
+        &graphql,
+        &defra_request_id,
+        &["interrupted"],
+        Duration::from_secs(15),
+    )
+    .await?;
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadList {
+            request_id: request_id(222),
+            params: codex::ThreadListParams {
+                cursor: None,
+                limit: None,
+                sort_key: None,
+                sort_direction: None,
+                model_providers: None,
+                source_kinds: None,
+                archived: None,
+                cwd: None,
+                use_state_db_only: true,
+                search_term: None,
+            },
+        },
+    )
+    .await?;
+    let _: codex::ThreadListResponse = tokio::time::timeout(
+        Duration::from_secs(15),
+        read_typed_response(&mut ws, request_id(222)),
+    )
+    .await
+    .context("shim stopped answering after interrupting background-tool turn")??;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -3284,6 +3427,39 @@ async fn seed_blank_materialized_completion(
     Ok(())
 }
 
+async fn seed_running_background_tool(
+    graphql: &str,
+    request_id: &str,
+    session_id: &str,
+    tool_call_key: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentToolCall(input: {{
+                tool_call_key: "{tool_call_key}",
+                request_id: "{request_id}",
+                session_id: "{session_id}",
+                message_sequence: 1,
+                tool_name: "bash",
+                tool_call_id: "codex-bg-interrupt",
+                args: "{{\"command\":\"sleep 600\"}}",
+                result: "",
+                status: "called",
+                lifecycle_state: "running",
+                started_at: "{now}",
+                await_mode: "background"
+            }}) {{ _docID }}
+        }}"#,
+        tool_call_key = escape_graphql_string(tool_call_key),
+        request_id = escape_graphql_string(request_id),
+        session_id = escape_graphql_string(session_id),
+        now = escape_graphql_string(&now),
+    );
+    graphql_query(graphql, &mutation).await?;
+    Ok(())
+}
+
 fn require_command(name: &str) -> Result<()> {
     if which(name).is_some() {
         Ok(())
@@ -3724,6 +3900,85 @@ async fn read_turn_started(ws: &mut ShimWebSocket) -> Result<codex::TurnStartedN
                 bail!("Codex shim sent unexpected server request: {request:?}");
             }
             codex::JSONRPCMessage::Response(_) => {}
+        }
+    }
+}
+
+async fn read_background_command_started(
+    ws: &mut ShimWebSocket,
+    expected_tool_call_key: &str,
+) -> Result<String> {
+    loop {
+        match read_jsonrpc(ws).await? {
+            codex::JSONRPCMessage::Notification(notification) => {
+                if let codex::ServerNotification::ItemStarted(started) =
+                    server_notification_from_jsonrpc(notification)?
+                {
+                    if let codex::ThreadItem::CommandExecution { id, process_id, .. } = started.item
+                    {
+                        if id == expected_tool_call_key
+                            && process_id.as_deref() == Some(expected_tool_call_key)
+                        {
+                            return Ok(id);
+                        }
+                    }
+                }
+            }
+            codex::JSONRPCMessage::Error(error) => {
+                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+            }
+            codex::JSONRPCMessage::Request(request) => {
+                bail!("Codex shim sent unexpected server request: {request:?}");
+            }
+            codex::JSONRPCMessage::Response(_) => {}
+        }
+    }
+}
+
+async fn read_interrupt_response_and_completed_turn(
+    ws: &mut ShimWebSocket,
+    expected_id: codex::RequestId,
+) -> Result<codex::Turn> {
+    let mut saw_interrupt_response = false;
+    let mut completed_turn = None;
+    loop {
+        match read_jsonrpc(ws).await? {
+            codex::JSONRPCMessage::Response(response) if response.id == expected_id => {
+                let _: codex::TurnInterruptResponse = serde_json::from_value(response.result)
+                    .context("decoding interrupt response")?;
+                saw_interrupt_response = true;
+            }
+            codex::JSONRPCMessage::Error(error) if error.id == expected_id => {
+                bail!(
+                    "Codex shim returned error for interrupt {}: {}",
+                    expected_id,
+                    error.error.message
+                );
+            }
+            codex::JSONRPCMessage::Notification(notification) => {
+                if let codex::ServerNotification::TurnCompleted(completed) =
+                    server_notification_from_jsonrpc(notification)?
+                {
+                    completed_turn = Some(completed.turn);
+                }
+            }
+            codex::JSONRPCMessage::Error(error) => {
+                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+            }
+            codex::JSONRPCMessage::Request(request) => {
+                bail!("Codex shim sent unexpected server request: {request:?}");
+            }
+            codex::JSONRPCMessage::Response(response) => {
+                bail!(
+                    "unexpected JSON-RPC response while waiting for interrupt {expected_id}: {response:?}"
+                );
+            }
+        }
+
+        if saw_interrupt_response {
+            if let Some(turn) = completed_turn.take() {
+                return Ok(turn);
+            }
         }
     }
 }

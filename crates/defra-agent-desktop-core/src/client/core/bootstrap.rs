@@ -64,6 +64,7 @@ impl ClientCore {
                     rate_limit_burst: options.rate_limit_burst,
                     rate_limit_rate: options.rate_limit_rate,
                     max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
+                    max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
                 })
                 .build()
                 .await

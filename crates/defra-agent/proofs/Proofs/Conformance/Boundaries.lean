@@ -65,6 +65,15 @@ therefore boundary witnesses over the derived projection; the executable Rust
 consumer must check that projection against admission reconstruction, not
 pretend a production `FleetState` aggregate exists.
 
+Each completion retry attempt is its own `InferenceCall` row and admission
+permit; no backend slot is held during backoff sleeps. Admission granularity is
+per provider call, not per logical owned-loop request.
+
+Backoff delay values, jitter, and rate-limit hints are product policy. The
+`CompletionRetry` model constrains budget counts, selected-wake deadline fit,
+repair/reissue legality, and effect-safe retraction; it does not model the
+concrete delay schedule.
+
 The command-policy model covers local validation and selection logic for
 `CommandExecutionMode`, `CommandNetworkMode`, argv allowed/forbidden prefixes,
 read-only command allowlisting, sandbox labels, and filtered shell environment
@@ -345,7 +354,7 @@ def boundaries : List Boundary :=
     , domain := "Admission"
     , subject := "backend health freshness"
     , statement :=
-        "Lean-generated cases and Rust tests cover observed-document admission availability; backend document freshness, probes, provider behavior, and network behavior remain environmental."
+        "Lean-generated cases and Rust tests cover observed-document admission availability composed with the local runtime's measured probe health (Proofs/BackendHealth, #640: scheduled probes, K-failure demotion, single-success promotion). Provider behavior beyond the probed models endpoint, cross-runtime reachability divergence, and fleet-wide document freshness remain environmental."
     }
   , { id := boundarySessionRecoveryClientRetrySurfaceId
     , domain := "SessionRecovery"

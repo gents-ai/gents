@@ -76,6 +76,73 @@ impl DefraQueryParams {
     }
 }
 
+/// Alias accepted in `ToolSelection.defra_query_collections` that expands to
+/// [`AGENT_CONFIG_QUERY_COLLECTIONS`]. Lets an operator (or a preset) grant
+/// the configuration read surface without enumerating collection names.
+pub const AGENT_CONFIG_SCOPE_ALIAS: &str = "agent-config";
+
+/// The configuration read surface: every collection an agent needs to explain
+/// its own setup and help diagnose config issues ("how am I configured?",
+/// "why doesn't X fire?", "which peers am I paired with?").
+///
+/// Deliberately excludes conversation content (`AgentRequest`/`AgentResponse`/
+/// `AgentMessage`/…), memory, telemetry (`InferenceCall`), and secret-bearing
+/// collections (`OAuthCredential`) — this is the agent's operating manual,
+/// not its mailbox. `InferenceBackend` rows are included but their key fields
+/// are already redacted by the schema's visible-field projection.
+pub const AGENT_CONFIG_QUERY_COLLECTIONS: &[&str] = &[
+    // Identity + behavior/tool configuration.
+    "AgentPrincipal",
+    "AgentBehavior",
+    "ToolSelection",
+    "Skill",
+    // Inference configuration (api_key fields are redacted at the schema
+    // projection; the raw column never reaches the model).
+    "InferenceBackend",
+    "InferenceProfile",
+    // Tool services + their health, for "why is my MCP tool failing?".
+    "ToolServiceRegistry",
+    "ToolServiceHealthState",
+    // Automation configuration.
+    "Task",
+    "Schedule",
+    "EventTrigger",
+    // Runtime reconcile state — the diagnosis anchor (generation, phase).
+    "AgentRuntime",
+    // Operator-visible P2P control plane, for pairing diagnosis. Addresses
+    // here are shareable multiaddrs by design; no key material.
+    "AgentNetwork",
+    "NetworkMembership",
+    "PeerEndpoint",
+    "PeerRegistry",
+    "PeerPairingDesired",
+    "PeerPairingApplied",
+    "DataPlanePairingDesired",
+];
+
+/// Expand scope aliases in a raw `defra_query_collections` list: each
+/// [`AGENT_CONFIG_SCOPE_ALIAS`] entry becomes the full
+/// [`AGENT_CONFIG_QUERY_COLLECTIONS`] set; literal collection names pass
+/// through unchanged. Callers dedupe via their scope-set types.
+pub fn expand_collection_scope_aliases<'a>(
+    collections: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    let mut expanded = Vec::new();
+    for entry in collections {
+        let entry = entry.trim();
+        if entry == AGENT_CONFIG_SCOPE_ALIAS {
+            expanded.extend(
+                AGENT_CONFIG_QUERY_COLLECTIONS
+                    .iter()
+                    .map(|collection| collection.to_string()),
+            );
+        } else if !entry.is_empty() {
+            expanded.push(entry.to_string());
+        }
+    }
+    expanded
+}
+
 /// Which collections a query surface is permitted to read.
 ///
 /// An explicit tristate so the deny-all case cannot be confused with allow-all
@@ -251,6 +318,44 @@ mod tests {
             fields: fields.iter().map(|f| f.to_string()).collect(),
             limit: None,
         }
+    }
+
+    #[test]
+    fn agent_config_alias_expands_to_the_preset() {
+        let expanded = expand_collection_scope_aliases(["agent-config"]);
+        assert_eq!(
+            expanded,
+            AGENT_CONFIG_QUERY_COLLECTIONS
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+        );
+        // The preset is config-only: no conversation content, no secrets.
+        for excluded in [
+            "AgentRequest",
+            "AgentResponse",
+            "AgentMessage",
+            "OAuthCredential",
+        ] {
+            assert!(!expanded.contains(&excluded.to_string()), "{excluded}");
+        }
+    }
+
+    #[test]
+    fn literal_collections_pass_through_alias_expansion() {
+        let expanded =
+            expand_collection_scope_aliases(["AgentRequest", " agent-config ", "", "Custom"]);
+        assert!(expanded.contains(&"AgentRequest".to_string()));
+        assert!(expanded.contains(&"Custom".to_string()));
+        assert!(
+            expanded.contains(&"AgentBehavior".to_string()),
+            "alias expanded"
+        );
+        assert!(!expanded.contains(&String::new()), "empties dropped");
+        assert!(
+            !expanded.contains(&"agent-config".to_string()),
+            "the alias itself never survives as a literal"
+        );
     }
 
     #[test]

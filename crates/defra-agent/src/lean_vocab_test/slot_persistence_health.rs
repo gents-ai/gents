@@ -126,6 +126,29 @@ pub(crate) struct LeanToolRetryCase {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct LeanCompletionRetryCase {
+    pub(crate) name: String,
+    pub(crate) domain: String,
+    pub(crate) action: String,
+    pub(crate) rust_surface: String,
+    pub(crate) failure_class: Option<String>,
+    pub(crate) selected_wake: Option<usize>,
+    pub(crate) legal: bool,
+    pub(crate) pre_phase: String,
+    pub(crate) expected_phase: Option<String>,
+    pub(crate) intermediate_phase: Option<String>,
+    pub(crate) expected_transport_used: Option<usize>,
+    pub(crate) expected_resample_used: Option<usize>,
+    pub(crate) expected_repair_used: Option<bool>,
+    pub(crate) expected_last_parse_error: Option<String>,
+    pub(crate) expected_turn_index: Option<usize>,
+    pub(crate) intermediate_turn_index: Option<usize>,
+    pub(crate) expected_effects: Option<usize>,
+    pub(crate) expected_rendered: Option<usize>,
+    pub(crate) intermediate_rendered: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct LeanMcpHealthCase {
     pub(crate) name: String,
     pub(crate) start_state: String,
@@ -135,4 +158,22 @@ pub(crate) struct LeanMcpHealthCase {
     pub(crate) next_state: Option<String>,
     pub(crate) next_count: Option<usize>,
     pub(crate) rust_projection: Option<String>,
+}
+
+/// Generated witness for `Proofs.BackendHealth.step` (#640): the scheduled
+/// inference-backend prober's per-runtime hysteresis machine. Unlike
+/// `LeanMcpHealthCase` the machine is total (no removal), so `next_state` /
+/// `next_count` are non-optional, and each row carries the `blocks_routing`
+/// projection of the next state (the routing veto the admission merge
+/// consumes).
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendHealthCase {
+    pub(crate) name: String,
+    pub(crate) start_state: String,
+    pub(crate) start_count: usize,
+    pub(crate) event: String,
+    pub(crate) threshold_k: usize,
+    pub(crate) next_state: String,
+    pub(crate) next_count: usize,
+    pub(crate) blocks_routing: bool,
 }

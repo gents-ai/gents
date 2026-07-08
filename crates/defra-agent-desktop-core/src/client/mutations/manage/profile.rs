@@ -3,8 +3,9 @@ use defra_agent_protocol::row::InferenceProfileRow;
 use defra_node::EmbeddedNode;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, graphql_optional_float_field,
-    graphql_optional_int_field, graphql_string_field, join_fields, normalize_required,
+    escape_graphql_string, execute_mutation, graphql_optional_bool_field,
+    graphql_optional_float_field, graphql_optional_int_field, graphql_optional_int_list_field,
+    graphql_string_field, join_fields, normalize_required,
 };
 
 pub async fn upsert_inference_profile(
@@ -50,6 +51,26 @@ pub async fn upsert_inference_profile(
             "deadline_duration_secs",
             row.deadline_duration_secs,
         )),
+        Some(graphql_optional_int_field(
+            "retry_max_transport",
+            row.retry_max_transport,
+        )),
+        Some(graphql_optional_int_list_field(
+            "retry_backoff_ms",
+            row.retry_backoff_ms.as_deref(),
+        )),
+        Some(graphql_optional_int_field(
+            "retry_max_resample",
+            row.retry_max_resample,
+        )),
+        Some(graphql_optional_bool_field(
+            "retry_allow_repair",
+            row.retry_allow_repair,
+        )),
+        Some(graphql_optional_int_field(
+            "retry_interactive_max",
+            row.retry_interactive_max,
+        )),
     ];
     let update_fields = [
         Some(graphql_string_field(
@@ -77,6 +98,26 @@ pub async fn upsert_inference_profile(
         Some(graphql_optional_int_field(
             "deadline_duration_secs",
             row.deadline_duration_secs,
+        )),
+        Some(graphql_optional_int_field(
+            "retry_max_transport",
+            row.retry_max_transport,
+        )),
+        Some(graphql_optional_int_list_field(
+            "retry_backoff_ms",
+            row.retry_backoff_ms.as_deref(),
+        )),
+        Some(graphql_optional_int_field(
+            "retry_max_resample",
+            row.retry_max_resample,
+        )),
+        Some(graphql_optional_bool_field(
+            "retry_allow_repair",
+            row.retry_allow_repair,
+        )),
+        Some(graphql_optional_int_field(
+            "retry_interactive_max",
+            row.retry_interactive_max,
         )),
     ];
 

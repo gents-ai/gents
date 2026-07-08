@@ -113,6 +113,7 @@ fn backend_admission_config(
         max_queue_depth,
         enabled: true,
         probe_status: crate::backend_registry::HEALTHY_PROBE_STATUS.to_string(),
+        measured_unhealthy: false,
         config_fingerprint: format!("{backend_id}:{max_concurrent}:{max_queue_depth}"),
     }
 }
@@ -1005,6 +1006,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
             crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
+        completion_retry: crate::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: crate::config::SamplingConfig::default(),
     });
     let updated_behavior = Arc::new(AgentBehavior {
@@ -1053,6 +1055,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
             crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
+        completion_retry: crate::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: crate::config::SamplingConfig::default(),
     });
 

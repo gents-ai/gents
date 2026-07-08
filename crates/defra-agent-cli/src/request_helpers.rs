@@ -1,4 +1,5 @@
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::path::Path;
 use std::time::Duration;
@@ -53,6 +54,35 @@ pub(crate) fn response_query(request_id: &str) -> String {
                 error_message
                 token_count
                 progress_seq
+                reasoning_progress_seq
+                materialized_message_sequence
+                materialized_at
+                completed_at
+                interrupted_at
+            }}
+        }}"#,
+        request_id = escape_graphql_string(request_id),
+    )
+}
+
+fn response_wait_progress_query(request_id: &str) -> String {
+    format!(
+        r#"{{
+            AgentResponse(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                order: {{ created_at: DESC }},
+                limit: 1
+            ) {{
+                _docID
+                request_id
+                session_id
+                status
+                content
+                reasoning
+                error_message
+                token_count
+                progress_seq
+                reasoning_progress_seq
                 materialized_message_sequence
                 materialized_at
                 completed_at
@@ -380,6 +410,77 @@ fn metadata_with_selected_skill_ids(
 /// completed live-tail responses, `content`/`reasoning` are hydrated from the
 /// materialized `AgentMessage` in the returned JSON only; the persisted
 /// `AgentResponse` row remains the live-tail surface.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WaitProgressMarker {
+    request_lifecycle_state: Option<String>,
+    request_failure_len: Option<usize>,
+    request_interrupt_requested_at: Option<String>,
+    request_valid_until: Option<String>,
+    response_doc_id: Option<String>,
+    response_status: Option<String>,
+    response_content_len: Option<usize>,
+    response_reasoning_fingerprint: Option<(usize, u64)>,
+    response_error_len: Option<usize>,
+    response_token_count: Option<String>,
+    response_progress_seq: Option<String>,
+    response_reasoning_progress_seq: Option<String>,
+    response_materialized_message_sequence: Option<String>,
+    response_materialized_at: Option<String>,
+    response_completed_at: Option<String>,
+    response_interrupted_at: Option<String>,
+}
+
+fn wait_progress_marker(
+    request_row: Option<&serde_json::Value>,
+    response_row: Option<&serde_json::Value>,
+) -> WaitProgressMarker {
+    WaitProgressMarker {
+        request_lifecycle_state: scalar_marker(request_row, "lifecycle_state"),
+        request_failure_len: string_len_marker(request_row, "failure_reason"),
+        request_interrupt_requested_at: scalar_marker(request_row, "interrupt_requested_at"),
+        request_valid_until: scalar_marker(request_row, "valid_until"),
+        response_doc_id: scalar_marker(response_row, "_docID"),
+        response_status: scalar_marker(response_row, "status"),
+        response_content_len: string_len_marker(response_row, "content"),
+        response_reasoning_fingerprint: string_fingerprint_marker(response_row, "reasoning"),
+        response_error_len: string_len_marker(response_row, "error_message"),
+        response_token_count: scalar_marker(response_row, "token_count"),
+        response_progress_seq: scalar_marker(response_row, "progress_seq"),
+        response_reasoning_progress_seq: scalar_marker(response_row, "reasoning_progress_seq"),
+        response_materialized_message_sequence: scalar_marker(
+            response_row,
+            "materialized_message_sequence",
+        ),
+        response_materialized_at: scalar_marker(response_row, "materialized_at"),
+        response_completed_at: scalar_marker(response_row, "completed_at"),
+        response_interrupted_at: scalar_marker(response_row, "interrupted_at"),
+    }
+}
+
+fn scalar_marker(row: Option<&serde_json::Value>, field: &str) -> Option<String> {
+    let value = row?.get(field)?;
+    if value.is_null() {
+        return None;
+    }
+    value
+        .as_str()
+        .map(ToOwned::to_owned)
+        .or_else(|| value.as_i64().map(|value| value.to_string()))
+        .or_else(|| value.as_u64().map(|value| value.to_string()))
+        .or_else(|| value.as_bool().map(|value| value.to_string()))
+}
+
+fn string_len_marker(row: Option<&serde_json::Value>, field: &str) -> Option<usize> {
+    row?.get(field)?.as_str().map(str::len)
+}
+
+fn string_fingerprint_marker(row: Option<&serde_json::Value>, field: &str) -> Option<(usize, u64)> {
+    let value = row?.get(field)?.as_str()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    Some((value.len(), hasher.finish()))
+}
+
 pub(crate) async fn wait_for_terminal_response(
     graphql: &str,
     request_id: &str,
@@ -388,7 +489,7 @@ pub(crate) async fn wait_for_terminal_response(
 ) -> Result<serde_json::Value> {
     let idle_timeout = Duration::from_secs(timeout_secs);
     let mut last_progress_at = tokio::time::Instant::now();
-    let mut last_progress_signature: Option<String> = None;
+    let mut last_progress_marker: Option<WaitProgressMarker> = None;
 
     loop {
         // Fetch request + response in sequence (cheap on the embedded node;
@@ -404,7 +505,7 @@ pub(crate) async fn wait_for_terminal_response(
                 .cloned()
         };
         let response_row = {
-            let query = response_query(request_id);
+            let query = response_wait_progress_query(request_id);
             let response = post_graphql(graphql, &query).await?;
             response
                 .pointer("/data/AgentResponse")
@@ -413,16 +514,9 @@ pub(crate) async fn wait_for_terminal_response(
                 .cloned()
         };
 
-        // Track "something observable changed" for the idle-timeout budget.
-        // Combine both rows so mutations on just the request (e.g. interrupt
-        // latch, transition to dead) count as progress.
-        let signature = serde_json::to_string(&serde_json::json!({
-            "request": request_row,
-            "response": response_row,
-        }))
-        .context("serializing AgentRequest + AgentResponse progress rows for timeout tracking")?;
-        if last_progress_signature.as_deref() != Some(signature.as_str()) {
-            last_progress_signature = Some(signature);
+        let marker = wait_progress_marker(request_row.as_ref(), response_row.as_ref());
+        if last_progress_marker.as_ref() != Some(&marker) {
+            last_progress_marker = Some(marker);
             last_progress_at = tokio::time::Instant::now();
         }
 
@@ -446,6 +540,16 @@ pub(crate) async fn wait_for_terminal_response(
         let terminal_by_request = is_terminal_lifecycle_state(lifecycle_state);
         let terminal_by_response = matches!(response_status, "complete" | "completed" | "error");
         if terminal_by_request || terminal_by_response {
+            let response_row = if response_row.is_some() {
+                let response = post_graphql(graphql, &response_query(request_id)).await?;
+                response
+                    .pointer("/data/AgentResponse")
+                    .and_then(|v| v.as_array())
+                    .and_then(|rows| rows.first())
+                    .cloned()
+            } else {
+                None
+            };
             // Build the return value: prefer the real response row when present
             // (interrupted / streaming-with-partial-content / complete / error).
             // If no row ever materialized (dead/Stale pre-claim), synthesize a

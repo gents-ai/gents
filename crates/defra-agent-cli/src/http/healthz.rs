@@ -137,6 +137,7 @@ mod tests {
             agent_did: "did:defra-agent:test".to_string(),
             started_at: "2026-05-13T12:00:00Z".to_string(),
             started_instant: Instant::now(),
+            backend_health: None,
         }
     }
 

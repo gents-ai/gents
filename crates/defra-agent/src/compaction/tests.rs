@@ -486,6 +486,119 @@ impl CompletionModel for MockSummaryModel {
     }
 }
 
+/// Counts provider calls and always fails transiently — to prove compaction
+/// does not retry. `Clone` shares the counter (the loop clones the model).
+#[derive(Clone)]
+struct CountingFailModel {
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl CountingFailModel {
+    fn new() -> Self {
+        Self {
+            calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+
+    fn calls(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+        self.calls.clone()
+    }
+}
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for CountingFailModel {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+        Self::new()
+    }
+
+    async fn completion(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(CompletionError::ProviderError(
+            "transient compaction failure".to_string(),
+        ))
+    }
+
+    async fn stream(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(CompletionError::ProviderError(
+            "transient compaction failure".to_string(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn compaction_fails_fast_without_retrying_on_transient_error() {
+    // #648: compaction is an internal sub-completion, not a user execution
+    // origin. A transient provider failure must fail fast, NOT inherit the
+    // scheduled retry ladder (5s/30s/120s, deadline-less) that would block
+    // inline compaction for minutes. `DefraCompactor::new` forces `no_retry`
+    // even when handed a `scheduled_default` config, so exactly one provider
+    // call is made and `compact` returns promptly with the error.
+    let model = CountingFailModel::new();
+    let calls = model.calls();
+    let config = crate::agent::loop_stream::LoopConfig {
+        preamble: None,
+        context_message: None,
+        temperature: None,
+        max_tokens: None,
+        additional_params: None,
+        tool_choice: None,
+        on_rendered_request: None,
+        retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
+        deadline: None,
+        max_turns: 0,
+    };
+    let compactor = DefraCompactor::new(std::sync::Arc::new(model), config);
+
+    let messages: Vec<Message> = (0..12)
+        .flat_map(|turn| {
+            [
+                text_msg("user", &"x".repeat(800)),
+                text_msg("assistant", &format!("response {turn} {}", "y".repeat(400))),
+            ]
+        })
+        .collect();
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        compactor.compact(
+            messages,
+            500,
+            &CompactionOptions {
+                threshold: 0.50,
+                keep_recent_tokens: 50,
+                strategy: CompactionStrategy::Summarize,
+                ..Default::default()
+            },
+        ),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "compaction must fail fast, not run the scheduled retry ladder (#648)"
+    );
+    assert!(
+        result.unwrap().is_err(),
+        "the transient provider error should surface as a compaction error"
+    );
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "compaction must not retry: exactly one provider call"
+    );
+}
+
 #[test]
 fn strip_preserves_text_messages() {
     let messages = vec![text_msg("user", "hello"), text_msg("assistant", "hi there")];
@@ -593,6 +706,8 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         additional_params: None,
         tool_choice: None,
         on_rendered_request: None,
+        retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
+        deadline: None,
         max_turns: 0,
     };
     let compactor = DefraCompactor::new(std::sync::Arc::new(model), config);

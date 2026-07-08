@@ -431,6 +431,13 @@ pub(crate) struct InitArgs {
     )]
     pub(crate) disable_defra_query: bool,
     #[arg(
+        long,
+        default_value_t = false,
+        conflicts_with = "disable_defra_query",
+        help = "Enable the read-only defra_query tool regardless of the tool package (pair with --defra-query-collection to scope it, e.g. the \"agent-config\" preset)"
+    )]
+    pub(crate) enable_defra_query: bool,
+    #[arg(
         long = "defra-query-collection",
         help = "Restrict the defra_query tool to these collections when a package enables it (repeatable); omit for all collections"
     )]
@@ -1655,6 +1662,16 @@ pub(crate) struct InferenceProfileUpsertArgs {
     pub(crate) stream_liveness_timeout_secs: Option<i64>,
     #[arg(long)]
     pub(crate) deadline_duration_secs: Option<i64>,
+    #[arg(long)]
+    pub(crate) retry_max_transport: Option<i64>,
+    #[arg(long, value_delimiter = ',')]
+    pub(crate) retry_backoff_ms: Option<Vec<i64>>,
+    #[arg(long)]
+    pub(crate) retry_max_resample: Option<i64>,
+    #[arg(long)]
+    pub(crate) retry_allow_repair: Option<bool>,
+    #[arg(long)]
+    pub(crate) retry_interactive_max: Option<i64>,
 }
 
 #[derive(clap::Args)]

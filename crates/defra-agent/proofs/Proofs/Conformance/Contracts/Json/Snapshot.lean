@@ -9,6 +9,7 @@ import Proofs.Conformance.Contracts.Json.BackgroundWork
 import Proofs.Conformance.Contracts.Json.ComposedInvariants
 import Proofs.Conformance.Contracts.Json.CodexShim
 import Proofs.Conformance.Contracts.Json.Workflow
+import Proofs.CompletionRetry.Contracts
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.ClientShell.Contracts
 import Proofs.ApplyReconcile.ContractCases
@@ -83,6 +84,8 @@ def snapshotJson : String :=
       ++ jsonArray (ToolExecution.preflightCases.map toolPreflightCaseJson) ++ ","
     ++ "\"tool_retry_cases\":"
       ++ jsonArray (ToolExecution.retryCases.map toolRetryCaseJson) ++ ","
+    ++ "\"completion_retry_cases\":"
+      ++ CompletionRetry.Contracts.casesJson ++ ","
     ++ "\"boundaries\":"
       ++ boundariesJson ++ ","
     ++ "\"deviations\":"
@@ -145,6 +148,9 @@ def snapshotJson : String :=
     ++ "\"mcp_health_cases\":"
       ++ jsonArray
         (Proofs.MCPHealth.transitionCases.map mcpHealthCaseJson) ++ ","
+    ++ "\"backend_health_cases\":"
+      ++ jsonArray
+        (Proofs.BackendHealth.transitionCases.map backendHealthCaseJson) ++ ","
     ++ "\"follow_up_hooks\":"
       ++ followUpHooksJson ++ ","
     ++ "\"event_delivery_transition_case_count\":"

@@ -647,6 +647,22 @@ pub fn optional_bool_field(name: &str, value: Option<bool>) -> Option<String> {
     value.map(|value| format!("{name}: {}", graphql_bool_literal(value)))
 }
 
+pub fn optional_i64_list_field(name: &str, value: Option<&[i64]>) -> Option<String> {
+    let values = value?;
+    if values.is_empty() {
+        Some(format!("{name}: null"))
+    } else {
+        Some(format!(
+            "{name}: [{}]",
+            values
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
+}
+
 pub fn optional_string_field(name: &str, value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)

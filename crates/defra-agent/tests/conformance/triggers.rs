@@ -394,18 +394,23 @@ async fn fetch_event_trigger_row(node: &EmbeddedNode, trigger_id: &str) -> Optio
     })
 }
 
-/// Mirrors `ProductionMaterializer::has_active_runtime_request_for_trigger`.
+/// Mirrors `ProductionMaterializer::has_active_runtime_request_for_trigger`
+/// (the #605 shape: DID-scoped; expiry handling lives in the scheduling
+/// conformance mirror — callers here only assert same-agent gating).
 async fn has_active_runtime_request_for_trigger(
     node: &EmbeddedNode,
+    agent_did: &str,
     trigger_id: &str,
     trigger_kind: &str,
 ) -> bool {
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_trigger_id = escape_graphql_string(trigger_id);
     let escaped_trigger_kind = escape_graphql_string(trigger_kind);
     let query = format!(
         r#"query {{
             AgentRequest(
                 filter: {{
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
                     caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }},
                     caused_by_trigger_kind: {{ _eq: "{escaped_trigger_kind}" }},
                     lifecycle_state: {{ _in: ["pending", "claimed", "processing"] }}
@@ -431,15 +436,18 @@ async fn has_active_runtime_request_for_trigger(
 /// Mirrors `ProductionMaterializer::supersede_active_runtime_requests_for_trigger`.
 async fn supersede_active_runtime_requests_for_trigger(
     node: &EmbeddedNode,
+    agent_did: &str,
     trigger_id: &str,
     trigger_kind: &str,
 ) -> usize {
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_trigger_id = escape_graphql_string(trigger_id);
     let escaped_trigger_kind = escape_graphql_string(trigger_kind);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
                 filter: {{
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
                     caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }},
                     caused_by_trigger_kind: {{ _eq: "{escaped_trigger_kind}" }},
                     lifecycle_state: {{ _in: ["pending", "claimed", "processing"] }}

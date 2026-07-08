@@ -542,6 +542,7 @@ mod tests {
             "subagent-tree-test-agent".to_string(),
             "did:key:z6Mksubagenttree".to_string(),
             None,
+            None,
         );
         tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;

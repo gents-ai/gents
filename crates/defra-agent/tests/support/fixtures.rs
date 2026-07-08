@@ -160,6 +160,8 @@ pub fn test_behavior(
             defra_agent::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(defra_agent::config::DEFAULT_DEADLINE_DURATION_SECS),
+        completion_retry:
+            defra_agent::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: defra_agent::config::SamplingConfig::default(),
     }
 }
@@ -198,6 +200,8 @@ pub fn test_behavior_for_principal(
             defra_agent::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(defra_agent::config::DEFAULT_DEADLINE_DURATION_SECS),
+        completion_retry:
+            defra_agent::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: defra_agent::config::SamplingConfig::default(),
     }
 }

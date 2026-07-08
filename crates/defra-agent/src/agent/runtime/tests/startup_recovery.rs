@@ -48,17 +48,58 @@ async fn wait_for_request_state(
     }
 }
 
+async fn fetch_backend_probe_row(
+    node: &defra_node::EmbeddedNode,
+    backend_id: &str,
+) -> (String, Option<String>) {
+    let escaped_backend_id = escape_graphql_string(backend_id);
+    let query = format!(
+        r#"{{
+            InferenceBackend(filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }}, limit: 1) {{
+                probe_status
+                last_probe
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "InferenceBackend probe row query failed: {:?}",
+        response.errors
+    );
+    let row = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("InferenceBackend"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("InferenceBackend row");
+    let probe_status = row
+        .get("probe_status")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let last_probe = row
+        .get("last_probe")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    (probe_status, last_probe)
+}
+
 #[tokio::test]
 async fn run_agent_starts_when_startup_probe_cannot_validate_model() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-probe-rejects-model"));
     let mock_endpoint = MockModelEndpoint::start("different-model").unwrap();
-    bind_default_behavior_backend(
+    bind_default_behavior_backend_with_capacity_and_probe_status(
         node.as_ref(),
         identity.did(),
         "backend-startup-probe",
         mock_endpoint.endpoint(),
+        1,
+        "unknown",
     )
     .await;
     let observer = Arc::new(RecordingObserver::default());
@@ -83,6 +124,13 @@ async fn run_agent_starts_when_startup_probe_cannot_validate_model() {
     assert_eq!(status.active_generation, 1);
     assert_eq!(status.last_reconcile_result, "startup");
     assert!(status.last_reconcile_error.is_empty());
+    let (probe_status, last_probe) =
+        fetch_backend_probe_row(node.as_ref(), "backend-startup-probe").await;
+    assert_eq!(probe_status, "healthy");
+    assert!(
+        last_probe.is_some(),
+        "startup unknown -> healthy promotion must stamp document last_probe"
+    );
 
     let _ = shutdown_tx.send(true);
     handle

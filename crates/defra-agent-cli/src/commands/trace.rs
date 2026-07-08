@@ -13,8 +13,8 @@ use defra_agent::adapter_projection::{
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::run_timeline::{
     build_run_timeline, RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineConversationRow,
-    TimelineMessageRow, TimelineRequestEvent, TimelineRequestRow, TimelineResponseRow,
-    TimelineSessionRow, TimelineToolCallEvent, TimelineToolCallRow,
+    TimelineInferenceCallRow, TimelineMessageRow, TimelineRequestEvent, TimelineRequestRow,
+    TimelineResponseRow, TimelineSessionRow, TimelineToolCallEvent, TimelineToolCallRow,
 };
 use defra_agent::trace_export::{
     analyze_request_failure, analyze_tool_call, extract_raw_tool_call_json, latency_ms,
@@ -156,6 +156,11 @@ async fn load_run_timeline_rows(
     if session_ids.is_empty() || root_session_id.is_none() {
         responses.extend(load_timeline_responses_for_request(access, &request.request_id).await?);
     }
+    let mut inference_calls = Vec::new();
+    for request_id in timeline_request_ids(&requests) {
+        inference_calls
+            .extend(load_timeline_inference_calls_for_request(access, &request_id).await?);
+    }
 
     let session = match root_session_id.as_deref() {
         Some(session_id) => load_timeline_session(access, session_id).await?,
@@ -173,6 +178,7 @@ async fn load_run_timeline_rows(
         requests,
         messages,
         tool_calls,
+        inference_calls,
         responses,
     })
 }
@@ -228,6 +234,7 @@ const PROJECTION_ACP_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentMessage",
     "AgentToolCall",
     "AgentResponse",
+    "InferenceCall",
     "AgentSession",
     "AgentConversation",
 ];
@@ -549,6 +556,18 @@ async fn apply_projection_acp_read_filter(
         }
     }
 
+    let mut filtered_inference_calls = Vec::new();
+    for call in rows.inference_calls {
+        let label = format!("{}:{}", call.request_id, call.call_seq);
+        let doc_id = required_doc_id("InferenceCall", &label, &call.doc_id)?;
+        if decider
+            .read_allowed(scope.resource_name("InferenceCall"), doc_id)
+            .await?
+        {
+            filtered_inference_calls.push(call);
+        }
+    }
+
     let session = match rows.session {
         Some(session) => {
             let doc_id =
@@ -590,6 +609,7 @@ async fn apply_projection_acp_read_filter(
         requests: filtered_requests,
         messages: filtered_messages,
         tool_calls: filtered_tool_calls,
+        inference_calls: filtered_inference_calls,
         responses: filtered_responses,
     })
 }
@@ -788,6 +808,7 @@ fn should_keep_scoped_timeline_event(
                         allowed_request_ids.contains(parent_request_id)
                     })
         }
+        RunTimelineEvent::InferenceCall(call) => allowed_request_ids.contains(&call.request_id),
         RunTimelineEvent::Message(message) => scoped_request_id_allowed(
             message.request_id.as_deref(),
             Some(message.session_id.as_str()),
@@ -1394,6 +1415,35 @@ async fn load_timeline_responses_for_request(
     load_rows(access, "AgentResponse", &query).await
 }
 
+async fn load_timeline_inference_calls_for_request(
+    access: &ConfigAccess,
+    request_id: &str,
+) -> Result<Vec<TimelineInferenceCallRow>> {
+    let query = format!(
+        r#"{{
+            InferenceCall(
+                filter: {{ request_id: {{ _eq: "{}" }} }},
+                order: {{ call_seq: ASC }}
+            ) {{
+                _docID
+                call_id
+                request_id
+                call_seq
+                attempt
+                call_state
+                failure_reason
+                queued_at
+                started_at
+                ended_at
+                backend_id
+                call_kind
+            }}
+        }}"#,
+        escape_graphql_string(request_id)
+    );
+    load_rows(access, "InferenceCall", &query).await
+}
+
 async fn load_timeline_session(
     access: &ConfigAccess,
     session_id: &str,
@@ -1474,6 +1524,18 @@ fn timeline_session_ids(requests: &[TimelineRequestRow]) -> Vec<String> {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn timeline_request_ids(requests: &[TimelineRequestRow]) -> Vec<String> {
+    requests
+        .iter()
+        .filter_map(|request| {
+            let request_id = request.request_id.trim();
+            (!request_id.is_empty()).then_some(request_id.to_string())
         })
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -2301,6 +2363,7 @@ mod tests {
             ("AgentMessage", "doc-message-allowed"),
             ("AgentToolCall", "doc-tool-allowed"),
             ("AgentResponse", "doc-response-allowed"),
+            ("InferenceCall", "doc-inference-allowed"),
             ("AgentConversation", "doc-conversation"),
         ] {
             allowed.insert((resource_name.to_string(), doc_id.to_string()), true);
@@ -2341,6 +2404,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["req-root"]
         );
+        assert_eq!(
+            filtered
+                .inference_calls
+                .iter()
+                .map(|call| call.call_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["inference-allowed"]
+        );
         assert!(
             filtered.session.is_none(),
             "session row should be omitted when ACP denies it"
@@ -2360,6 +2431,7 @@ mod tests {
             ("runtime_message", "doc-message-allowed"),
             ("runtime_tool_call", "doc-tool-allowed"),
             ("runtime_response", "doc-response-allowed"),
+            ("runtime_inference_call", "doc-inference-allowed"),
             ("runtime_conversation", "doc-conversation"),
         ] {
             allowed.insert((resource_name.to_string(), doc_id.to_string()), true);
@@ -2371,6 +2443,10 @@ mod tests {
             ("AgentToolCall".to_string(), "runtime_tool_call".to_string()),
             ("AgentResponse".to_string(), "runtime_response".to_string()),
             (
+                "InferenceCall".to_string(),
+                "runtime_inference_call".to_string(),
+            ),
+            (
                 "AgentConversation".to_string(),
                 "runtime_conversation".to_string(),
             ),
@@ -2381,6 +2457,7 @@ mod tests {
         assert_eq!(filtered.requests.len(), 1);
         assert_eq!(filtered.messages.len(), 1);
         assert_eq!(filtered.tool_calls.len(), 1);
+        assert_eq!(filtered.inference_calls.len(), 1);
         assert_eq!(filtered.responses.len(), 1);
         assert!(filtered.conversation.is_some());
         assert!(filtered.session.is_none());
@@ -2490,6 +2567,29 @@ mod tests {
                     session_id: Some("session-acp".to_string()),
                     status: Some("completed".to_string()),
                     ..TimelineResponseRow::default()
+                },
+            ],
+            inference_calls: vec![
+                TimelineInferenceCallRow {
+                    doc_id: Some("doc-inference-allowed".to_string()),
+                    call_id: "inference-allowed".to_string(),
+                    request_id: "req-root".to_string(),
+                    call_seq: 1,
+                    attempt: 1,
+                    call_state: "failed".to_string(),
+                    failure_reason: Some("sensitive transient".to_string()),
+                    call_kind: "inference".to_string(),
+                    ..TimelineInferenceCallRow::default()
+                },
+                TimelineInferenceCallRow {
+                    doc_id: Some("doc-inference-denied".to_string()),
+                    call_id: "inference-denied".to_string(),
+                    request_id: "req-child".to_string(),
+                    call_seq: 1,
+                    attempt: 1,
+                    call_state: "completed".to_string(),
+                    call_kind: "inference".to_string(),
+                    ..TimelineInferenceCallRow::default()
                 },
             ],
         }

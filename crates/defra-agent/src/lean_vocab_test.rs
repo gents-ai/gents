@@ -51,7 +51,10 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) managed_exec_liveness_cases: Vec<LeanManagedExecLivenessCase>,
     pub(crate) tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
+    #[serde(default)]
+    pub(crate) completion_retry_cases: Vec<LeanCompletionRetryCase>,
     pub(crate) mcp_health_cases: Vec<LeanMcpHealthCase>,
+    pub(crate) backend_health_cases: Vec<LeanBackendHealthCase>,
     pub(crate) boundaries: Vec<LeanBoundary>,
     pub(crate) deviations: Vec<LeanDeviation>,
     pub(crate) command_policy_cases: Vec<LeanCommandPolicyCase>,
@@ -440,6 +443,10 @@ pub(crate) fn lean_tool_retry_cases() -> &'static [LeanToolRetryCase] {
     &lean_contract_snapshot().tool_retry_cases
 }
 
+pub(crate) fn lean_completion_retry_cases() -> &'static [LeanCompletionRetryCase] {
+    &lean_contract_snapshot().completion_retry_cases
+}
+
 pub(crate) fn lean_queue_deadline_cases() -> &'static [LeanQueueDeadlineConformanceCase] {
     &lean_contract_snapshot().queue_deadline_conformance_cases
 }
@@ -642,6 +649,10 @@ pub(crate) fn lean_tool_retry_case(name: &str) -> &'static LeanToolRetryCase {
 
 pub(crate) fn lean_mcp_health_cases() -> &'static [LeanMcpHealthCase] {
     &lean_contract_snapshot().mcp_health_cases
+}
+
+pub(crate) fn lean_backend_health_cases() -> &'static [LeanBackendHealthCase] {
+    &lean_contract_snapshot().backend_health_cases
 }
 
 pub(crate) fn lean_command_policy_cases() -> &'static [LeanCommandPolicyCase] {

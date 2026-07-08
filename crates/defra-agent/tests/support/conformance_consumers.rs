@@ -126,6 +126,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_tool_policy_cases_match_lean_composition",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::completion_retry_lean_witness_cases_hold",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/conformance.rs",
+            module_path: "conformance",
+            function: "completion_retry_lean_witness_cases_hold",
+        },
+        ConformanceConsumer::RustTest {
             id: "cli_mcp_probe::mcp_probe_json_reports_health_snapshot_for_registry_service",
             package: "defra-agent-cli",
             source_path: "crates/defra-agent-cli/tests/cli_mcp_probe.rs",
@@ -152,6 +159,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/defra-agent/src/backend_registry/tests.rs",
             module_path: "backend_registry::tests",
             function: "display_state_matches_every_lean_backend_health_admission_case",
+        },
+        ConformanceConsumer::RustTest {
+            id: "backend_health::tests::generated_backend_health_cases_match_prober_transitions",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/src/backend_health.rs",
+            module_path: "backend_health::tests",
+            function: "generated_backend_health_cases_match_prober_transitions",
+        },
+        ConformanceConsumer::RustTest {
+            id: "http::prometheus::tests::backend_probe_status_metric_reflects_measured_health",
+            package: "defra-agent-cli",
+            source_path: "crates/defra-agent-cli/src/http/prometheus.rs",
+            module_path: "http::prometheus::tests",
+            function: "backend_probe_status_metric_reflects_measured_health",
         },
         ConformanceConsumer::RustTest {
             id: "cli_server::server_exposes_fleet_slot_snapshot_endpoint",

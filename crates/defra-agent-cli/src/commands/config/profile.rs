@@ -4,8 +4,10 @@ use serde_json::json;
 
 use crate::cli::*;
 use crate::extract_mutation_doc_id;
+use crate::optional_bool_field;
 use crate::optional_f64_field;
 use crate::optional_i64_field;
+use crate::optional_i64_list_field;
 use crate::optional_string_field;
 use crate::post_graphql;
 use crate::print_json;
@@ -34,6 +36,11 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
             args.stream_liveness_timeout_secs,
         ),
         optional_i64_field("deadline_duration_secs", args.deadline_duration_secs),
+        optional_i64_field("retry_max_transport", args.retry_max_transport),
+        optional_i64_list_field("retry_backoff_ms", args.retry_backoff_ms.as_deref()),
+        optional_i64_field("retry_max_resample", args.retry_max_resample),
+        optional_bool_field("retry_allow_repair", args.retry_allow_repair),
+        optional_i64_field("retry_interactive_max", args.retry_interactive_max),
     ]
     .into_iter()
     .flatten()
@@ -51,6 +58,11 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
             args.stream_liveness_timeout_secs,
         ),
         optional_i64_field("deadline_duration_secs", args.deadline_duration_secs),
+        optional_i64_field("retry_max_transport", args.retry_max_transport),
+        optional_i64_list_field("retry_backoff_ms", args.retry_backoff_ms.as_deref()),
+        optional_i64_field("retry_max_resample", args.retry_max_resample),
+        optional_bool_field("retry_allow_repair", args.retry_allow_repair),
+        optional_i64_field("retry_interactive_max", args.retry_interactive_max),
     ]
     .into_iter()
     .flatten()
@@ -85,6 +97,11 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
         "stream_batch_ms": args.stream_batch_ms,
         "stream_liveness_timeout_secs": args.stream_liveness_timeout_secs,
         "deadline_duration_secs": args.deadline_duration_secs,
+        "retry_max_transport": args.retry_max_transport,
+        "retry_backoff_ms": args.retry_backoff_ms,
+        "retry_max_resample": args.retry_max_resample,
+        "retry_allow_repair": args.retry_allow_repair,
+        "retry_interactive_max": args.retry_interactive_max,
     });
     print_json(&output)?;
     Ok(())
