@@ -1049,6 +1049,33 @@ pub async fn ensure_consumed_invite_nonce_migrations(node: Arc<EmbeddedNode>) ->
     }
 }
 
+/// Idempotent migration ensuring the `ReciprocalConversationIntent` collection
+/// exists. Conversation dapair invites write this server-side intent so the
+/// reciprocal reconciler can materialize a self-scoped conversation data-plane
+/// edge once the invited member's signed `PeerEndpoint` appears. Fresh databases
+/// already get the collection from `schemas::ALL`; upgraded databases add it
+/// here.
+pub async fn ensure_reciprocal_conversation_intent_migrations(
+    node: Arc<EmbeddedNode>,
+) -> Result<()> {
+    if node
+        .get_collection("ReciprocalConversationIntent")
+        .context("get ReciprocalConversationIntent collection")?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    match node
+        .add_schema(defra_agent_protocol::schemas::RECIPROCAL_CONVERSATION_INTENT)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
+        Err(error) => Err(error).context("add ReciprocalConversationIntent schema"),
+    }
+}
+
 /// Idempotent migration ensuring the `AgentNetwork` control-plane collection
 /// exists (cut-2 network membership, Task 1). A fresh database created from
 /// `schemas::ALL` already has this collection, so the migration is a no-op
@@ -1776,6 +1803,9 @@ pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()
     ensure_consumed_invite_nonce_migrations(node.clone())
         .await
         .context("ensure ConsumedInviteNonce migrations")?;
+    ensure_reciprocal_conversation_intent_migrations(node.clone())
+        .await
+        .context("ensure ReciprocalConversationIntent migrations")?;
     ensure_agent_network_migrations(node.clone())
         .await
         .context("ensure AgentNetwork migrations")?;
@@ -2908,6 +2938,32 @@ mod patch_kind_tests {
         }
     }
 
+    #[tokio::test]
+    async fn reciprocal_conversation_intent_migration_creates_collection_with_all_fields() {
+        let node = test_node().await;
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+        // Idempotent: calling twice must not fail.
+        ensure_reciprocal_conversation_intent_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_reciprocal_conversation_intent_migrations(node.clone())
+            .await
+            .unwrap();
+
+        let collection = node
+            .get_collection("ReciprocalConversationIntent")
+            .unwrap()
+            .expect("ReciprocalConversationIntent collection must exist after migration");
+
+        for field in &["member_did", "template", "created_at", "updated_at"] {
+            assert!(
+                collection_has_field(&collection, field),
+                "ReciprocalConversationIntent must have field '{field}'"
+            );
+        }
+    }
+
     /// Regression for the host-drift bug (Finding #3 / Pattern 3): CLI-local
     /// paths used to hand-enumerate a SUBSET of migrations
     /// (`ensure_tool_call_migrations` + `ensure_subagent_extensions_migrations`)
@@ -2983,6 +3039,12 @@ mod patch_kind_tests {
                 .unwrap()
                 .is_some(),
             "ConsumedInviteNonce ledger must exist after ensure_all_runtime_migrations"
+        );
+        assert!(
+            node.get_collection("ReciprocalConversationIntent")
+                .unwrap()
+                .is_some(),
+            "ReciprocalConversationIntent must exist after ensure_all_runtime_migrations"
         );
     }
 
