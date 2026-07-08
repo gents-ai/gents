@@ -126,6 +126,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_tool_policy_cases_match_lean_composition",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::completion_retry_lean_witness_cases_hold",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/conformance.rs",
+            module_path: "conformance",
+            function: "completion_retry_lean_witness_cases_hold",
+        },
+        ConformanceConsumer::RustTest {
             id: "cli_mcp_probe::mcp_probe_json_reports_health_snapshot_for_registry_service",
             package: "defra-agent-cli",
             source_path: "crates/defra-agent-cli/tests/cli_mcp_probe.rs",

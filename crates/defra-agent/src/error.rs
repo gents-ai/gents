@@ -235,7 +235,7 @@ fn provider_message_has_any_status(message: &str, statuses: &[u16]) -> bool {
 /// every decode variant is covered without depending on backslash escaping in the
 /// wire body. Genuine request-shape 400s (e.g. `duplicate field max_tokens`) lack the
 /// JSONDecodeError signature and stay permanent.
-fn provider_message_is_tool_call_json_parse_failure(message: &str) -> bool {
+pub(crate) fn provider_message_is_tool_call_json_parse_failure(message: &str) -> bool {
     message.contains("BadRequestError")
         && message.contains(" line ")
         && message.contains(" column ")

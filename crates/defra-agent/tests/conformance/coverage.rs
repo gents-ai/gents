@@ -612,6 +612,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     if !snapshot.tool_retry_cases.is_empty() {
         emitted.insert(("tool_cases".to_string(), "ToolExecutionRetry".to_string()));
     }
+    if !snapshot.completion_retry_cases.is_empty() {
+        emitted.insert((
+            "completion_retry_cases".to_string(),
+            "completionRetry".to_string(),
+        ));
+    }
     if !snapshot.command_policy_cases.is_empty() {
         emitted.insert((
             "command_policy_cases".to_string(),
@@ -809,6 +815,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "desktop_client_shell_cases",
         "request_lifecycle_operator_ui_cases",
         "tool_cases",
+        "completion_retry_cases",
         "command_policy_cases",
         "live_overlay_cases",
         "queue_deadline_cases",

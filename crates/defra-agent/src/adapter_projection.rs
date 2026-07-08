@@ -1509,6 +1509,7 @@ fn build_openai_codex_run_trace(
                     timestamp: event.timestamp.clone(),
                 });
             }
+            RunTimelineEvent::InferenceCall(_) => {}
             RunTimelineEvent::Message(event) => {
                 items.push(OpenAiCodexTraceItem::Message {
                     id: format!("{}:message:{}", event.session_id, event.sequence),
@@ -1602,6 +1603,16 @@ fn build_langgraph_state_history(
                 event.parent_request_id.clone(),
                 event.parent_tool_call_id.clone(),
                 event.lifecycle_state.clone().or(event.status.clone()),
+            ),
+            RunTimelineEvent::InferenceCall(event) => (
+                format!("inference_call:{}", event.call_id),
+                "inference_call".to_string(),
+                Some(event.request_id.clone()),
+                None,
+                None,
+                None,
+                None,
+                Some(event.call_state.clone()),
             ),
             RunTimelineEvent::Message(event) => (
                 format!("message:{}:{}", event.session_id, event.sequence),
@@ -1774,6 +1785,7 @@ fn build_multi_agent_task(
                     });
                 }
             }
+            RunTimelineEvent::InferenceCall(_) => {}
             RunTimelineEvent::Message(message) => {
                 messages.push(MultiAgentMessage {
                     id: format!("{}:message:{}", message.session_id, message.sequence),

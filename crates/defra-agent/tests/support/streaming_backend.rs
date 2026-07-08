@@ -53,6 +53,64 @@ impl StreamScript {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct StreamPlan {
+    marker: String,
+    responses: Vec<StreamResponse>,
+}
+
+impl StreamPlan {
+    pub fn new(marker: impl Into<String>, responses: Vec<StreamResponse>) -> Self {
+        Self {
+            marker: marker.into(),
+            responses,
+        }
+    }
+
+    fn repeat_stream(script: StreamScript) -> Self {
+        Self {
+            marker: script.marker.clone(),
+            responses: vec![StreamResponse::Stream(script)],
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum StreamResponse {
+    Stream(StreamScript),
+    HttpStatus { status: u16, body: String },
+}
+
+impl StreamResponse {
+    pub fn completes(
+        marker: impl Into<String>,
+        chunks: impl IntoIterator<Item = &'static str>,
+    ) -> Self {
+        StreamResponse::Stream(StreamScript::completes(marker, chunks))
+    }
+
+    pub fn service_unavailable(message: impl Into<String>) -> Self {
+        let message = message.into();
+        StreamResponse::HttpStatus {
+            status: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            body: json!({
+                "error": {
+                    "message": message,
+                    "type": "server_error"
+                }
+            })
+            .to_string(),
+        }
+    }
+
+    pub fn bad_request(body: impl Into<String>) -> Self {
+        StreamResponse::HttpStatus {
+            status: StatusCode::BAD_REQUEST.as_u16(),
+            body: body.into(),
+        }
+    }
+}
+
 pub struct MockStreamingBackend {
     endpoint: String,
     state: Arc<StreamingState>,
@@ -62,10 +120,17 @@ pub struct MockStreamingBackend {
 
 impl MockStreamingBackend {
     pub fn start(model_name: &str, scripts: Vec<StreamScript>) -> anyhow::Result<Self> {
+        Self::start_with_plans(
+            model_name,
+            scripts.into_iter().map(StreamPlan::repeat_stream).collect(),
+        )
+    }
+
+    pub fn start_with_plans(model_name: &str, plans: Vec<StreamPlan>) -> anyhow::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let state = Arc::new(StreamingState::new(
             model_name.to_string(),
-            scripts,
+            plans,
             stop.clone(),
         ));
         let app = Router::new()
@@ -112,6 +177,10 @@ impl MockStreamingBackend {
         self.state.chunk_count(marker)
     }
 
+    pub fn observed_requests(&self, marker: &str) -> usize {
+        self.state.request_count(marker)
+    }
+
     pub async fn wait_for_chunks(&self, marker: &str, expected: usize) {
         let observed = self
             .state
@@ -138,7 +207,7 @@ impl Drop for MockStreamingBackend {
 
 struct StreamingState {
     model_name: String,
-    scripts: Vec<StreamScript>,
+    plans: Vec<StreamPlan>,
     stop: Arc<AtomicBool>,
     inner: Mutex<StreamingStateInner>,
     notify: Notify,
@@ -147,26 +216,46 @@ struct StreamingState {
 #[derive(Default)]
 struct StreamingStateInner {
     chunk_counts: HashMap<String, usize>,
+    request_counts: HashMap<String, usize>,
     releases: HashSet<String>,
 }
 
 impl StreamingState {
-    fn new(model_name: String, scripts: Vec<StreamScript>, stop: Arc<AtomicBool>) -> Self {
+    fn new(model_name: String, plans: Vec<StreamPlan>, stop: Arc<AtomicBool>) -> Self {
         Self {
             model_name,
-            scripts,
+            plans,
             stop,
             inner: Mutex::new(StreamingStateInner::default()),
             notify: Notify::new(),
         }
     }
 
-    fn find_script(&self, body: &str) -> StreamScript {
-        self.scripts
-            .iter()
-            .find(|script| body.contains(&script.marker))
+    fn next_response(&self, body: &str) -> StreamResponse {
+        let Some(plan) = self.plans.iter().find(|plan| body.contains(&plan.marker)) else {
+            return StreamResponse::Stream(StreamScript::completes(
+                "__default__",
+                ["mock streamed response"],
+            ));
+        };
+
+        let mut inner = self.inner.lock().expect("streaming backend mutex poisoned");
+        let count = inner.request_counts.entry(plan.marker.clone()).or_default();
+        let response_index = *count;
+        *count += 1;
+        drop(inner);
+        self.notify.notify_waiters();
+
+        plan.responses
+            .get(response_index)
+            .or_else(|| plan.responses.last())
             .cloned()
-            .unwrap_or_else(|| StreamScript::completes("__default__", ["mock streamed response"]))
+            .unwrap_or_else(|| {
+                StreamResponse::Stream(StreamScript::completes(
+                    "__default__",
+                    ["mock streamed response"],
+                ))
+            })
     }
 
     fn record_chunk(&self, marker: &str) {
@@ -181,6 +270,16 @@ impl StreamingState {
             .lock()
             .expect("streaming backend mutex poisoned")
             .chunk_counts
+            .get(marker)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    fn request_count(&self, marker: &str) -> usize {
+        self.inner
+            .lock()
+            .expect("streaming backend mutex poisoned")
+            .request_counts
             .get(marker)
             .copied()
             .unwrap_or_default()
@@ -244,8 +343,15 @@ async fn handle_models(State(state): State<Arc<StreamingState>>) -> Response {
 
 async fn handle_chat(State(state): State<Arc<StreamingState>>, body: String) -> Response {
     if request_is_streaming(&body) {
-        let script = state.find_script(&body);
-        return streaming_response(script, state);
+        return match state.next_response(&body) {
+            StreamResponse::Stream(script) => streaming_response(script, state),
+            StreamResponse::HttpStatus { status, body } => (
+                StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                [(header::CONTENT_TYPE, "application/json")],
+                body,
+            )
+                .into_response(),
+        };
     }
 
     // Non-streaming completion (title generation and similar).

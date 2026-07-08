@@ -58,6 +58,11 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         stream_batch_ms: Some(50),
         stream_liveness_timeout_secs: Some(300),
         deadline_duration_secs: Some(300),
+        retry_max_transport: None,
+        retry_backoff_ms: None,
+        retry_max_resample: None,
+        retry_allow_repair: None,
+        retry_interactive_max: None,
     })
     .await?;
 
@@ -79,7 +84,6 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         read_only_command_allowlist: Vec::new(),
         command_allowed_argv_prefixes: Vec::new(),
         command_forbidden_argv_prefixes: Vec::new(),
-        read_only_command_allowlist: Vec::new(),
         command_network_mode: None,
         cli_tool_names: vec!["rg".to_string(), "cargo".to_string()],
         enable_meta_tools: Some(true),

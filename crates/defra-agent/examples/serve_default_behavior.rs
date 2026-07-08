@@ -133,7 +133,6 @@ async fn seed_demo_documents(
             read_only_command_allowlist: None,
             command_allowed_argv_prefixes: Some(Vec::new()),
             command_forbidden_argv_prefixes: Some(Vec::new()),
-            read_only_command_allowlist: None,
             command_network_mode: None,
             cli_tool_names: Some(Vec::new()),
             enable_meta_tools: Some(true),
@@ -168,6 +167,11 @@ async fn seed_demo_documents(
             stream_batch_ms: Some(1_000),
             stream_liveness_timeout_secs: None,
             deadline_duration_secs: Some(deadline_secs as i64),
+            retry_max_transport: None,
+            retry_backoff_ms: None,
+            retry_max_resample: None,
+            retry_allow_repair: None,
+            retry_interactive_max: None,
         },
     )
     .await?;

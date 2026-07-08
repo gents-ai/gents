@@ -14,6 +14,7 @@ use super::{
     ProcessLifecycleObserver,
 };
 use crate::admission::BackendAdmissionConfig;
+use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::backend_provider::BackendProviderKind;
 use crate::backend_registry::lookup_backend;
 use crate::compaction::CompactionStrategy;
@@ -605,6 +606,7 @@ impl PendingAgentBehavior {
             stream_batch_ms: self.stream_batch_ms,
             stream_liveness_timeout: self.stream_liveness_timeout,
             deadline_duration: self.deadline_duration,
+            completion_retry: CompletionRetryProfileFields::default(),
             sampling: self.sampling,
             skills: self.skills,
         })

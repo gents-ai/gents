@@ -51,6 +51,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) managed_exec_liveness_cases: Vec<LeanManagedExecLivenessCase>,
     pub(crate) tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
+    #[serde(default)]
+    pub(crate) completion_retry_cases: Vec<LeanCompletionRetryCase>,
     pub(crate) mcp_health_cases: Vec<LeanMcpHealthCase>,
     pub(crate) backend_health_cases: Vec<LeanBackendHealthCase>,
     pub(crate) boundaries: Vec<LeanBoundary>,
@@ -439,6 +441,10 @@ pub(crate) fn lean_tool_preflight_case(name: &str) -> &'static LeanToolPreflight
 
 pub(crate) fn lean_tool_retry_cases() -> &'static [LeanToolRetryCase] {
     &lean_contract_snapshot().tool_retry_cases
+}
+
+pub(crate) fn lean_completion_retry_cases() -> &'static [LeanCompletionRetryCase] {
+    &lean_contract_snapshot().completion_retry_cases
 }
 
 pub(crate) fn lean_queue_deadline_cases() -> &'static [LeanQueueDeadlineConformanceCase] {

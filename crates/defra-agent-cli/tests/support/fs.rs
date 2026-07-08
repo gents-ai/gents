@@ -222,6 +222,11 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
                 "stream_batch_ms",
                 "stream_liveness_timeout_secs",
                 "deadline_duration_secs",
+                "retry_max_transport",
+                "retry_backoff_ms",
+                "retry_max_resample",
+                "retry_allow_repair",
+                "retry_interactive_max",
             ],
         )?;
     }
@@ -374,6 +379,11 @@ pub async fn assert_runtime_init_state(
                 stream_batch_ms
                 stream_liveness_timeout_secs
                 deadline_duration_secs
+                retry_max_transport
+                retry_backoff_ms
+                retry_max_resample
+                retry_allow_repair
+                retry_interactive_max
             }}
             InferenceBackend(filter: {{ backend_id: {{ _eq: "{}" }} }}, limit: 1) {{
                 backend_id

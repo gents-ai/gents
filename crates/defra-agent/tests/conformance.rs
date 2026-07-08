@@ -84,6 +84,8 @@ mod client_runtime;
 mod codex_shim;
 #[path = "conformance/command_policy.rs"]
 mod command_policy;
+#[path = "conformance/completion_retry.rs"]
+mod completion_retry;
 #[path = "conformance/composed_invariants.rs"]
 mod composed_invariants;
 #[path = "conformance/coverage.rs"]
@@ -227,6 +229,11 @@ fn generated_tool_execution_cases_cover_preflight_and_retry_contracts() {
 #[test]
 fn generated_tool_policy_cases_match_lean_composition() {
     tool_policy::generated_tool_policy_cases_match_lean_composition();
+}
+
+#[test]
+fn completion_retry_lean_witness_cases_hold() {
+    completion_retry::completion_retry_lean_witness_cases_hold();
 }
 
 #[test]

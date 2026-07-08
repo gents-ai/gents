@@ -100,6 +100,21 @@ pub(super) fn graphql_string_list_field(name: &str, values: &[String]) -> String
     format!("{name}: [{values}]")
 }
 
+pub(super) fn graphql_optional_int_list_field(name: &str, values: Option<&[i64]>) -> String {
+    let Some(values) = values else {
+        return format!("{name}: null");
+    };
+    if values.is_empty() {
+        return format!("{name}: null");
+    }
+    let values = values
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{name}: [{values}]")
+}
+
 pub(super) fn graphql_optional_bool_field(name: &str, value: Option<bool>) -> String {
     match value {
         Some(value) => format!("{name}: {value}"),

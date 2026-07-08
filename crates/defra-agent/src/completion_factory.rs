@@ -1,11 +1,14 @@
 use crate::llm::ToolChoice;
+use chrono::{DateTime, Utc};
 use rig::client::CompletionClient;
 use rig::completion::CompletionModel;
 
 use crate::admission::{AdmissionRegistry, AdmittedCompletionClient};
+use crate::agent::completion_retry::CompletionRetryPolicy;
 use crate::agent::loop_stream::LoopConfig;
 use crate::backend_provider::BackendProviderKind;
 use crate::config::{AgentBehavior, SamplingConfig};
+use crate::lifecycle::ExecutionOrigin;
 use crate::watcher::AgentRequest;
 
 fn effective_max_tokens(max_output_tokens: usize, sampling_max_tokens: Option<u64>) -> Option<u64> {
@@ -56,6 +59,8 @@ pub(crate) fn loop_config(
         ),
         tool_choice: (tool_count > 0).then_some(ToolChoice::Auto),
         on_rendered_request: None,
+        retry_policy: CompletionRetryPolicy::scheduled_default(),
+        deadline: None,
         max_turns: behavior.max_turns,
     }
 }
@@ -82,7 +87,23 @@ pub(crate) fn loop_config_for_request(
         config.additional_params =
             merge_optional_params(config.additional_params.take(), Some(additional_params));
     }
+    let origin = completion_retry_origin(request.execution_origin.as_deref());
+    config.retry_policy = CompletionRetryPolicy::resolve(&behavior.completion_retry, origin);
+    config.deadline = parse_request_deadline(request.deadline.as_deref());
     config
+}
+
+fn completion_retry_origin(value: Option<&str>) -> ExecutionOrigin {
+    match value {
+        Some("interactive") => ExecutionOrigin::Interactive,
+        _ => ExecutionOrigin::Scheduled,
+    }
+}
+
+fn parse_request_deadline(value: Option<&str>) -> Option<DateTime<Utc>> {
+    value
+        .and_then(|value| DateTime::parse_from_rfc3339(value.trim()).ok())
+        .map(|value| value.with_timezone(&Utc))
 }
 
 fn sampling_for_request(defaults: SamplingConfig, request: &AgentRequest) -> SamplingConfig {

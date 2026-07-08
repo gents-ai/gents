@@ -12,7 +12,6 @@ use crate::backend_provider::BackendProviderKind;
 use crate::completion_factory::build_admitted_model;
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
 use crate::prompt::LayeredPromptBuilder;
-use crate::retry::RetryPolicy;
 use crate::tool_surface::{self, ToolRuntimeContext, ToolSurface};
 use crate::watcher::AgentRequest;
 
@@ -21,7 +20,6 @@ pub(super) struct RuntimeContext {
     pub(super) node: Arc<defra_node::EmbeddedNode>,
     pub(super) tool_runtime: ToolRuntimeContext,
     pub(super) admission_registry: AdmissionRegistry,
-    pub(super) retry_policy: RetryPolicy,
     pub(super) hook_failure_policy: crate::hook::FailurePolicy,
     pub(super) rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
@@ -262,7 +260,6 @@ impl RuntimeContext {
             preamble,
             loop_tools,
             prompt_builder,
-            self.retry_policy.clone(),
             self.hook_failure_policy,
             self.rendered_request_capture_factory.clone(),
             background_tool_registry,

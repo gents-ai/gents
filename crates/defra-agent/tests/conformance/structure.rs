@@ -42,6 +42,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("CodexShim", Module("conformance/codex_shim.rs")),
         ("CommandPolicy", Module("conformance/command_policy.rs")),
         ("Compaction", Module("conformance/streaming_compaction.rs")),
+        ("CompletionRetry", Module("conformance/completion_retry.rs")),
         (
             "CancelPropagation",
             Module("conformance/cancel_propagation.rs"),

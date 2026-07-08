@@ -783,6 +783,11 @@ fn standard_inference_profile(profile_id: &str) -> InferenceProfile {
         stream_batch_ms: Some(DEFAULT_STREAM_BATCH_MS as i64),
         stream_liveness_timeout_secs: Some(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
         deadline_duration_secs: Some(DEFAULT_DEADLINE_DURATION_SECS as i64),
+        retry_max_transport: None,
+        retry_backoff_ms: None,
+        retry_max_resample: None,
+        retry_allow_repair: None,
+        retry_interactive_max: None,
     }
 }
 
