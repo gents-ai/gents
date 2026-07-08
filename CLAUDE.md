@@ -41,5 +41,6 @@ The few things you can't discover until they bite:
 - **Always `graphql::escape_graphql_string()`** for anything interpolated into a GraphQL string. Queries are built inline by convention.
 - **Never emit `[]` in a DefraDB mutation** — an empty list literal types as `JsonArray` and corrupts nillable array columns. Emit `null`.
 - **Gate with the full package suite** (`cargo test -p defra-agent`), not `--lib` — integration tests are separate compile units and `--lib` will happily pass while they don't build.
+- **Compile the whole workspace before pushing** (`cargo check --workspace --all-targets`) — the test gate above still skips examples, the desktop crates, and many test targets, so a new required struct field breaks their construction sites silently until CI (or the next unrelated PR). CI enforces this in `rust-and-cli`; run it locally first.
 - **Flaky tests are defects.** The formal-verification investment exists to eliminate that class; capture, file, and fix — never shrug.
 - `tracing`, never `println`.

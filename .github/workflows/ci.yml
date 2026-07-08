@@ -95,6 +95,15 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
+      # Compile the FULL target surface — examples, every test target, and the
+      # desktop crates — which the test steps below do not cover. A PR that adds
+      # a required field to a widely-constructed struct breaks literal
+      # construction sites in these uncovered targets; this fails fast on them
+      # instead of letting the breakage slip to main and land on the next PR
+      # (#646). It also warms the build cache for the test steps that follow.
+      - name: Compile all targets
+        run: cargo check --workspace --all-targets
+
       - name: Run PR smoke tests
         if: github.event_name == 'pull_request'
         run: |
