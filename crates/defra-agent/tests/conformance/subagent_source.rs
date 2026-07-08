@@ -213,12 +213,16 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
 /// live cascade, the source's post-create re-check, and recovery all race to
 /// write the latch, so a single post-call snapshot is not a valid observation
 /// (#591). The contract stays exact — the latch must land within the bound.
+///
+/// The bound matches `wait_for_child_request`'s 10s: on a saturated CI runner
+/// the propagation itself is scheduler-starved, and a 5s bound could expire
+/// before any of the racing writers landed the latch (the residual #591 flake).
 async fn wait_for_child_interrupt_latch(
     node: &EmbeddedNode,
     child_request_id: &str,
     failure_message: &str,
 ) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         if fetch_interrupt_requested_at(node, child_request_id)
             .await
