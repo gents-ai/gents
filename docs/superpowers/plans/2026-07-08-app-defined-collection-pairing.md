@@ -33,11 +33,11 @@
 - `crates/defra-agent/proofs/Proofs/PairingReconcile.lean` — add `import Proofs.PairingReconcile.Layering` to the barrel (Task 1b).
 - `crates/defra-agent/tests/conformance/scope_templates.rs` — conformance: app-collections resolves as Unscoped/Replicate/empty template set (Task 2).
 - `crates/defra-agent/src/agent/p2p_reconcile/templates.rs` — new template + const + fix two unit tests (Task 3).
-- `crates/defra-agent/src/agent/p2p_reconcile/engine.rs` — `load_desired` query; `data_plane_desired_from_pairing_row` (honor row collections, soft-skip, `Result<Option<..>>`); `desired_from_pairing_row` (reject app-collections, `Result<Option<..>>`); `merge_layered_desired` conditional subscription preservation (Tasks 4–7).
-- `crates/defra-agent/tests/conformance/pairing_reconcile.rs` — merge subscription-preservation + resolution + soft-skip + reject conformance (Tasks 5–7).
+- `crates/defra-agent/src/agent/p2p_reconcile/engine.rs` — `load_desired` query; `data_plane_desired_from_pairing_row` (honor row collections, soft-skip, `Result<Option<..>>`); `desired_from_pairing_row` (reject app-collections, `Result<Option<..>>`); `merge_layered_desired` conditional subscription preservation; **plus its in-crate `#[cfg(test)] mod tests`** — new app-collections resolver/soft-skip/reject tests AND updates to the existing resolver call sites that the signature change breaks (Tasks 4–7).
+- `crates/defra-agent/tests/conformance/pairing_reconcile.rs` — merge subscription-preservation conformance only (Task 5, via the public `merge_layered_desired`). Resolution / soft-skip / reject tests are in-crate in engine.rs (Tasks 6–7), not here.
 - `crates/defra-agent-cli/src/commands/p2p/pairings.rs` — reject `app-collections` on generic pairing path (Task 8).
+- `crates/defra-agent/tests/e2e_triggers.rs` — the harness root (a file, not `mod.rs`); add `mod app_collection_pairing_p2p_e2e;` next to `mod event_trigger_p2p_e2e;` (line ~11) (Task 9).
 - `crates/defra-agent/tests/e2e_triggers/app_collection_pairing_p2p_e2e.rs` — membership-materialization harness + acceptance e2e (Tasks 9–10).
-- `crates/defra-agent/tests/e2e_triggers/mod.rs` (or the harness's mod root) — register the new test module (Task 9).
 
 ---
 
@@ -543,7 +543,7 @@ git commit -m "feat(p2p): preserve app-collections subscription through merge_la
 
 **Files:**
 - Modify: `crates/defra-agent/src/agent/p2p_reconcile/engine.rs:738-828` (`data_plane_desired_from_pairing_row`) and its call site in `load_desired` (lines 513-523)
-- Test: `crates/defra-agent/tests/conformance/pairing_reconcile.rs`
+- Test: in-crate `#[cfg(test)] mod tests` in `engine.rs` (new tests + updates to existing call sites the signature change breaks)
 
 **Interfaces:**
 - Consumes: `templates::APP_COLLECTIONS_TEMPLATE`, `PairingStateRow.collections` (Task 4).
@@ -719,12 +719,25 @@ At lines 513-523, the match arm already unwraps with `?`. Because the function n
 
 (The soft-skip `Ok(None)` now flows through as `data_plane = None`, leaving `base` intact in `merge_layered_desired`.)
 
+- [ ] **Step 4b: Update the existing in-crate test call sites the signature change breaks**
+
+The signature is now `Result<Option<PairingDesired>>`, so every existing test that did `data_plane_desired_from_pairing_row(..).expect("..")` and then read a field now has an `Option` and won't compile. Update these call sites in the `#[cfg(test)] mod tests` — they are `.expect(..)`-then-use-field sites at approximately engine.rs **1079, 1112, 1148** (add a second unwrap):
+
+```rust
+        // before: .expect("data-plane desired")
+        // after:
+        .expect("data-plane desired")
+        .expect("some data-plane layer")
+```
+
+The **error-expecting** site at ~engine.rs **1175** (`let error = data_plane_desired_from_pairing_row(..)` used to assert a `bail!`) is UNAFFECTED — the foreign-`agent_did` path still returns `Err`, so its `.unwrap_err()`/error assertion still holds. Do not add a second unwrap there. Let the compiler enumerate the exact sites: fix each until `cargo test -p defra-agent --lib p2p_reconcile` compiles.
+
 - [ ] **Step 5: Run the in-crate tests + full engine tests**
 
 Run: `cargo test -p defra-agent --lib p2p_reconcile::engine::tests::app_collections`
 Expected: PASS (both resolution + soft-skip).
 Run: `cargo test -p defra-agent --lib p2p_reconcile`
-Expected: PASS (existing resolver/merge unit tests unaffected).
+Expected: PASS (existing resolver/merge unit tests updated in Step 4b, all green).
 
 - [ ] **Step 6: Commit**
 
@@ -808,12 +821,26 @@ At lines 506-508, the base currently does `.map(|row| desired_from_pairing_row(r
             .flatten();
 ```
 
+- [ ] **Step 4b: Update the existing in-crate test call sites the signature change breaks**
+
+`desired_from_pairing_row` now returns `Result<Option<PairingDesired>>`. The existing in-crate tests call it at approximately engine.rs **1843, 1866, 1885, 1890, 1904, 1933, 1953, 1995, 2037**. Each `.expect("..")`-then-use-field site (including the **1890 "unknown template"** case — an unknown id falls back to `conversation`, which is now `Ok(Some(..))`, so it needs the second unwrap too) gets a second unwrap:
+
+```rust
+        // before: desired_from_pairing_row(row, "did:key:self").expect("desired")
+        // after:
+        desired_from_pairing_row(row, "did:key:self")
+            .expect("desired")
+            .expect("some desired layer")
+```
+
+The only sites that must NOT get a second unwrap are any that assert an `Err` (the blank-DID `bail!` at engine.rs:708 is unchanged). Let the compiler enumerate: fix each until `cargo test -p defra-agent --lib p2p_reconcile` compiles.
+
 - [ ] **Step 5: Run the in-crate test + full lib tests**
 
 Run: `cargo test -p defra-agent --lib p2p_reconcile::engine::tests::app_collections_on_control_plane_path_soft_skips`
 Expected: PASS.
 Run: `cargo test -p defra-agent --lib p2p_reconcile`
-Expected: PASS.
+Expected: PASS (existing resolver tests updated in Step 4b).
 
 - [ ] **Step 6: Commit**
 
@@ -885,7 +912,9 @@ git commit -m "feat(cli): reject app-collections on the generic pairing path (#6
 
 **Files:**
 - Create: `crates/defra-agent/tests/e2e_triggers/app_collection_pairing_p2p_e2e.rs`
-- Modify: the `e2e_triggers` module root to register it (grep for where `event_trigger_p2p_e2e` is declared: `mod event_trigger_p2p_e2e;` and add `mod app_collection_pairing_p2p_e2e;`).
+- Modify: `crates/defra-agent/tests/e2e_triggers.rs` (the harness root is this FILE, not `e2e_triggers/mod.rs`) — add `mod app_collection_pairing_p2p_e2e;` next to the existing `mod event_trigger_p2p_e2e;` (line ~11).
+
+The integration-test binary is named `e2e_triggers` (from `e2e_triggers.rs`), so all `cargo test` runs below use `--test e2e_triggers`.
 
 **Interfaces:**
 - Consumes: `defra_agent_protocol::network_token::{NetworkRecord, MembershipRecord, EndpointRecord}` (each has `signing_payload()`); `AgentIdentity::sign`; `bs58` (sig encoding — see `network.rs:690 decode_sig` uses `bs58::decode`, so write with `bs58::encode(sig).into_string()`); `graphql::escape_graphql_string`.
@@ -955,13 +984,13 @@ async fn seed_makes_peer_materializable() {
 }
 ```
 
-Run: `cargo test -p defra-agent --test <e2e_triggers-target> seed_makes_peer_materializable`
+Run: `cargo test -p defra-agent --test e2e_triggers seed_makes_peer_materializable`
 Expected: PASS. If FAIL, the sig encoding or a field name is wrong — compare against Step 1 decoders (this is the fast feedback loop; do not proceed until green).
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/defra-agent/tests/e2e_triggers/app_collection_pairing_p2p_e2e.rs crates/defra-agent/tests/e2e_triggers/mod.rs
+git add crates/defra-agent/tests/e2e_triggers/app_collection_pairing_p2p_e2e.rs crates/defra-agent/tests/e2e_triggers.rs
 git commit -m "test(e2e): in-process membership-materialization harness for app-collection pairing (#657)"
 ```
 
@@ -993,9 +1022,18 @@ async fn register_change_proposed_schema(node: &EmbeddedNode) {
 }
 
 /// Write a DataPlanePairingDesired row via desired-state config (NOT add_replicator).
+/// HAPPY-PATH ONLY: this helper requires a non-empty collection set. The malformed
+/// (blank-only) soft-skip row in Task 10 Step 3 is written by its own inline
+/// mutation, NOT through this helper — because `collections` is `[String!]!`
+/// (non-null), the only valid "empty" vector is a blank-only list `["   "]`, and
+/// this helper must never be asked to emit `[]` (Global Constraints).
 async fn write_app_collection_pairing(
     node: &EmbeddedNode, peer_id: &str, self_did: &str, address: &str, collections: &[&str],
 ) {
+    assert!(
+        collections.iter().any(|c| !c.trim().is_empty()),
+        "write_app_collection_pairing is happy-path only; pass a non-empty collection set"
+    );
     let peer = escape_graphql_string(peer_id);
     let did = escape_graphql_string(self_did);
     let addr = escape_graphql_string(address);
@@ -1003,7 +1041,6 @@ async fn write_app_collection_pairing(
         .map(|c| format!(r#""{}""#, escape_graphql_string(c)))
         .collect::<Vec<_>>().join(",");
     let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    // collections is a non-empty literal here; if it were empty we would emit null.
     let mutation = format!(r#"mutation {{
         create_DataPlanePairingDesired(input: {{
             peer_id: "{peer}", agent_did: "{did}",
@@ -1043,7 +1080,7 @@ Fill the body by copying the assertion blocks from `event_trigger_p2p_e2e.rs:436
 
 - [ ] **Step 2: Run to verify it fails for the RIGHT reason**
 
-Run: `cargo test -p defra-agent --test <e2e_triggers-target> app_collection_pairing_fires_event_trigger_via_reconcile -- --nocapture`
+Run: `cargo test -p defra-agent --test e2e_triggers app_collection_pairing_fires_event_trigger_via_reconcile -- --nocapture`
 Expected at this point in the branch: it should **PASS** if Tasks 3-7 are already merged (the reconcile path is implemented). To honor TDD, run this test on a checkout WITHOUT Tasks 5-6 (e.g. `git stash` the engine.rs resolver/merge changes) and confirm it FAILS with the diagnostic ("doc replicated but trigger did not fire" or "no replicator established"). Document the observed failure, then restore.
 
 - [ ] **Step 3: Add the malformed-path assertion (guards the soft-skip)**
@@ -1070,7 +1107,7 @@ rejects it) nor `[]` (Global Constraints: corrupts nillable array columns).
 
 - [ ] **Step 4: Run the full e2e module**
 
-Run: `cargo test -p defra-agent --test <e2e_triggers-target> app_collection_pairing`
+Run: `cargo test -p defra-agent --test e2e_triggers app_collection_pairing`
 Expected: PASS (both the happy path and the malformed-path guard).
 
 - [ ] **Step 5: Commit**
@@ -1137,7 +1174,7 @@ EOF
 ## Notes for the executor
 
 - **Resolver tests live in-crate (Tasks 6-7).** `data_plane_desired_from_pairing_row` / `desired_from_pairing_row` are private; test them from the existing `#[cfg(test)] mod tests` in `engine.rs` (which already calls the former directly), NOT from `tests/conformance/*` — integration tests compile `defra-agent` as a normal dependency and cannot see private items or `#[cfg(test)]`/unfeatured-`pub` seams. Do not add a `conformance-seams` feature. Merge-rule conformance (Task 5) is different: it uses the already-`pub` `merge_layered_desired`, so it can (and does) live in `tests/conformance/pairing_reconcile.rs`.
-- **e2e target name:** integration tests under `tests/e2e_triggers/` compile as one binary; find its harness entry (`grep -rn "mod event_trigger_p2p_e2e" crates/defra-agent/tests/`) and use that `--test <name>` for the run commands above.
+- **e2e target name:** integration tests under `tests/e2e_triggers/` compile as one binary; find its harness entry (`grep -rn "mod event_trigger_p2p_e2e" crates/defra-agent/tests/`) and use that `--test e2e_triggers` for the run commands above.
 - **`data_plane_scope_filter` for app-collections** returns `{}` (Unscoped), so the replicator is unfiltered — correct for whole-collection sync. Confirm `apply_op`'s `InstallReplicator` passes an empty `PairingFilters` (it reads `desired.replicator_filter`).
 - **Ordering invariant** is enforced by test sequencing (trigger reconciled before the data-plane rows are written), matching `event_trigger_p2p_e2e.rs`.
 - **Optional (spec §4, reviewer-optional):** a diagnostic test that an unknown/non-`@branchable` collection name surfaces an error string naming the offending collection. This exercises the `apply_op` → `add_p2p_collections` error path, which needs a live node; only add it if it can be written without excessive harness cost. No runtime branchable gate either way. Not a blocking deliverable.
