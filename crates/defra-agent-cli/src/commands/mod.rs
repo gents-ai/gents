@@ -12,6 +12,7 @@ pub(crate) mod fleet;
 pub(crate) mod init;
 pub(crate) mod mcp;
 pub(crate) mod native_fs_runner;
+pub(crate) mod onboard;
 pub(crate) mod p2p;
 pub(crate) mod provision;
 pub(crate) mod query;

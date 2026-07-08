@@ -158,6 +158,41 @@ pub(crate) enum Command {
     },
     #[command(about = "Interactive, self-contained fleet demo (single node -> paired fleet)")]
     Demo(DemoArgs),
+    #[command(
+        about = "Configure and connect an inference backend for an initialized agent (#647)"
+    )]
+    Onboard(OnboardArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct OnboardArgs {
+    #[arg(long, help = "Agent home directory (defaults to the standard home)")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "GraphQL endpoint of a running server. Defaults to auto-detecting a live server for this home, else operating on the home offline"
+    )]
+    pub(crate) graphql: Option<String>,
+    #[arg(
+        long,
+        help = "Non-interactive: configure this backend preset (openai, openrouter, ollama, llama-cpp, vllm)"
+    )]
+    pub(crate) backend_preset: Option<BackendPresetArg>,
+    #[arg(
+        long,
+        help = "Non-interactive: configure this backend base URL, e.g. http://127.0.0.1:8080/v1"
+    )]
+    pub(crate) inference_url: Option<String>,
+    #[arg(
+        long,
+        help = "Model name to bind (defaults to the detected/preset model)"
+    )]
+    pub(crate) model: Option<String>,
+    #[arg(
+        long,
+        help = "API key stored in the backend document. Prefer an env-var backend for secrets"
+    )]
+    pub(crate) api_key: Option<String>,
 }
 
 #[derive(clap::Args)]

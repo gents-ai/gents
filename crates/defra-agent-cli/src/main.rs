@@ -19,7 +19,9 @@ mod desired_state;
 mod graphql_access;
 mod home_state;
 mod http;
+mod onboarding;
 mod p2p_relay;
+mod prompt;
 mod request_helpers;
 mod resolve_helpers;
 mod shared;
@@ -457,6 +459,7 @@ async fn async_main() -> Result<()> {
         Command::Session { command } => commands::session::dispatch(command).await,
         Command::Subagent { command } => commands::subagent::dispatch(command).await,
         Command::Demo(args) => commands::demo::demo(args).await,
+        Command::Onboard(args) => commands::onboard::onboard(args).await,
         Command::NativeFsRunner(_) => unreachable!("handled before telemetry initialization"),
     };
     telemetry.shutdown();

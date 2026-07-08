@@ -343,6 +343,16 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     } else {
         eprintln!("defra-agent server is running local-only. Press Ctrl-C to stop.");
     }
+    // The runtime keeps serving even when the default behavior can't run; make
+    // that visible up front rather than leaving a silent "degraded" that fails
+    // only at chat time. Point at the backend flow (#647) without asserting the
+    // cause is a backend — the reason string carries the actual diagnosis.
+    if let Some(reason) = unavailable_behaviors.get(&default_behavior_id) {
+        eprintln!("The default behavior ({default_behavior_id}) is not runnable: {reason}");
+        eprintln!(
+            "If it needs an inference backend, configure one with `defra-agent onboard`, then restart."
+        );
+    }
 
     if let Some(handle) = codex_shim_handle.as_mut() {
         tokio::select! {

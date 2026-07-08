@@ -6,10 +6,8 @@
 //! paired node B reuse the same backend. No mock is ever offered.
 
 use std::path::Path;
-use std::time::Duration;
 
 use anyhow::{bail, Result};
-use serde_json::Value;
 
 use crate::cli::args::DemoArgs;
 
@@ -87,7 +85,9 @@ pub(super) async fn pick_backend(
                     let url = non_empty(&url)
                         .unwrap_or("http://127.0.0.1:11434/v1")
                         .to_string();
-                    let detected = probe_models(&url).await.unwrap_or_default();
+                    let detected = crate::onboarding::probe_models(&url)
+                        .await
+                        .unwrap_or_default();
                     (url, detected)
                 }
             };
@@ -110,12 +110,11 @@ pub(super) async fn pick_backend(
 }
 
 async fn detect_local() -> Option<(String, String)> {
-    for url in ["http://127.0.0.1:8080/v1", "http://127.0.0.1:11434/v1"] {
-        if let Some(model) = probe_models(url).await {
-            return Some((url.to_string(), model));
-        }
-    }
-    None
+    // Shared detection so the demo and the first-class `onboard` flow probe the
+    // same local endpoints and agree on what "a local server" means (#647).
+    crate::onboarding::detect_local_backend()
+        .await
+        .map(|backend| (backend.url, backend.model))
 }
 
 fn openai_backend(model: Option<&str>, api_key: Option<&str>) -> BackendChoice {
@@ -170,23 +169,6 @@ fn custom_url_backend(url: &str, model: Option<&str>, api_key: Option<&str>) -> 
         init_args,
         label: format!("{url} · {model}"),
     }
-}
-
-/// GET `{base}/models`; return the first advertised model id if reachable.
-async fn probe_models(base: &str) -> Option<String> {
-    let response = reqwest::Client::new()
-        .get(format!("{base}/models"))
-        .timeout(Duration::from_millis(700))
-        .send()
-        .await
-        .ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    let body: Value = response.json().await.ok()?;
-    body.pointer("/data/0/id")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
 }
 
 pub(super) fn write_backend_args(path: &Path, args: &[String]) {
