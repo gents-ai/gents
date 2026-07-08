@@ -33,7 +33,7 @@ const ADD_AGENT_TOOL_CALL_SUBAGENT_PATCH: &str = r#"[
 
 #[allow(dead_code)]
 const ADD_AGENT_REQUEST_SUBAGENT_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"subagent_depth","Kind":5}},
+    {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"subagent_depth","Kind":4}},
     {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"caused_by_parent_request_id","Kind":11}},
     {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"caused_by_parent_tool_call_id","Kind":11}}
 ]"#;
@@ -44,6 +44,13 @@ const ADD_AGENT_REQUEST_SUBAGENT_PATCH: &str = r#"[
 // field-kind number that is unassigned in defradb.rs's enum, so the SDL builder
 // treated the patch as a named-type reference and failed with
 // "no type found for given name. Kind: 17" — crash-looping every store upgrade.
+//
+// NUMERIC KIND TRAP (#661): the numeric encoding is NOT sequential and scalars
+// vs arrays are easy to swap. A scalar `Int` is Kind 4; `[Int]` (IntArray) is
+// Kind 5. Patching an intended-scalar field as Kind 5 creates an array column,
+// and every scalar write then fails with "Expected array, got: Number(0)" —
+// silently, until the first request. Cross-check every numeric Kind here
+// against the field's SDL type (or use the string form, e.g. "Int").
 #[allow(dead_code)]
 const ADD_TOOL_SELECTION_SUBAGENT_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_targets","Kind":21}},
@@ -88,7 +95,7 @@ const ADD_AGENT_TOOL_CALL_COMMAND_DENIAL_PATCH: &str = r#"[
 
 #[allow(dead_code)]
 const ADD_TOOL_SELECTION_R5_PATCH: &str = r#"[
-    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"cross_deployment_spawn_timeout_seconds","Kind":5}}
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"cross_deployment_spawn_timeout_seconds","Kind":4}}
 ]"#;
 
 #[allow(dead_code)]
@@ -113,7 +120,7 @@ const ADD_TOOL_SELECTION_POLICY_VERSION_PATCH: &str = r#"[
 ]"#;
 
 const ADD_AGENT_RESPONSE_REASONING_PROGRESS_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentResponse/Fields/-","value":{"Name":"reasoning_progress_seq","Kind":5}}
+    {"op":"add","path":"/AgentResponse/Fields/-","value":{"Name":"reasoning_progress_seq","Kind":4}}
 ]"#;
 
 const ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH: &str = r#"[
@@ -157,12 +164,12 @@ const ADD_TOOL_SERVICE_REGISTRY_SEND_AGENT_DID_PATCH: &str = r#"[
 ]"#;
 
 const ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH: &str = r#"[
-    {"op":"add","path":"/ToolServiceHealthState/Fields/-","value":{"Name":"tool_count","Kind":5}}
+    {"op":"add","path":"/ToolServiceHealthState/Fields/-","value":{"Name":"tool_count","Kind":4}}
 ]"#;
 
 const ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_capacity","Kind":5}},
-    {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_queue_depth","Kind":5}},
+    {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_capacity","Kind":4}},
+    {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_queue_depth","Kind":4}},
     {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_status_json","Kind":11}}
 ]"#;
 
@@ -398,6 +405,18 @@ fn collection_has_lifecycle_state(cv: &defra_node::CollectionVersion) -> bool {
 
 fn collection_has_field(cv: &defra_node::CollectionVersion, field_name: &str) -> bool {
     cv.fields.iter().any(|f| f.name == field_name)
+}
+
+/// Serialized field kind, for comparing a field's type without depending on
+/// defradb.rs's concrete `FieldKind` encoding. `None` if the field is absent.
+fn field_kind_value(
+    cv: &defra_node::CollectionVersion,
+    field_name: &str,
+) -> Option<serde_json::Value> {
+    cv.fields
+        .iter()
+        .find(|f| f.name == field_name)
+        .and_then(|f| serde_json::to_value(&f.kind).ok())
 }
 
 fn field_is_immutable(cv: &defra_node::CollectionVersion, field_name: &str) -> bool {
@@ -1325,7 +1344,33 @@ pub async fn ensure_agent_response_reasoning_progress_migration(
     else {
         return Ok(());
     };
-    if collection_has_field(&collection, "reasoning_progress_seq") {
+    if let Some(existing_kind) = field_kind_value(&collection, "reasoning_progress_seq") {
+        // The field already exists. Guard its TYPE, not just its presence: a
+        // wrong kind (e.g. an out-of-band manual schema patch that added it as
+        // an array instead of scalar Int) makes every create_AgentResponse fail
+        // with `Expected array, got: Number(0)` and silently breaks the whole
+        // runtime on the first request. Compare against a stable scalar-Int
+        // sibling as the reference kind, so we don't hard-code defradb.rs's kind
+        // encoding; if none is present we can't validate and fall back to
+        // presence-only. Fail loudly rather than run broken (#661).
+        let reference_kind = [
+            "progress_seq",
+            "token_count",
+            "materialized_message_sequence",
+        ]
+        .iter()
+        .find_map(|name| field_kind_value(&collection, name));
+        if let Some(expected_kind) = reference_kind {
+            anyhow::ensure!(
+                existing_kind == expected_kind,
+                "AgentResponse.reasoning_progress_seq has an unexpected field kind \
+                 ({existing_kind}); it must be scalar Int like its siblings ({expected_kind}). \
+                 This is a corrupted schema — likely a manual additive patch applied the wrong \
+                 type — and every create_AgentResponse will fail with \"Expected array, got: \
+                 Number(0)\". Repair the field to scalar Int before starting (remove it and let \
+                 this migration re-add it). See sourcenetwork/defra-agent#661."
+            );
+        }
         return Ok(());
     }
 
@@ -1915,8 +1960,8 @@ mod patch_kind_tests {
         assert_eq!(
             fields,
             vec![
-                ("behavior_executor_capacity".to_string(), 5),
-                ("behavior_executor_queue_depth".to_string(), 5),
+                ("behavior_executor_capacity".to_string(), 4),
+                ("behavior_executor_queue_depth".to_string(), 4),
                 ("behavior_executor_status_json".to_string(), 11),
             ]
         );
@@ -2196,6 +2241,34 @@ mod patch_kind_tests {
             agent_did: String @index
             session_id: String @index
             content: String
+            created_at: String @index
+        }
+    "#;
+    // AgentResponse with the scalar-Int `progress_seq` sibling but WITHOUT
+    // reasoning_progress_seq, so the migration adds the latter; used to assert
+    // the patch adds a scalar Int, not an array (#661).
+    const AGENT_RESPONSE_WITH_INT_SIBLING_SCHEMA: &str = r#"
+        type AgentResponse @branchable {
+            response_key: String @index(unique: true)
+            request_id: String @index
+            agent_did: String @index
+            session_id: String @index
+            content: String
+            progress_seq: Int
+            created_at: String @index
+        }
+    "#;
+    // #661: reasoning_progress_seq mistyped as a list (a wrong manual schema
+    // patch), with progress_seq as the correct scalar-Int reference sibling.
+    const CORRUPTED_AGENT_RESPONSE_SCHEMA: &str = r#"
+        type AgentResponse @branchable {
+            response_key: String @index(unique: true)
+            request_id: String @index
+            agent_did: String @index
+            session_id: String @index
+            content: String
+            progress_seq: Int
+            reasoning_progress_seq: [Int]
             created_at: String @index
         }
     "#;
@@ -2910,6 +2983,76 @@ mod patch_kind_tests {
                 .unwrap()
                 .is_some(),
             "ConsumedInviteNonce ledger must exist after ensure_all_runtime_migrations"
+        );
+    }
+
+    #[tokio::test]
+    async fn reasoning_progress_migration_adds_scalar_int_not_array() {
+        // #661 root cause: the patch used `Kind:5` (IntArray) where scalar Int
+        // is `Kind:4`, so reasoning_progress_seq was created as `[Int]` and every
+        // create_AgentResponse (which writes scalar `0`) failed with "Expected
+        // array, got: Number(0)". Assert the migration adds a scalar Int and that
+        // the incident operation — a scalar create — now succeeds.
+        let node = test_node().await;
+        node.add_schema(AGENT_RESPONSE_WITH_INT_SIBLING_SCHEMA)
+            .await
+            .unwrap();
+
+        ensure_agent_response_reasoning_progress_migration(node.clone())
+            .await
+            .unwrap();
+
+        let collection = node.get_collection("AgentResponse").unwrap().unwrap();
+        assert_eq!(
+            field_kind_value(&collection, "reasoning_progress_seq"),
+            field_kind_value(&collection, "progress_seq"),
+            "reasoning_progress_seq must be scalar Int like its sibling progress_seq, not an array"
+        );
+
+        let created = node
+            .execute(
+                r#"mutation {
+                    create_AgentResponse(input: {
+                        response_key: "scalar-write",
+                        request_id: "scalar-write",
+                        agent_did: "did:defra-agent:migration-test",
+                        session_id: "scalar-write",
+                        content: "",
+                        reasoning_progress_seq: 0,
+                        created_at: "2026-07-08T12:00:00Z"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !created.has_errors(),
+            "a scalar reasoning_progress_seq write must succeed after the migration (#661): {:?}",
+            created.errors
+        );
+    }
+
+    #[tokio::test]
+    async fn reasoning_progress_migration_fails_loud_on_wrong_field_kind() {
+        // #661: a reasoning_progress_seq mistyped as a list (from a bad manual
+        // schema patch) makes every create_AgentResponse fail with "Expected
+        // array, got: Number(0)". The migration must reject it loudly at
+        // startup rather than silently leave the runtime broken.
+        let node = test_node().await;
+        node.add_schema(CORRUPTED_AGENT_RESPONSE_SCHEMA)
+            .await
+            .unwrap();
+
+        let err = ensure_agent_response_reasoning_progress_migration(node.clone())
+            .await
+            .expect_err("migration must reject a wrong-typed reasoning_progress_seq");
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("reasoning_progress_seq") && message.contains("scalar Int"),
+            "error must name the field and the required type; got: {message}"
+        );
+        assert!(
+            message.contains("661"),
+            "error should point at the tracking issue; got: {message}"
         );
     }
 
