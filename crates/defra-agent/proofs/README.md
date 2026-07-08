@@ -118,7 +118,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, and cancellation properties |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/StorageObservation.lean` | Daemon-visible storage observation model and persistence bridge |
-| `Proofs/CrossMachineComposed.lean` | Cross-machine composition and guards; global `WellFormed` (list-level coherence, unique call ids, no early tools, invFG) established at `initial` and preserved by every transition (#555) |
+| `Proofs/CrossMachineComposed.lean` | Cross-machine composition and guards; global `WellFormed` (list-level coherence, detached persistence/linkage, unique call ids, no early tools, invFG) established at `initial` and preserved by every transition (#555) |
 | `Proofs/Scheduling.lean` | Scheduler/backend slot state |
 | `Proofs/Fleet.lean` | Barrel for fleet state, transitions, executable semantics, and slot accounting |
 | `Proofs/SessionRecovery.lean` | Retry/reissue model for session-linked requests |
@@ -452,16 +452,19 @@ per-node Lean machines.
 | ID | Property | Tier | Why it matters | Theorem |
 |----|----------|------|----------------|---------|
 | L1 | Real current-product phase changes decrease a termination measure | 3 (bounded phase progress) | The model rules out endless phase churn that never gets closer to terminal state | `phase_change_decreases_measure` |
-| L2 | Claimed work has a constructive path to terminal state | 1 | A claimed request is not modeled as stuck forever before inference begins | `claimed_eventually_terminal` |
-| L3 | Recovery converges | 1 | A finite set of stuck requests can be driven to terminal outcomes in finite steps | `recovery_convergence` |
+| L2 | Claimed work has a constructive path to terminal state | 1 (`∃ post, Trace`) | A claimed request is not modeled as stuck forever before inference begins | `claimed_eventually_terminal` |
+| L3 | Recovery has a same-length terminal-result list | 1′ (list witness, **not** a Trace) | For any stuck list there exists a same-length list of terminal contexts; does *not* prove a transition path from each stuck input to its result | `recovery_convergence` |
 
 ### Scheduler Safety and Liveness
 
+Numeric tiers (1–4) apply to **liveness** rows only. Safety invariants are marked
+`— (safety)` rather than assigned a liveness tier.
+
 | ID | Property | Tier | Why it matters | Theorem |
 |----|----------|------|----------------|---------|
-| S7 | Capacity invariants are preserved | safety | Running-slot counts stay within backend limits | `capacity_invariant_preserved`, `reconstructedSlotCount_bounded_by_max_concurrent` |
-| S8 | Slot accounting is preserved | safety | Scheduler running counts stay aligned with per-request admission state and persisted running call rows | `slot_accounting_preserved`, `scheduler_running_reconstructed_from_inference_calls` |
-| S9 | Terminal work releases capacity; unavailable backends cannot acquire | safety | Slots are not leaked and unrunnable backends do not accept new work | `terminal_implies_released`, `permitDrop_terminalization_not_counted`, `unavailable_blocks_acquire` |
+| S7 | Capacity invariants are preserved | — (safety) | Running-slot counts stay within backend limits | `capacity_invariant_preserved`, `reconstructedSlotCount_bounded_by_max_concurrent` |
+| S8 | Slot accounting is preserved | — (safety) | Scheduler running counts stay aligned with per-request admission state and persisted running call rows | `slot_accounting_preserved`, `scheduler_running_reconstructed_from_inference_calls` |
+| S9 | Terminal work releases capacity; unavailable backends cannot acquire | — (safety) | Slots are not leaked and unrunnable backends do not accept new work | `terminal_implies_released`, `permitDrop_terminalization_not_counted`, `unavailable_blocks_acquire` |
 | L | Capacity-available work can acquire | 1 | A waiting request is not artificially blocked when slots exist | `acquire_when_capacity_available` |
 | L | Accepted work eventually releases | 1 | The model has a constructive path from accepted work to released capacity | `accepted_work_eventually_releases` |
 

@@ -412,7 +412,7 @@ def boundaries : List Boundary :=
         "Durable transcripts may contain unpaired assistant tool-call rows while tool execution is interrupted, failed, or in flight; provider sends must narrow loaded history through sanitize_history_for_provider so no dangling tool call reaches the backend."
     }
   , { id := boundaryModelNatTypedIdsTimeId
-    , domain := "ModelBoundary"
+    , domain := "CoreTypes"
     , subject := "Nat-typed IDs and Time"
     , statement :=
         "Core identifiers and Time are Nat abbreviations (Proofs/Basic and friends). Lifecycle and ordering proofs only need decidable equality and ordering. The abstraction deliberately omits wall-clock skew, UUID/string parse/serialize failures, ID-namespace collisions, and cross-node identity mismatches (AgentDid/PeerId/RequestId across deployments)."
