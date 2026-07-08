@@ -158,9 +158,7 @@ pub(crate) enum Command {
     },
     #[command(about = "Interactive, self-contained fleet demo (single node -> paired fleet)")]
     Demo(DemoArgs),
-    #[command(
-        about = "Configure and connect an inference backend for an initialized agent (#647)"
-    )]
+    #[command(about = "Configure and connect an inference backend for an initialized agent")]
     Onboard(OnboardArgs),
 }
 
