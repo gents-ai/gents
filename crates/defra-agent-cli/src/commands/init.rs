@@ -721,11 +721,12 @@ fn resolve_init_tool_package(
 fn validate_init_tool_flags(args: &InitArgs, tool_package: ToolPackageArg) -> Result<()> {
     if args.identity_only
         && (args.enable_memory
+            || args.enable_defra_query
             || args.disable_defra_query
             || !args.defra_query_collections.is_empty())
     {
         anyhow::bail!(
-            "--enable-memory, --disable-defra-query, and --defra-query-collection cannot be used with --identity-only because no ToolSelection document is written"
+            "--enable-memory, --enable-defra-query, --disable-defra-query, and --defra-query-collection cannot be used with --identity-only because no ToolSelection document is written"
         );
     }
     if !args.defra_query_collections.is_empty() {
@@ -1157,6 +1158,16 @@ mod tests {
         identity_only.enable_memory = true;
         assert!(
             validate_init_tool_flags(&identity_only, ToolPackageArg::Readonly)
+                .unwrap_err()
+                .to_string()
+                .contains("--identity-only")
+        );
+
+        let mut identity_only_query = init_args();
+        identity_only_query.identity_only = true;
+        identity_only_query.enable_defra_query = true;
+        assert!(
+            validate_init_tool_flags(&identity_only_query, ToolPackageArg::Readonly)
                 .unwrap_err()
                 .to_string()
                 .contains("--identity-only")
