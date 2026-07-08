@@ -36,6 +36,12 @@ use crate::{
 
 const DEFAULT_MODEL: &str = "gpt-4.1-mini";
 const DEFAULT_MAX_CONCURRENT: i64 = 8;
+/// A backend onboarding just probed successfully (detected-local path): safe to
+/// mark runnable now instead of waiting for the server's startup re-probe.
+const HEALTHY_PROBE_STATUS: &str = "healthy";
+/// A backend onboarding did not measure (remote / preset / scripted): the
+/// startup probe (#640) decides its health.
+const UNKNOWN_PROBE_STATUS: &str = "unknown";
 
 pub(crate) async fn onboard(args: OnboardArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
@@ -79,7 +85,8 @@ pub(crate) async fn onboard(args: OnboardArgs) -> Result<()> {
             .model
             .clone()
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
-        let backend_id = persist_backend(&access, &agent_did, &resolved, &model).await?;
+        let backend_id =
+            persist_backend(&access, &agent_did, &resolved, &model, UNKNOWN_PROBE_STATUS).await?;
         bind_default_behavior(&access, &default_behavior_id, &backend_id, Some(&model)).await?;
         return report(&backend_id, "configured", &default_behavior_id);
     }
@@ -103,7 +110,12 @@ pub(crate) async fn onboard(args: OnboardArgs) -> Result<()> {
                 None,
                 BackendResolutionMode::Init,
             )?;
-            let backend_id = persist_backend(&access, &agent_did, &resolved, &model).await?;
+            // detect_local_backend already probed this endpoint's /models, so
+            // record it healthy now — the behavior is runnable without waiting
+            // for the server to re-probe the same live server on next startup.
+            let backend_id =
+                persist_backend(&access, &agent_did, &resolved, &model, HEALTHY_PROBE_STATUS)
+                    .await?;
             bind_default_behavior(&access, &default_behavior_id, &backend_id, Some(&model)).await?;
             println!(
                 "Detected a local inference server at {} — connected.",
@@ -124,8 +136,14 @@ pub(crate) async fn onboard(args: OnboardArgs) -> Result<()> {
                 // bound — the user re-runs `onboard` once the server is up.
                 None => Ok(()),
                 Some((resolved, model)) => {
-                    let backend_id =
-                        persist_backend(&access, &agent_did, &resolved, &model).await?;
+                    let backend_id = persist_backend(
+                        &access,
+                        &agent_did,
+                        &resolved,
+                        &model,
+                        UNKNOWN_PROBE_STATUS,
+                    )
+                    .await?;
                     bind_default_behavior(&access, &default_behavior_id, &backend_id, Some(&model))
                         .await?;
                     report(&backend_id, "configured", &default_behavior_id)
@@ -164,11 +182,17 @@ async fn query_configured_backends(access: &ConfigAccess) -> Result<Vec<Configur
 
 /// Persist a backend under the agent's canonical backend id (updating in place
 /// so onboarding is idempotent) and return that id.
+///
+/// `probe_status` is `HEALTHY_PROBE_STATUS` only when onboarding just made a
+/// successful live probe of this exact endpoint (the detected-local path);
+/// otherwise `UNKNOWN_PROBE_STATUS`, so the honest-probe subsystem (#640) — not
+/// this write — owns promoting an unmeasured endpoint to healthy.
 async fn persist_backend(
     access: &ConfigAccess,
     agent_did: &str,
     resolved: &ResolvedBackendConfig,
     model: &str,
+    probe_status: &str,
 ) -> Result<String> {
     let backend_id = format!("{agent_did}:backend");
     let doc = InferenceBackendUpsertDocument {
@@ -184,10 +208,7 @@ async fn persist_backend(
         enabled: true,
         models_on_add: vec![model.to_string()],
         models_on_update: Some(vec![model.to_string()]),
-        // Onboarding does not measure remote health; leave this as the catalog
-        // default so the honest-probe fix (#640) stays the single owner of the
-        // health signal rather than stamping "healthy" here.
-        probe_status: "unknown".to_string(),
+        probe_status: probe_status.to_string(),
     };
     write_inference_backend_document(access, &doc).await?;
     Ok(backend_id)
