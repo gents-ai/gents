@@ -258,8 +258,15 @@ async fn upsert_data_plane(
 }
 
 fn data_plane_collections_literal(template: &str) -> Result<String> {
+    use defra_agent::agent::p2p_reconcile::templates::APP_COLLECTIONS_TEMPLATE;
     let template = resolve_template(template)
         .with_context(|| format!("unknown data-plane template {template:?}"))?;
+    if template.id == APP_COLLECTIONS_TEMPLATE {
+        anyhow::bail!(
+            "app-collections requires an explicit collection set; fleet upsert_data_plane \
+             cannot expand it from the template (see #607 for config-apply ownership)"
+        );
+    }
     let collections = template
         .collections
         .iter()

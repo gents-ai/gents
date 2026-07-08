@@ -36,8 +36,9 @@
 - `crates/defra-agent/src/agent/p2p_reconcile/engine.rs` — `load_desired` query; `data_plane_desired_from_pairing_row` (honor row collections, soft-skip, `Result<Option<..>>`); `desired_from_pairing_row` (reject app-collections, `Result<Option<..>>`); `merge_layered_desired` conditional subscription preservation; **plus its in-crate `#[cfg(test)] mod tests`** — new app-collections resolver/soft-skip/reject tests AND updates to the existing resolver call sites that the signature change breaks (Tasks 4–7).
 - `crates/defra-agent/tests/conformance/pairing_reconcile.rs` — merge subscription-preservation conformance only (Task 5, via the public `merge_layered_desired`). Resolution / soft-skip / reject tests are in-crate in engine.rs (Tasks 6–7), not here.
 - `crates/defra-agent-cli/src/commands/p2p/pairings.rs` — reject `app-collections` on generic pairing path (Task 8).
+- `crates/defra-agent-cli/src/commands/demo/fleet.rs` — reject `app-collections` in `data_plane_collections_literal` so fleet never expands to `[]` / silent soft-skip (Task 8b).
 - `crates/defra-agent/tests/e2e_triggers.rs` — the harness root (a file, not `mod.rs`); add `mod app_collection_pairing_p2p_e2e;` next to `mod event_trigger_p2p_e2e;` (line ~11) (Task 9).
-- `crates/defra-agent/tests/e2e_triggers/app_collection_pairing_p2p_e2e.rs` — membership-materialization harness + acceptance e2e (Tasks 9–10).
+- `crates/defra-agent/tests/e2e_triggers/app_collection_pairing_p2p_e2e.rs` — membership-materialization harness + acceptance e2e (Tasks 9–10). Wait pairing readiness on `PeerPairingApplied`, not RuntimeSnapshot.
 
 ---
 
@@ -163,7 +164,9 @@ def mergeLayered (base : Option Layer) (dataPlane : Option Layer) : Option Layer
   | some b, some d =>
       some { subscriptions := b.subscriptions ∪ d.subscriptions
            , replicatorCollections := b.replicatorCollections ∪ d.replicatorCollections
-           , isAppCollections := b.isAppCollections }
+           -- OR so a later re-use of the result as a data-plane input still
+           -- remembers that an app-collections layer contributed.
+           , isAppCollections := b.isAppCollections || d.isAppCollections }
 
 /-- An app-collections data-plane layer's subscriptions survive the merge, so an
 `InstallCollection` op can reach the diff. -/
@@ -201,6 +204,8 @@ theorem base_preserved
   cases dp with
   | none => simp [mergeLayered] at hm; subst hm; exact ⟨subset_rfl, subset_rfl⟩
   | some d =>
+      -- After clampDataPlane the merged record still supersets the base,
+      -- regardless of d.isAppCollections (and regardless of the OR on the flag).
       simp [mergeLayered, clampDataPlane] at hm
       subst hm
       exact ⟨Finset.subset_union_left, Finset.subset_union_left⟩
@@ -499,9 +504,25 @@ If `merge_layered_desired` or `PairingDesired` are not already `pub` at those pa
 Run: `cargo test -p defra-agent --test conformance merge_preserves_app_collections_subscription_only`
 Expected: FAIL — the current blanket `desired.collections.clear()` empties the app-collections subscription, so `merged.collections.contains("ChangeProposed")` is false.
 
-- [ ] **Step 3: Make the clear conditional**
+- [ ] **Step 3: Make the clear conditional + rewrite the function doc comment**
 
-Replace the unconditional clear (lines 902-905) with:
+First, rewrite the doc comment above `merge_layered_desired` (currently lines
+888-893: "Data-plane templates are delivered by filtered push… must not extend
+the subscription set"). That blanket claim becomes wrong once app-collections
+is allowed to subscribe. Replace it with:
+
+```rust
+/// Merge Layer-1 control-plane desired state with optional Layer-2 data-plane
+/// desired state for the same peer.
+///
+/// Most data-plane templates are delivered by filtered push replicators, so
+/// their collections extend only the per-peer replicator set — the subscription
+/// set is cleared so conversation data never gossips unfiltered. Exception:
+/// the `app-collections` (bring-your-own Unscoped/Replicate) policy preserves
+/// its subscription set so the merged doc is observable on both sides.
+```
+
+Then replace the unconditional clear (lines 902-905) with:
 
 ```rust
     // Layer-2 desired rows add data-plane collections to the per-peer
@@ -604,12 +625,42 @@ git commit -m "feat(p2p): preserve app-collections subscription through merge_la
         .expect("resolve ok (soft-skip is Ok(None), not Err)");
         assert!(out.is_none(), "empty/blank app-collections set must soft-skip to None");
     }
+
+    /// Residual (documented, not softened in #657): a foreign `agent_did` on a
+    /// data-plane row still hard-fails the whole peer load (`desired_read_failed`),
+    /// including a co-existing control pairing. Security refusal, not soft-skip.
+    /// Keep this test so a future co-existence hardening change is deliberate.
+    #[test]
+    fn foreign_agent_did_still_hard_fails_whole_peer_load() {
+        let signed_endpoint = NetworkEndpointEntry {
+            peer_id: "peer-b".to_string(),
+            agent_did: "did:key:peer-b".to_string(),
+            address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        };
+        let err = data_plane_desired_from_pairing_row(
+            PairingStateRow {
+                agent_did: Some("did:key:someone-else".to_string()), // != self_did
+                collections: Some(vec!["ChangeProposed".to_string()]),
+                replicator_addresses: None,
+                template: Some("app-collections".to_string()),
+                replicator_filter: None,
+            },
+            &signed_endpoint,
+            "did:key:self",
+        )
+        .expect_err("foreign agent_did must hard-fail, not soft-skip");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("foreign") || msg.contains("someone-else") || msg.contains("refusing"),
+            "error should name the refusal: {msg}"
+        );
+    }
 ```
 
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `cargo test -p defra-agent --lib p2p_reconcile::engine::tests::app_collections`
-Expected: FAIL to COMPILE — the resolver currently returns `Result<PairingDesired>`, so `.expect("resolve ok").expect("some layer")` (a double unwrap through `Option`) does not type-check. This compile failure is the red state; Step 3 changes the signature to `Result<Option<..>>`.
+Expected: FAIL to COMPILE — the resolver currently returns `Result<PairingDesired>`, so `.expect("resolve ok").expect("some layer")` (a double unwrap through `Option`) does not type-check. This compile failure is the red state; Step 3 changes the signature to `Result<Option<..>>`. The foreign-DID test should still type-check as `Err` either before or after the signature change (it stays `Err`).
 
 - [ ] **Step 3: Change the signature to `Result<Option<PairingDesired>>` and honor row collections**
 
@@ -894,15 +945,36 @@ In `resolve_pairing_template`, after the empty check and before the `resolve_tem
     }
 ```
 
+- [ ] **Step 3b (cheap defense-in-depth): reject `app-collections` in fleet `data_plane_collections_literal`**
+
+`demo/fleet.rs:data_plane_collections_literal` expands `template.collections`, which
+is `[]` for app-collections — and Global Constraints forbid emitting `[]` in
+mutations; even a non-empty blank workaround would soft-skip silently. Reject
+early so a mis-invoked fleet helper fails loud rather than writing a no-op row:
+
+```rust
+// in data_plane_collections_literal, after resolve_template:
+if template.id == defra_agent::agent::p2p_reconcile::templates::APP_COLLECTIONS_TEMPLATE {
+    anyhow::bail!(
+        "app-collections requires an explicit collection set; fleet upsert_data_plane \
+         cannot expand it from the template (see #607 for config-apply ownership)"
+    );
+}
+```
+
+Full `--collections` / `config apply` ownership remains #607. This only closes
+the silent-skip footgun for the one built-in writer that would expand to `[]`.
+
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `cargo test -p defra-agent-cli app_collections_rejected_on_generic_pairing_path`
 Expected: PASS.
+(If Step 3b added a unit test for the fleet reject, run that too.)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/defra-agent-cli/src/commands/p2p/pairings.rs
+git add crates/defra-agent-cli/src/commands/p2p/pairings.rs crates/defra-agent-cli/src/commands/demo/fleet.rs
 git commit -m "feat(cli): reject app-collections on the generic pairing path (#657)"
 ```
 
@@ -919,6 +991,15 @@ The integration-test binary is named `e2e_triggers` (from `e2e_triggers.rs`), so
 **Interfaces:**
 - Consumes: `defra_agent_protocol::network_token::{NetworkRecord, MembershipRecord, EndpointRecord}` (each has `signing_payload()`); `AgentIdentity::sign`; `bs58` (sig encoding — see `network.rs:690 decode_sig` uses `bs58::decode`, so write with `bs58::encode(sig).into_string()`); `graphql::escape_graphql_string`.
 - Produces: `async fn seed_materializable_peer(node, network_id, admin_identity, member_identity, member_node_id, member_address)` that writes admin-signed `AgentNetwork` + admin-signed active `NetworkMembership` + member-signed fresh `PeerEndpoint` so `GraphqlNetworkStore::load_materializable_entries` returns the member. Verified against that function.
+
+**Peer identity contract (load-bearing for Task 10):**
+- `PeerEndpoint.node_id` becomes `NetworkEndpointEntry.peer_id` (`network.rs:141`).
+- `materializable_entry_for_peer` matches on `peer_id` **and** `agent_did != self_did`.
+- `DataPlanePairingDesired.peer_id` must equal that remote `node_id`.
+- The signed endpoint **address** is authoritative (row addresses are overridden).
+- Task 9's unit gate may use synthetic `"peer-node"` / `"addr"`; Task 10 **must**
+  derive real listen addresses and peer node ids from each `EmbeddedNode`'s P2P
+  transport (same source as `install_one_way_replicator` / `wait_for_listen_addr`).
 
 **NOTE — spike first.** This task front-loads investigation: the exact mutation field names + sig encoding must match the decoders `network_record` / `membership_record` / `endpoint_record` (`network.rs:638-690`) and the writers `write_agent_network` / `write_membership` (`crates/defra-agent-cli/src/commands/p2p/network_admin.rs:275+`) and `endpoint.rs:112 upsert_PeerEndpoint`. Read those four before writing the helper; mirror their field/encoding shapes exactly. The verification gate (Step 3) is objective, so a wrong encoding fails fast.
 
@@ -1002,11 +1083,46 @@ git commit -m "test(e2e): in-process membership-materialization harness for app-
 - Modify: `crates/defra-agent/tests/e2e_triggers/app_collection_pairing_p2p_e2e.rs`
 
 **Interfaces:**
-- Consumes: `seed_materializable_peer` (Task 9); the harness helpers copied from `event_trigger_p2p_e2e.rs` (`wait_for_runtime_snapshot`, `create_task`, `create_event_trigger_with_filter`, `query_agent_requests_for_trigger`, `fetch_event_trigger`, `test_p2p_db`, `MockModelEndpoint`, `bind_default_behavior_backend`).
+- Consumes: `seed_materializable_peer` (Task 9); harness helpers copied from
+  `event_trigger_p2p_e2e.rs` (`wait_for_runtime_snapshot`, `create_task`,
+  `create_event_trigger_with_filter`, `query_agent_requests_for_trigger`,
+  `fetch_event_trigger`, `test_p2p_db`, `MockModelEndpoint`,
+  `bind_default_behavior_backend`, `wait_for_listen_addr`).
+- Pairing-ready wait helper (new): poll **`PeerPairingApplied`**, not the
+  document-reconcile RuntimeSnapshot. Mirror
+  `cancel_propagation::wait_for_replicator_installed` and
+  `demo/fleet.rs::wait_conversation_replicator`.
 
-- [ ] **Step 1: Write the failing acceptance test**
+**Observation channels (do not conflate):**
 
-Model on `p2p_replicated_doc_fires_event_trigger` (event_trigger_p2p_e2e.rs:401-576). Key deltas — the source collection is app-defined `@branchable`, and replication is established by **config rows + reconcile**, not `install_one_way_replicator`:
+| Signal | What it means | Use for |
+|--------|---------------|---------|
+| `RuntimeSnapshot.active_generation` + `last_reconcile_result == "applied"` | Document reconciler (Task / EventTrigger) | Ordering: trigger live **before** data-plane rows |
+| `PeerPairingApplied.replicator_addresses` non-empty + `collections` contains `ChangeProposed` | Pairing reconciler applied app-collections | Pairing readiness after writing data-plane rows |
+| `PeerPairingApplied` control collections unchanged | Soft-skip / co-existence | Malformed row + idempotence |
+
+`desired_read_failed` is **internal** to `PairingTickOutcome` — it is **not** on
+RuntimeSnapshot. Soft-skip is observed only via applied-state stability.
+
+**Dual-agent requirement:** Unlike `event_trigger_p2p_e2e` (bare writer + one
+agent + manual `install_one_way_replicator`), both nodes must run
+`DefraAgent::run` so **both** start `run_pairing_reconciler`. That means two
+identities, two default behaviors, two mock model endpoints (A may never
+complete; still needs a backend bind). Allow generous timeouts (pairing + P2P
+is heavier than the one-way admin path).
+
+**Co-existing control pairing:** use **`network-control`** on `PeerPairingDesired`
+(Unscoped Replicate of `AgentNetwork` / `NetworkMembership` / `PeerEndpoint`) —
+not subagent. Subagent adds complement templates and PeerDid scoping noise
+without testing anything app-collections-specific. Capture applied control
+collections before the data-plane write; assert they remain after.
+
+- [ ] **Step 1: Write helpers + acceptance test**
+
+Model trigger assertions on `p2p_replicated_doc_fires_event_trigger`
+(event_trigger_p2p_e2e.rs:401-576). Key deltas — app-defined `@branchable`
+collection; replication via **config rows + reconcile**, not
+`install_one_way_replicator`:
 
 ```rust
 async fn register_change_proposed_schema(node: &EmbeddedNode) {
@@ -1027,6 +1143,10 @@ async fn register_change_proposed_schema(node: &EmbeddedNode) {
 /// mutation, NOT through this helper — because `collections` is `[String!]!`
 /// (non-null), the only valid "empty" vector is a blank-only list `["   "]`, and
 /// this helper must never be asked to emit `[]` (Global Constraints).
+///
+/// `peer_id` = remote peer's P2P node_id (must match PeerEndpoint.node_id seeded
+/// for that peer). `self_did` = THIS node's agent DID (foreign DID hard-fails).
+/// `address` = remote listen address (signed endpoint address still wins at load).
 async fn write_app_collection_pairing(
     node: &EmbeddedNode, peer_id: &str, self_did: &str, address: &str, collections: &[&str],
 ) {
@@ -1052,51 +1172,123 @@ async fn write_app_collection_pairing(
     assert!(!resp.has_errors(), "create DataPlanePairingDesired: {:?}", resp.errors);
 }
 
+/// Poll PeerPairingApplied until the app-collections subscription + replicator
+/// are installed. Do NOT use RuntimeSnapshot for pairing readiness.
+async fn wait_for_app_collections_pairing_applied(
+    node: &EmbeddedNode,
+    peer_id: &str,
+    expected_collection: &str,
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    let escaped = escape_graphql_string(peer_id);
+    let mut last = String::from("<none>");
+    loop {
+        let query = format!(
+            r#"{{
+                PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{
+                    peer_id collections replicator_addresses replicator_filter
+                }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        // parse first row; require:
+        //   - replicator_addresses has at least one non-empty entry
+        //   - collections contains expected_collection (Replicate path)
+        // on success return; else sleep 250ms until deadline then panic with last
+        let _ = (response, expected_collection, &mut last, deadline);
+        todo!("implement per cancel_propagation::wait_for_replicator_installed");
+    }
+}
+
+/// Write PeerPairingDesired with template network-control for co-existence.
+async fn write_network_control_pairing(
+    node: &EmbeddedNode, peer_id: &str, agent_did: &str, address: &str,
+) { /* create_PeerPairingDesired template: "network-control", addresses, agent_did */ }
+
+async fn fetch_pairing_applied_collections(
+    node: &EmbeddedNode, peer_id: &str,
+) -> Vec<String> { /* query PeerPairingApplied.collections */ }
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
-    // Node A (sender/writer) + Node B (agent). Both run DefraAgent::run.
+    // BOTH nodes run DefraAgent::run (pairing reconciler on each side).
+    //
+    // 0. Boot A + B with P2P, distinct identities, mock backends, DefraAgent::run.
+    //    Derive real peer ids + listen addresses (wait_for_listen_addr / peer_info).
     // 1. Both register ChangeProposed (@branchable).
-    // 2. seed_materializable_peer on BOTH nodes: A knows B, B knows A
-    //    (signed network/membership/endpoint), so data_plane_materialized_entry
-    //    returns Some on both.
-    // 3. On B: Task + EventTrigger watching ChangeProposed/created; WAIT for the
-    //    trigger to reconcile into the active snapshot (ordering invariant).
-    // 4. Co-existing control pairing: establish a subagent (control) pairing on
-    //    A<->B (write the PeerPairingDesired rows) and capture its applied state.
+    // 2. seed_materializable_peer on BOTH nodes with REAL node_id + address:
+    //    - on A: seed B's endpoint (member = B's identity, node_id = B's peer id)
+    //    - on B: seed A's endpoint (member = A's identity, node_id = A's peer id)
+    //    Use a shared admin identity to sign AgentNetwork + NetworkMembership on
+    //    both nodes (same signed docs, written locally — no chicken-and-egg with
+    //    network-control replication). Confirm data_plane_materialized_entry would
+    //    return Some for the remote peer on each side.
+    // 3. On B only: Task + EventTrigger watching ChangeProposed/created.
+    //    WAIT via RuntimeSnapshot (document reconciler) until trigger is live
+    //    (ordering invariant — seed_seen_docs runs on empty collection).
+    // 4. Co-existing control: write_network_control_pairing on A and B.
+    //    wait_for_replicator-style poll until PeerPairingApplied has control
+    //    collections; CAPTURE that applied collections snapshot.
     // 5. Write DataPlanePairingDesired (template app-collections, collections
-    //    ["ChangeProposed"]) on BOTH nodes (A->B and B->A) via config. Wait for
-    //    each node's reconcile generation to advance and last_reconcile_result
-    //    == "applied".
+    //    ["ChangeProposed"]) on BOTH nodes (A→B and B→A). agent_did = local self
+    //    DID; peer_id = remote node_id; address = remote listen addr.
+    //    WAIT via wait_for_app_collections_pairing_applied on BOTH nodes
+    //    (PeerPairingApplied contains ChangeProposed + non-empty replicator_addresses).
+    //    Also assert control collections from step 4 are still present (union).
     // 6. Write a ChangeProposed doc on A; poll B for exactly one AgentRequest
     //    caused_by_trigger_id, rendered content, execution_origin "scheduled";
     //    then EventTrigger last_status "fired", fire_count 1,
     //    last_fired_source_doc_id == the doc id.
-    // 7. Idempotence: capture generation, force/await another sweep, assert no new
-    //    ops and the control pairing's applied state is unchanged.
+    //    On timeout: diagnostic — query ChangeProposed on A and B (replicate vs fire).
+    // 7. Idempotence: re-read PeerPairingApplied on both nodes after another
+    //    pairing sweep interval (or force by writing a no-op touch and waiting);
+    //    assert collections + replicator_addresses unchanged from post-step-5
+    //    snapshot; control collections still equal the captured union.
 }
 ```
 
-Fill the body by copying the assertion blocks from `event_trigger_p2p_e2e.rs:436-573` verbatim (they already assert exactly one request, lineage, `execution_origin`, rendered content, `last_status`/`fire_count`/`last_fired_source_doc_id`/`last_error`, and the apply-owned fields), swapping `ReplicatedEvent`→`ChangeProposed` and the trigger/task ids.
+Fill trigger assertion blocks from `event_trigger_p2p_e2e.rs:436-573` (exactly
+one request, lineage, `execution_origin`, rendered content, fire bookkeeping),
+swapping `ReplicatedEvent`→`ChangeProposed` and the trigger/task ids.
 
-- [ ] **Step 2: Run to verify it fails for the RIGHT reason**
+- [ ] **Step 2: Run as the acceptance gate (after Tasks 3–7)**
 
 Run: `cargo test -p defra-agent --test e2e_triggers app_collection_pairing_fires_event_trigger_via_reconcile -- --nocapture`
-Expected at this point in the branch: it should **PASS** if Tasks 3-7 are already merged (the reconcile path is implemented). To honor TDD, run this test on a checkout WITHOUT Tasks 5-6 (e.g. `git stash` the engine.rs resolver/merge changes) and confirm it FAILS with the diagnostic ("doc replicated but trigger did not fire" or "no replicator established"). Document the observed failure, then restore.
+
+Expected: **PASS** once Tasks 3–7 are on the branch. This e2e is the final
+acceptance gate, not a red-first unit. If it fails, use the diagnostic panics:
+
+- `PeerPairingApplied` never gains `ChangeProposed` → resolver/merge/membership
+  gate (Tasks 5–6 / 9).
+- Doc on B but no trigger fire → product/trigger gap (not pairing).
+- Empty `ChangeProposed` on B → P2P/replicator path (addresses, both-sides rows).
+
+Do **not** block on a `git stash` red ritual; optional offline check only.
 
 - [ ] **Step 3: Add the malformed-path assertion (guards the soft-skip)**
 
-Append a second `#[tokio::test]` (or extend the first after the happy-path asserts):
+Append a second `#[tokio::test]`:
 
 ```rust
-// Malformed app-collections row (empty collections) must NOT stall the
-// co-existing control pairing: the data-plane layer soft-skips, base survives.
+// Malformed app-collections row (blank-only collections) must NOT stall the
+// co-existing control pairing: data-plane layer soft-skips, base survives.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn empty_app_collection_row_does_not_stall_control_pairing() {
-    // Boot one agent node with a control pairing already applied; write a
-    // DataPlanePairingDesired with collections: ["   "] (blank-only) + template
-    // app-collections; assert the next reconcile tick is NOT desired_read_failed
-    // (fetch_runtime_snapshot / last_reconcile_result stays "applied") and the
-    // control pairing's applied collections are unchanged.
+    // 1. Boot one (or two) agent node(s) with P2P + DefraAgent::run.
+    // 2. Seed materializable peer + write_network_control_pairing; wait until
+    //    PeerPairingApplied has control collections (e.g. AgentNetwork).
+    //    CAPTURE applied collections + replicator_addresses.
+    // 3. Write DataPlanePairingDesired with collections: ["   "] (blank-only)
+    //    + template app-collections + valid peer_id / self agent_did.
+    // 4. Wait at least one pairing sweep interval (and/or trigger a store update).
+    // 5. Assert PeerPairingApplied control collections + addresses are UNCHANGED
+    //    (still present; not deleted; not desired_read_failed starvation).
+    // 6. Assert ChangeProposed is NOT in applied.collections (layer skipped).
+    //
+    // Do NOT assert via RuntimeSnapshot.last_reconcile_result — that is the
+    // document reconciler. Do NOT assert desired_read_failed (not externally
+    // readable). Soft-skip success = control applied state stable.
 }
 ```
 
@@ -1155,12 +1347,17 @@ Closes #657. Follow-up epic: #660 (document-defined scope templates).
 Adds an `app-collections` (Unscoped/Replicate, bring-your-own) scope template and
 honors the previously-dropped `DataPlanePairingDesired.collections` field, gated on
 `template == "app-collections"`. Subscription is preserved for that policy at both
-the resolver and `merge_layered_desired`. Malformed rows soft-skip (never stall a
-co-existing control pairing); the template is rejected on the control-plane path
-(reconciler + CLI). Lean-first: catalog totality extended; behavior fenced by
-conformance calling the real resolver/merge. Acceptance e2e drives replication
-through reconcile (not `add_replicator`) and fires B's EventTrigger on the merged
-app-defined doc.
+the resolver and `merge_layered_desired`. Malformed (blank-only) rows soft-skip so
+they never stall a co-existing control pairing; the template is rejected on the
+control-plane path (reconciler + CLI) and in fleet `data_plane_collections_literal`.
+Lean-first: catalog entry + pure `mergeLayered` subscription rule; resolution /
+soft-skip fenced by in-crate unit tests + merge conformance. Acceptance e2e drives
+replication through reconcile (not `add_replicator`) and fires B's EventTrigger on
+the merged app-defined doc.
+
+Known residual: a foreign `agent_did` on a data-plane row still hard-fails the
+whole peer load (`desired_read_failed`), including control — security refusal,
+unchanged. Full `config apply` / `--collections` for app-collections is #607.
 
 Spec: docs/superpowers/specs/2026-07-08-app-defined-collection-pairing-design.md
 
@@ -1173,9 +1370,12 @@ EOF
 
 ## Notes for the executor
 
-- **Resolver tests live in-crate (Tasks 6-7).** `data_plane_desired_from_pairing_row` / `desired_from_pairing_row` are private; test them from the existing `#[cfg(test)] mod tests` in `engine.rs` (which already calls the former directly), NOT from `tests/conformance/*` — integration tests compile `defra-agent` as a normal dependency and cannot see private items or `#[cfg(test)]`/unfeatured-`pub` seams. Do not add a `conformance-seams` feature. Merge-rule conformance (Task 5) is different: it uses the already-`pub` `merge_layered_desired`, so it can (and does) live in `tests/conformance/pairing_reconcile.rs`.
+- **Resolver tests live in-crate (Tasks 6-7).** `data_plane_desired_from_pairing_row` / `desired_from_pairing_row` are private; test them from the existing `#[cfg(test)] mod tests` in `engine.rs` (which already calls the former directly), NOT from `tests/conformance/*` — integration tests compile `defra-agent` as a normal dependency and cannot see private items or `#[cfg(test)]`/unfeatured-`pub` seams. Do not add a `conformance-seams` feature. Merge-rule conformance (Task 5) is different: it uses the already-`pub` `merge_layered_desired`, so it can (and does) live in `tests/conformance/pairing_reconcile.rs`. Design-doc items (i)/(iv)/(v) map to those in-crate tests; (ii)/(iii) map to conformance.
 - **e2e target name:** integration tests under `tests/e2e_triggers/` compile as one binary; find its harness entry (`grep -rn "mod event_trigger_p2p_e2e" crates/defra-agent/tests/`) and use that `--test e2e_triggers` for the run commands above.
 - **`data_plane_scope_filter` for app-collections** returns `{}` (Unscoped), so the replicator is unfiltered — correct for whole-collection sync. Confirm `apply_op`'s `InstallReplicator` passes an empty `PairingFilters` (it reads `desired.replicator_filter`).
-- **Ordering invariant** is enforced by test sequencing (trigger reconciled before the data-plane rows are written), matching `event_trigger_p2p_e2e.rs`.
+- **Ordering invariant** is enforced by test sequencing (document-reconcile trigger live **before** the data-plane rows are written), matching `event_trigger_p2p_e2e.rs`. Pairing readiness is a **separate** wait on `PeerPairingApplied`.
+- **Pairing vs document reconcile:** never use `RuntimeSnapshot.last_reconcile_result` as a proxy for pairing apply or soft-skip. Soft-skip is not externally readable as `desired_read_failed`; observe control `PeerPairingApplied` stability.
+- **Foreign `agent_did` residual:** still hard-`bail!`s the whole peer (control + data plane). Soft-skip covers empty/blank collections only. Unit test in Task 6 documents this deliberately.
 - **Optional (spec §4, reviewer-optional):** a diagnostic test that an unknown/non-`@branchable` collection name surfaces an error string naming the offending collection. This exercises the `apply_op` → `add_p2p_collections` error path, which needs a live node; only add it if it can be written without excessive harness cost. No runtime branchable gate either way. Not a blocking deliverable.
-- **CLI writer (`upsert_data_plane`, `demo/fleet.rs`):** unchanged by this plan. It is only unsafe if invoked with `template == "app-collections"` (its `data_plane_collections_literal` expands to `[]`), which the demo never does. Full `config apply` ownership of `DataPlanePairingDesired.collections` — including a proper `--collections` writer for `app-collections` — is #607, out of scope here.
+- **Optional follow-ups (not blocking):** teardown when the app-collections row is deleted; multi-collection row; idempotent second sweep with empty ops list.
+- **CLI / fleet writers:** Task 8 rejects control-plane `app-collections` and rejects fleet `data_plane_collections_literal` expansion (would be `[]`). Full `config apply` ownership of `DataPlanePairingDesired.collections` — including a proper `--collections` writer for `app-collections` — remains #607. Do not invoke fleet upsert with `app-collections` until then.

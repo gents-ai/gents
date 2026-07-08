@@ -151,8 +151,10 @@ hard-fail: an empty/blank-only `app-collections` collection set yields `Ok(None)
 (warn + skip this layer only), honoring "must not disturb a co-existing control
 pairing." The pre-existing hard-`Err` for a **foreign `agent_did`**
 (`engine.rs:772`) is kept as-is — it is a security refusal, not a malformed-input
-case — and is documented as the one condition that still fails the whole peer
-load (unchanged behavior).
+case — and is the documented residual that still fails the whole peer load
+(unchanged behavior; unit-tested so any future softening is deliberate). Note:
+`desired_read_failed` is not exposed on RuntimeSnapshot; e2e observes soft-skip
+success only via co-existing `PeerPairingApplied` stability.
 
 For every **other** template id: current behavior exactly — `template.collections`
 drives, subscription set stays empty. Fully backward compatible; the existing
@@ -196,12 +198,12 @@ CLI is not the only writer:
   DataPlanePairingDesired rows only; supply an explicit `--collections` set"
   error, so the operator gets an immediate message instead of a silent skip.
 
-The data-plane writer path (`demo/fleet.rs:234 upsert_data_plane`) must, for the
-`app-collections` template, take the collection set from an explicit argument rather
-than `data_plane_collections_literal` (whose template expansion is `[]` for
-`app-collections`). #657's e2e writes rows directly and does not exercise these CLI
-paths; the guards exist so the new template cannot be misused. Full
-`config apply` ownership of `DataPlanePairingDesired.collections` is #607.
+The data-plane writer path (`demo/fleet.rs:234 upsert_data_plane`) currently
+expands collections via `data_plane_collections_literal` (template set → `[]` for
+`app-collections`). #657 rejects `app-collections` there so a mis-invocation fails
+loud rather than writing a blank set that soft-skips. Full `config apply` /
+explicit-collections ownership of `DataPlanePairingDesired.collections` is #607;
+the e2e writes rows directly and does not exercise fleet upsert.
 
 ### 4. `@branchable` is the operator's responsibility
 
@@ -230,88 +232,86 @@ the sender.
 
 ## Lean / conformance
 
-The change alters *what collection set a data-plane pairing resolves to* — a
-model concern. Per the foundation flow (CLAUDE.md), start in the Lean spec:
+The change introduces a **safety-relevant exception** to the data-plane
+subscription rule ("data-plane layers must not extend the subscription set").
+Per the foundation flow (CLAUDE.md), that rule change starts in Lean. Scope is
+deliberately narrow:
 
-- **`ScopeTemplates` catalog.** The Lean `ScopeTemplates.builtinCatalog`
-  currently mirrors the seven Rust builtins. Add `dataPlaneTemplate` (empty
-  collections, `Unscoped`, `Replicate`) so catalog membership / totality proofs
-  track the eighth entry, plus a resolution theorem
-  (`resolveTemplate "app-collections" = some dataPlaneTemplate`). Row-supplied
-  collections do **not** belong in the static template's collection set — they
-  enter as a derivation in `PairingReconcile` (below), keeping the template a
-  pure policy.
-- `PairingReconcile` already models `ReplicatorId = (address, ReplicatorFilter,
-  ReplicatorCollections)` and the merge boundary. Extend the data-plane
-  resolution so that for the `app-collections` policy the effective
-  `ReplicatorCollections` **and** the subscription set are the row-supplied set,
-  while every other template resolves exactly as today (template set,
-  subscription cleared at the merge). Prove the existing safety/liveness
-  properties (idempotence, filter-change-forces-reinstall,
-  co-existing-pairing-non-interference) still hold, and prove the new merge
-  property: an `app-collections` layer's subscription survives, a non-`app-collections`
-  data-plane layer's does not.
-- Mirror into `tests/conformance/pairing_reconcile.rs`: (i) an `app-collections` row
-  resolves its row `collections` as both `replicator_collections` and the
-  subscription set; (ii) that subscription survives `merge_layered_desired`
-  while a network-control-only data-plane layer's subscription is still cleared;
-  (iii) the `app-collections` layer merges with a co-existing control pairing without
-  cross-contaminating filters or subscriptions; (iv) an empty/blank-only
-  `app-collections` row soft-skips (layer → `None`, base preserved); (v) a
-  `app-collections` template on the `PeerPairingDesired`/base path soft-skips to no
-  wiring.
+- **`ScopeTemplates` catalog.** Add `appCollectionsTemplate` (empty collections,
+  `Unscoped`, `Replicate`) as the eighth `builtinCatalog` entry, plus
+  `appCollections_in_catalog` / empty-collections / unscoped-no-filter theorems.
+  Row-supplied collections do **not** belong in the static template — the
+  template stays pure policy.
+- **`PairingReconcile.Layering` (new pure derivation, not a new machine).** Model
+  `clampDataPlane` + `mergeLayered`: drop a data-plane layer's subscriptions
+  unless `isAppCollections`; always union replicator collections; prove
+  (a) app-collections subscriptions survive, (b) non-app data-plane
+  subscriptions clear, (c) control-plane base is preserved. Existing
+  PairingReconcile machine proofs (idempotence, filter-change-forces-reinstall,
+  …) are untouched — the layering change is additive beside the machine.
+- **Not modeled in Lean** (input-validation plumbing below the machine boundary;
+  fenced by Rust unit/conformance instead): the *source* of a data-plane
+  collection set (row vs template), soft-skip of malformed rows, and control-plane
+  rejection of `app-collections`. Those do not change what the reconcile machine
+  may do once it has a desired state.
+- **Rust fencing:**
+  - Conformance (`tests/conformance/pairing_reconcile.rs`): (ii) app-collections
+    subscription survives `merge_layered_desired` while network-control data-plane
+    still clears; (iii) co-existence with a control base (no filter/subscription
+    cross-contamination).
+  - In-crate unit tests (`engine.rs` `#[cfg(test)]`): (i) row collections resolve
+    as both replicator + subscription sets; (iv) empty/blank-only soft-skips;
+    (v) control-plane path soft-skips `app-collections`; plus a documented residual
+    that foreign `agent_did` still hard-fails the whole peer load.
 - Zero `sorry`s.
 
-If the resolution is a pure function over already-modeled quantities
-(template-id-gated row set vs template set), the proof obligation is light; if it
-is not, that is information (CLAUDE.md) and we stop to reconsider.
-
-## Acceptance e2e (TDD — written first, must fail first)
+## Acceptance e2e (final gate; after engine tasks)
 
 New test in `tests/e2e_triggers/` (sibling of `event_trigger_p2p_e2e.rs`),
 modeled on `p2p_replicated_doc_fires_event_trigger` but driving replication
 through **reconcile**, not manual admin:
 
-1. Two agent nodes A and B, P2P enabled, each running `DefraAgent::run`.
+1. Two agent nodes A and B, P2P enabled, **each running `DefraAgent::run`** (both
+   need the pairing reconciler — unlike the bare-writer existing P2P trigger e2e).
 2. Register an app-defined `@branchable` `ChangeProposed` schema on both.
 3. Materialize the peers through the real membership gate (signed
-   `AgentNetwork` + active `NetworkMembership` + fresh `PeerEndpoint`), so
+   `AgentNetwork` + active `NetworkMembership` + fresh `PeerEndpoint` written
+   **locally on each node** with real P2P `node_id` + listen address), so
    `data_plane_materialized_entry` returns `Some` on both — B-on-A and A-on-B.
-   (Implementation task: locate/build the in-process materialization path the
-   CLI `p2p network create` / `invite` / `join` flow uses.)
 4. On B: create a `Task` + `EventTrigger` watching `ChangeProposed` for
-   `created`; wait for it to reconcile into the active snapshot (ordering
-   invariant — trigger before replicator).
-5. **Co-existing control pairing**: establish a subagent (control) pairing on the
-   same A↔B peer and assert it stays intact across the data-plane reconcile.
+   `created`; wait for **document** reconcile into the active snapshot
+   (`RuntimeSnapshot.last_reconcile_result == "applied"`) — ordering invariant
+   (trigger before replicator).
+5. **Co-existing control pairing**: write `PeerPairingDesired` with template
+   **`network-control`** (not subagent) on the same A↔B peer; wait until
+   `PeerPairingApplied` shows control collections; capture that snapshot.
 6. Via **desired-state config**, write a `DataPlanePairingDesired` row on **both**
    nodes — mirroring the manual `install_one_way_replicator`, which does
-   `add_collections` + `add_replicator` on both sides (sender pushes; receiver
-   authorizes). Both rows carry the **same** `template: "app-collections"` and the
-   **same** `collections: ["ChangeProposed"]`:
-   - A's row targets peer B; B's row targets peer A.
-   - Both peers are already materializable (step 3), so both `load_desired`s
-     honor their rows.
-   - Both rows are written **after** B's trigger reconciles (step 4), preserving
-     the ordering invariant (`seed_seen_docs_for_collection` runs on an empty
-     collection → the merged doc is a genuine first-observation).
-   The reconciler — not the test — establishes both replicators + subscriptions.
+   `add_collections` + `add_replicator` on both sides. Both rows carry the
+   **same** `template: "app-collections"` and the **same**
+   `collections: ["ChangeProposed"]`; `agent_did` = local self DID; `peer_id` =
+   remote node_id:
+   - Both rows are written **after** B's trigger reconciles (step 4).
+   - Wait for pairing readiness via **`PeerPairingApplied`** (non-empty
+     `replicator_addresses` + `collections` contains `ChangeProposed`) — **not**
+     RuntimeSnapshot. Assert control collections from step 5 still present.
    No `add_replicator` / `add_collections` call in the test.
 7. Write a `ChangeProposed` doc on A; assert it replicates to B and fires B's
    `EventTrigger` as `created` — exactly one `AgentRequest` with the rendered
    prompt and matching trigger lineage, `last_status="fired"`, `fire_count=1`,
    `last_fired_source_doc_id` = the replicated doc id.
-8. Assert reconcile idempotence (a second sweep installs nothing new) and the
-   control pairing is untouched.
+8. Assert pairing idempotence (`PeerPairingApplied` stable across another sweep)
+   and the control pairing collections are untouched.
 9. **Malformed path** (guards the soft-skip fix): write a `DataPlanePairingDesired`
-   row with an empty/blank-only `collections` set and assert the co-existing
-   control pairing still reconciles (data-plane layer skipped, `base` intact) —
-   the tick is *not* marked `desired_read_failed`.
+   row with a blank-only `collections` set `["   "]` and assert the co-existing
+   control `PeerPairingApplied` is unchanged (data-plane layer skipped, `base`
+   intact). Soft-skip is **not** observable as `desired_read_failed` on
+   RuntimeSnapshot — observe applied-state stability only.
 
-The membership-materialization step is the heavy part of the harness; TDD forces
-it out. If an in-process materialization path proves prohibitively large, that is
-a signal to reconsider harness shape (e.g. CLI-subprocess like
-`cli_p2p_network.rs`) — but the product change (b) is unaffected.
+The membership-materialization step is the heavy part of the harness. If an
+in-process materialization path proves prohibitively large, that is a signal to
+reconsider harness shape (e.g. CLI-subprocess like `cli_p2p_network.rs`) — but
+the product change (b) is unaffected.
 
 ## Scope / non-goals
 

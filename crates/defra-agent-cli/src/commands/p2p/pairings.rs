@@ -171,10 +171,19 @@ pub(super) async fn p2p_pairings_remove(args: P2pPairingRefArgs) -> Result<()> {
 /// the normalized id. An unknown template is a hard error (with the catalog
 /// listed) rather than a silent fallback, since the operator named it explicitly.
 pub(super) fn resolve_pairing_template(template: &str) -> Result<String> {
-    use defra_agent::agent::p2p_reconcile::templates::{builtin_templates, resolve_template};
+    use defra_agent::agent::p2p_reconcile::templates::{
+        builtin_templates, resolve_template, APP_COLLECTIONS_TEMPLATE,
+    };
     let template = template.trim();
     if template.is_empty() {
         return Ok("conversation".to_string());
+    }
+    if template == APP_COLLECTIONS_TEMPLATE {
+        anyhow::bail!(
+            "the app-collections template is for DataPlanePairingDesired rows only; \
+             it supplies no collections on the control-plane pairing path — write a \
+             data-plane pairing with an explicit collection set instead"
+        );
     }
     if resolve_template(template).is_some() {
         return Ok(template.to_string());
@@ -910,6 +919,17 @@ mod tests {
         let error = resolve_pairing_template("nope").unwrap_err().to_string();
         assert!(error.contains("unknown scope template"));
         assert!(error.contains("conversation"));
+    }
+
+    #[test]
+    fn app_collections_rejected_on_generic_pairing_path() {
+        let err = resolve_pairing_template("app-collections")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("app-collections"),
+            "error must name the offending template: {err}"
+        );
     }
 
     #[test]

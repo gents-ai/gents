@@ -17,6 +17,7 @@ use crate::identity::AgentIdentity;
 use super::network::{GraphqlNetworkStore, NetworkEndpointEntry, NetworkStore};
 use super::templates::{
     resolve_template, scope_filter, Delivery, DidSource, PairingFilters, Scope,
+    APP_COLLECTIONS_TEMPLATE,
 };
 use super::{
     compute_owned_pairing_diff, DiffOp, EmbeddedRemoteP2pAdmin, PairingActual, PairingApplied,
@@ -496,6 +497,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
                 }}
                 DataPlanePairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
                     agent_did
+                    collections
                     replicator_addresses
                     template
                 }}
@@ -505,7 +507,8 @@ impl PairingStateStore for GraphqlPairingStateStore {
         ensure_no_errors(&response, "query pairing desired state")?;
         let base = first_row::<PairingStateRow>(&response, "PeerPairingDesired")?
             .map(|row| desired_from_pairing_row(row, self.identity.did()))
-            .transpose()?;
+            .transpose()?
+            .flatten();
         let materialized_entry = self
             .data_plane_materialized_entry(&raw_peer_id)
             .await
@@ -514,11 +517,9 @@ impl PairingStateStore for GraphqlPairingStateStore {
             materialized_entry,
             first_row::<PairingStateRow>(&response, "DataPlanePairingDesired")?,
         ) {
-            (Some(entry), Some(row)) => Some(data_plane_desired_from_pairing_row(
-                row,
-                &entry,
-                self.identity.did(),
-            )?),
+            (Some(entry), Some(row)) => {
+                data_plane_desired_from_pairing_row(row, &entry, self.identity.did())?
+            }
             _ => None,
         };
         Ok(merge_layered_desired(base, data_plane))
@@ -668,7 +669,10 @@ struct PeerIdRow {
     peer_id: String,
 }
 
-fn desired_from_pairing_row(row: PairingStateRow, local_did: &str) -> Result<PairingDesired> {
+fn desired_from_pairing_row(
+    row: PairingStateRow,
+    local_did: &str,
+) -> Result<Option<PairingDesired>> {
     let replicator_addresses = row
         .replicator_addresses
         .unwrap_or_default()
@@ -695,6 +699,19 @@ fn desired_from_pairing_row(row: PairingStateRow, local_did: &str) -> Result<Pai
         resolve_template(DEFAULT_PAIRING_TEMPLATE)
             .expect("default pairing template is in the catalog")
     });
+
+    // app-collections is a data-plane-only (bring-your-own) policy: a
+    // control-plane / PeerPairingDesired row cannot supply row collections, so
+    // it would resolve to empty wiring yet has_wiring() would be true (addresses
+    // present). Refuse to wire it. Soft-skip (Ok(None) + warn) so a raw-GraphQL
+    // row cannot install an empty-collection replicator.
+    if template.id == APP_COLLECTIONS_TEMPLATE {
+        tracing::warn!(
+            "PeerPairingDesired names the app-collections template, which is \
+             data-plane-only and supplies no collections here; skipping (no wiring)"
+        );
+        return Ok(None);
+    }
 
     // The scope filter value is the row's agent DID. For network-control rows
     // this is the remote member DID; for data-plane rows the loader first
@@ -726,20 +743,20 @@ fn desired_from_pairing_row(row: PairingStateRow, local_did: &str) -> Result<Pai
         Delivery::Replicate => replicator_collections.clone(),
     };
 
-    Ok(PairingDesired {
+    Ok(Some(PairingDesired {
         collections: subscription_collections,
         replicator_addresses,
         replicator_collections,
         replicator_filter,
         template_ids: BTreeSet::from([template.id.to_string()]),
-    })
+    }))
 }
 
 fn data_plane_desired_from_pairing_row(
     mut row: PairingStateRow,
     signed_endpoint: &NetworkEndpointEntry,
     self_did: &str,
-) -> Result<PairingDesired> {
+) -> Result<Option<PairingDesired>> {
     let row_addresses = row
         .replicator_addresses
         .as_ref()
@@ -810,21 +827,56 @@ fn data_plane_desired_from_pairing_row(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .collect::<BTreeSet<_>>();
-    let replicator_collections = template
-        .collections
-        .iter()
-        .map(|&c| c.to_string())
-        .collect::<BTreeSet<_>>();
-    let replicator_filter =
-        data_plane_scope_filter(&template.scope, template.collections, peer_did, self_did);
 
-    Ok(PairingDesired {
-        collections: BTreeSet::new(),
+    // app-collections (bring-your-own): the row supplies the collection set; the
+    // template supplies only scope (Unscoped) + delivery (Replicate). A blank set
+    // is malformed input — SOFT-SKIP this layer (Ok(None) + warn) rather than
+    // bail, so a bad app row never fails the whole peer's desired load and stalls
+    // a co-existing control pairing (reconcile_peer_tick desired_read_failed).
+    let (replicator_collections, subscription_collections): (BTreeSet<String>, BTreeSet<String>) =
+        if template.id == APP_COLLECTIONS_TEMPLATE {
+            let row_cols = row
+                .collections
+                .unwrap_or_default()
+                .into_iter()
+                .map(|c| c.trim().to_string())
+                .filter(|c| !c.is_empty())
+                .collect::<BTreeSet<_>>();
+            if row_cols.is_empty() {
+                tracing::warn!(
+                    peer_id = %signed_endpoint.peer_id,
+                    "app-collections DataPlanePairingDesired has no non-blank collections; \
+                     skipping this data-plane layer (control pairing unaffected)"
+                );
+                return Ok(None);
+            }
+            // Replicate: subscribe to the same set so the merged doc is observable.
+            (row_cols.clone(), row_cols)
+        } else {
+            // Legacy / template-driven data-plane rows: unchanged. Template
+            // collections drive the replicator; no subscription (push channel).
+            let cols = template
+                .collections
+                .iter()
+                .map(|&c| c.to_string())
+                .collect::<BTreeSet<_>>();
+            (cols, BTreeSet::new())
+        };
+
+    let filter_collections = replicator_collections
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let replicator_filter =
+        data_plane_scope_filter(&template.scope, &filter_collections, peer_did, self_did);
+
+    Ok(Some(PairingDesired {
+        collections: subscription_collections,
         replicator_addresses,
         replicator_collections,
         replicator_filter,
         template_ids: BTreeSet::from([template.id.to_string()]),
-    })
+    }))
 }
 
 fn scope_requires_peer_did(scope: &Scope) -> bool {
@@ -888,19 +940,25 @@ fn data_plane_scope_filter(
 /// Merge Layer-1 control-plane desired state with optional Layer-2 data-plane
 /// desired state for the same peer.
 ///
-/// Data-plane templates are delivered by filtered push replicators, so their
-/// collections extend only the per-peer replicator set. They must not extend the
-/// subscription set, otherwise conversation documents could gossip unfiltered.
+/// Most data-plane templates are delivered by filtered push replicators, so
+/// their collections extend only the per-peer replicator set — the subscription
+/// set is cleared so conversation data never gossips unfiltered. Exception:
+/// the `app-collections` (bring-your-own Unscoped/Replicate) policy preserves
+/// its subscription set so the merged doc is observable on both sides.
 pub fn merge_layered_desired(
     base: Option<PairingDesired>,
     data_plane: Option<PairingDesired>,
 ) -> Option<PairingDesired> {
     // Layer-2 desired rows add data-plane collections to the per-peer
-    // replicator, not to the subscription set. The subscription side must stay
-    // the Layer-1 network-control set so conversation data never gossips
+    // replicator, not to the subscription set — EXCEPT the app-collections
+    // (bring-your-own) policy, which is a whole-collection Replicate that must
+    // subscribe on both sides for the merged doc to be observable. All other
+    // data-plane layers keep the clear so conversation data never gossips
     // unfiltered.
     let data_plane = data_plane.map(|mut desired| {
-        desired.collections.clear();
+        if !desired.template_ids.contains(APP_COLLECTIONS_TEMPLATE) {
+            desired.collections.clear();
+        }
         desired
     });
     match (base, data_plane) {
@@ -1087,7 +1145,8 @@ mod tests {
             &signed_endpoint,
             "did:key:self",
         )
-        .expect("data-plane desired");
+        .expect("data-plane desired")
+        .expect("some data-plane layer");
 
         assert_eq!(
             desired.replicator_addresses,
@@ -1120,7 +1179,8 @@ mod tests {
             &signed_endpoint,
             "did:key:coord",
         )
-        .expect("data-plane coordinator desired");
+        .expect("data-plane coordinator desired")
+        .expect("some data-plane layer");
 
         assert_eq!(
             desired
@@ -1156,7 +1216,8 @@ mod tests {
             &signed_endpoint,
             "did:key:host",
         )
-        .expect("data-plane host desired");
+        .expect("data-plane host desired")
+        .expect("some data-plane layer");
 
         assert_eq!(desired.replicator_filter.len(), 8);
         for predicate in desired.replicator_filter.values() {
@@ -1844,7 +1905,8 @@ mod tests {
             desired_row(Some("conversation"), Some("did:key:bob")),
             "did:key:self",
         )
-        .expect("template resolves");
+        .expect("template resolves")
+        .expect("some desired layer");
 
         assert!(
             desired.collections.is_empty(),
@@ -1867,7 +1929,8 @@ mod tests {
             desired_row(Some("agent-config"), Some("did:key:bob")),
             "did:key:self",
         )
-        .expect("template resolves");
+        .expect("template resolves")
+        .expect("some desired layer");
 
         assert!(desired.collections.contains("AgentBehavior"));
         assert_eq!(desired.collections, desired.replicator_collections);
@@ -1883,7 +1946,8 @@ mod tests {
     fn missing_and_unknown_template_default_to_conversation() {
         let missing =
             desired_from_pairing_row(desired_row(None, Some("did:key:bob")), "did:key:self")
-                .expect("default resolves");
+                .expect("default resolves")
+                .expect("some desired layer");
         assert!(missing.collections.is_empty());
         assert!(missing.replicator_filter.contains_key("AgentRequest"));
 
@@ -1891,7 +1955,8 @@ mod tests {
             desired_row(Some("not-a-template"), Some("did:key:bob")),
             "did:key:self",
         )
-        .expect("default resolves");
+        .expect("default resolves")
+        .expect("some desired layer");
         assert_eq!(
             unknown.replicator_collections,
             missing.replicator_collections
@@ -1905,7 +1970,8 @@ mod tests {
             desired_row(Some("subagent-coordinator"), Some("did:key:host")),
             "did:key:coord",
         )
-        .expect("subagent coordinator template resolves");
+        .expect("subagent coordinator template resolves")
+        .expect("some desired layer");
 
         assert!(desired.collections.is_empty());
         assert_eq!(
@@ -1934,7 +2000,8 @@ mod tests {
             desired_row(Some("subagent-host"), Some("did:key:coord")),
             "did:key:host",
         )
-        .expect("subagent host template resolves");
+        .expect("subagent host template resolves")
+        .expect("some desired layer");
 
         assert!(desired.collections.is_empty());
         assert!(desired.replicator_collections.contains("AgentToolCall"));
@@ -1943,6 +2010,105 @@ mod tests {
             assert_eq!(predicate.field, "agent_did");
             assert_eq!(predicate.value, "did:key:host");
         }
+    }
+
+    #[test]
+    fn app_collections_on_control_plane_path_soft_skips() {
+        // A base/PeerPairingDesired row naming app-collections has no way to
+        // supply row collections; it must resolve to no wiring (soft-skip),
+        // never an empty-collection replicator.
+        let out = desired_from_pairing_row(
+            PairingStateRow {
+                agent_did: Some("did:key:peer".to_string()),
+                collections: None,
+                replicator_addresses: Some(vec!["addr-b".to_string()]),
+                template: Some("app-collections".to_string()),
+                replicator_filter: None,
+            },
+            "did:key:self",
+        )
+        .expect("resolve ok");
+        assert!(out.is_none(), "app-collections is invalid for a control-plane row");
+    }
+
+    #[test]
+    fn app_collections_row_resolves_row_collections_as_subscription_and_replicator() {
+        let signed_endpoint = NetworkEndpointEntry {
+            peer_id: "peer-b".to_string(),
+            agent_did: "did:key:peer-b".to_string(),
+            address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        };
+        let layer = data_plane_desired_from_pairing_row(
+            PairingStateRow {
+                agent_did: Some("did:key:self".to_string()),
+                collections: Some(vec!["ChangeProposed".to_string()]),
+                replicator_addresses: None,
+                template: Some("app-collections".to_string()),
+                replicator_filter: None,
+            },
+            &signed_endpoint,
+            "did:key:self",
+        )
+        .expect("resolve ok")
+        .expect("some layer");
+        assert!(layer.replicator_collections.contains("ChangeProposed"));
+        assert!(
+            layer.collections.contains("ChangeProposed"),
+            "app-collections must subscribe (Replicate)"
+        );
+        assert!(layer.replicator_filter.is_empty(), "unscoped => no filter");
+        assert!(layer.template_ids.contains("app-collections"));
+    }
+
+    #[test]
+    fn app_collections_empty_collections_soft_skips() {
+        let signed_endpoint = NetworkEndpointEntry {
+            peer_id: "peer-b".to_string(),
+            agent_did: "did:key:peer-b".to_string(),
+            address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        };
+        let out = data_plane_desired_from_pairing_row(
+            PairingStateRow {
+                agent_did: Some("did:key:self".to_string()),
+                collections: Some(vec!["   ".to_string()]),
+                replicator_addresses: None,
+                template: Some("app-collections".to_string()),
+                replicator_filter: None,
+            },
+            &signed_endpoint,
+            "did:key:self",
+        )
+        .expect("resolve ok (soft-skip is Ok(None), not Err)");
+        assert!(out.is_none(), "empty/blank app-collections set must soft-skip to None");
+    }
+
+    /// Residual (documented, not softened in #657): a foreign `agent_did` on a
+    /// data-plane row still hard-fails the whole peer load (`desired_read_failed`),
+    /// including a co-existing control pairing. Security refusal, not soft-skip.
+    #[test]
+    fn foreign_agent_did_still_hard_fails_whole_peer_load() {
+        let signed_endpoint = NetworkEndpointEntry {
+            peer_id: "peer-b".to_string(),
+            agent_did: "did:key:peer-b".to_string(),
+            address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        };
+        let err = data_plane_desired_from_pairing_row(
+            PairingStateRow {
+                agent_did: Some("did:key:someone-else".to_string()),
+                collections: Some(vec!["ChangeProposed".to_string()]),
+                replicator_addresses: None,
+                template: Some("app-collections".to_string()),
+                replicator_filter: None,
+            },
+            &signed_endpoint,
+            "did:key:self",
+        )
+        .expect_err("foreign agent_did must hard-fail, not soft-skip");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("foreign") || msg.contains("someone-else") || msg.contains("refusing"),
+            "error should name the refusal: {msg}"
+        );
     }
 
     /// End-to-end reconcile of a `Push` (conversation) template: a filtered
@@ -1954,7 +2120,8 @@ mod tests {
                 desired_row(Some("conversation"), Some("did:key:bob")),
                 "did:key:self",
             )
-            .expect("template resolves"),
+            .expect("template resolves")
+            .expect("some desired layer"),
         ));
         let admin = MockAdmin::default();
 
@@ -1996,7 +2163,8 @@ mod tests {
                 desired_row(Some("agent-config"), Some("did:key:bob")),
                 "did:key:self",
             )
-            .expect("template resolves"),
+            .expect("template resolves")
+            .expect("some desired layer"),
         ));
         let admin = MockAdmin::default();
 
@@ -2038,7 +2206,8 @@ mod tests {
                 desired_row(Some("conversation"), Some("did:key:bob")),
                 "did:key:self",
             )
-            .expect("template resolves"),
+            .expect("template resolves")
+            .expect("some desired layer"),
         ));
         // Applied state: addr1 already installed under a DIFFERENT (alice) filter.
         let mut alice_filter = PairingFilters::default();
