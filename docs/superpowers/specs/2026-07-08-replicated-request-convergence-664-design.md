@@ -100,6 +100,36 @@ delta"); only the Rust action differs.
    owner's terminal for an unconverged replica. Registered in the conformance
    module (and the structure fence if a Lean model is added).
 
+## Review pass 2 — proof↔implementation fidelity (folded in)
+
+A second review flagged the dominant risk as **proof↔implementation overclaim**: the
+first model kept `EmitTerminalDelta` enabled *until the peer matched the owner* (a
+convergence oracle the real owner does not have), while the code hard-stops at
+`TERMINAL_REDRIVE_CAP = 3`. So TLC-green proved an idealized re-drive, not what ships.
+Fixed by making the model faithful:
+
+- Replaced the boolean `Reemit` with a per-peer budget `Cap` = the shipping
+  `TERMINAL_REDRIVE_CAP`. `EmitTerminalDelta` is gated **only** by
+  `emitCount[peer] < Cap`, never by whether the peer converged. `TerminalConverges`
+  is now a **conditional theorem**: it holds iff `Cap` exceeds the delivery loss
+  (`MaxDrops + MaxCrashes`). Green = `Cap = 3` (outlasts 1 drop + 1 crash → converges);
+  Stuck = `Cap = 1` (budget < loss → reachably violated — the shipping cap's real
+  failure mode). Beyond the budget the code falls back to the next organic write
+  (out of model scope), stated explicitly.
+- Two modeling assumptions are now documented, not hidden: (i) at most one re-assert
+  per peer outstanding at a time (the 5s ticks are spaced so each PushLog resolves
+  first — without this a single `CrashPeer` could wipe all `Cap` simultaneously-in-flight
+  deltas, an interleaving the tick-spaced code never exhibits); (ii) peers are modeled
+  as receiving only terminal deltas, so intermediate replicated owner states
+  (`Claimed`/`Processing` — the literal #661 shape) are acknowledged benign-but-unmodeled
+  rather than implicitly excluded. `SingleClaimer` proves "no peer self-claim," not
+  "peers are never seen in an intermediate state."
+- Code: the re-drive doc comment no longer claims it "stops when converged" (it stops at
+  the cap; the owner can't observe convergence) or that "startup recovery re-drives"
+  (it handles stuck non-terminal rows; the re-drive itself refills its budget on the
+  next tick). Added an `agent_did == self` conjunct to the re-drive mutation filter for
+  defense-in-depth parity with the queue seams.
+
 ## Adversarial-review outcomes (folded in)
 
 An adversarial verification pass (liveness + safety + Rust binding, each

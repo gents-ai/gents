@@ -19,10 +19,23 @@ EXTENDS Naturals, FiniteSets, TLC
 (* Design (owner re-drive, passive peers): the owner periodically          *)
 (* re-asserts terminal state for requests it owns, forcing the terminal    *)
 (* delta back through the normal PushLog path. This model abstracts the    *)
-(* Phase-0 Rust binding (same-value re-assert / convergence_seq bump) as a *)
-(* single re-emittable EmitTerminalDelta action. Peers are strictly        *)
-(* passive: their only lifecycle action is applying a delivered owner       *)
-(* delta.                                                                   *)
+(* Phase-0 Rust binding (same-value re-assert) as a re-emittable           *)
+(* EmitTerminalDelta action. Peers are strictly passive: their only        *)
+(* lifecycle action is applying a delivered owner delta.                   *)
+(*                                                                         *)
+(* FIDELITY TO THE SHIPPING CODE. The owner has no back-channel telling it *)
+(* whether a peer has caught up, so it CANNOT stop re-emitting "once the   *)
+(* peer converges". The code re-asserts each terminal row a fixed          *)
+(* TERMINAL_REDRIVE_CAP times and then stops, converged or not. This model *)
+(* mirrors that exactly: EmitTerminalDelta is gated ONLY by a per-peer      *)
+(* budget emitCount[peer] < Cap, NOT by whether the peer already matches    *)
+(* the owner. Consequently TerminalConverges is a CONDITIONAL theorem:      *)
+(* it holds iff the budget Cap exceeds the delivery loss a peer suffers     *)
+(* (MaxDrops + MaxCrashes). The green config takes Cap = 3 (the shipping    *)
+(* cap) with one drop + one crash and converges; the Stuck config takes     *)
+(* Cap = 1 and does not (a lost single emission strands the peer). Beyond   *)
+(* the budget the code relies on the next organic write to the row — that   *)
+(* fallback is out of this model's scope.                                   *)
 (***************************************************************************)
 
 CONSTANTS
@@ -32,7 +45,9 @@ CONSTANTS
   MaxDrops,       \* how many terminal deltas the gossip channel may drop
   MaxCrashes,     \* total node crashes across owner + peers
   TerminalKind,   \* the terminal lifecycle states (e.g. Completed, Failed)
-  Reemit,         \* TRUE: owner re-drive enabled; FALSE: single-shot (diagnostic)
+  Cap,            \* per-peer re-emit budget (the shipping TERMINAL_REDRIVE_CAP):
+                  \* the owner re-asserts each peer's terminal AT MOST Cap times,
+                  \* WITHOUT observing whether the peer converged (no back-channel)
   AllowPeerClaim  \* FALSE normally; TRUE arms the adversarial peer-claim action
                   \* (the diagnostic that proves SingleClaimer is falsifiable)
 
@@ -49,7 +64,7 @@ ASSUME MaxDropsIsNat == MaxDrops \in Nat
 ASSUME MaxCrashesIsNat == MaxCrashes \in Nat
 ASSUME TerminalKindNonEmpty == TerminalKind # {}
 ASSUME TerminalKindDisjoint == TerminalKind \cap NonTerminal = {}
-ASSUME ReemitIsBoolean == Reemit \in BOOLEAN
+ASSUME CapIsPositiveNat == Cap \in (Nat \ {0})
 ASSUME AllowPeerClaimIsBoolean == AllowPeerClaim \in BOOLEAN
 
 Delta == [
@@ -65,7 +80,7 @@ VARIABLES
   deltaIdsUsed,    \* SUBSET DeltaId — ids consumed by re-emissions
   dropCount,       \* 0..MaxDrops — deltas dropped so far
   crashCount,      \* 0..MaxCrashes — node crashes so far
-  emittedTargets   \* SUBSET ReplicaHolder — peers a delta has ever been emitted for
+  emitCount        \* [ReplicaHolder -> 0..Cap] — terminal deltas emitted per peer
 
 vars == <<
   reqState,
@@ -74,7 +89,7 @@ vars == <<
   deltaIdsUsed,
   dropCount,
   crashCount,
-  emittedTargets
+  emitCount
 >>
 
 IsTerminal(s) == s \in TerminalKind
@@ -88,7 +103,7 @@ TypeOK ==
   /\ deltaIdsUsed    \in SUBSET DeltaId
   /\ dropCount       \in 0..MaxDrops
   /\ crashCount      \in 0..MaxCrashes
-  /\ emittedTargets  \in SUBSET ReplicaHolder
+  /\ emitCount       \in [ReplicaHolder -> 0..Cap]
 
 Init ==
   /\ reqState        = [n \in Node |-> "Pending"]
@@ -97,7 +112,7 @@ Init ==
   /\ deltaIdsUsed    = {}
   /\ dropCount       = 0
   /\ crashCount      = 0
-  /\ emittedTargets  = {}
+  /\ emitCount       = [peer \in ReplicaHolder |-> 0]
 
 (***************************************************************************)
 (* Owner-only lifecycle. The owner advances its OWN replica through the    *)
@@ -108,44 +123,59 @@ Init ==
 Claim ==
   /\ reqState[Owner] = "Pending"
   /\ reqState' = [reqState EXCEPT ![Owner] = "Claimed"]
-  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emittedTargets>>
+  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount>>
 
 Process ==
   /\ reqState[Owner] = "Claimed"
   /\ reqState' = [reqState EXCEPT ![Owner] = "Processing"]
-  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emittedTargets>>
+  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount>>
 
 Terminalize(k) ==
   /\ k \in TerminalKind
   /\ reqState[Owner] = "Processing"
   /\ reqState' = [reqState EXCEPT ![Owner] = k]
-  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emittedTargets>>
+  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount>>
 
 (***************************************************************************)
 (* Owner terminal re-drive. Abstracts the Rust binding (idempotent         *)
-(* same-value terminal re-assert / convergence_seq bump) as a re-emittable *)
-(* delta onto the gossip channel, targeted at one peer.                    *)
+(* same-value terminal re-assert) as a delta onto the gossip channel,      *)
+(* targeted at one peer.                                                    *)
 (*                                                                         *)
-(* Enabled while the owner is terminal and the peer has not yet converged. *)
-(* When Reemit = TRUE this is the anti-entropy re-drive: it may fire again  *)
-(* after a drop or a peer crash. When Reemit = FALSE it is single-shot per  *)
-(* peer (the pre-fix behavior: one PushLog delivery, no re-drive) — the     *)
-(* diagnostic that makes TerminalConverges reachable-violated.             *)
+(* Gated by the per-peer budget emitCount[peer] < Cap — NOT by whether the  *)
+(* peer has converged. This is the crux of fidelity to the shipping code:   *)
+(* the owner cannot observe convergence, so it spends a fixed budget of     *)
+(* re-emissions per peer and then stops. With Cap large enough to outlast    *)
+(* the delivery loss the peer converges; with Cap too small (the Stuck       *)
+(* diagnostic) a lost emission strands it.                                   *)
+(*                                                                         *)
+(* MODELING ASSUMPTION (tick spacing). Also gated on "no delta for this      *)
+(* peer already in flight" (AllDeltas). The shipping re-drive re-asserts at   *)
+(* most once per 5s reconcile tick, and the ticks are spaced far enough that *)
+(* each re-assert's PushLog is delivered, dropped, or crash-lost before the  *)
+(* next — so at most one re-assert per peer is ever outstanding. Without this *)
+(* guard the model would let the owner blast all Cap copies into the channel *)
+(* simultaneously and then lose every one to a SINGLE crash (CrashPeer       *)
+(* clears the whole pendingInbound at once) — an interleaving the tick-spaced *)
+(* code never exhibits. With the guard, each of the Cap re-asserts is an      *)
+(* independent attempt that resolves before the next, so the budget genuinely *)
+(* buys Cap delivery tries.                                                   *)
 (***************************************************************************)
 
 FreshDeltaIds(k) == Cardinality(DeltaId \ deltaIdsUsed) >= k
 
+PeerHasInflightDelta(peer) == \E d \in AllDeltas : d.target = peer
+
 EmitTerminalDelta(peer) ==
   /\ peer \in ReplicaHolder
   /\ IsTerminal(reqState[Owner])
-  /\ reqState[peer] # reqState[Owner]        \* bounded re-drive: stop once converged
-  /\ (Reemit \/ peer \notin emittedTargets)  \* Reemit=FALSE => at most one emission per peer
+  /\ emitCount[peer] < Cap
+  /\ ~PeerHasInflightDelta(peer)
   /\ FreshDeltaIds(1)
   /\ LET id == CHOOSE i \in DeltaId \ deltaIdsUsed : TRUE
          d  == [id |-> id, target |-> peer, value |-> reqState[Owner]]
-     IN /\ messages'       = messages \cup {d}
-        /\ deltaIdsUsed'   = deltaIdsUsed \cup {id}
-        /\ emittedTargets' = emittedTargets \cup {peer}
+     IN /\ messages'     = messages \cup {d}
+        /\ deltaIdsUsed' = deltaIdsUsed \cup {id}
+        /\ emitCount'    = [emitCount EXCEPT ![peer] = @ + 1]
   /\ UNCHANGED <<reqState, pendingInbound, dropCount, crashCount>>
 
 (***************************************************************************)
@@ -156,14 +186,14 @@ DeliverDelta(d) ==
   /\ d \in messages
   /\ messages'       = messages \ {d}
   /\ pendingInbound' = pendingInbound \cup {d}
-  /\ UNCHANGED <<reqState, deltaIdsUsed, dropCount, crashCount, emittedTargets>>
+  /\ UNCHANGED <<reqState, deltaIdsUsed, dropCount, crashCount, emitCount>>
 
 DropDelta(d) ==
   /\ d \in messages
   /\ dropCount < MaxDrops
   /\ messages'  = messages \ {d}
   /\ dropCount' = dropCount + 1
-  /\ UNCHANGED <<reqState, pendingInbound, deltaIdsUsed, crashCount, emittedTargets>>
+  /\ UNCHANGED <<reqState, pendingInbound, deltaIdsUsed, crashCount, emitCount>>
 
 (***************************************************************************)
 (* Peer applies a delivered owner delta. This is the ONLY action that      *)
@@ -176,7 +206,24 @@ PersistDeltaOnPeer(d) ==
   /\ d \in pendingInbound
   /\ pendingInbound' = pendingInbound \ {d}
   /\ reqState'       = [reqState EXCEPT ![d.target] = d.value]
-  /\ UNCHANGED <<messages, deltaIdsUsed, dropCount, crashCount, emittedTargets>>
+  /\ UNCHANGED <<messages, deltaIdsUsed, dropCount, crashCount, emitCount>>
+
+(***************************************************************************)
+(* Crash abstraction. A peer crash loses its volatile (not-yet-persisted)  *)
+(* inbound deltas; owner-durable terminal state survives an owner restart. *)
+(***************************************************************************)
+
+CrashPeer(peer) ==
+  /\ peer \in ReplicaHolder
+  /\ crashCount < MaxCrashes
+  /\ pendingInbound' = {d \in pendingInbound : d.target # peer}
+  /\ crashCount'     = crashCount + 1
+  /\ UNCHANGED <<reqState, messages, deltaIdsUsed, dropCount, emitCount>>
+
+CrashOwner ==
+  /\ crashCount < MaxCrashes
+  /\ crashCount' = crashCount + 1
+  /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, emitCount>>
 
 (***************************************************************************)
 (* Adversarial peer claim (diagnostic). A peer transitions its OWN replica  *)
@@ -192,24 +239,7 @@ PeerClaimsForeign(peer) ==
   /\ peer \in ReplicaHolder
   /\ reqState[peer] = "Pending"
   /\ reqState' = [reqState EXCEPT ![peer] = "Claimed"]
-  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emittedTargets>>
-
-(***************************************************************************)
-(* Crash abstraction. A peer crash loses its volatile (not-yet-persisted)  *)
-(* inbound deltas; owner-durable terminal state survives an owner restart. *)
-(***************************************************************************)
-
-CrashPeer(peer) ==
-  /\ peer \in ReplicaHolder
-  /\ crashCount < MaxCrashes
-  /\ pendingInbound' = {d \in pendingInbound : d.target # peer}
-  /\ crashCount'     = crashCount + 1
-  /\ UNCHANGED <<reqState, messages, deltaIdsUsed, dropCount, emittedTargets>>
-
-CrashOwner ==
-  /\ crashCount < MaxCrashes
-  /\ crashCount' = crashCount + 1
-  /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, emittedTargets>>
+  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount>>
 
 (***************************************************************************)
 (* Safety invariants.                                                      *)
@@ -223,6 +253,17 @@ CrashOwner ==
 \* AllowPeerClaim in the MC...PeerClaim diagnostic) drives a peer into Claimed
 \* and reachably violates it — so the green run is evidence the fence holds,
 \* not a type artifact.
+\*
+\* MODELING ASSUMPTION (scope). This model abstracts a peer replica as receiving
+\* only the owner's TERMINAL deltas, so a modeled peer is only ever Pending or a
+\* delivered terminal. In production a peer replica also carries the owner's
+\* replicated INTERMEDIATE states (Claimed/Processing) — that is the literal
+\* #661 shape (peers stuck at "processing"). Those are benign (owner-originated,
+\* never self-claimed) and orthogonal to the terminal-convergence property under
+\* study, so they are not modeled here; SingleClaimer proves the property that
+\* matters — a peer never self-originates a claim — not that a peer is never
+\* observed in an intermediate state. Modeling intermediate-state replication
+\* (with CRDT priority ordering) is a separate fidelity extension.
 SingleClaimer ==
   \A n \in ReplicaHolder :
     /\ reqState[n] \notin {"Claimed", "Processing"}
@@ -240,8 +281,10 @@ DeltaBackedByOwnerTerminal ==
 DeltaIdsTracked ==
   \A d \in AllDeltas : d.id \in deltaIdsUsed
 
+\* The total re-emissions are bounded by the per-peer budget: emitCount already
+\* caps each peer at Cap, so deltaIdsUsed can never exceed Cap * |ReplicaHolder|.
 StateBound ==
-  Cardinality(deltaIdsUsed) <= 4
+  Cardinality(deltaIdsUsed) <= Cap * Cardinality(ReplicaHolder)
 
 (***************************************************************************)
 (* Transitions and fairness.                                               *)
@@ -259,12 +302,13 @@ Next ==
   \/ \E peer \in ReplicaHolder : CrashPeer(peer)
   \/ CrashOwner
 
-\* Weak fairness on the re-drive workers only: the owner keeps re-emitting
-\* the terminal delta, and delivery/persistence make progress. No fairness on
-\* the owner lifecycle (Claim/Process/Terminalize), drops, or crashes — those
-\* are voluntary. This is exactly what makes the re-emit load-bearing: bounded
-\* drops/crashes cannot starve convergence only because Emit is re-emittable
-\* AND fair.
+\* Weak fairness on the re-drive workers only: the owner keeps re-emitting the
+\* terminal delta until its per-peer budget is spent, and delivery/persistence
+\* make progress. No fairness on the owner lifecycle (Claim/Process/Terminalize),
+\* drops, or crashes — those are voluntary. Convergence is therefore driven by
+\* the re-emit BUDGET, not by fairness alone: once emitCount[peer] = Cap the
+\* re-emit is disabled, so if the budget is smaller than the loss a peer
+\* suffers, fairness cannot rescue it (the Stuck diagnostic).
 Fairness ==
   /\ \A peer \in ReplicaHolder : WF_vars(EmitTerminalDelta(peer))
   /\ WF_vars(\E d \in messages : DeliverDelta(d))
@@ -273,7 +317,10 @@ Fairness ==
 Spec == Init /\ [][Next]_vars /\ Fairness
 
 (***************************************************************************)
-(* Liveness: owner-terminal converges to every replica holder.             *)
+(* Liveness: owner-terminal converges to every replica holder — CONDITIONAL *)
+(* on the re-emit budget Cap exceeding the delivery loss (MaxDrops +         *)
+(* MaxCrashes). Holds in the green config (Cap = 3 > 1 drop + 1 crash);      *)
+(* reachably violated in the Stuck config (Cap = 1 <= the loss).            *)
 (***************************************************************************)
 
 TerminalConverges ==
