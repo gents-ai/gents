@@ -6,13 +6,22 @@ use super::*;
 
 impl RequestLifecycle {
     pub async fn recover_all(node: &EmbeddedNode, agent_did: &str) -> Result<RecoveryReport> {
+        // Load-bearing order: first make every stale response terminal (and
+        // manufacture missing response documents), then treat those terminal
+        // responses as durable request-repair intent. Do not collapse this
+        // sequence back into a struct literal whose field order is easy to
+        // reorder during refactoring.
+        let responses_recovered = recover_stuck_responses(node, agent_did).await?
+            + recover_missing_response_documents(node, agent_did).await?;
+        let requests_recovered = Self::repair_terminal_requests(node, agent_did)
+            .await?
+            .repaired;
+        let conversations_recovered = recover_stuck_conversations(node, agent_did).await?;
+
         Ok(RecoveryReport {
-            responses_recovered: recover_stuck_responses(node, agent_did).await?
-                + recover_missing_response_documents(node, agent_did).await?,
-            requests_recovered: Self::repair_terminal_requests(node, agent_did)
-                .await?
-                .repaired,
-            conversations_recovered: recover_stuck_conversations(node, agent_did).await?,
+            responses_recovered,
+            requests_recovered,
+            conversations_recovered,
         })
     }
 
@@ -246,10 +255,15 @@ impl RequestLifecycle {
                 .error_message
                 .as_deref()
                 .unwrap_or_default();
+            let response_was_interrupted = terminal_response
+                .interrupted_at
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+                || response_reason == crate::streaming::INTERRUPTED_RESPONSE_ERROR_SENTINEL;
             let (next_status, next_lifecycle_state) =
                 if matches!(response_status.as_str(), "complete" | "completed") {
                     ("completed", PersistedLifecycleState::Completed.as_str())
-                } else if response_reason == "interrupted" {
+                } else if response_was_interrupted {
                     ("interrupted", PersistedLifecycleState::Interrupted.as_str())
                 } else {
                     ("error", PersistedLifecycleState::Failed.as_str())
@@ -257,7 +271,12 @@ impl RequestLifecycle {
             let terminalized_at = chrono::Utc::now().to_rfc3339();
             let escaped_terminalized_at = escape_graphql_string(&terminalized_at);
             let escaped_doc_id = escape_graphql_string(doc_id);
-            let escaped_failure_reason = escape_graphql_string(response_reason);
+            let failure_reason = match next_lifecycle_state {
+                state if state == PersistedLifecycleState::Completed.as_str() => "",
+                state if state == PersistedLifecycleState::Interrupted.as_str() => "interrupted",
+                _ => response_reason,
+            };
+            let escaped_failure_reason = escape_graphql_string(failure_reason);
             let escaped_agent_did = escape_graphql_string(agent_did);
             let stale_states = crate::lifecycle::stuck_request_lifecycle_state_graphql_list();
 

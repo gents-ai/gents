@@ -493,6 +493,107 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
         .await
         .unwrap();
     assert_eq!(duplicate.repaired, 0, "duplicate observation is idempotent");
+
+    // A provider is allowed to return the ordinary text "interrupted". That
+    // must remain a failed outcome unless the response carries the runtime's
+    // reserved interrupt sentinel or an interrupted_at stamp.
+    let provider_request_id = "convergence-provider-interrupted-message";
+    let provider_session_id = "convergence-provider-interrupted-session";
+    create_owned_request(
+        &db.node,
+        provider_request_id,
+        provider_session_id,
+        OWNER_DID,
+        "processing",
+        "processing",
+    )
+    .await;
+    let provider_response_doc_id = create_response_with_status(
+        &db.node,
+        provider_request_id,
+        provider_request_id,
+        provider_session_id,
+        "error",
+    )
+    .await;
+    let escaped_provider_response_doc_id = escape_graphql_string(&provider_response_doc_id);
+    let response = db
+        .node
+        .execute(&format!(
+            r#"mutation {{
+                update_AgentResponse(
+                    filter: {{ _docID: {{ _eq: "{escaped_provider_response_doc_id}" }} }},
+                    input: {{ error_message: "interrupted" }}
+                ) {{ _docID }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "seed provider interrupted message: {:?}",
+        response.errors
+    );
+
+    let provider_repair = RequestLifecycle::repair_terminal_requests(&db.node, OWNER_DID)
+        .await
+        .unwrap();
+    assert_eq!(provider_repair.repaired, 1);
+    let provider_row = fetch_convergence_row(&db.node, provider_request_id).await;
+    assert_eq!(provider_row.status, "error");
+    assert_eq!(provider_row.lifecycle_state, "failed");
+    assert_eq!(provider_row.failure_reason.as_deref(), Some("interrupted"));
+
+    // The reserved durable marker remains sufficient even if the earlier
+    // interrupted_at stamp exhausted its own retries before response finalize.
+    let runtime_interrupt_request_id = "convergence-runtime-interrupt-sentinel";
+    let runtime_interrupt_session_id = "convergence-runtime-interrupt-session";
+    create_owned_request(
+        &db.node,
+        runtime_interrupt_request_id,
+        runtime_interrupt_session_id,
+        OWNER_DID,
+        "processing",
+        "processing",
+    )
+    .await;
+    let runtime_interrupt_response_doc_id = create_response_with_status(
+        &db.node,
+        runtime_interrupt_request_id,
+        runtime_interrupt_request_id,
+        runtime_interrupt_session_id,
+        "error",
+    )
+    .await;
+    let escaped_runtime_interrupt_response_doc_id =
+        escape_graphql_string(&runtime_interrupt_response_doc_id);
+    let response = db
+        .node
+        .execute(&format!(
+            r#"mutation {{
+                update_AgentResponse(
+                    filter: {{ _docID: {{ _eq: "{escaped_runtime_interrupt_response_doc_id}" }} }},
+                    input: {{ error_message: "__defra_agent_runtime_interrupted__" }}
+                ) {{ _docID }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "seed runtime interrupt sentinel: {:?}",
+        response.errors
+    );
+
+    let runtime_interrupt_repair = RequestLifecycle::repair_terminal_requests(&db.node, OWNER_DID)
+        .await
+        .unwrap();
+    assert_eq!(runtime_interrupt_repair.repaired, 1);
+    let runtime_interrupt_row = fetch_convergence_row(&db.node, runtime_interrupt_request_id).await;
+    assert_eq!(runtime_interrupt_row.status, "interrupted");
+    assert_eq!(runtime_interrupt_row.lifecycle_state, "interrupted");
+    assert_eq!(
+        runtime_interrupt_row.failure_reason.as_deref(),
+        Some("interrupted")
+    );
 }
 
 /// Recovery-drift fix: `recover_stuck_requests` keys the stale set on

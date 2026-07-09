@@ -390,6 +390,14 @@ Crash-enabled two-collection attempts were stopped for tractability, not propert
   replay completion remain external assumptions. The connection tracker covers
   local dial, remote-first reconnect, and daemon startup, but permanent
   disconnect or permanent reinstall failure is outside the liveness claim.
+- **Sub-sweep connection flaps.** `peerOnline` does not model a peer that drops
+  and reconnects entirely between two reconciler samples. Production likewise
+  detects inactive-to-active edges only at sweeps (although document-update
+  events normally trigger extra sweeps during redrive). A partition that lasts
+  beyond the request-write cap but disappears wholly between samples can evade
+  reconnect replay and leave a stale terminal replica. Closing that residual
+  requires a transport reconnect event or independent anti-entropy signal, not
+  a stronger claim about the current polling tracker.
 - **Crash-enabled multi-collection scope.** `MCReversePairingMulti.cfg` verifies `Collection = {c1, c2}` with `MaxCrashes = 0`. Attempts with one or two crashes did not fail, but crossed the reference runtime cutoff during liveness checking. The leads-to property is parametric in `(n, p, c)`, so the multi-collection no-crash run is a sanity check for collection-generic structure rather than a replacement for the default crash-recovery bound.
 - **Per-action SF on Reconcile.** Current `\A n \in Node : SF_vars(Reconcile(n))` enforces fairness on each node's reconcile loop but treats the disjunction over `(p, c)` as one action. Multi-collection liveness may need per-(p, c) fairness: `\A n, p \in Node, c \in Collection : SF_vars(ReconcileInstall(n, p, c) \/ ReconcileTeardown(n, p, c))`. **Follow-up:** add when multi-collection runs are needed.
 - **StateBound constraint.** `Cardinality(rpcIdsUsed) <= 4` bounds total RPCs ever issued in any trace. This avoids the bounded-pool artifact but limits exploration depth in long-running traces. **Follow-up:** lift the bound or replace with a different bound (e.g., per-cycle limits) once the model is stable.

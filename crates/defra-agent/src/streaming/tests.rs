@@ -226,7 +226,7 @@ fn build_finalize_mutation_clears_tail_without_buffer() {
             session_id: None,
             content: String::new(),
             status: "streaming".to_string(),
-            error_message: None,
+            error_message: Some("stale provider error".to_string()),
             token_count: 0,
             interrupted_at: None,
         }),
@@ -244,6 +244,11 @@ fn build_finalize_mutation_clears_tail_without_buffer() {
     assert!(mutation.contains(r#"update_AgentRequest("#));
     assert!(mutation.contains(r#"request_id: { _eq: "req-1" }"#));
     assert!(mutation.contains(r#"lifecycle_state: "completed""#));
+    assert!(mutation.contains(r#"failure_reason: """#));
+    assert!(
+        !mutation.contains(r#"failure_reason: "stale provider error""#),
+        "complete finalization must not carry a stale response error into the request"
+    );
     assert!(mutation.contains(r#"terminal_redrive_attempts: 0"#));
     // content and reasoning are cleared to "" on finalize (issue #64 contract)
     assert!(mutation.contains(r#"content: """#));
@@ -789,7 +794,7 @@ async fn finalize_interrupted_response_does_not_rewrite_request_failed() {
     );
     assert_eq!(
         row.get("error_message").and_then(|value| value.as_str()),
-        Some("interrupted")
+        Some(INTERRUPTED_RESPONSE_ERROR_SENTINEL)
     );
     assert_eq!(
         row.get("interrupted_at").and_then(|value| value.as_str()),

@@ -69,6 +69,7 @@ pub(super) async fn lookup_terminal_response_by_request_id(
             ) {{
                 status
                 error_message
+                interrupted_at
             }}
         }}"#
     );

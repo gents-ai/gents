@@ -280,6 +280,21 @@ async fn sweep_pairings(
             match reconcile_peer_tick_with_replay(admin, store, &peer_id, force_replay).await {
                 Ok(outcome) => {
                     if outcome.desired_read_failed {
+                        // Desired-state failure performs no topology work, but
+                        // the connectivity observation is still valid. Record
+                        // it before continuing so a first-sweep read failure
+                        // does not leave the peer absent from the tracker and
+                        // manufacture a startup/reconnect replay on the next
+                        // healthy read. Preserve an existing false -> true edge,
+                        // though: that false also means replay is pending, and
+                        // the failed desired read gave us no chance to perform it.
+                        let replay_pending = active_before
+                            && replay_connections
+                                .get(&peer_id)
+                                .is_some_and(|active| !active);
+                        if !replay_pending {
+                            replay_connections.insert(peer_id.clone(), active_before);
+                        }
                         continue;
                     }
                     if !outcome.ops_applied.is_empty() {
@@ -1455,6 +1470,10 @@ mod tests {
         /// When set, `connect` fails after recording the call — modeling the
         /// Linux redial-timeout that motivated the active-peer gate.
         fail_connect: bool,
+        /// Number of upcoming replicator installs to fail. This models the
+        /// torn reconnect-replay window where delete succeeds but reinstall
+        /// transiently fails; the next topology diff must heal it.
+        fail_add_replicator_attempts: Mutex<usize>,
     }
 
     #[async_trait]
@@ -1492,6 +1511,14 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((addresses.to_vec(), filters.clone()));
+            let mut remaining_failures = self.fail_add_replicator_attempts.lock().unwrap();
+            if *remaining_failures > 0 {
+                *remaining_failures -= 1;
+                return Err(RemoteP2pAdminError::RpcError(
+                    "transient add_replicator failure".into(),
+                ));
+            }
+            drop(remaining_failures);
             for address in addresses {
                 // Like the real adapter, the transport records the carried
                 // collection set in *id* space; `read_actual` reverse-resolves
@@ -1638,6 +1665,163 @@ mod tests {
         assert!(outcome.desired_read_failed);
         assert!(outcome.ops_applied.is_empty());
         assert!(admin.emitted.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn desired_read_failure_records_connectivity_without_spurious_replay() {
+        let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
+        let desired = PairingDesired {
+            replicator_addresses: set(&["addr1"]),
+            replicator_collections: set(&["AgentRequest"]),
+            replicator_filter: filter.clone(),
+            template_ids: set(&["subagent-host"]),
+            ..Default::default()
+        };
+        let store = MockStore {
+            desired: Mutex::new(Err("transient desired read".into())),
+            applied: Mutex::new(PairingApplied {
+                replicator_addresses: set(&["addr1"]),
+                replicator_filter: filter,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let admin = MockAdmin {
+            active: Mutex::new(vec!["peer-a".into()]),
+            ..Default::default()
+        };
+        admin.replicators.lock().unwrap().insert(
+            "addr1".into(),
+            RemoteReplicator {
+                id: Some("id-addr1".into()),
+                collections: vec![mock_collection_id("AgentRequest")],
+                address: Some("addr1".into()),
+            },
+        );
+        let mut replay_connections = BTreeMap::new();
+
+        sweep_pairings(&admin, &store, &mut replay_connections)
+            .await
+            .expect("degraded desired-read sweep");
+        assert_eq!(replay_connections.get("peer-a"), Some(&true));
+
+        *store.desired.lock().unwrap() = Ok(Some(desired));
+        sweep_pairings(&admin, &store, &mut replay_connections)
+            .await
+            .expect("healthy follow-up sweep");
+
+        assert!(
+            admin.emitted.lock().unwrap().is_empty(),
+            "a desired-read recovery without a connection edge must not delete+reinstall"
+        );
+        assert_eq!(replay_connections.get("peer-a"), Some(&true));
+    }
+
+    #[tokio::test]
+    async fn desired_read_failure_during_reconnect_keeps_replay_pending() {
+        let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
+        let desired = PairingDesired {
+            replicator_addresses: set(&["addr1"]),
+            replicator_collections: set(&["AgentRequest"]),
+            replicator_filter: filter.clone(),
+            template_ids: set(&["subagent-host"]),
+            ..Default::default()
+        };
+        let store = MockStore {
+            desired: Mutex::new(Err("transient desired read".into())),
+            applied: Mutex::new(PairingApplied {
+                replicator_addresses: set(&["addr1"]),
+                replicator_filter: filter,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let admin = MockAdmin {
+            active: Mutex::new(vec!["peer-a".into()]),
+            ..Default::default()
+        };
+        admin.replicators.lock().unwrap().insert(
+            "addr1".into(),
+            RemoteReplicator {
+                id: Some("id-addr1".into()),
+                collections: vec![mock_collection_id("AgentRequest")],
+                address: Some("addr1".into()),
+            },
+        );
+        let mut replay_connections = BTreeMap::from([("peer-a".to_string(), false)]);
+
+        sweep_pairings(&admin, &store, &mut replay_connections)
+            .await
+            .expect("degraded reconnect sweep");
+        assert_eq!(replay_connections.get("peer-a"), Some(&false));
+
+        *store.desired.lock().unwrap() = Ok(Some(desired));
+        sweep_pairings(&admin, &store, &mut replay_connections)
+            .await
+            .expect("healthy follow-up replays pending reconnect");
+
+        assert_eq!(replay_connections.get("peer-a"), Some(&true));
+        assert_eq!(
+            *admin.emitted.lock().unwrap(),
+            vec![
+                DiffOp::TeardownReplicator("addr1".into()),
+                DiffOp::InstallReplicator("addr1".into()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_reconnect_replay_is_healed_by_next_tick_diff() {
+        let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
+        let store = MockStore::with_desired(Some(PairingDesired {
+            replicator_addresses: set(&["addr1"]),
+            replicator_collections: set(&["AgentRequest"]),
+            replicator_filter: filter.clone(),
+            template_ids: set(&["subagent-host"]),
+            ..Default::default()
+        }));
+        *store.applied.lock().unwrap() = PairingApplied {
+            replicator_addresses: set(&["addr1"]),
+            replicator_filter: filter,
+            ..Default::default()
+        };
+        let admin = MockAdmin {
+            active: Mutex::new(vec!["peer-a".into()]),
+            fail_add_replicator_attempts: Mutex::new(1),
+            ..Default::default()
+        };
+        admin.replicators.lock().unwrap().insert(
+            "addr1".into(),
+            RemoteReplicator {
+                id: Some("id-addr1".into()),
+                collections: vec![mock_collection_id("AgentRequest")],
+                address: Some("addr1".into()),
+            },
+        );
+        let mut replay_connections = BTreeMap::new();
+
+        sweep_pairings(&admin, &store, &mut replay_connections)
+            .await
+            .expect("sweep contains per-peer replay failure");
+        assert_eq!(replay_connections.get("peer-a"), Some(&false));
+        assert!(admin.replicators.lock().unwrap().is_empty());
+        assert_eq!(
+            *admin.emitted.lock().unwrap(),
+            vec![DiffOp::TeardownReplicator("addr1".into())]
+        );
+
+        sweep_pairings(&admin, &store, &mut replay_connections)
+            .await
+            .expect("next sweep heals torn replay");
+        assert_eq!(replay_connections.get("peer-a"), Some(&true));
+        assert!(admin.replicators.lock().unwrap().contains_key("addr1"));
+        assert_eq!(
+            *admin.emitted.lock().unwrap(),
+            vec![
+                DiffOp::TeardownReplicator("addr1".into()),
+                DiffOp::InstallReplicator("addr1".into()),
+            ]
+        );
     }
 
     #[tokio::test]

@@ -25,6 +25,12 @@ use queries::{
 
 const MAX_LIVE_REASONING_BYTES: usize = 64 * 1024;
 
+/// Reserved durable marker for a response finalized by the runtime interrupt
+/// path. This must not overlap plausible provider error text: request repair
+/// uses it to distinguish an interrupt from a provider failure whose message
+/// happens to be the ordinary word "interrupted".
+pub(crate) const INTERRUPTED_RESPONSE_ERROR_SENTINEL: &str = "__defra_agent_runtime_interrupted__";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamStatus {
     Streaming,
@@ -327,7 +333,7 @@ impl DefraStreamWriter {
         self.finalize_inner(
             doc_id,
             StreamStatus::Error,
-            Some("interrupted"),
+            Some(INTERRUPTED_RESPONSE_ERROR_SENTINEL),
             RequestFinalizeMode::ResponseOnly,
         )
         .await
@@ -721,8 +727,11 @@ fn build_finalize_mutation(
 ) -> String {
     let escaped_doc_id = escape_graphql_string(doc_id);
     let escaped_now = escape_graphql_string(now);
-    let effective_error_message =
-        error_message.or_else(|| existing.and_then(|response| response.error_message.as_deref()));
+    let effective_error_message = match status {
+        StreamStatus::Error => error_message
+            .or_else(|| existing.and_then(|response| response.error_message.as_deref())),
+        StreamStatus::Complete | StreamStatus::Streaming => None,
+    };
     let request_transition = match request_mode {
         RequestFinalizeMode::UpdateRequest => existing
             .map(|existing| {

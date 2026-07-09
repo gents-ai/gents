@@ -773,7 +773,10 @@ async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCa
                 r#"mutation {{
                     update_AgentResponse(
                         filter: {{ _docID: {{ _eq: "{escaped_response_doc_id}" }} }},
-                        input: {{ error_message: "interrupted" }}
+                        input: {{
+                            error_message: "interrupted",
+                            interrupted_at: "2026-07-09T00:00:00Z"
+                        }}
                     ) {{ _docID }}
                 }}"#
             ))

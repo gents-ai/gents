@@ -184,8 +184,9 @@ contract:
    all-storage-error retry. If retries exhaust after the response is durable,
    startup and periodic `RequestLifecycle::repair_terminal_requests` finish the
    matching `claimed`/`processing` request without re-executing it. The closed
-   response reason `interrupted` repairs to the interrupted request terminal;
-   other response errors repair to failed.
+   response's reserved runtime-interrupt sentinel (or its `interrupted_at`
+   stamp) repairs to the interrupted request terminal; ordinary provider error
+   text, including the literal word `interrupted`, repairs to failed.
 2. `failure_reason` is latched before I/O and included in the terminal request
    mutation. The durable response's `error_message` is the restart-safe source
    for repair, so a failed standalone reason write cannot lose the terminal
@@ -199,7 +200,11 @@ contract:
    When an existing subagent pairing reconnects, the reconciler reinstalls its
    already-desired replicator once. DefraDB's install path performs a full replay
    of current owner-authored heads. A failed reinstall remains retryable through
-   the ordinary topology diff on the next tick.
+   the ordinary topology diff on the next tick. The in-memory connection tracker
+   starts empty, so the first startup sweep with readable desired state
+   intentionally performs this one bounded delete+reinstall for each configured
+   subagent peer; rolling fleet restarts therefore normally replay each pairing
+   once per restarted daemon.
 5. Every request mutation is owner-scoped. Foreign replicas remain passive;
    duplicate response observations and bridge projections remain absorbed by
    source-state guards.
@@ -227,5 +232,10 @@ violations. Code: `cargo test -p defra-agent` (full) + `cargo check --workspace
   configured peer eventually reconnecting and completing full replay. Permanent
   storage failure, permanent partition, revoked authorization, or an invalid
   replicator filter are observable retrying states, not claimed convergence.
+- Reconnect detection is sampled. A disconnect that lasts beyond the redrive
+  cap but drops and recovers wholly between pairing sweeps produces no observed
+  inactive-to-active edge, so replay is not guaranteed. Update-triggered sweeps
+  narrow this window; eliminating it requires a transport reconnect event or
+  DefraDB anti-entropy hook.
 
 Refs #664, #661, #663, #630. defradb.rs#1074.

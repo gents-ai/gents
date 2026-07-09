@@ -44,6 +44,8 @@ pub(super) struct ResponseTerminalRow {
     pub(super) status: String,
     #[serde(default)]
     pub(super) error_message: Option<String>,
+    #[serde(default)]
+    pub(super) interrupted_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
