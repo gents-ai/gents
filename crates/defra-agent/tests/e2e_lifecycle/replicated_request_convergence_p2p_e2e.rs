@@ -28,9 +28,7 @@ use std::time::{Duration, Instant};
 
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{
-    RequestLifecycle, TERMINAL_REDRIVE_CAP,
-};
+use defra_agent::{RequestLifecycle, TERMINAL_REDRIVE_CAP};
 use serde::Deserialize;
 
 use crate::support::test_p2p_db;
@@ -279,12 +277,7 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     let owner = test_p2p_db("convergence-p2p-owner-live").await;
     let peer = test_p2p_db("convergence-p2p-peer-live").await;
 
-    install_one_way_replicator(
-        owner.node.as_ref(),
-        peer.node.as_ref(),
-        &["AgentRequest"],
-    )
-    .await;
+    install_one_way_replicator(owner.node.as_ref(), peer.node.as_ref(), &["AgentRequest"]).await;
 
     let request_id = "convergence-p2p-live-req";
     let session_id = "convergence-p2p-live-session";
@@ -353,13 +346,10 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     // 3. Owner re-drive: same-value re-assert (higher-priority CRDT delta).
     //    Peer must remain at the owner terminal — no fork / no regression.
     let mut budget = HashMap::new();
-    let first = RequestLifecycle::redrive_terminal_convergence(
-        owner.node.as_ref(),
-        OWNER_DID,
-        &mut budget,
-    )
-    .await
-    .expect("redrive");
+    let first =
+        RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID, &mut budget)
+            .await
+            .expect("redrive");
     assert!(
         first.reasserted >= 1,
         "owner re-drive must re-assert at least the terminal row; report={first:?}"
@@ -398,13 +388,10 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
         total_reasserted <= TERMINAL_REDRIVE_CAP as usize,
         "redrive must not exceed TERMINAL_REDRIVE_CAP={TERMINAL_REDRIVE_CAP}, got {total_reasserted}"
     );
-    let exhausted = RequestLifecycle::redrive_terminal_convergence(
-        owner.node.as_ref(),
-        OWNER_DID,
-        &mut budget,
-    )
-    .await
-    .expect("redrive after cap");
+    let exhausted =
+        RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID, &mut budget)
+            .await
+            .expect("redrive after cap");
     assert_eq!(
         exhausted.reasserted, 0,
         "after CAP re-asserts the row must self-drop from the re-drive budget"
@@ -455,12 +442,7 @@ async fn p2p_redrive_converges_terminal_after_late_peer_join() {
     assert_eq!(on_owner.status, "completed");
 
     // Peer comes online and replication is installed after the terminal write.
-    install_one_way_replicator(
-        owner.node.as_ref(),
-        peer.node.as_ref(),
-        &["AgentRequest"],
-    )
-    .await;
+    install_one_way_replicator(owner.node.as_ref(), peer.node.as_ref(), &["AgentRequest"]).await;
 
     // Some DefraDB builds may already anti-entropy on install; either way the
     // re-drive must be a safe, higher-priority re-push of the terminal value.
