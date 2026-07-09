@@ -183,14 +183,19 @@ pub(crate) struct OnboardArgs {
     pub(crate) inference_url: Option<String>,
     #[arg(
         long,
-        help = "Model name to bind (defaults to the detected/preset model)"
+        help = "Model to bind. With --backend-preset/--inference-url: required unless the preset has a safe default (same rule as init). On the detect path: an optional override of the server's advertised model. Ignored when rebinding an already-stored backend"
     )]
     pub(crate) model: Option<String>,
     #[arg(
         long,
-        help = "API key stored in the backend document. Prefer an env-var backend for secrets"
+        help = "API key stored in the backend document. Prefer --api-key-env-var for secrets"
     )]
     pub(crate) api_key: Option<String>,
+    #[arg(
+        long,
+        help = "Environment variable name the runtime reads the API key from (kept out of the stored document; mirrors init)"
+    )]
+    pub(crate) api_key_env_var: Option<String>,
 }
 
 #[derive(clap::Args)]

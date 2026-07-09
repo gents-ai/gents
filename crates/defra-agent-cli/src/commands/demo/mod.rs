@@ -19,7 +19,6 @@ mod shell;
 mod util;
 
 use anyhow::{Context, Result};
-use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::cli::args::DemoArgs;
 
@@ -41,7 +40,7 @@ pub(crate) async fn demo(args: DemoArgs) -> Result<()> {
     let backend_file = home.join("demo-backend.json");
 
     // One owned stdin reader drives the picker, the shell, and reconfigure.
-    let mut reader = BufReader::new(tokio::io::stdin()).lines();
+    let mut reader = crate::prompt::stdin_lines();
 
     // First run sets up; later runs resume the saved agent. The backend args are
     // persisted so a resumed session (and a paired node B) reuse the same backend.

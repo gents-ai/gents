@@ -349,8 +349,12 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     // cause is a backend — the reason string carries the actual diagnosis.
     if let Some(reason) = unavailable_behaviors.get(&default_behavior_id) {
         eprintln!("The default behavior ({default_behavior_id}) is not runnable: {reason}");
+        // onboard writes through this running server's GraphQL and the runtime
+        // reconciles the change live, so a restart is usually unnecessary — only
+        // needed if the behavior stays unavailable (e.g. to re-run startup
+        // probes for a backend that just came online).
         eprintln!(
-            "If it needs an inference backend, configure one with `defra-agent onboard`, then restart."
+            "Configure a backend with `defra-agent onboard` (it writes to this running server); if the behavior stays unavailable, restart to re-run startup probes."
         );
     }
 

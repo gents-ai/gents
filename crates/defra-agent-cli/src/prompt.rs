@@ -17,10 +17,12 @@ pub(crate) fn stdin_lines() -> StdinLines {
     tokio::io::BufReader::new(tokio::io::stdin()).lines()
 }
 
-/// Print `text` and flush, without a trailing newline (for inline prompts).
+/// Write an inline prompt (no trailing newline) to STDERR and flush. Prompts
+/// are interactive UI, not data — keeping them off stdout lets a caller pipe a
+/// command's stdout as a clean payload (e.g. onboard's single JSON report).
 pub(crate) fn prompt(text: &str) {
-    print!("{text}");
-    let _ = std::io::stdout().flush();
+    eprint!("{text}");
+    let _ = std::io::stderr().flush();
 }
 
 /// Print `text`, then read one line from the shared reader.
@@ -37,7 +39,8 @@ pub(crate) async fn prompt_secret(reader: &mut StdinLines, text: &str) -> Result
     let line = reader.next_line().await;
     if hidden {
         set_terminal_echo(true);
-        println!();
+        // The echoed newline is UI, not data — keep stdout clean.
+        eprintln!();
     }
     Ok(line?.unwrap_or_default())
 }

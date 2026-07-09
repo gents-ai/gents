@@ -1,10 +1,12 @@
 //! Shared inference-backend onboarding: local-server detection, live health
 //! probing, and the first-launch decision tree from #647.
 //!
-//! Consumed by the interactive `onboard` command, the `demo` setup, and the
-//! `serve` no-backend hint, so all three surfaces agree on what "configure and
-//! connect a backend" means. The decision tree itself ([`plan_backend_onboarding`])
-//! is pure and total — unit-tested without a node or network.
+//! Consumed by the interactive `onboard` command and the `demo` setup, so both
+//! agree on what "a local server" and "configure and connect a backend" mean.
+//! (`serve` does not call this module; it only prints a string pointing the
+//! operator at `onboard` when the default behavior is not runnable.) The
+//! decision tree itself ([`plan_backend_onboarding`]) is pure and total —
+//! unit-tested without a node or network.
 
 use std::time::Duration;
 
@@ -26,10 +28,13 @@ pub(crate) struct DetectedBackend {
 }
 
 /// A backend already stored in the node, as seen by the onboarding decision.
+/// `endpoint` is carried for the caller's reachability probe; the pure decision
+/// tree ignores it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfiguredBackend {
     pub(crate) backend_id: String,
     pub(crate) enabled: bool,
+    pub(crate) endpoint: Option<String>,
 }
 
 /// What first-launch onboarding should do, given the currently-stored backends
@@ -123,6 +128,7 @@ mod tests {
             .map(|(id, enabled)| ConfiguredBackend {
                 backend_id: (*id).to_string(),
                 enabled: *enabled,
+                endpoint: None,
             })
             .collect()
     }
