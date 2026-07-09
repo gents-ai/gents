@@ -427,6 +427,33 @@ fn field_kind_value(
         .and_then(|f| serde_json::to_value(&f.kind).ok())
 }
 
+fn ensure_field_kind_matches_reference(
+    collection: &defra_node::CollectionVersion,
+    collection_name: &str,
+    field_name: &str,
+    reference_fields: &[&str],
+    expected_type: &str,
+) -> Result<()> {
+    let Some(existing_kind) = field_kind_value(collection, field_name) else {
+        return Ok(());
+    };
+    let Some(expected_kind) = reference_fields
+        .iter()
+        .find_map(|name| field_kind_value(collection, name))
+    else {
+        return Ok(());
+    };
+
+    anyhow::ensure!(
+        existing_kind == expected_kind,
+        "{collection_name}.{field_name} has an unexpected field kind ({existing_kind}); \
+         it must be scalar {expected_type} like its stable sibling ({expected_kind}). This is a \
+         corrupted schema — likely an out-of-band additive patch applied with the wrong type. \
+         Repair the field before starting. See sourcenetwork/defra-agent#661 and #663."
+    );
+    Ok(())
+}
+
 fn field_is_immutable(cv: &defra_node::CollectionVersion, field_name: &str) -> bool {
     cv.fields
         .iter()
@@ -1396,13 +1423,12 @@ pub async fn ensure_agent_response_reasoning_progress_migration(
     Ok(())
 }
 
-/// Add and backfill the persisted terminal-convergence scheduling fields.
+/// Add and validate the persisted terminal-convergence scheduling fields.
 ///
-/// The backfill is resumable in bounded pages: a crash after the schema patch
-/// but before every legacy terminal row is initialized leaves null fields, and
-/// the next startup continues from those rows. Legacy terminal timestamps use
-/// `created_at` as the only durable ordering fact available; every new terminal
-/// edge writes the actual terminalization time.
+/// Row backfill is deliberately separate because this schema migration also
+/// runs in generic CLI and desktop processes that do not own every replicated
+/// `AgentRequest` in the local store. Only an owner runtime with its concrete
+/// DID may call [`backfill_agent_request_terminal_durability`].
 pub async fn ensure_agent_request_terminal_durability_migrations(
     node: Arc<EmbeddedNode>,
 ) -> Result<()> {
@@ -1412,6 +1438,21 @@ pub async fn ensure_agent_request_terminal_durability_migrations(
     else {
         return Ok(());
     };
+
+    ensure_field_kind_matches_reference(
+        &collection,
+        "AgentRequest",
+        "terminalized_at",
+        &["created_at"],
+        "String",
+    )?;
+    ensure_field_kind_matches_reference(
+        &collection,
+        "AgentRequest",
+        "terminal_redrive_attempts",
+        &["retry_count", "max_retries"],
+        "Int",
+    )?;
 
     let mut missing_field_patches = Vec::new();
     if !collection_has_field(&collection, "terminalized_at") {
@@ -1435,29 +1476,51 @@ pub async fn ensure_agent_request_terminal_durability_migrations(
         );
     }
 
+    Ok(())
+}
+
+/// Backfill terminal scheduling metadata for requests owned by `agent_did`.
+///
+/// The owner filter is present on both the page query and each guarded update:
+/// replicated foreign requests must remain byte-for-byte untouched by startup
+/// migration. The bounded pages are resumable; legacy terminal timestamps use
+/// `created_at` as the only durable ordering fact available.
+pub async fn backfill_agent_request_terminal_durability(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        !agent_did.trim().is_empty(),
+        "terminal durability backfill requires a non-empty owner agent_did"
+    );
+    let escaped_agent_did = crate::graphql::escape_graphql_string(agent_did);
+
     loop {
-        let query = r#"{
+        let query = format!(
+            r#"{{
             AgentRequest(
-                filter: {
+                filter: {{
                     _and: [
-                        { lifecycle_state: { _in: ["completed", "failed", "superseded", "dead", "interrupted"] } },
-                        { _or: [
-                            { terminalized_at: { _eq: null } },
-                            { terminal_redrive_attempts: { _eq: null } }
-                        ] }
+                        {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
+                        {{ lifecycle_state: {{ _in: ["completed", "failed", "superseded", "dead", "interrupted"] }} }},
+                        {{ _or: [
+                            {{ terminalized_at: {{ _eq: null }} }},
+                            {{ terminal_redrive_attempts: {{ _eq: null }} }}
+                        ] }}
                     ]
-                },
-                order: [{ created_at: ASC }, { request_id: ASC }],
+                }},
+                order: [{{ created_at: ASC }}, {{ request_id: ASC }}],
                 limit: 64
-            ) {
+            ) {{
                 _docID
                 request_id
                 created_at
                 terminalized_at
                 terminal_redrive_attempts
-            }
-        }"#;
-        let response = node.execute(query).await;
+            }}
+        }}"#
+        );
+        let response = node.execute(&query).await;
         if response.has_errors() {
             anyhow::bail!(
                 "querying legacy AgentRequest terminal durability rows: {:?}",
@@ -1514,7 +1577,16 @@ pub async fn ensure_agent_request_terminal_durability_migrations(
             let mutation = format!(
                 r#"mutation {{
                     update_AgentRequest(
-                        filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                        filter: {{
+                            _and: [
+                                {{ _docID: {{ _eq: "{doc_id}" }} }},
+                                {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
+                                {{ _or: [
+                                    {{ terminalized_at: {{ _eq: null }} }},
+                                    {{ terminal_redrive_attempts: {{ _eq: null }} }}
+                                ] }}
+                            ]
+                        }},
                         input: {{
                             {assignments}
                         }}
@@ -2393,7 +2465,30 @@ mod patch_kind_tests {
             status: String @index
             lifecycle_state: String @index
             created_at: String @index
+            retry_count: Int
             terminalized_at: String
+        }
+    "#;
+    const CORRUPTED_TERMINALIZED_AT_AGENT_REQUEST_SCHEMA: &str = r#"
+        type AgentRequest @branchable {
+            request_id: String @index
+            agent_did: String @index
+            lifecycle_state: String @index
+            created_at: String @index
+            retry_count: Int
+            terminalized_at: [String]
+            terminal_redrive_attempts: Int
+        }
+    "#;
+    const CORRUPTED_TERMINAL_REDRIVE_AGENT_REQUEST_SCHEMA: &str = r#"
+        type AgentRequest @branchable {
+            request_id: String @index
+            agent_did: String @index
+            lifecycle_state: String @index
+            created_at: String @index
+            retry_count: Int
+            terminalized_at: String
+            terminal_redrive_attempts: [Int]
         }
     "#;
     const OLD_AGENT_RESPONSE_SCHEMA: &str = r#"
@@ -2452,9 +2547,10 @@ mod patch_kind_tests {
     "#;
 
     #[tokio::test]
-    async fn terminal_durability_migration_resumes_partial_schema_and_backfill() {
+    async fn terminal_durability_backfill_is_owner_scoped_and_resumable() {
         #[derive(Deserialize)]
         struct MigratedRequestRow {
+            request_id: String,
             terminalized_at: Option<String>,
             terminal_redrive_attempts: Option<i64>,
         }
@@ -2465,16 +2561,27 @@ mod patch_kind_tests {
             .unwrap();
         let response = node
             .execute(
-                r#"mutation { create_AgentRequest(input: {
-                    request_id: "terminal-migration-request",
-                    agent_did: "did:defra-agent:terminal-migration",
-                    session_id: "terminal-migration-session",
-                    content: "done",
-                    status: "completed",
-                    lifecycle_state: "completed",
-                    created_at: "2026-01-01T00:00:00Z",
-                    terminalized_at: "2026-01-02T00:00:00Z"
-                }) { _docID } }"#,
+                r#"mutation {
+                    owner: create_AgentRequest(input: {
+                        request_id: "terminal-migration-owner",
+                        agent_did: "did:defra-agent:terminal-migration",
+                        session_id: "terminal-migration-session",
+                        content: "done",
+                        status: "completed",
+                        lifecycle_state: "completed",
+                        created_at: "2026-01-01T00:00:00Z",
+                        terminalized_at: "2026-01-02T00:00:00Z"
+                    }) { _docID }
+                    foreign: create_AgentRequest(input: {
+                        request_id: "terminal-migration-foreign",
+                        agent_did: "did:defra-agent:foreign",
+                        session_id: "terminal-migration-foreign-session",
+                        content: "done",
+                        status: "completed",
+                        lifecycle_state: "completed",
+                        created_at: "2026-01-03T00:00:00Z"
+                    }) { _docID }
+                }"#,
             )
             .await;
         assert!(!response.has_errors(), "seed row: {:?}", response.errors);
@@ -2485,6 +2592,18 @@ mod patch_kind_tests {
         ensure_agent_request_terminal_durability_migrations(node.clone())
             .await
             .unwrap();
+        backfill_agent_request_terminal_durability(
+            node.as_ref(),
+            "did:defra-agent:terminal-migration",
+        )
+        .await
+        .unwrap();
+        backfill_agent_request_terminal_durability(
+            node.as_ref(),
+            "did:defra-agent:terminal-migration",
+        )
+        .await
+        .unwrap();
 
         let collection = node
             .get_collection("AgentRequest")
@@ -2495,10 +2614,19 @@ mod patch_kind_tests {
             &collection,
             "terminal_redrive_attempts"
         ));
+        assert_eq!(
+            field_kind_value(&collection, "terminalized_at"),
+            field_kind_value(&collection, "created_at")
+        );
+        assert_eq!(
+            field_kind_value(&collection, "terminal_redrive_attempts"),
+            field_kind_value(&collection, "retry_count")
+        );
 
         let response = node
             .execute(
-                r#"{ AgentRequest(filter: { request_id: { _eq: "terminal-migration-request" } }) {
+                r#"{ AgentRequest {
+                    request_id
                     terminalized_at
                     terminal_redrive_attempts
                 } }"#,
@@ -2511,13 +2639,62 @@ mod patch_kind_tests {
             .and_then(|data| data.get("AgentRequest"))
             .and_then(|value| serde_json::from_value(value.clone()).ok())
             .unwrap_or_default();
-        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.len(), 2);
+        let owner = rows
+            .iter()
+            .find(|row| row.request_id == "terminal-migration-owner")
+            .expect("owner request");
         assert_eq!(
-            rows[0].terminalized_at.as_deref(),
+            owner.terminalized_at.as_deref(),
             Some("2026-01-02T00:00:00Z"),
             "partial backfill must preserve an existing terminal timestamp"
         );
-        assert_eq!(rows[0].terminal_redrive_attempts, Some(0));
+        assert_eq!(owner.terminal_redrive_attempts, Some(0));
+
+        let foreign = rows
+            .iter()
+            .find(|row| row.request_id == "terminal-migration-foreign")
+            .expect("foreign request");
+        assert_eq!(
+            foreign.terminalized_at, None,
+            "owner startup must not author a terminal timestamp on a foreign replica"
+        );
+        assert_eq!(
+            foreign.terminal_redrive_attempts, None,
+            "owner startup must not refill the redrive cap on a foreign replica"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_durability_migration_fails_loud_on_wrong_field_kinds() {
+        for (schema, field, expected_type) in [
+            (
+                CORRUPTED_TERMINALIZED_AT_AGENT_REQUEST_SCHEMA,
+                "terminalized_at",
+                "scalar String",
+            ),
+            (
+                CORRUPTED_TERMINAL_REDRIVE_AGENT_REQUEST_SCHEMA,
+                "terminal_redrive_attempts",
+                "scalar Int",
+            ),
+        ] {
+            let node = test_node().await;
+            node.add_schema(schema).await.unwrap();
+
+            let error = ensure_agent_request_terminal_durability_migrations(node)
+                .await
+                .expect_err("migration must reject a wrong-typed durability field");
+            let message = format!("{error:#}");
+            assert!(
+                message.contains(field) && message.contains(expected_type),
+                "error must name {field} and require {expected_type}; got: {message}"
+            );
+            assert!(
+                message.contains("663"),
+                "error should point at the migration kind guard incident; got: {message}"
+            );
+        }
     }
 
     #[tokio::test]

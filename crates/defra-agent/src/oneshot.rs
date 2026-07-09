@@ -40,6 +40,11 @@ pub async fn run_openai_oneshot_with_tools(
     // path can never drift on which migrations have run (e.g. the `agent_did`
     // scope key that `ToolCallLifecycle::load` selects on an upgraded DB).
     crate::migration::ensure_all_runtime_migrations(node.clone()).await?;
+    crate::migration::backfill_agent_request_terminal_durability(
+        node.as_ref(),
+        behavior.agent_did(),
+    )
+    .await?;
 
     let api_key = behavior.completion_client_api_key()?;
     let tool_runtime =
