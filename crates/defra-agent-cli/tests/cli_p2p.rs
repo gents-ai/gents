@@ -155,6 +155,167 @@ async fn p2p_invite_conversation_records_reciprocal_intent() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p2p_bearer_claim_grants_membership_and_intent_end_to_end() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_a = tempdir.path().join("bearer-a");
+    let home_b = tempdir.path().join("bearer-b");
+    fs::create_dir_all(&home_a)?;
+    fs::create_dir_all(&home_b)?;
+
+    let model_name = format!("mock-p2p-bearer-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+
+    let port_a = allocate_port()?;
+    let port_b = allocate_port()?;
+    let agent_name_a = format!("cli-bearer-a-{}", Uuid::new_v4().simple());
+    let agent_name_b = format!("cli-bearer-b-{}", Uuid::new_v4().simple());
+    let graphql_a = graphql_url(port_a);
+    let graphql_b = graphql_url(port_b);
+
+    let init_a = run_init_json(
+        &home_a,
+        &[
+            "--agent-name",
+            &agent_name_a,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let init_b = run_init_json(
+        &home_b,
+        &[
+            "--agent-name",
+            &agent_name_b,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did_a = agent_did_from_init(&init_a)?;
+    let agent_did_b = agent_did_from_init(&init_b)?;
+
+    let p2p_flags = [
+        "--p2p-bind-addr",
+        "127.0.0.1",
+        "--p2p-port",
+        "0",
+        "--p2p-relay-mode",
+        "disabled",
+        "--p2p-discovery",
+        "disabled",
+    ];
+    let (mut serve_a, _ready_a) = spawn_server_with_ready_json(&home_a, port_a, &p2p_flags, &[])?;
+    wait_for_port(port_a, &mut serve_a)?;
+    wait_for_runtime_ready(&graphql_a, &agent_did_a, Duration::from_secs(30)).await?;
+    let (mut serve_b, _ready_b) = spawn_server_with_ready_json(&home_b, port_b, &p2p_flags, &[])?;
+    wait_for_port(port_b, &mut serve_b)?;
+    wait_for_runtime_ready(&graphql_b, &agent_did_b, Duration::from_secs(30)).await?;
+
+    create_network(&home_a, "Bearer Claim Fleet")?;
+
+    // Mint an audience-unbound bearer invite: NO grant and NO intent exist yet.
+    let invite = run_cli_json(
+        &home_a,
+        &[
+            "p2p",
+            "pairings",
+            "invite",
+            "--bearer",
+            "--template",
+            "conversation",
+        ],
+    )?;
+    assert_eq!(
+        invite.get("status").and_then(Value::as_str),
+        Some("bearer_invite_created"),
+        "invite output: {invite}"
+    );
+    let token = invite
+        .get("token")
+        .and_then(Value::as_str)
+        .context("bearer invite output missing token")?
+        .to_string();
+    assert!(token.starts_with("dabear1-"), "unexpected token: {token}");
+
+    // B claims: binds its own DID, wires its push pairing, ships the claim.
+    let claim = run_cli_json(&home_b, &["p2p", "pairings", "claim", &token])?;
+    assert_eq!(
+        claim.get("status").and_then(Value::as_str),
+        Some("claim_submitted"),
+        "claim output: {claim}"
+    );
+    assert_eq!(
+        claim.get("claimant_did").and_then(Value::as_str),
+        Some(agent_did_b.as_str())
+    );
+
+    // The claim replicates B→A; A's bearer-claim reconciler burns the nonce,
+    // authors the admin-signed membership for B, and records the reciprocal
+    // conversation intent. Poll A until all three land.
+    let escaped_b = escape_graphql_string(&agent_did_b);
+    let deadline = std::time::Instant::now() + Duration::from_secs(90);
+    loop {
+        let memberships = graphql_query(
+            &graphql_a,
+            &format!(
+                r#"query {{
+                    NetworkMembership(filter: {{ member_did: {{ _eq: "{escaped_b}" }} }}) {{
+                        member_did
+                        status
+                    }}
+                    ReciprocalConversationIntent(filter: {{ member_did: {{ _eq: "{escaped_b}" }} }}) {{
+                        member_did
+                    }}
+                    ConsumedInviteNonce(filter: {{ claimant_did: {{ _eq: "{escaped_b}" }} }}) {{
+                        claimant_did
+                    }}
+                }}"#
+            ),
+        )
+        .await?;
+        let granted = first_graphql_row(&memberships, "NetworkMembership")
+            .ok()
+            .map(|row| row.get("status").and_then(Value::as_str) == Some("active"))
+            .unwrap_or(false);
+        let intent = first_graphql_row(&memberships, "ReciprocalConversationIntent").is_ok();
+        let burned = first_graphql_row(&memberships, "ConsumedInviteNonce").is_ok();
+        if granted && intent && burned {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!(
+                "bearer claim did not converge on issuer: granted={granted} intent={intent} burned={burned}; last response: {memberships}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // Single-use across devices: a second claimant on the same token must not
+    // be granted. (B claims again under a fresh identity would need a third
+    // node; here we assert the ledger binds the nonce to B specifically.)
+    let nonce_rows = graphql_query(
+        &graphql_a,
+        &format!(
+            r#"query {{
+                ConsumedInviteNonce(filter: {{ claimant_did: {{ _eq: "{escaped_b}" }} }}) {{
+                    claimant_did
+                    issuer_did
+                }}
+            }}"#
+        ),
+    )
+    .await?;
+    let row = first_graphql_row(&nonce_rows, "ConsumedInviteNonce")?;
+    assert_eq!(
+        row.get("issuer_did").and_then(Value::as_str),
+        Some(agent_did_a.as_str())
+    );
+
+    Ok(())
+}
+
 /// Task C2 (#16): an invite token is single-use. The first join consuming its
 /// nonce succeeds and records it in the `ConsumedInviteNonce` ledger; a second
 /// join presenting the *same* token (same nonce) is rejected as a replay, even

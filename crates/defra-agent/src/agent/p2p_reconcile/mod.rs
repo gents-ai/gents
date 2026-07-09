@@ -1,5 +1,6 @@
 //! Runtime-owned P2P pairing reconcile seam.
 
+pub mod bearer_claim;
 pub mod diff;
 pub mod discovery;
 pub mod embedded_impl;
@@ -14,6 +15,11 @@ pub mod registry;
 pub mod templates;
 pub mod trait_def;
 
+pub use bearer_claim::{
+    decide_bearer_claim, reconcile_bearer_claim_tick, run_bearer_claim_reconciler,
+    BearerClaimStore, BearerClaimTickOutcome, BearerClaimVerdicts, BearerRejection,
+    GraphqlBearerClaimStore, NonceBinding, PreparedBearerClaim,
+};
 pub use diff::{
     compute_owned_pairing_diff, compute_pairing_diff, DiffOp, PairingActual, PairingApplied,
     PairingDesired,

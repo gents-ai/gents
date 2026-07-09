@@ -406,7 +406,7 @@ fn parse_rfc3339(value: &str, label: &str) -> Result<DateTime<Utc>> {
 /// `PeerPairingDesired` row. The reconciler independently resolves collections
 /// from `template`, so this is informational; the template id is authoritative.
 /// `template` is assumed already validated by `resolve_pairing_template`.
-fn template_collections(template: &str) -> Vec<String> {
+pub(super) fn template_collections(template: &str) -> Vec<String> {
     resolve_template(template)
         .map(|t| t.collections.iter().map(|&c| c.to_string()).collect())
         .unwrap_or_default()

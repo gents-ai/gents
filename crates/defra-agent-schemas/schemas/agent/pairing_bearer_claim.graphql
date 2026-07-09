@@ -1,0 +1,28 @@
+# A claimant's self-signed redemption of an audience-unbound `dabear1-` bearer
+# invite. The claiming device writes this row locally and pushes it to the
+# invite issuer; the issuer's bearer-claim reconciler verifies the embedded
+# token's issuer signature AND this row's claimant signature, burns the token
+# nonce in the issuer-side ConsumedInviteNonce ledger (bound to the claimant),
+# authors the NetworkMembership, and — for `conversation` tokens — records the
+# ReciprocalConversationIntent.
+#
+# TRUST BASIS — this row grants NOTHING by itself (Lean
+# `unsigned_claim_grants_nothing`, mirroring `join_request_grants_nothing`):
+# it is a request. Authority lives entirely in the issuer-side reconciler's
+# signature checks and nonce ledger, so this collection is safe to accept from
+# unauthenticated peers; forged or replayed rows are inert.
+#
+# `@branchable` is REQUIRED: the row replicates over P2P (claimant-authored
+# claims reach the issuer), matching NetworkJoinRequest — DefraDB only
+# P2P-syncs branchable collections. ReciprocalConversationIntent stays
+# NON-branchable by design: its trust basis is local-only writes.
+type PairingBearerClaim @branchable {
+    # The full encoded dabear1- token being redeemed.
+    token: String
+    claimant_did: String @index
+    claimant_node_id: String
+    claimant_address: String
+    claimed_at: DateTime @index(direction: DESC)
+    # base58 signature by claimant_did over the claim signing payload.
+    binding_sig: String
+}

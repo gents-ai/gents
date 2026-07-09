@@ -8,4 +8,10 @@ type ConsumedInviteNonce {
     nonce: String @index(unique: true)
     issuer_did: String @index
     consumed_at: String
+    # For bearer-claim burns only: the DID the nonce was bound to at admission.
+    # Re-processing the same claim (crash between the burn and the grant write)
+    # stays admissible for this claimant and repairs idempotently, while any
+    # other claimant presenting the nonce is rejected. Null for DID-bound v5
+    # joins, whose ledger row is written on the joiner instead.
+    claimant_did: String @index
 }

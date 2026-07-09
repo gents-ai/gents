@@ -2227,6 +2227,14 @@ true` on the relevant behaviors' tool selections on BOTH servers \
     Invite(P2pInviteArgs),
     #[command(about = "Accept a pairing invite token and write a desired row")]
     Join(P2pJoinArgs),
+    #[command(
+        about = "Claim an audience-unbound bearer invite token (scan-one-QR pairing)",
+        long_about = "Claim a dabear1- bearer invite: verify the issuer signature, wire the \
+local push pairing toward the issuer, and publish a self-signed claim that the \
+issuer's daemon turns into a membership grant (and, for conversation invites, \
+the reciprocal conversation edge)."
+    )]
+    Claim(P2pClaimArgs),
 }
 
 #[derive(clap::Args)]
@@ -2304,6 +2312,32 @@ pub(crate) struct P2pInviteArgs {
     /// admin-signed NetworkMembership grant on the issuer.
     #[arg(long = "member-did", value_name = "DID")]
     pub(crate) member_did: Option<String>,
+    /// Mint an audience-unbound bearer invite (`dabear1-`) instead of a
+    /// DID-bound one. The claiming device binds itself at claim time with
+    /// `p2p pairings claim`; the running issuer daemon authors the membership
+    /// grant (and, for conversation invites, the reciprocal intent) when the
+    /// claim replicates in. Bearer invites are single-use and expire after
+    /// 5 minutes.
+    #[arg(
+        long = "bearer",
+        default_value_t = false,
+        conflicts_with = "member_did"
+    )]
+    pub(crate) bearer: bool,
+    /// Render the minted token as a scannable QR code on stdout (bearer only).
+    #[arg(long = "qr", default_value_t = false, requires = "bearer")]
+    pub(crate) qr: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pClaimArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    /// The `dabear1-` bearer invite token to claim.
+    #[arg(value_name = "TOKEN")]
+    pub(crate) token: String,
 }
 
 #[derive(clap::Args)]

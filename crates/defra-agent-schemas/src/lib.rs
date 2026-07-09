@@ -58,6 +58,9 @@ pub const CONSUMED_INVITE_NONCE: &str =
 pub const RECIPROCAL_CONVERSATION_INTENT_NAME: &str = "ReciprocalConversationIntent";
 pub const RECIPROCAL_CONVERSATION_INTENT: &str =
     include_str!("../schemas/agent/reciprocal_conversation_intent.graphql");
+pub const PAIRING_BEARER_CLAIM_NAME: &str = "PairingBearerClaim";
+pub const PAIRING_BEARER_CLAIM: &str =
+    include_str!("../schemas/agent/pairing_bearer_claim.graphql");
 pub const AGENT_NETWORK_NAME: &str = "AgentNetwork";
 pub const AGENT_NETWORK: &str = include_str!("../schemas/agent/agent_network.graphql");
 pub const NETWORK_MEMBERSHIP_NAME: &str = "NetworkMembership";
@@ -94,6 +97,7 @@ pub const ALL: &[&str] = &[
     PEER_REGISTRY,
     CONSUMED_INVITE_NONCE,
     RECIPROCAL_CONVERSATION_INTENT,
+    PAIRING_BEARER_CLAIM,
     AGENT_NETWORK,
     NETWORK_MEMBERSHIP,
     PEER_ENDPOINT,
@@ -126,6 +130,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     PEER_REGISTRY_NAME,
     CONSUMED_INVITE_NONCE_NAME,
     RECIPROCAL_CONVERSATION_INTENT_NAME,
+    PAIRING_BEARER_CLAIM_NAME,
     AGENT_NETWORK_NAME,
     NETWORK_MEMBERSHIP_NAME,
     PEER_ENDPOINT_NAME,
@@ -157,7 +162,7 @@ mod tests {
 
     #[test]
     fn all_contains_every_agent_schema() {
-        assert_eq!(ALL.len(), 28);
+        assert_eq!(ALL.len(), 29);
     }
 
     #[test]

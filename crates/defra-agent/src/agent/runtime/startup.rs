@@ -37,6 +37,7 @@ enum BackgroundTaskResult {
     EndpointHeartbeat(Result<()>),
     NetworkReconcile(Result<()>),
     ReciprocalReconcile(Result<()>),
+    BearerClaimReconcile(Result<()>),
     DiscoveryReconcile(Result<()>),
 }
 
@@ -346,6 +347,20 @@ pub(in crate::agent) async fn run_agent(
         )
     });
 
+    let bearer_node = agent.node.clone();
+    let bearer_identity = agent.principal_arc().identity.clone();
+    let bearer_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::BearerClaimReconcile(
+            crate::agent::p2p_reconcile::run_bearer_claim_reconciler(
+                bearer_node,
+                bearer_identity,
+                bearer_cancel,
+            )
+            .await,
+        )
+    });
+
     let reciprocal_node = agent.node.clone();
     let reciprocal_identity = agent.principal_arc().identity.clone();
     let reciprocal_cancel = cancel.child_token();
@@ -472,6 +487,7 @@ pub(in crate::agent) async fn run_agent(
             Ok(BackgroundTaskResult::EndpointHeartbeat(result)) => (result, false),
             Ok(BackgroundTaskResult::NetworkReconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::ReciprocalReconcile(result)) => (result, false),
+            Ok(BackgroundTaskResult::BearerClaimReconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::DiscoveryReconcile(result)) => (result, false),
             Err(error) => (Err(anyhow!("background task join failed: {error}")), false),
         },

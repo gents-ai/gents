@@ -76,6 +76,8 @@ use support::{
 mod backend_health;
 #[path = "conformance/background.rs"]
 mod background;
+#[path = "conformance/bearer_claim.rs"]
+mod bearer_claim;
 #[path = "conformance/cancel_propagation.rs"]
 mod cancel_propagation;
 #[path = "conformance/client_runtime.rs"]

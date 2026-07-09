@@ -122,13 +122,19 @@ pub const DEFAULT_INVITE_MAX_AGE: Duration = Duration::hours(1);
 /// A malformed `issued_at` is rejected. This is the replay-window check the join
 /// path runs after verifying the signature.
 pub fn check_freshness(token: &InviteToken, now: DateTime<Utc>, max_age: Duration) -> Result<()> {
-    let issued_at = DateTime::parse_from_rfc3339(token.issued_at.trim())
-        .with_context(|| {
-            format!(
-                "pairing invite has an unparseable issued_at {:?}",
-                token.issued_at
-            )
-        })?
+    check_issued_at_freshness(&token.issued_at, now, max_age)
+}
+
+/// Freshness check over a bare `issued_at` string, shared by the DID-bound
+/// invite ([`check_freshness`]) and the bearer invite
+/// (`bearer_token::check_bearer_freshness`).
+pub fn check_issued_at_freshness(
+    raw_issued_at: &str,
+    now: DateTime<Utc>,
+    max_age: Duration,
+) -> Result<()> {
+    let issued_at = DateTime::parse_from_rfc3339(raw_issued_at.trim())
+        .with_context(|| format!("pairing invite has an unparseable issued_at {raw_issued_at:?}"))?
         .with_timezone(&Utc);
     let age = now.signed_duration_since(issued_at);
     if age > max_age {
