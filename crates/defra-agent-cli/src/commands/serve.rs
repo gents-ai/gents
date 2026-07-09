@@ -583,10 +583,16 @@ fn resolve_server_p2p_config(
         load_persisted_collections: true,
         max_concurrent_dag_fetches: crate::DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES,
         max_concurrent_push_tasks: crate::DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS,
-        rate_limit_burst: crate::DEFAULT_P2P_RATE_LIMIT_BURST,
-        rate_limit_rate: crate::DEFAULT_P2P_RATE_LIMIT_RATE,
+        rate_limit_burst: args
+            .p2p_rate_limit_burst
+            .unwrap_or(crate::DEFAULT_P2P_RATE_LIMIT_BURST),
+        rate_limit_rate: args
+            .p2p_rate_limit_rate
+            .unwrap_or(crate::DEFAULT_P2P_RATE_LIMIT_RATE),
         max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-        max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
+        max_pending_dags: args
+            .p2p_max_pending_dags
+            .unwrap_or(crate::DEFAULT_P2P_MAX_PENDING_DAGS),
     }))
 }
 
@@ -672,10 +678,57 @@ fn display_shim_host(host: IpAddr) -> String {
 #[cfg(test)]
 mod shim_host_tests {
     use super::*;
+    use crate::cli::{Cli, Command};
+    use clap::Parser;
+
+    fn parse_server(extra: &[&str]) -> ServeArgs {
+        let mut argv = vec!["defra-agent", "server"];
+        argv.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(argv).expect("server should parse");
+        match cli.command {
+            Command::Server(args) => args,
+            _ => panic!("expected `server`"),
+        }
+    }
 
     #[test]
     fn ipv6_shim_hosts_are_bracketed() {
         assert_eq!(display_shim_host("::1".parse().unwrap()), "[::1]");
         assert_eq!(display_shim_host("127.0.0.1".parse().unwrap()), "127.0.0.1");
+    }
+
+    #[test]
+    fn server_p2p_config_uses_upstream_admission_defaults() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let args = parse_server(&[]);
+
+        let config = resolve_server_p2p_config(tempdir.path(), &args)
+            .expect("resolve p2p config")
+            .expect("p2p enabled");
+
+        assert_eq!(config.max_pending_dags, p2p::sync::DEFAULT_MAX_PENDING_DAGS);
+        assert_eq!(config.rate_limit_burst, p2p::sync::DEFAULT_RATE_LIMIT_BURST);
+        assert_eq!(config.rate_limit_rate, p2p::sync::DEFAULT_RATE_LIMIT_RATE);
+    }
+
+    #[test]
+    fn server_p2p_config_uses_admission_overrides() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let args = parse_server(&[
+            "--p2p-max-pending-dags",
+            "222",
+            "--p2p-rate-limit-burst",
+            "333",
+            "--p2p-rate-limit-rate",
+            "44.5",
+        ]);
+
+        let config = resolve_server_p2p_config(tempdir.path(), &args)
+            .expect("resolve p2p config")
+            .expect("p2p enabled");
+
+        assert_eq!(config.max_pending_dags, 222);
+        assert_eq!(config.rate_limit_burst, 333);
+        assert_eq!(config.rate_limit_rate, 44.5);
     }
 }

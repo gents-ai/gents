@@ -52,6 +52,7 @@ pub struct ClientCoreOptions {
     pub max_concurrent_push_tasks: usize,
     pub rate_limit_burst: u32,
     pub rate_limit_rate: f64,
+    pub max_pending_dags: usize,
     pub install_replicators_on_bootstrap: bool,
 }
 
@@ -67,6 +68,7 @@ impl Default for ClientCoreOptions {
             max_concurrent_push_tasks: DESKTOP_P2P_MAX_CONCURRENT_PUSH_TASKS,
             rate_limit_burst: DESKTOP_P2P_RATE_LIMIT_BURST,
             rate_limit_rate: DESKTOP_P2P_RATE_LIMIT_RATE,
+            max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
             install_replicators_on_bootstrap: true,
         }
     }

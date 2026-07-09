@@ -24,6 +24,8 @@ The proofs are strongest where the runtime is a state machine:
 - command/tool execution policy for bash argv, network, sandbox, and shell env
 - MCP/tool execution preflight and retry eligibility boundaries
 - managed native executor deadline/cancel liveness and tool composition
+- P2P backpressure/admission local invariants for success acks, pending-DAG
+  capacity, and outbound push slot release
 - provider-input narrowing and prompt-layer assembly (`PromptAssembly`,
   #448): `sanitize` soundness/fixpoint/idempotence/split-stability over the
   permissive transcript, loop-threading validity (the `run_loop_stream`
@@ -51,7 +53,7 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 
 ## What Is Proven
 
-The current proof suite covers fourteen practical areas:
+The current proof suite covers fifteen practical areas:
 
 1. Request/process/persistence state transitions
 2. Daemon storage-observation assumptions that refine persistence
@@ -73,6 +75,9 @@ The current proof suite covers fourteen practical areas:
     machine — demotion at exactly K consecutive failures, no flap below K,
     single-success promotion, and effective availability as
     intent ∧ ¬measured-unhealthy
+15. P2P backpressure/admission (#630): success PushLog acks remain backed by
+    merge or pending-DAG registration, pending registration preserves capacity,
+    and timeout/failure transitions release outbound in-flight slots
 
 The proof boundary matters:
 
@@ -89,6 +94,9 @@ The `tla/` sibling directory contains TLA+ specifications for cross-node propert
 
 Currently:
 - `ReversePairing` — control-plane convergence of reverse-pairing subscriptions; first concrete artifact under issue #155's cross-boundary verification strategy.
+- `PairingTransport` — connection/install liveness for one directed pairing edge.
+- `P2PBackpressure` — bounded hub fan-in/fan-out admission and push-worker liveness for issue #630.
+- `ReplicatedRequestConvergence` — replicated terminal-state convergence under bounded re-drive.
 
 ## Why This Matters
 
@@ -131,6 +139,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/CommandPolicy.lean` | Barrel for command/tool execution policy validation, sandbox, env, and safety proofs |
 | `Proofs/ToolExecution.lean` | MCP/tool preflight and retry eligibility boundary model |
 | `Proofs/ManagedExec.lean` | Barrel for managed native executor state, executable transitions, liveness properties, and tool composition |
+| `Proofs/P2PBackpressure.lean` | Local P2P admission/backpressure invariants for success-ack backing, pending-DAG capacity, and push slot release |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
 | `Proofs/Properties/Liveness.lean` | Request/process liveness properties L1-L3 |
 | `Proofs/Properties/SchedulingSafety.lean` | Scheduler/fleet safety properties S7-S9 |

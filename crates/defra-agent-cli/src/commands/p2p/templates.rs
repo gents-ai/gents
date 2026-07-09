@@ -193,6 +193,7 @@ mod tests {
                 "network-control",
                 "subagent-coordinator",
                 "subagent-host",
+                "app-collections",
             ]
         );
     }
@@ -221,5 +222,14 @@ mod tests {
         let row = rows.iter().find(|r| r.id == "backup").unwrap();
         assert_eq!(row.delivery, "replicate");
         assert_eq!(row.scope, "unscoped");
+    }
+
+    #[test]
+    fn app_collections_row_is_replicate_unscoped_with_no_fixed_collections() {
+        let rows = template_rows();
+        let row = rows.iter().find(|r| r.id == "app-collections").unwrap();
+        assert_eq!(row.delivery, "replicate");
+        assert_eq!(row.scope, "unscoped");
+        assert_eq!(row.collections, "");
     }
 }

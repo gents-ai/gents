@@ -52,20 +52,7 @@ impl ClientCore {
             NodeBuilder::default()
                 .data_path(paths.node_data_dir())
                 .with_storage_backend(StorageBackend::RocksDb)
-                .with_p2p(P2PConfig {
-                    port: options.port,
-                    bind_addr: options.bind_addr,
-                    relay_mode: options.relay_mode.clone(),
-                    discovery: options.discovery.clone(),
-                    secret_key_path: Some(paths.iroh_secret_key_path().to_path_buf()),
-                    load_persisted_collections: options.load_persisted_collections,
-                    max_concurrent_dag_fetches: options.max_concurrent_dag_fetches,
-                    max_concurrent_push_tasks: options.max_concurrent_push_tasks,
-                    rate_limit_burst: options.rate_limit_burst,
-                    rate_limit_rate: options.rate_limit_rate,
-                    max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-                    max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
-                })
+                .with_p2p(desktop_p2p_config(&paths, &options))
                 .build()
                 .await
                 .context("starting embedded desktop node")?,
@@ -158,6 +145,23 @@ impl ClientCore {
             listen_addresses,
             bootstrap_errors,
         })
+    }
+}
+
+fn desktop_p2p_config(paths: &DesktopPaths, options: &ClientCoreOptions) -> P2PConfig {
+    P2PConfig {
+        port: options.port,
+        bind_addr: options.bind_addr,
+        relay_mode: options.relay_mode.clone(),
+        discovery: options.discovery.clone(),
+        secret_key_path: Some(paths.iroh_secret_key_path().to_path_buf()),
+        load_persisted_collections: options.load_persisted_collections,
+        max_concurrent_dag_fetches: options.max_concurrent_dag_fetches,
+        max_concurrent_push_tasks: options.max_concurrent_push_tasks,
+        rate_limit_burst: options.rate_limit_burst,
+        rate_limit_rate: options.rate_limit_rate,
+        max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
+        max_pending_dags: options.max_pending_dags,
     }
 }
 
@@ -644,6 +648,24 @@ fn graphql_endpoint_is_loopback_or_unspecified(graphql: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_p2p_config_uses_pending_dag_option() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let paths = DesktopPaths::from_root(tempdir.path().to_path_buf());
+        let options = ClientCoreOptions {
+            max_pending_dags: 77,
+            ..ClientCoreOptions::local_only()
+        };
+
+        let config = desktop_p2p_config(&paths, &options);
+
+        assert_eq!(config.max_pending_dags, 77);
+        assert_eq!(
+            config.max_doc_sync_request_doc_ids,
+            p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS
+        );
+    }
 
     #[test]
     fn loopback_graphql_pairs_by_default() {
