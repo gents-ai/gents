@@ -97,16 +97,16 @@ impl RequestLifecycle {
                 lifecycle_state.to_string(),
             ));
         }
-        let candidate_ids: std::collections::HashSet<&str> =
-            candidates.iter().map(|(doc_id, ..)| doc_id.as_str()).collect();
+        let candidate_ids: std::collections::HashSet<&str> = candidates
+            .iter()
+            .map(|(doc_id, ..)| doc_id.as_str())
+            .collect();
         budget.retain(|doc_id, _| candidate_ids.contains(doc_id.as_str()));
 
         let scanned = candidates.len();
         let mut reasserted = 0usize;
         for (doc_id, request_id, status, lifecycle_state) in &candidates {
-            let remaining = budget
-                .entry(doc_id.clone())
-                .or_insert(TERMINAL_REDRIVE_CAP);
+            let remaining = budget.entry(doc_id.clone()).or_insert(TERMINAL_REDRIVE_CAP);
             if *remaining == 0 {
                 continue;
             }
