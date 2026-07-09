@@ -43,8 +43,9 @@ end Manifest
 
 /-- DB state observable to both apply and runtime, exposing the desired-
     and live-projection per document. `liveOnly` documents are those with
-    no manifest entry but nonzero live state — the current CLI reports
-    these diagnostically but does not delete them. -/
+    no manifest entry but nonzero live state. The CLI reports generic rows
+    diagnostically unless prune is enabled; provenance-scoped,
+    manifest-authoritative rows are retracted automatically. -/
 structure LiveState where
   desired : DocRef → Option DesiredFields
   live    : DocRef → Option LiveFields

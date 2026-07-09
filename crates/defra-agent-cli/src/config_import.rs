@@ -33,7 +33,8 @@ const CONFIG_IMPORT_BATCH_SIZE: usize = 50;
 // realizes the Lean retry model by rebuilding the live diff at the start of
 // each `config apply` attempt, then applying selected documents with
 // unique-field upserts or equivalent override writers.
-const CONFIG_APPLY_ORDER: [Collection; 11] = [
+const CONFIG_APPLY_ORDER: [Collection; 12] = [
+    Collection::PeerPairingDesired,
     Collection::InferenceBackend,
     Collection::InferenceProfile,
     Collection::ToolServiceRegistry,
@@ -47,7 +48,7 @@ const CONFIG_APPLY_ORDER: [Collection; 11] = [
     Collection::AgentPrincipal,
 ];
 
-const CONFIG_PRUNE_ORDER: [Collection; 11] = [
+const CONFIG_PRUNE_ORDER: [Collection; 12] = [
     Collection::AgentPrincipal,
     Collection::EventTrigger,
     Collection::Schedule,
@@ -59,6 +60,7 @@ const CONFIG_PRUNE_ORDER: [Collection; 11] = [
     Collection::ToolServiceRegistry,
     Collection::InferenceProfile,
     Collection::InferenceBackend,
+    Collection::PeerPairingDesired,
 ];
 
 #[cfg(test)]
@@ -140,7 +142,9 @@ pub(crate) async fn apply_import_collection(
         return Ok(0);
     }
 
-    if override_existing && uses_custom_apply_writer(collection_name) {
+    if override_existing && collection_name == "PeerPairingDesired" {
+        apply_manifest_pairing_documents(txn, &prepared).await?;
+    } else if override_existing && uses_custom_apply_writer(collection_name) {
         apply_custom_override_collection_batched(txn, collection_name, unique_field, &prepared)
             .await?;
     } else {
@@ -155,6 +159,91 @@ pub(crate) async fn apply_import_collection(
     }
 
     Ok(docs.len())
+}
+
+async fn apply_manifest_pairing_documents(
+    txn: &ConfigApplyTxn<'_>,
+    docs: &[PreparedImportDocument],
+) -> Result<()> {
+    let fields = docs
+        .iter()
+        .enumerate()
+        .map(|(index, doc)| {
+            let source = doc
+                .add_doc
+                .get("source")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|source| {
+                    source.starts_with(desired_state::PEER_PAIRING_MANIFEST_SOURCE_PREFIX)
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "manifest PeerPairingDesired {} is missing manifest source provenance",
+                        doc.unique_value
+                    )
+                })?;
+            let add_literal = graphql_input_literal(&doc.add_doc)?;
+            let update_literal =
+                graphql_input_literal(doc.update_doc.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("missing update document for PeerPairingDesired")
+                })?)?;
+            Ok(AliasedMutationField {
+                alias: format!("doc_{index}"),
+                field: format!(
+                    r#"doc_{index}: upsert_PeerPairingDesired(
+                        filter: {{
+                            peer_id: {{ _eq: "{peer_id}" }},
+                            source: {{ _eq: "{source}" }}
+                        }},
+                        add: {add_literal},
+                        update: {update_literal}
+                    ) {{ _docID }}"#,
+                    peer_id = escape_graphql_string(&doc.unique_value),
+                    source = escape_graphql_string(source),
+                ),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    execute_aliased_mutation_batches(txn, "PeerPairingDesired", &fields).await
+}
+
+async fn apply_delete_manifest_pairings(
+    txn: &ConfigApplyTxn<'_>,
+    ids: &[String],
+    owner_agent_did: &str,
+) -> Result<usize> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let source = desired_state::peer_pairing_manifest_source(owner_agent_did);
+    let fields = ids
+        .iter()
+        .enumerate()
+        .map(|(index, peer_id)| manifest_pairing_delete_mutation_field(index, peer_id, &source))
+        .collect::<Vec<_>>();
+    execute_aliased_mutation_batches(txn, "PeerPairingDesired", &fields).await?;
+    Ok(ids.len())
+}
+
+fn manifest_pairing_delete_mutation_field(
+    index: usize,
+    peer_id: &str,
+    source: &str,
+) -> AliasedMutationField {
+    AliasedMutationField {
+        alias: format!("doc_{index}"),
+        field: format!(
+            r#"doc_{index}: delete_PeerPairingDesired(
+                filter: {{
+                    peer_id: {{ _eq: "{peer_id}" }},
+                    source: {{ _eq: "{source}" }}
+                }}
+            ) {{ _docID }}"#,
+            peer_id = escape_graphql_string(peer_id),
+            source = escape_graphql_string(source),
+        ),
+    }
 }
 
 pub(crate) async fn apply_delete_collection(
@@ -692,13 +781,17 @@ pub(crate) async fn apply_desired_state_changes(
 
     for collection in CONFIG_PRUNE_ORDER {
         let diff = planned.collections.get(collection);
-        let deleted = apply_delete_collection(
-            txn,
-            collection.graphql_type(),
-            collection.unique_field(),
-            &diff.delete,
-        )
-        .await?;
+        let deleted = if collection == Collection::PeerPairingDesired {
+            apply_delete_manifest_pairings(txn, &diff.delete, &planned.agent_did).await?
+        } else {
+            apply_delete_collection(
+                txn,
+                collection.graphql_type(),
+                collection.unique_field(),
+                &diff.delete,
+            )
+            .await?
+        };
         counts.add(collection, deleted);
 
         if let Some(sleep) = per_collection_sleep {
@@ -829,6 +922,23 @@ doc_1: create_Task(input: { task_id: "b" }) { _docID }
             filter: { task_id: { _eq: "task\"with\\chars" } }
         ) { _docID }"#
         );
+    }
+
+    #[test]
+    fn manifest_pairing_delete_is_owner_scoped_and_escaped() {
+        let field = manifest_pairing_delete_mutation_field(
+            3,
+            r#"peer"with\chars"#,
+            r#"manifest:did:key:owner"with\chars"#,
+        );
+
+        assert_eq!(field.alias, "doc_3");
+        assert!(field
+            .field
+            .contains(r#"peer_id: { _eq: "peer\"with\\chars" }"#));
+        assert!(field
+            .field
+            .contains(r#"source: { _eq: "manifest:did:key:owner\"with\\chars" }"#));
     }
 
     #[test]
@@ -1774,6 +1884,10 @@ mod lean_apply_write_boundary_tests {
                 .into_iter()
                 .map(|doc| desired_projection_acp_binding(doc, &agent_did))
                 .collect(),
+            peer_pairings: docs_for_collection(case, Collection::PeerPairingDesired)
+                .into_iter()
+                .map(desired_peer_pairing)
+                .collect(),
             tasks: docs_for_collection(case, Collection::Task)
                 .into_iter()
                 .map(desired_task)
@@ -1968,6 +2082,16 @@ mod lean_apply_write_boundary_tests {
         }
     }
 
+    fn desired_peer_pairing(doc: &LeanApplyDesiredDoc) -> desired_state::DesiredPeerPairing {
+        desired_state::DesiredPeerPairing {
+            peer_did: format!("did:key:{}", doc.content),
+            addresses: vec![format!("{}@127.0.0.1:4100", doc.id)],
+            template: "conversation".to_string(),
+            enabled: true,
+            peer_id: doc.id.clone(),
+        }
+    }
+
     fn desired_schedule(doc: &LeanApplyDesiredDoc) -> desired_state::DesiredSchedule {
         desired_state::DesiredSchedule {
             schedule_id: doc.id.clone(),
@@ -2005,6 +2129,7 @@ mod lean_apply_write_boundary_tests {
             inference_profiles: diff_for_collection(case, Collection::InferenceProfile),
             tool_service_registries: diff_for_collection(case, Collection::ToolServiceRegistry),
             projection_acp_bindings: diff_for_collection(case, Collection::ProjectionAcpBinding),
+            peer_pairings: diff_for_collection(case, Collection::PeerPairingDesired),
             tasks: diff_for_collection(case, Collection::Task),
             schedules: diff_for_collection(case, Collection::Schedule),
             event_triggers: diff_for_collection(case, Collection::EventTrigger),
@@ -2138,6 +2263,7 @@ mod lean_apply_write_boundary_tests {
             Collection::InferenceProfile => counts.inference_profiles,
             Collection::ToolServiceRegistry => counts.tool_service_registries,
             Collection::ProjectionAcpBinding => counts.projection_acp_bindings,
+            Collection::PeerPairingDesired => counts.peer_pairings,
             Collection::Task => counts.tasks,
             Collection::Schedule => counts.schedules,
             Collection::EventTrigger => counts.event_triggers,
@@ -2149,6 +2275,7 @@ mod lean_apply_write_boundary_tests {
             Collection::InferenceBackend => &["probe_status"],
             Collection::ToolServiceRegistry => &["tools", "version"],
             Collection::ProjectionAcpBinding => &[],
+            Collection::PeerPairingDesired => &[],
             Collection::Schedule => &[
                 "next_run_at",
                 "last_attempt_at",

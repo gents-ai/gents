@@ -8,8 +8,11 @@
 //! **operator-owned** and **registry-owned** rows, and the discovery step only
 //! ever writes or deletes registry-owned rows — it never reads, writes, or
 //! deletes operator-owned rows. We carry that partition as a `source`
-//! discriminator field on `PeerPairingDesired` (`"operator"` | `"registry"`),
-//! *queried as a partition* (`filter: { source: { _eq: "registry" } }`).
+//! discriminator field on `PeerPairingDesired`. Direct operator rows use
+//! `"operator"`; config-managed rows use the operator subpartition
+//! `"manifest:<owner-did>"`; registry rows use `"registry"`. Registry writes
+//! and deletes are still queried as an exact partition
+//! (`filter: { source: { _eq: "registry" } }`).
 //!
 //! Mirrored Lean properties:
 //! - `deriveRegistryDesired(self, registry)` = live, non-self registry entries
@@ -45,6 +48,10 @@ pub const PREFERRED_DISCOVERY_TEMPLATE: &str = "conversation";
 
 /// The `source` discriminator value for operator-authored desired rows.
 pub const SOURCE_OPERATOR: &str = "operator";
+/// Config-manifest rows are an explicitly-provenanced subpartition of
+/// operator intent. Discovery treats them as operator-owned for exclusion, but
+/// the suffix lets `config apply` remove only rows owned by its manifest root.
+pub const SOURCE_MANIFEST_PREFIX: &str = "manifest:";
 /// The `source` discriminator value for registry-derived (discovery-owned)
 /// desired rows.
 pub const SOURCE_REGISTRY: &str = "registry";
@@ -595,7 +602,22 @@ impl DiscoveryStore for GraphqlDiscoveryStore {
     }
 
     async fn list_operator_owned_peers(&self) -> Result<BTreeSet<String>> {
-        self.list_peers_by_source(SOURCE_OPERATOR).await
+        let query = r#"{
+            PeerPairingDesired {
+                peer_id
+                source
+            }
+        }"#;
+        let response = self.node.execute(query).await;
+        ensure_no_errors(&response, "query operator-owned PeerPairingDesired rows")?;
+        Ok(rows::<PeerSourceRow>(&response, "PeerPairingDesired")?
+            .into_iter()
+            .filter(|row| source_is_operator_owned(row.source.as_deref()))
+            .filter_map(|row| {
+                let peer_id = row.peer_id.trim().to_string();
+                (!peer_id.is_empty()).then_some(peer_id)
+            })
+            .collect())
     }
 
     async fn list_network_owned_peers(&self) -> Result<BTreeSet<String>> {
@@ -624,6 +646,11 @@ impl DiscoveryStore for GraphqlDiscoveryStore {
         let response = self.node.execute(&mutation).await;
         ensure_no_errors(&response, "delete registry-owned PeerPairingDesired")
     }
+}
+
+fn source_is_operator_owned(source: Option<&str>) -> bool {
+    let source = source.map(str::trim).unwrap_or(SOURCE_OPERATOR);
+    source == SOURCE_OPERATOR || source.starts_with(SOURCE_MANIFEST_PREFIX)
 }
 
 /// Upsert a registry-owned `PeerPairingDesired` row, populated from the registry
@@ -776,6 +803,12 @@ struct PeerIdRow {
     peer_id: String,
 }
 
+#[derive(Deserialize)]
+struct PeerSourceRow {
+    peer_id: String,
+    source: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -793,6 +826,19 @@ mod tests {
     }
 
     // ---- pure derivation (mirrors Lean deriveRegistryDesired) ----
+
+    #[test]
+    fn manifest_provenance_is_an_operator_owned_subpartition() {
+        assert!(source_is_operator_owned(None));
+        assert!(source_is_operator_owned(Some(SOURCE_OPERATOR)));
+        assert!(source_is_operator_owned(Some(
+            "manifest:did:key:local-owner"
+        )));
+        assert!(!source_is_operator_owned(Some(SOURCE_REGISTRY)));
+        assert!(!source_is_operator_owned(Some(
+            super::super::network::SOURCE_NETWORK
+        )));
+    }
 
     #[test]
     fn derive_skips_self_and_offline() {

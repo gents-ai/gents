@@ -64,6 +64,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 acp.workspace = true
+async-trait = "0.1"
 defra-agent-lean-contract.workspace = true
 identity.workspace = true
 jsonschema = { version = "0.46.5", default-features = false }

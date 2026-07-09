@@ -28,6 +28,7 @@ def serviceA : DocRef := doc .toolServiceRegistry "service-a"
 def skillA : DocRef := doc .skill "skill-a"
 def behaviorA : DocRef := doc .agentBehavior "behavior-a"
 def projectionBindingA : DocRef := doc .projectionAcpBinding "projection-binding-a"
+def pairingA : DocRef := doc .peerPairingDesired "1111111111111111111111111111111111111111111111111111111111111111"
 def taskA : DocRef := doc .task "task-a"
 def scheduleA : DocRef := doc .schedule "schedule-a"
 def eventTriggerA : DocRef := doc .eventTrigger "trigger-a"
@@ -64,6 +65,14 @@ def applyReconcileScenarios : List ApplyReconcileScenario :=
     , preLive := [live .inferenceBackend "backend-b" "orphan-runtime"]
     , pruneMode := false
     , prefixLen := 0
+    }
+  , { name := "managed_pairing_absent_retracts_without_prune"
+    , manifest := []
+    , preDesired :=
+        [ desired .peerPairingDesired pairingA.id "manifest-owned-pairing" ]
+    , preLive := [live .peerPairingDesired pairingA.id "runtime-pairing-state"]
+    , pruneMode := false
+    , prefixLen := 1
     }
   , { name := "prune_live_only_unreferenced_backend"
     , manifest := []
@@ -110,7 +119,10 @@ def applyReconcileScenarios : List ApplyReconcileScenario :=
     }
   , { name := "production_write_boundary_all_collections"
     , manifest :=
-        [ desired .inferenceBackend "backend-a" "backend-desired"
+        [ desired .peerPairingDesired
+            "1111111111111111111111111111111111111111111111111111111111111111"
+            "pairing-desired"
+        , desired .inferenceBackend "backend-a" "backend-desired"
         , desired .inferenceProfile "profile-a" "profile-desired"
         , desired .toolServiceRegistry "service-a" "service-desired"
         , desired .toolSelection "selection-a" "selection-desired"

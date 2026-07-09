@@ -93,6 +93,7 @@ def collectionName : Collection → String
   | .inferenceProfile => "InferenceProfile"
   | .toolServiceRegistry => "ToolServiceRegistry"
   | .projectionAcpBinding => "ProjectionAcpBinding"
+  | .peerPairingDesired => "PeerPairingDesired"
   | .task => "Task"
   | .schedule => "Schedule"
   | .eventTrigger => "EventTrigger"
@@ -106,12 +107,14 @@ def collectionUniqueField : Collection → String
   | .inferenceProfile => "profile_id"
   | .toolServiceRegistry => "service_id"
   | .projectionAcpBinding => "binding_id"
+  | .peerPairingDesired => "peer_id"
   | .task => "task_id"
   | .schedule => "schedule_id"
   | .eventTrigger => "trigger_id"
 
 def productionWriteOrder : List Collection :=
-  [ .inferenceBackend
+  [ .peerPairingDesired
+  , .inferenceBackend
   , .inferenceProfile
   , .toolServiceRegistry
   , .toolSelection

@@ -19,6 +19,7 @@ pub enum Collection {
     InferenceProfile,
     ToolServiceRegistry,
     ProjectionAcpBinding,
+    PeerPairingDesired,
     Task,
     Schedule,
     EventTrigger,
@@ -27,7 +28,7 @@ pub enum Collection {
 impl Collection {
     /// All variants in declaration order. Not sorted by `apply_order()` —
     /// callers that need apply-ordered iteration must sort explicitly.
-    pub const ALL: [Collection; 11] = [
+    pub const ALL: [Collection; 12] = [
         Collection::AgentPrincipal,
         Collection::AgentBehavior,
         Collection::Skill,
@@ -36,6 +37,7 @@ impl Collection {
         Collection::InferenceProfile,
         Collection::ToolServiceRegistry,
         Collection::ProjectionAcpBinding,
+        Collection::PeerPairingDesired,
         Collection::Task,
         Collection::Schedule,
         Collection::EventTrigger,
@@ -60,6 +62,7 @@ impl Collection {
             Collection::InferenceProfile => Some("inference-profiles"),
             Collection::ToolServiceRegistry => Some("tool-services"),
             Collection::ProjectionAcpBinding => Some("projection-acp-bindings"),
+            Collection::PeerPairingDesired => Some("peer-pairings"),
             Collection::Task => Some("tasks"),
             Collection::Schedule => Some("schedules"),
             // EventTrigger uses underscore (not hyphen) to match the schema
@@ -80,6 +83,7 @@ impl Collection {
             Collection::InferenceProfile => "InferenceProfile",
             Collection::ToolServiceRegistry => "ToolServiceRegistry",
             Collection::ProjectionAcpBinding => "ProjectionAcpBinding",
+            Collection::PeerPairingDesired => "PeerPairingDesired",
             Collection::Task => "Task",
             Collection::Schedule => "Schedule",
             Collection::EventTrigger => "EventTrigger",
@@ -97,6 +101,7 @@ impl Collection {
             Collection::InferenceProfile => "profile_id",
             Collection::ToolServiceRegistry => "service_id",
             Collection::ProjectionAcpBinding => "binding_id",
+            Collection::PeerPairingDesired => "peer_id",
             Collection::Task => "task_id",
             Collection::Schedule => "schedule_id",
             Collection::EventTrigger => "trigger_id",
@@ -112,7 +117,8 @@ impl Collection {
             | Collection::ToolSelection
             | Collection::InferenceProfile
             | Collection::ToolServiceRegistry
-            | Collection::Skill => 0,
+            | Collection::Skill
+            | Collection::PeerPairingDesired => 0,
             Collection::AgentBehavior => 1,
             Collection::ProjectionAcpBinding => 2,
             Collection::Task => 2,
@@ -120,6 +126,13 @@ impl Collection {
             Collection::AgentPrincipal => 3,
             Collection::EventTrigger => 3,
         }
+    }
+
+    /// Whether this collection's live config projection is provenance-scoped
+    /// to the current manifest owner. Such rows converge on manifest absence
+    /// without requiring generic `--prune`.
+    pub fn manifest_authoritative(self) -> bool {
+        matches!(self, Collection::PeerPairingDesired)
     }
 }
 
@@ -138,6 +151,7 @@ impl fmt::Display for Collection {
             Collection::InferenceProfile => "inference_profiles",
             Collection::ToolServiceRegistry => "tool_service_registries",
             Collection::ProjectionAcpBinding => "projection_acp_bindings",
+            Collection::PeerPairingDesired => "peer_pairings",
             Collection::Task => "tasks",
             Collection::Schedule => "schedules",
             Collection::EventTrigger => "event_triggers",
@@ -177,6 +191,15 @@ mod tests {
     }
 
     #[test]
+    fn peer_pairings_are_the_only_manifest_authoritative_collection() {
+        let authoritative = Collection::ALL
+            .into_iter()
+            .filter(|collection| collection.manifest_authoritative())
+            .collect::<Vec<_>>();
+        assert_eq!(authoritative, vec![Collection::PeerPairingDesired]);
+    }
+
+    #[test]
     fn canonical_variants_and_ranks() {
         // This list is the Rust side of the parity contract. The Lean
         // inductive `ApplyReconcile.Collection` and the
@@ -200,6 +223,7 @@ mod tests {
             (Collection::InferenceProfile, 0, "InferenceProfile"),
             (Collection::ToolServiceRegistry, 0, "ToolServiceRegistry"),
             (Collection::ProjectionAcpBinding, 2, "ProjectionAcpBinding"),
+            (Collection::PeerPairingDesired, 0, "PeerPairingDesired"),
             (Collection::Task, 2, "Task"),
             (Collection::Schedule, 2, "Schedule"),
             (Collection::EventTrigger, 3, "EventTrigger"),

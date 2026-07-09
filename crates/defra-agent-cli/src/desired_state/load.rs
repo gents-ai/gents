@@ -7,9 +7,9 @@ use super::normalize::normalize_manifest;
 use super::validate::validate_manifest;
 use super::{
     DesiredAgentBehavior, DesiredAgentPrincipal, DesiredEventTrigger, DesiredInferenceBackend,
-    DesiredInferenceProfile, DesiredProjectionAcpBinding, DesiredSchedule, DesiredSkill,
-    DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport, DesiredTask,
-    DesiredToolSelection, DesiredToolServiceRegistry, HasUniqueId,
+    DesiredInferenceProfile, DesiredPeerPairing, DesiredProjectionAcpBinding, DesiredSchedule,
+    DesiredSkill, DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport,
+    DesiredTask, DesiredToolSelection, DesiredToolServiceRegistry, HasUniqueId,
 };
 use defra_agent::Collection;
 
@@ -43,6 +43,7 @@ pub(crate) fn load_manifest_root(
         load_per_doc_collection(root, Collection::ToolServiceRegistry, &mut errors);
     let projection_acp_bindings: Vec<DesiredProjectionAcpBinding> =
         load_per_doc_collection(root, Collection::ProjectionAcpBinding, &mut errors);
+    let peer_pairings = load_peer_pairings(root, &mut errors);
     let mut tasks: Vec<DesiredTask> = load_per_doc_collection(root, Collection::Task, &mut errors);
     let schedules: Vec<DesiredSchedule> =
         load_per_doc_collection(root, Collection::Schedule, &mut errors);
@@ -77,6 +78,7 @@ pub(crate) fn load_manifest_root(
         inference_profiles: inference_profiles.len(),
         tool_service_registries: tool_service_registries.len(),
         projection_acp_bindings: projection_acp_bindings.len(),
+        peer_pairings: peer_pairings.len(),
         tasks: tasks.len(),
         schedules: schedules.len(),
         event_triggers: event_triggers.len(),
@@ -94,6 +96,7 @@ pub(crate) fn load_manifest_root(
             inference_profiles,
             tool_service_registries,
             projection_acp_bindings,
+            peer_pairings,
             tasks,
             schedules,
             event_triggers,
@@ -118,6 +121,92 @@ pub(crate) fn load_manifest_root(
             errors,
         },
     )
+}
+
+/// Load `peer-pairings/<handle>/object.json` documents.
+///
+/// Pairing handles are intentionally human-readable labels (for example
+/// `coding-steward`), while the stable document identity is `peer_did`; unlike
+/// the other per-document collections, the directory name therefore does not
+/// have to equal a field inside `object.json`.
+fn load_peer_pairings(root: &Path, errors: &mut Vec<String>) -> Vec<DesiredPeerPairing> {
+    let collection_path = root.join(
+        Collection::PeerPairingDesired
+            .dir_name()
+            .expect("PeerPairingDesired uses a directory manifest form"),
+    );
+    if !collection_path.exists() {
+        return Vec::new();
+    }
+    if !collection_path.is_dir() {
+        errors.push(format!(
+            "manifest collection path is not a directory: {}",
+            collection_path.display()
+        ));
+        return Vec::new();
+    }
+
+    let entries = match fs::read_dir(&collection_path) {
+        Ok(entries) => entries,
+        Err(error) => {
+            errors.push(format!(
+                "reading {} failed: {error}",
+                collection_path.display()
+            ));
+            return Vec::new();
+        }
+    };
+    let mut subdirs = entries
+        .filter_map(|entry| match entry {
+            Ok(entry) if entry.path().is_dir() => entry
+                .file_name()
+                .to_str()
+                .filter(|name| !name.starts_with('.'))
+                .map(|name| (name.to_string(), entry.path())),
+            Ok(_) => None,
+            Err(error) => {
+                errors.push(format!(
+                    "reading {} failed: {error}",
+                    collection_path.display()
+                ));
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    subdirs.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut pairings = Vec::with_capacity(subdirs.len());
+    let mut did_to_handle = std::collections::BTreeMap::<String, String>::new();
+    for (handle, path) in subdirs {
+        let object_path = path.join("object.json");
+        let bytes = match fs::read(&object_path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                errors.push(if error.kind() == std::io::ErrorKind::NotFound {
+                    format!("per-doc dir is missing object.json: {}", path.display())
+                } else {
+                    format!("reading {} failed: {error}", object_path.display())
+                });
+                continue;
+            }
+        };
+        let pairing: DesiredPeerPairing = match serde_json::from_slice(&bytes) {
+            Ok(pairing) => pairing,
+            Err(error) => {
+                errors.push(format!("invalid {}: {error}", object_path.display()));
+                continue;
+            }
+        };
+        let peer_did = pairing.peer_did.trim().to_string();
+        if let Some(previous) = did_to_handle.insert(peer_did.clone(), handle.clone()) {
+            errors.push(format!(
+                "duplicate peer_did in peer-pairings manifest: {peer_did} ({previous}/ and {handle}/)"
+            ));
+            continue;
+        }
+        pairings.push(pairing);
+    }
+    pairings
 }
 
 fn empty_report(root_display: String, errors: Vec<String>) -> DesiredStateValidationReport {

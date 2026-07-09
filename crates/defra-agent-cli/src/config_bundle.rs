@@ -230,6 +230,7 @@ pub(crate) async fn build_config_export_bundle(
     )
     .await?;
     sort_document_rows(&mut projection_acp_binding_rows, "binding_id");
+    let peer_pairing_rows = load_manifest_owned_peer_pairings(access, agent_did).await?;
 
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
@@ -244,6 +245,7 @@ pub(crate) async fn build_config_export_bundle(
         inference_profiles: profile_rows,
         tool_service_registries: tool_service_registry_rows,
         projection_acp_bindings: projection_acp_binding_rows,
+        peer_pairings: peer_pairing_rows,
         tasks: task_rows,
         schedules: schedule_rows,
         event_triggers: event_trigger_rows,
@@ -516,6 +518,7 @@ pub(crate) async fn build_desired_state_live_bundle(
                 .is_some_and(|binding_id| desired_binding_ids.contains(binding_id))
     });
     sort_document_rows(&mut projection_acp_binding_rows, "binding_id");
+    let peer_pairing_rows = load_manifest_owned_peer_pairings(access, agent_did).await?;
 
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
@@ -530,6 +533,7 @@ pub(crate) async fn build_desired_state_live_bundle(
         inference_profiles: profile_rows,
         tool_service_registries: tool_service_registry_rows,
         projection_acp_bindings: projection_acp_binding_rows,
+        peer_pairings: peer_pairing_rows,
         tasks: task_rows,
         schedules: schedule_rows,
         event_triggers: event_trigger_rows,
@@ -558,12 +562,39 @@ pub(crate) fn live_manifest_from_bundle(
                 inference_profiles: Vec::new(),
                 tool_service_registries: Vec::new(),
                 projection_acp_bindings: Vec::new(),
+                peer_pairings: Vec::new(),
                 tasks: Vec::new(),
                 schedules: Vec::new(),
                 event_triggers: Vec::new(),
             },
         ))
     }
+}
+
+async fn load_manifest_owned_peer_pairings(
+    access: &ConfigAccess,
+    owner_agent_did: &str,
+) -> Result<Vec<Value>> {
+    let source = desired_state::peer_pairing_manifest_source(owner_agent_did);
+    let source = escape_graphql_string(&source);
+    let mut rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "PeerPairingDesired",
+        &format!(
+            r#"{{
+                PeerPairingDesired(filter: {{ source: {{ _eq: "{source}" }} }}) {{
+                    peer_id
+                    agent_did
+                    replicator_addresses
+                    template
+                    source
+                }}
+            }}"#
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut rows, "peer_id");
+    Ok(rows)
 }
 
 /// Scope globally-fetched `Task`, `Schedule`, and `EventTrigger` rows to

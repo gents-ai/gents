@@ -31,6 +31,15 @@ pub(crate) async fn diff_bound_desired_manifest(
     bound: &super::binding::BoundDesiredManifest,
 ) -> Result<desired_state::DesiredStateDiffReport> {
     let desired_manifest = &bound.manifest;
+    let live_errors =
+        desired_state::validate::validate_manifest_against_live(desired_manifest, access).await?;
+    if !live_errors.is_empty() {
+        anyhow::bail!(
+            "{} live validation error(s): {}",
+            live_errors.len(),
+            live_errors.join("; ")
+        );
+    }
     let live_bundle = build_desired_state_live_bundle(&access, desired_manifest).await?;
     let (live_principal, live_manifest) =
         live_manifest_from_bundle(desired_manifest, &live_bundle)?;

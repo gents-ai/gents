@@ -6758,6 +6758,7 @@ version = "0.6.6"
 dependencies = [
  "acp",
  "anyhow",
+ "async-trait",
  "axum",
  "bs58",
  "chrono",

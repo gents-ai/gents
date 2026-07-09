@@ -278,6 +278,7 @@ mod tests {
             inference_profiles,
             tool_service_registries: Vec::new(),
             projection_acp_bindings: Vec::new(),
+            peer_pairings: Vec::new(),
             tasks: Vec::new(),
             schedules: Vec::new(),
             event_triggers: Vec::new(),
