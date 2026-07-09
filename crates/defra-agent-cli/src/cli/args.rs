@@ -1166,6 +1166,30 @@ pub(crate) enum ToolSelectionCommand {
         alias = "remove"
     )]
     Rm(ConfigShowArgs),
+    #[command(
+        name = "subagent-target-entry",
+        about = "Build a single --subagent-target JSON entry from its parts",
+        after_help = "Example:\n  defra-agent config tools set --graphql <url> --agent-did <did> \\\n    --selection-id main --subagent-target \"$(defra-agent config tools \\\n    subagent-target-entry --name researcher --agent-did did:key:z... \\\n    --behavior-id did:key:z...:default)\""
+    )]
+    SubagentTargetEntry(SubagentTargetEntryArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct SubagentTargetEntryArgs {
+    #[arg(long, help = "Model-facing name used by spawn_subagent")]
+    pub(crate) name: String,
+    #[arg(
+        long,
+        help = "DID of the agent that owns the target behavior (local or remote)"
+    )]
+    pub(crate) agent_did: String,
+    #[arg(long, help = "Behavior id on the owning agent")]
+    pub(crate) behavior_id: String,
+    #[arg(
+        long,
+        help = "Optional human-readable description surfaced to the model"
+    )]
+    pub(crate) description: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -1480,7 +1504,11 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) clear_defra_query_collections: bool,
     #[arg(
         long = "subagent-target",
-        help = "SubagentTarget JSON entry allowed for spawn_subagent (repeatable); omit to preserve existing targets"
+        help = "SubagentTarget JSON entry allowed for spawn_subagent, e.g. \
+                {\"name\":\"researcher\",\"agent_did\":\"did:key:...\",\"behavior_id\":\"did:key:...:default\",\"description\":\"...\"} \
+                (repeatable); or @path/@- to read one entry or a JSON array of entries from a \
+                file/stdin; omit to preserve existing targets. See `config tools \
+                subagent-target-entry --help` to build a single entry from its parts."
     )]
     pub(crate) subagent_targets: Vec<String>,
     #[arg(
