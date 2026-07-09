@@ -5,15 +5,22 @@ import Mathlib.Data.Finset.Card
 /-!
 # P2P Backpressure
 
-Per-node admission invariants for the #630 hub backpressure work. The matching
-TLA+ model (`proofs/tla/P2PBackpressure.tla`) covers cross-peer fairness and
-worker-slot liveness. This Lean model proves the local transition obligations
-that make those distributed retries safe:
+Per-node admission *obligation* model for the #630 hub backpressure work.
+
+This is **not** a conformance-fenced refinement of the shipping `p2p` /
+`defradb.rs` coordinator. It records the local transition obligations that the
+TLA+ hub model (`proofs/tla/P2PBackpressure.tla`) and the live fleet depend on:
 
 * a successful inbound PushLog ack remains backed by either a pending-DAG
   registration or a merge;
 * pending-DAG registration preserves the configured capacity bound;
-* a timeout/failure transition removes the outbound in-flight slot.
+* a timeout/failure transition of an in-flight peer **strictly** frees its
+  outbound worker slot.
+
+Pending entries are keyed by peer here (and in the TLA model) as a one-wave
+abstraction; production capacity is keyed by DAG root / CID. Multi-wave load,
+rate limiting, Bitswap stall lifetime, and gossip send-loop health are outside
+this model — see `proofs/tla/README.md`.
 -/
 
 namespace P2PBackpressure
@@ -139,15 +146,24 @@ def pushSlotsBounded (s : OutboundState) : Prop :=
 def startPush
     (s : OutboundState)
     (peer : PeerId)
-    (_hCapacity : s.inFlight.card < s.workers) : OutboundState :=
+    (_hCapacity : s.inFlight.card < s.workers)
+    (_hNotInFlight : peer ∉ s.inFlight) : OutboundState :=
   { s with inFlight := insert peer s.inFlight }
 
-def deliverPush (s : OutboundState) (peer : PeerId) : OutboundState :=
+/-- Success path: peer must be in-flight; frees the worker slot. -/
+def deliverPush
+    (s : OutboundState)
+    (peer : PeerId)
+    (_hInFlight : peer ∈ s.inFlight) : OutboundState :=
   { s with
     inFlight := s.inFlight.erase peer
     delivered := insert peer s.delivered }
 
-def timeoutPush (s : OutboundState) (peer : PeerId) : OutboundState :=
+/-- Timeout/failure path: peer must be in-flight; frees the worker slot. -/
+def timeoutPush
+    (s : OutboundState)
+    (peer : PeerId)
+    (_hInFlight : peer ∈ s.inFlight) : OutboundState :=
   { s with
     inFlight := s.inFlight.erase peer
     failed := insert peer s.failed }
@@ -155,26 +171,51 @@ def timeoutPush (s : OutboundState) (peer : PeerId) : OutboundState :=
 theorem startPush_slotsBounded
     (s : OutboundState)
     (peer : PeerId)
-    (hCapacity : s.inFlight.card < s.workers) :
-    pushSlotsBounded (startPush s peer hCapacity) := by
+    (hCapacity : s.inFlight.card < s.workers)
+    (hNotInFlight : peer ∉ s.inFlight) :
+    pushSlotsBounded (startPush s peer hCapacity hNotInFlight) := by
   unfold pushSlotsBounded startPush
-  by_cases hPresent : peer ∈ s.inFlight
-  · simpa [hPresent] using Nat.le_of_lt hCapacity
-  · rw [Finset.card_insert_of_not_mem hPresent]
-    exact hCapacity
+  rw [Finset.card_insert_of_not_mem hNotInFlight]
+  exact hCapacity
 
-theorem timeoutPush_releases_or_preserves_slot_count
+theorem timeoutPush_strictly_releases_slot
     (s : OutboundState)
-  (peer : PeerId) :
-    (timeoutPush s peer).inFlight.card ≤ s.inFlight.card := by
+    (peer : PeerId)
+    (hInFlight : peer ∈ s.inFlight) :
+    (timeoutPush s peer hInFlight).inFlight.card + 1 = s.inFlight.card := by
   unfold timeoutPush
-  exact Finset.card_erase_le
+  exact Finset.card_erase_add_one hInFlight
 
-theorem deliverPush_releases_or_preserves_slot_count
+theorem deliverPush_strictly_releases_slot
     (s : OutboundState)
-  (peer : PeerId) :
-    (deliverPush s peer).inFlight.card ≤ s.inFlight.card := by
+    (peer : PeerId)
+    (hInFlight : peer ∈ s.inFlight) :
+    (deliverPush s peer hInFlight).inFlight.card + 1 = s.inFlight.card := by
   unfold deliverPush
-  exact Finset.card_erase_le
+  exact Finset.card_erase_add_one hInFlight
+
+theorem timeoutPush_slotsBounded
+    (s : OutboundState)
+    (peer : PeerId)
+    (hInFlight : peer ∈ s.inFlight)
+    (h : pushSlotsBounded s) :
+    pushSlotsBounded (timeoutPush s peer hInFlight) := by
+  unfold pushSlotsBounded
+  have hEq := timeoutPush_strictly_releases_slot s peer hInFlight
+  have hLt : (timeoutPush s peer hInFlight).inFlight.card < s.inFlight.card := by
+    omega
+  exact Nat.le_trans (Nat.le_of_lt hLt) h
+
+theorem deliverPush_slotsBounded
+    (s : OutboundState)
+    (peer : PeerId)
+    (hInFlight : peer ∈ s.inFlight)
+    (h : pushSlotsBounded s) :
+    pushSlotsBounded (deliverPush s peer hInFlight) := by
+  unfold pushSlotsBounded
+  have hEq := deliverPush_strictly_releases_slot s peer hInFlight
+  have hLt : (deliverPush s peer hInFlight).inFlight.card < s.inFlight.card := by
+    omega
+  exact Nat.le_trans (Nat.le_of_lt hLt) h
 
 end P2PBackpressure

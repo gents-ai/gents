@@ -15,11 +15,12 @@ use crate::http::healthz::render_healthz_payload;
 use crate::http::mcp_pool::load_mcp_pool_snapshot;
 use crate::http::prometheus::{
     load_metrics_query_data, render_prometheus_metrics, with_local_native_executors,
-    MetricsRuntimeRow,
+    MetricsRuntimeRow, P2pMetricsSnapshot,
 };
 use crate::http::self_view::{load_self_view, ContextBudget, SelfBehavior};
 use crate::http::sessions::{load_session_history_snapshot, SessionHistoryParams};
 use crate::http::version::version_response;
+use crate::shared::P2pAdmissionState;
 use defra_agent::defra_query::CollectionScope;
 
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
@@ -36,6 +37,8 @@ pub(crate) struct RuntimeHttpState {
     /// endpoint reports measurement, not the stored document constant.
     /// `None` when the HTTP surface runs without an in-process runtime.
     pub(crate) backend_health: Option<defra_agent::BackendHealthMap>,
+    /// P2P admission knobs resolved at serve start (`None` when P2P disabled).
+    pub(crate) p2p_admission: Option<P2pAdmissionState>,
 }
 
 pub(crate) fn runtime_contract_router(
@@ -47,6 +50,7 @@ pub(crate) fn runtime_contract_router(
     // surface (same listener exposure as the GraphQL endpoint).
     defra_query_mcp_scope: Option<CollectionScope>,
     backend_health: Option<defra_agent::BackendHealthMap>,
+    p2p_admission: Option<P2pAdmissionState>,
 ) -> Router {
     let graphql_for_mcp = graphql.clone();
     let state = RuntimeHttpState {
@@ -56,6 +60,7 @@ pub(crate) fn runtime_contract_router(
         started_at: chrono::Utc::now().to_rfc3339(),
         started_instant: Instant::now(),
         backend_health,
+        p2p_admission,
     };
 
     let mut router = Router::new()
@@ -96,7 +101,14 @@ async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {
         Some(map) => map.snapshot().await,
         None => Default::default(),
     };
-    match render_prometheus_metrics(&state.graphql, &state.agent_did, &measured_backend_health)
+    let p2p_live = crate::commands::p2p::load_live_http_p2p_status(None, &state.graphql).await;
+    let p2p_metrics = p2p_metrics_from_status(&p2p_live, state.p2p_admission.as_ref());
+    match render_prometheus_metrics(
+        &state.graphql,
+        &state.agent_did,
+        &measured_backend_health,
+        Some(&p2p_metrics),
+    )
         .await
     {
         Ok(body) => ([(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)], body).into_response(),
@@ -132,8 +144,39 @@ async fn healthz_handler(State(state): State<RuntimeHttpState>) -> Response {
     }
 }
 
+fn p2p_metrics_from_status(
+    p2p: &Value,
+    admission: Option<&P2pAdmissionState>,
+) -> P2pMetricsSnapshot {
+    let enabled = p2p
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let connected_peers = p2p
+        .get("p2p_connected_peers")
+        .and_then(Value::as_array)
+        .map(|rows| rows.len())
+        .unwrap_or(0);
+    let replicators = p2p
+        .get("p2p_replicator_count")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize)
+        .unwrap_or(0);
+    P2pMetricsSnapshot {
+        enabled,
+        connected_peers,
+        replicators,
+        admission: admission.cloned(),
+    }
+}
+
 async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
-    let p2p = crate::commands::p2p::load_live_http_p2p_status(None, &state.graphql).await;
+    let mut p2p = crate::commands::p2p::load_live_http_p2p_status(None, &state.graphql).await;
+    if let Some(admission) = state.p2p_admission.as_ref() {
+        if let Some(map) = p2p.as_object_mut() {
+            map.insert("p2p_admission".to_string(), admission.to_json());
+        }
+    }
     let mut body = match load_metrics_query_data(&state.graphql, &state.agent_did).await {
         Ok(data) => {
             let data = with_local_native_executors(data);
@@ -390,6 +433,7 @@ mod tests {
             started_at: "2026-06-04T00:00:00Z".to_string(),
             started_instant: Instant::now(),
             backend_health: None,
+            p2p_admission: None,
         }
     }
 

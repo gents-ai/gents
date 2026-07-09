@@ -17,7 +17,7 @@ use tokio::sync::watch;
 use crate::cli::*;
 use crate::commands::codex_shim::{bind_codex_shim, CodexShimBindArgs};
 use crate::http::runtime_contract_router;
-use crate::shared::*;
+use crate::shared::{P2pAdmissionState, *};
 use crate::{
     default_data_dir, default_key_path, display_host, format_tool_ceiling, parse_cli_tool_arg,
     print_json, read_init_config, resolve_home_dir, server_start_failure_hint, write_runtime_state,
@@ -107,8 +107,9 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     }
 
     let p2p_config = resolve_server_p2p_config(&home_dir, &args)?;
-    if p2p_config.is_some() {
+    if let Some(config) = p2p_config.as_ref() {
         crate::p2p_relay::log_relay_mode_diagnostics(args.p2p_relay_mode);
+        log_p2p_admission_config(config);
     }
     // The MCP `defra_query` endpoint is opt-in (unauthenticated read surface).
     let mcp_query_scope = if !args.enable_mcp {
@@ -120,6 +121,12 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             args.mcp_query_collections.clone(),
         ))
     };
+    // Snapshot admission knobs for ready-status / runtime.json / metrics before
+    // the node builder consumes the config (P2PConfig is not Clone).
+    let p2p_admission_state = p2p_config.as_ref().map(p2p_admission_state);
+    let p2p_admission = p2p_admission_state
+        .as_ref()
+        .map(P2pAdmissionState::to_json);
     // One measured-health handle shared between the runtime's prober (writer)
     // and the /metrics endpoint (reader), so the probe-status metric reports
     // measurement instead of the stored document constant (#640).
@@ -131,6 +138,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             identity.did().to_string(),
             mcp_query_scope,
             Some(backend_health.clone()),
+            p2p_admission_state.clone(),
         )),
     );
     if let Some(node_identity_did) = server_identity.node_identity_did.as_ref() {
@@ -218,7 +226,8 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         }
     }
 
-    let p2p_status = load_local_server_p2p_status(node.as_ref(), args.p2p_transport).await?;
+    let p2p_status =
+        load_local_server_p2p_status(node.as_ref(), args.p2p_transport, p2p_admission).await?;
     write_runtime_state(
         &home_dir,
         &StoredRuntimeState {
@@ -246,6 +255,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
                         .collect()
                 })
                 .unwrap_or_default(),
+            p2p_admission: p2p_admission_state,
         },
     )?;
 
@@ -339,10 +349,36 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         "p2p_transport": p2p_status.get("p2p_transport").cloned().unwrap_or(Value::String(default_p2p_transport())),
         "p2p_peer_id": p2p_status.get("p2p_peer_id").cloned().unwrap_or(Value::Null),
         "p2p_listen_addresses": p2p_status.get("p2p_listen_addresses").cloned().unwrap_or_else(|| json!([])),
+        "p2p_admission": p2p_status.get("p2p_admission").cloned().unwrap_or(Value::Null),
         "codex_shim": codex_shim_output,
     });
     print_json(&output)?;
     if args.p2p_transport == P2pTransportArg::Iroh {
+        if let Some(admission) = output.get("p2p_admission") {
+            eprintln!(
+                "P2P admission: pending_dags={} push_tasks={} dag_fetches={} rate_burst={} rate/s={}",
+                admission
+                    .get("max_pending_dags")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                admission
+                    .get("max_concurrent_push_tasks")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                admission
+                    .get("max_concurrent_dag_fetches")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                admission
+                    .get("rate_limit_burst")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                admission
+                    .get("rate_limit_rate")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0),
+            );
+        }
         eprintln!(
             "defra-agent server is running with IROH P2P. Press Ctrl-C to stop. For the desktop demo, run `defra-agent-desktop init`, launch `defra-agent-desktop`, wait for `replication: subscriptions armed`, then chat."
         );
@@ -557,6 +593,29 @@ fn resolve_server_p2p_config(
         return Ok(None);
     }
 
+    let max_pending_dags = args
+        .p2p_max_pending_dags
+        .unwrap_or(crate::DEFAULT_P2P_MAX_PENDING_DAGS);
+    let max_concurrent_push_tasks = args
+        .p2p_max_concurrent_push_tasks
+        .unwrap_or(crate::DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS);
+    let max_concurrent_dag_fetches = args
+        .p2p_max_concurrent_dag_fetches
+        .unwrap_or(crate::DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES);
+    let rate_limit_burst = args
+        .p2p_rate_limit_burst
+        .unwrap_or(crate::DEFAULT_P2P_RATE_LIMIT_BURST);
+    let rate_limit_rate = args
+        .p2p_rate_limit_rate
+        .unwrap_or(crate::DEFAULT_P2P_RATE_LIMIT_RATE);
+    validate_p2p_admission_config(
+        max_pending_dags,
+        max_concurrent_push_tasks,
+        max_concurrent_dag_fetches,
+        rate_limit_burst,
+        rate_limit_rate,
+    )?;
+
     let secret_key_path = args
         .p2p_secret_key_path
         .clone()
@@ -581,25 +640,70 @@ fn resolve_server_p2p_config(
         },
         secret_key_path: Some(secret_key_path),
         load_persisted_collections: true,
-        max_concurrent_dag_fetches: crate::DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES,
-        max_concurrent_push_tasks: crate::DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS,
-        rate_limit_burst: args
-            .p2p_rate_limit_burst
-            .unwrap_or(crate::DEFAULT_P2P_RATE_LIMIT_BURST),
-        rate_limit_rate: args
-            .p2p_rate_limit_rate
-            .unwrap_or(crate::DEFAULT_P2P_RATE_LIMIT_RATE),
+        max_concurrent_dag_fetches,
+        max_concurrent_push_tasks,
+        rate_limit_burst,
+        rate_limit_rate,
         max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-        max_pending_dags: args
-            .p2p_max_pending_dags
-            .unwrap_or(crate::DEFAULT_P2P_MAX_PENDING_DAGS),
+        max_pending_dags,
     }))
+}
+
+/// Reject degenerate admission values before the node starts. Upstream clamps
+/// some zeros to `1`, but an explicit zero is almost always an operator footgun
+/// during a live hub incident (effective freeze or silent clamp).
+fn validate_p2p_admission_config(
+    max_pending_dags: usize,
+    max_concurrent_push_tasks: usize,
+    max_concurrent_dag_fetches: usize,
+    rate_limit_burst: u32,
+    rate_limit_rate: f64,
+) -> Result<()> {
+    if max_pending_dags == 0 {
+        anyhow::bail!("--p2p-max-pending-dags must be > 0");
+    }
+    if max_concurrent_push_tasks == 0 {
+        anyhow::bail!("--p2p-max-concurrent-push-tasks must be > 0");
+    }
+    if max_concurrent_dag_fetches == 0 {
+        anyhow::bail!("--p2p-max-concurrent-dag-fetches must be > 0");
+    }
+    if rate_limit_burst == 0 {
+        anyhow::bail!("--p2p-rate-limit-burst must be > 0");
+    }
+    if !rate_limit_rate.is_finite() || rate_limit_rate <= 0.0 {
+        anyhow::bail!("--p2p-rate-limit-rate must be a finite value > 0");
+    }
+    Ok(())
+}
+
+fn log_p2p_admission_config(config: &defra_node::P2PConfig) {
+    tracing::info!(
+        max_pending_dags = config.max_pending_dags,
+        max_concurrent_push_tasks = config.max_concurrent_push_tasks,
+        max_concurrent_dag_fetches = config.max_concurrent_dag_fetches,
+        rate_limit_burst = config.rate_limit_burst,
+        rate_limit_rate = config.rate_limit_rate,
+        "P2P admission configuration"
+    );
+}
+
+fn p2p_admission_state(config: &defra_node::P2PConfig) -> P2pAdmissionState {
+    P2pAdmissionState {
+        max_pending_dags: config.max_pending_dags,
+        max_concurrent_push_tasks: config.max_concurrent_push_tasks,
+        max_concurrent_dag_fetches: config.max_concurrent_dag_fetches,
+        rate_limit_burst: config.rate_limit_burst,
+        rate_limit_rate: config.rate_limit_rate,
+    }
 }
 
 async fn load_local_server_p2p_status(
     node: &EmbeddedNode,
     transport: P2pTransportArg,
+    admission: Option<Value>,
 ) -> Result<Value> {
+    let admission = admission.unwrap_or(Value::Null);
     match transport {
         P2pTransportArg::None => Ok(json!({
             "enabled": false,
@@ -607,6 +711,7 @@ async fn load_local_server_p2p_status(
             "p2p_peer_id": Value::Null,
             "p2p_listen_addresses": [],
             "p2p_connected_peers": [],
+            "p2p_admission": admission,
         })),
         P2pTransportArg::Iroh => {
             let p2p = node.p2p().ok_or_else(|| {
@@ -629,6 +734,7 @@ async fn load_local_server_p2p_status(
                 "p2p_peer_id": peer_id,
                 "p2p_listen_addresses": listen_addresses,
                 "p2p_connected_peers": connected_peers,
+                "p2p_admission": admission,
             }))
         }
     }
@@ -707,6 +813,14 @@ mod shim_host_tests {
             .expect("p2p enabled");
 
         assert_eq!(config.max_pending_dags, p2p::sync::DEFAULT_MAX_PENDING_DAGS);
+        assert_eq!(
+            config.max_concurrent_push_tasks,
+            p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS
+        );
+        assert_eq!(
+            config.max_concurrent_dag_fetches,
+            p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES
+        );
         assert_eq!(config.rate_limit_burst, p2p::sync::DEFAULT_RATE_LIMIT_BURST);
         assert_eq!(config.rate_limit_rate, p2p::sync::DEFAULT_RATE_LIMIT_RATE);
     }
@@ -717,6 +831,10 @@ mod shim_host_tests {
         let args = parse_server(&[
             "--p2p-max-pending-dags",
             "222",
+            "--p2p-max-concurrent-push-tasks",
+            "16",
+            "--p2p-max-concurrent-dag-fetches",
+            "11",
             "--p2p-rate-limit-burst",
             "333",
             "--p2p-rate-limit-rate",
@@ -728,7 +846,27 @@ mod shim_host_tests {
             .expect("p2p enabled");
 
         assert_eq!(config.max_pending_dags, 222);
+        assert_eq!(config.max_concurrent_push_tasks, 16);
+        assert_eq!(config.max_concurrent_dag_fetches, 11);
         assert_eq!(config.rate_limit_burst, 333);
         assert_eq!(config.rate_limit_rate, 44.5);
+    }
+
+    #[test]
+    fn server_p2p_config_rejects_degenerate_admission_values() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+
+        let zero_pending = parse_server(&["--p2p-max-pending-dags", "0"]);
+        assert!(resolve_server_p2p_config(tempdir.path(), &zero_pending).is_err());
+
+        let zero_push = parse_server(&["--p2p-max-concurrent-push-tasks", "0"]);
+        assert!(resolve_server_p2p_config(tempdir.path(), &zero_push).is_err());
+
+        let zero_rate = parse_server(&["--p2p-rate-limit-rate", "0"]);
+        assert!(resolve_server_p2p_config(tempdir.path(), &zero_rate).is_err());
+
+        // Use `=` form so clap does not treat a leading `-` as another flag.
+        let negative_rate = parse_server(&["--p2p-rate-limit-rate=-1.0"]);
+        assert!(resolve_server_p2p_config(tempdir.path(), &negative_rate).is_err());
     }
 }

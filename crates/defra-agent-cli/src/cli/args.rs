@@ -549,19 +549,31 @@ pub(crate) struct ServeArgs {
     #[arg(
         long,
         env = "DEFRA_P2P_MAX_PENDING_DAGS",
-        help = "Maximum pending DAG registrations retained while Bitswap resolves missing links"
+        help = "Maximum pending DAG registrations retained while Bitswap resolves missing links (must be > 0)"
     )]
     pub(crate) p2p_max_pending_dags: Option<usize>,
     #[arg(
         long,
+        env = "DEFRA_P2P_MAX_CONCURRENT_PUSH_TASKS",
+        help = "Maximum concurrent outbound PushLog worker slots (must be > 0). This is the hub fan-out semaphore that must free on timeout"
+    )]
+    pub(crate) p2p_max_concurrent_push_tasks: Option<usize>,
+    #[arg(
+        long,
+        env = "DEFRA_P2P_MAX_CONCURRENT_DAG_FETCHES",
+        help = "Maximum concurrent Bitswap DAG fetches while resolving missing links (must be > 0)"
+    )]
+    pub(crate) p2p_max_concurrent_dag_fetches: Option<usize>,
+    #[arg(
+        long,
         env = "DEFRA_P2P_RATE_LIMIT_BURST",
-        help = "Per-peer P2P rate-limit burst capacity"
+        help = "Per-peer P2P rate-limit burst capacity (must be > 0)"
     )]
     pub(crate) p2p_rate_limit_burst: Option<u32>,
     #[arg(
         long,
         env = "DEFRA_P2P_RATE_LIMIT_RATE",
-        help = "Per-peer P2P rate-limit refill rate in tokens per second"
+        help = "Per-peer P2P rate-limit refill rate in tokens per second (must be finite and > 0)"
     )]
     pub(crate) p2p_rate_limit_rate: Option<f64>,
 }
@@ -2912,6 +2924,10 @@ mod tests {
         let args = parse_server(&[
             "--p2p-max-pending-dags",
             "321",
+            "--p2p-max-concurrent-push-tasks",
+            "16",
+            "--p2p-max-concurrent-dag-fetches",
+            "12",
             "--p2p-rate-limit-burst",
             "654",
             "--p2p-rate-limit-rate",
@@ -2919,6 +2935,8 @@ mod tests {
         ]);
 
         assert_eq!(args.p2p_max_pending_dags, Some(321));
+        assert_eq!(args.p2p_max_concurrent_push_tasks, Some(16));
+        assert_eq!(args.p2p_max_concurrent_dag_fetches, Some(12));
         assert_eq!(args.p2p_rate_limit_burst, Some(654));
         assert_eq!(args.p2p_rate_limit_rate, Some(98.5));
     }
@@ -2927,6 +2945,8 @@ mod tests {
     fn server_p2p_admission_env_parse() {
         let _env = EnvVarGuard::set(&[
             ("DEFRA_P2P_MAX_PENDING_DAGS", "1234"),
+            ("DEFRA_P2P_MAX_CONCURRENT_PUSH_TASKS", "24"),
+            ("DEFRA_P2P_MAX_CONCURRENT_DAG_FETCHES", "9"),
             ("DEFRA_P2P_RATE_LIMIT_BURST", "5678"),
             ("DEFRA_P2P_RATE_LIMIT_RATE", "42.25"),
         ]);
@@ -2934,6 +2954,8 @@ mod tests {
         let args = parse_server(&[]);
 
         assert_eq!(args.p2p_max_pending_dags, Some(1234));
+        assert_eq!(args.p2p_max_concurrent_push_tasks, Some(24));
+        assert_eq!(args.p2p_max_concurrent_dag_fetches, Some(9));
         assert_eq!(args.p2p_rate_limit_burst, Some(5678));
         assert_eq!(args.p2p_rate_limit_rate, Some(42.25));
     }

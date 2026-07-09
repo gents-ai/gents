@@ -140,6 +140,185 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
         .pointer("/p2p/p2p_shareable_address")
         .and_then(Value::as_str)
         .is_some_and(|value| !value.is_empty()));
+    // Admission knobs must be visible on status so hub operators can confirm
+    // what bounds the process actually started with (#630 / #637).
+    assert_eq!(
+        output
+            .pointer("/p2p_admission/max_pending_dags")
+            .and_then(Value::as_u64),
+        Some(p2p::sync::DEFAULT_MAX_PENDING_DAGS as u64)
+    );
+    assert_eq!(
+        output
+            .pointer("/p2p_admission/max_concurrent_push_tasks")
+            .and_then(Value::as_u64),
+        Some(p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS as u64)
+    );
+    assert_eq!(
+        output
+            .pointer("/p2p/p2p_admission/max_pending_dags")
+            .and_then(Value::as_u64),
+        Some(p2p::sync::DEFAULT_MAX_PENDING_DAGS as u64)
+    );
+
+    let metrics = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{port}/metrics"))
+        .send()
+        .await
+        .context("GET /metrics")?
+        .error_for_status()
+        .context("/metrics status")?
+        .text()
+        .await
+        .context("/metrics body")?;
+    assert!(
+        metrics.contains("defra_agent_p2p_enabled 1"),
+        "metrics missing p2p_enabled: {metrics}"
+    );
+    assert!(
+        metrics.contains(&format!(
+            "defra_agent_p2p_admission_max_pending_dags {}",
+            p2p::sync::DEFAULT_MAX_PENDING_DAGS
+        )),
+        "metrics missing pending-dag admission: {metrics}"
+    );
+    assert!(
+        metrics.contains(&format!(
+            "defra_agent_p2p_admission_max_concurrent_push_tasks {}",
+            p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS
+        )),
+        "metrics missing push-task admission: {metrics}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_and_metrics_surface_overridden_p2p_admission_knobs() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-p2p-admission-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+
+    let port = allocate_port()?;
+    let agent_name = format!("cli-p2p-admission-{}", Uuid::new_v4().simple());
+    let graphql = graphql_url(port);
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let (mut serve, ready) = spawn_server_with_ready_json(
+        &home_dir,
+        port,
+        &[
+            "--p2p-bind-addr",
+            "127.0.0.1",
+            "--p2p-port",
+            "0",
+            "--p2p-relay-mode",
+            "disabled",
+            "--p2p-discovery",
+            "disabled",
+            "--p2p-max-pending-dags",
+            "17",
+            "--p2p-max-concurrent-push-tasks",
+            "3",
+            "--p2p-max-concurrent-dag-fetches",
+            "5",
+            "--p2p-rate-limit-burst",
+            "111",
+            "--p2p-rate-limit-rate",
+            "22.5",
+        ],
+        &[],
+    )?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    assert_eq!(
+        ready
+            .pointer("/p2p_admission/max_pending_dags")
+            .and_then(Value::as_u64),
+        Some(17),
+        "ready JSON: {ready}"
+    );
+    assert_eq!(
+        ready
+            .pointer("/p2p_admission/max_concurrent_push_tasks")
+            .and_then(Value::as_u64),
+        Some(3),
+        "ready JSON: {ready}"
+    );
+
+    let output = run_cli_json(&home_dir, &["status"])?;
+    assert_eq!(
+        output
+            .pointer("/p2p_admission/max_pending_dags")
+            .and_then(Value::as_u64),
+        Some(17),
+        "status: {output}"
+    );
+    assert_eq!(
+        output
+            .pointer("/p2p_admission/max_concurrent_push_tasks")
+            .and_then(Value::as_u64),
+        Some(3),
+        "status: {output}"
+    );
+    assert_eq!(
+        output
+            .pointer("/p2p_admission/max_concurrent_dag_fetches")
+            .and_then(Value::as_u64),
+        Some(5),
+        "status: {output}"
+    );
+    assert_eq!(
+        output
+            .pointer("/p2p_admission/rate_limit_burst")
+            .and_then(Value::as_u64),
+        Some(111),
+        "status: {output}"
+    );
+    assert_eq!(
+        output
+            .pointer("/p2p_admission/rate_limit_rate")
+            .and_then(Value::as_f64),
+        Some(22.5),
+        "status: {output}"
+    );
+
+    let metrics = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{port}/metrics"))
+        .send()
+        .await
+        .context("GET /metrics")?
+        .error_for_status()
+        .context("/metrics status")?
+        .text()
+        .await
+        .context("/metrics body")?;
+    for needle in [
+        "defra_agent_p2p_admission_max_pending_dags 17",
+        "defra_agent_p2p_admission_max_concurrent_push_tasks 3",
+        "defra_agent_p2p_admission_max_concurrent_dag_fetches 5",
+        "defra_agent_p2p_admission_rate_limit_burst 111",
+        "defra_agent_p2p_admission_rate_limit_rate 22.5",
+    ] {
+        assert!(
+            metrics.contains(needle),
+            "metrics missing `{needle}`: {metrics}"
+        );
+    }
 
     Ok(())
 }

@@ -24,8 +24,6 @@ The proofs are strongest where the runtime is a state machine:
 - command/tool execution policy for bash argv, network, sandbox, and shell env
 - MCP/tool execution preflight and retry eligibility boundaries
 - managed native executor deadline/cancel liveness and tool composition
-- P2P backpressure/admission local invariants for success acks, pending-DAG
-  capacity, and outbound push slot release
 - provider-input narrowing and prompt-layer assembly (`PromptAssembly`,
   #448): `sanitize` soundness/fixpoint/idempotence/split-stability over the
   permissive transcript, loop-threading validity (the `run_loop_stream`
@@ -35,6 +33,15 @@ They model daemon storage observations, but do not prove DefraDB storage-engine
 correctness, network delivery, provider behavior, UI rendering, external tool
 behavior, or host sandbox implementation details. Those are explicit model
 boundaries.
+
+**Obligation models without a Rust conformance bridge** (design notes /
+local lemmas only — not listed as fenced proven areas):
+
+- P2P backpressure/admission (`Proofs/P2PBackpressure.lean` + TLA
+  `P2PBackpressure`): success-ack backing, pending-DAG capacity, and strict
+  outbound push-slot release under timeout. These record the obligations the
+  live hub depends on; they do **not** yet refine the shipping
+  `defradb.rs` / `p2p` coordinator.
 
 ## Quick Start
 
@@ -53,7 +60,7 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 
 ## What Is Proven
 
-The current proof suite covers fifteen practical areas:
+The current proof suite covers fourteen practical areas:
 
 1. Request/process/persistence state transitions
 2. Daemon storage-observation assumptions that refine persistence
@@ -75,16 +82,23 @@ The current proof suite covers fifteen practical areas:
     machine — demotion at exactly K consecutive failures, no flap below K,
     single-success promotion, and effective availability as
     intent ∧ ¬measured-unhealthy
-15. P2P backpressure/admission (#630): success PushLog acks remain backed by
-    merge or pending-DAG registration, pending registration preserves capacity,
-    and timeout/failure transitions release outbound in-flight slots
+
+Separately, **obligation models** (no Rust refinement tests yet):
+
+- **P2P backpressure/admission (#630):** local Lean lemmas + TLA+ hub
+  model. Proves what *must* hold for one-wave admission safety/liveness
+  (success-ack backing, pending capacity, timeout frees the push
+  semaphore). Does **not** prove multi-wave hub stability, Bitswap stall
+  recovery, gossip send-loop health, or that the pinned `p2p` crate
+  implements these transitions. Operator knobs on `defra-agent server`
+  expose the production bounds these models talk about.
 
 The proof boundary matters:
 
 - Lean proves invariants from the point where runtime state is visible to the
   model.
 - Rust conformance tests check that persisted DefraDB-visible states refine
-  that model.
+  that model (for the fenced areas above — not for obligation models).
 - External assumptions such as "DefraDB eventually makes an acked mutation
   visible" or "provider streamed bytes" are not proven here.
 
@@ -95,7 +109,7 @@ The `tla/` sibling directory contains TLA+ specifications for cross-node propert
 Currently:
 - `ReversePairing` — control-plane convergence of reverse-pairing subscriptions; first concrete artifact under issue #155's cross-boundary verification strategy.
 - `PairingTransport` — connection/install liveness for one directed pairing edge.
-- `P2PBackpressure` — bounded hub fan-in/fan-out admission and push-worker liveness for issue #630.
+- `P2PBackpressure` — bounded hub fan-in/fan-out admission and push-worker liveness obligations for issue #630 (obligation model; not a fleet stability proof).
 - `ReplicatedRequestConvergence` — replicated terminal-state convergence under bounded re-drive.
 
 ## Why This Matters
@@ -139,7 +153,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/CommandPolicy.lean` | Barrel for command/tool execution policy validation, sandbox, env, and safety proofs |
 | `Proofs/ToolExecution.lean` | MCP/tool preflight and retry eligibility boundary model |
 | `Proofs/ManagedExec.lean` | Barrel for managed native executor state, executable transitions, liveness properties, and tool composition |
-| `Proofs/P2PBackpressure.lean` | Local P2P admission/backpressure invariants for success-ack backing, pending-DAG capacity, and push slot release |
+| `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
 | `Proofs/Properties/Liveness.lean` | Request/process liveness properties L1-L3 |
 | `Proofs/Properties/SchedulingSafety.lean` | Scheduler/fleet safety properties S7-S9 |

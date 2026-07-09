@@ -94,6 +94,8 @@ pub(crate) fn flatten_p2p_fields(map: &mut serde_json::Map<String, Value>, p2p: 
         "p2p_listen_addresses",
         "p2p_shareable_address",
         "p2p_connected_peers",
+        "p2p_replicator_count",
+        "p2p_admission",
         "p2p_error",
     ] {
         map.insert(
@@ -162,6 +164,19 @@ pub(super) async fn fetch_live_http_p2p_status(
     let peer_rows: Vec<P2pPeerRow> =
         http_get_json(&client, &format!("{api_base}/p2p/peers")).await?;
     let connected_peers = peer_rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
+    // Replicator list is best-effort: older nodes or permission gaps should not
+    // fail the whole P2P status surface used by /status and /metrics.
+    let replicator_count = match http_get_json::<Vec<Value>>(&client, &format!("{api_base}/p2p/replicators"))
+        .await
+    {
+        Ok(rows) => rows.len(),
+        Err(_) => 0,
+    };
+    let p2p_admission = runtime_state
+        .as_ref()
+        .and_then(|state| state.p2p_admission.as_ref())
+        .map(|admission| admission.to_json())
+        .unwrap_or(Value::Null);
     Ok(json!({
         "enabled": true,
         "p2p_transport": if transport == P2pTransportArg::None.as_str() {
@@ -173,6 +188,8 @@ pub(super) async fn fetch_live_http_p2p_status(
         "p2p_listen_addresses": listen_addresses,
         "p2p_shareable_address": shareable_address,
         "p2p_connected_peers": connected_peers,
+        "p2p_replicator_count": replicator_count,
+        "p2p_admission": p2p_admission,
         "p2p_error": Value::Null,
     }))
 }
@@ -194,6 +211,12 @@ pub(crate) fn persisted_p2p_status(runtime_state: Option<&StoredRuntimeState>) -
             "p2p_listen_addresses": runtime_state.p2p_listen_addresses,
             "p2p_shareable_address": Value::Null,
             "p2p_connected_peers": [],
+            "p2p_replicator_count": 0,
+            "p2p_admission": runtime_state
+                .p2p_admission
+                .as_ref()
+                .map(|admission| admission.to_json())
+                .unwrap_or(Value::Null),
             "p2p_error": Value::Null,
         }),
         None => json!({
@@ -203,6 +226,8 @@ pub(crate) fn persisted_p2p_status(runtime_state: Option<&StoredRuntimeState>) -
             "p2p_listen_addresses": [],
             "p2p_shareable_address": Value::Null,
             "p2p_connected_peers": [],
+            "p2p_replicator_count": 0,
+            "p2p_admission": Value::Null,
             "p2p_error": Value::Null,
         }),
     }

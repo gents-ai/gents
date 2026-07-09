@@ -52,7 +52,44 @@ pub async fn test_db(name: &str) -> TestDb {
     }
 }
 
+/// P2P admission overrides for multi-node tests that exercise hub backpressure
+/// bounds (#630). Defaults match `p2p::sync::DEFAULT_*`.
+#[derive(Debug, Clone)]
+pub struct TestP2pAdmission {
+    pub max_concurrent_push_tasks: usize,
+    pub max_concurrent_dag_fetches: usize,
+    pub max_pending_dags: usize,
+    pub rate_limit_burst: u32,
+    pub rate_limit_rate: f64,
+}
+
+impl Default for TestP2pAdmission {
+    fn default() -> Self {
+        Self {
+            max_concurrent_push_tasks: p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS,
+            max_concurrent_dag_fetches: p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES,
+            max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
+            rate_limit_burst: p2p::sync::DEFAULT_RATE_LIMIT_BURST,
+            rate_limit_rate: p2p::sync::DEFAULT_RATE_LIMIT_RATE,
+        }
+    }
+}
+
+impl TestP2pAdmission {
+    /// Tight fan-out semaphore used by the #630 one-worker hub shape.
+    pub fn single_push_worker() -> Self {
+        Self {
+            max_concurrent_push_tasks: 1,
+            ..Self::default()
+        }
+    }
+}
+
 pub async fn test_p2p_db(name: &str) -> TestDb {
+    test_p2p_db_with_admission(name, TestP2pAdmission::default()).await
+}
+
+pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission) -> TestDb {
     let tempdir = tempfile::Builder::new()
         .prefix(&format!("defra-agent-{name}-"))
         .tempdir()
@@ -67,12 +104,12 @@ pub async fn test_p2p_db(name: &str) -> TestDb {
                 discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
                 secret_key_path: None,
                 load_persisted_collections: false,
-                max_concurrent_dag_fetches: p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES,
-                max_concurrent_push_tasks: p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS,
-                rate_limit_burst: p2p::sync::DEFAULT_RATE_LIMIT_BURST,
-                rate_limit_rate: p2p::sync::DEFAULT_RATE_LIMIT_RATE,
+                max_concurrent_dag_fetches: admission.max_concurrent_dag_fetches,
+                max_concurrent_push_tasks: admission.max_concurrent_push_tasks,
+                rate_limit_burst: admission.rate_limit_burst,
+                rate_limit_rate: admission.rate_limit_rate,
                 max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-                max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
+                max_pending_dags: admission.max_pending_dags,
             })
             .build()
             .await
