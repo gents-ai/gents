@@ -268,6 +268,7 @@ impl MaterializerHandle for ProductionMaterializer {
         let trigger_kind_str = trigger_kind.as_str();
         let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
         Box::pin(async move {
+            let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
             // Single bulk update against the active runtime tuple match,
             // scoped to this agent's own requests (#605): without the DID
             // filter a LatestOnly fire would locally rewrite OTHER agents'
@@ -289,7 +290,9 @@ impl MaterializerHandle for ProductionMaterializer {
                         }},
                         input: {{
                             status: "superseded",
-                            lifecycle_state: "superseded"
+                            lifecycle_state: "superseded",
+                            terminalized_at: "{terminalized_at}",
+                            terminal_redrive_attempts: 0
                         }}
                     ) {{ _docID }}
                 }}"#,
@@ -297,13 +300,12 @@ impl MaterializerHandle for ProductionMaterializer {
                 trigger_id = escaped_trigger_id,
                 trigger_kind = trigger_kind_str,
             );
-            let resp = node.execute(&mutation).await;
-            if resp.has_errors() {
-                anyhow::bail!(
-                    "supersede active runtime AgentRequests by trigger failed: {:?}",
-                    resp.errors
-                );
-            }
+            let resp = crate::retry::execute_graphql_with_terminal_persistence_retry(
+                node.as_ref(),
+                &mutation,
+                "supersede_active_runtime_requests_for_trigger",
+            )
+            .await?;
             let count = resp
                 .data
                 .as_ref()

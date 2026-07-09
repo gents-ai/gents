@@ -38,6 +38,14 @@ const ADD_AGENT_REQUEST_SUBAGENT_PATCH: &str = r#"[
     {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"caused_by_parent_tool_call_id","Kind":11}}
 ]"#;
 
+// #664 durable terminalization: `terminalized_at` schedules by the time the
+// terminal edge actually persisted (not request creation time), while the
+// persisted attempt counter survives daemon restarts and bounds same-value
+// request-field history. Kind 11 = nullable String; Kind 4 = scalar Int.
+const ADD_AGENT_REQUEST_TERMINALIZED_AT_FIELD: &str =
+    r#"{"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"terminalized_at","Kind":11}}"#;
+const ADD_AGENT_REQUEST_TERMINAL_REDRIVE_ATTEMPTS_FIELD: &str = r#"{"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"terminal_redrive_attempts","Kind":4}}"#;
+
 // Kind 21 == ScalarArrayKind::NillableStringArray in defradb.rs. The SDL
 // `[String]` (nullable elements) for these fields compiles to that kind, so the
 // migration patch must use it. The previous value of 17 was a stale Go-DefraDB
@@ -1388,6 +1396,145 @@ pub async fn ensure_agent_response_reasoning_progress_migration(
     Ok(())
 }
 
+/// Add and backfill the persisted terminal-convergence scheduling fields.
+///
+/// The backfill is resumable in bounded pages: a crash after the schema patch
+/// but before every legacy terminal row is initialized leaves null fields, and
+/// the next startup continues from those rows. Legacy terminal timestamps use
+/// `created_at` as the only durable ordering fact available; every new terminal
+/// edge writes the actual terminalization time.
+pub async fn ensure_agent_request_terminal_durability_migrations(
+    node: Arc<EmbeddedNode>,
+) -> Result<()> {
+    let Some(collection) = node
+        .get_collection("AgentRequest")
+        .context("get AgentRequest collection")?
+    else {
+        return Ok(());
+    };
+
+    let mut missing_field_patches = Vec::new();
+    if !collection_has_field(&collection, "terminalized_at") {
+        missing_field_patches.push(ADD_AGENT_REQUEST_TERMINALIZED_AT_FIELD);
+    }
+    if !collection_has_field(&collection, "terminal_redrive_attempts") {
+        missing_field_patches.push(ADD_AGENT_REQUEST_TERMINAL_REDRIVE_ATTEMPTS_FIELD);
+    }
+    if !missing_field_patches.is_empty() {
+        let patch = format!("[{}]", missing_field_patches.join(","));
+        let next = node
+            .patch_collection("AgentRequest", &patch)
+            .await
+            .context("patch_collection AgentRequest terminal durability fields")?;
+        node.set_active_collection_version(&next.version_id)
+            .await
+            .context("set_active_collection_version AgentRequest terminal durability fields")?;
+        tracing::info!(
+            version = %next.version_id,
+            "AgentRequest patched with terminal durability fields"
+        );
+    }
+
+    loop {
+        let query = r#"{
+            AgentRequest(
+                filter: {
+                    _and: [
+                        { lifecycle_state: { _in: ["completed", "failed", "superseded", "dead", "interrupted"] } },
+                        { _or: [
+                            { terminalized_at: { _eq: null } },
+                            { terminal_redrive_attempts: { _eq: null } }
+                        ] }
+                    ]
+                },
+                order: [{ created_at: ASC }, { request_id: ASC }],
+                limit: 64
+            ) {
+                _docID
+                request_id
+                created_at
+                terminalized_at
+                terminal_redrive_attempts
+            }
+        }"#;
+        let response = node.execute(query).await;
+        if response.has_errors() {
+            anyhow::bail!(
+                "querying legacy AgentRequest terminal durability rows: {:?}",
+                response.errors
+            );
+        }
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if rows.is_empty() {
+            break;
+        }
+
+        for row in rows {
+            let doc_id = row
+                .get("_docID")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            if doc_id.is_empty() {
+                continue;
+            }
+            let request_id = row
+                .get("request_id")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let terminalized_at = row
+                .get("created_at")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+            let doc_id = crate::graphql::escape_graphql_string(doc_id);
+            let terminalized_at = crate::graphql::escape_graphql_string(&terminalized_at);
+            let mut assignments = Vec::new();
+            if row
+                .get("terminalized_at")
+                .is_none_or(serde_json::Value::is_null)
+            {
+                assignments.push(format!("terminalized_at: \"{terminalized_at}\""));
+            }
+            if row
+                .get("terminal_redrive_attempts")
+                .is_none_or(serde_json::Value::is_null)
+            {
+                assignments.push("terminal_redrive_attempts: 0".to_string());
+            }
+            if assignments.is_empty() {
+                continue;
+            }
+            let mutation = format!(
+                r#"mutation {{
+                    update_AgentRequest(
+                        filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                        input: {{
+                            {assignments}
+                        }}
+                    ) {{ _docID }}
+                }}"#,
+                assignments = assignments.join(", ")
+            );
+            let response = node.execute(&mutation).await;
+            if response.has_errors() {
+                anyhow::bail!(
+                    "backfilling terminal durability for AgentRequest {request_id}: {:?}",
+                    response.errors
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Per-collection outcome of the legacy `agent_did` scope-key reconciliation
 /// (Finding #11): how many rows were backfilled from their owning record, and
 /// how many remain unscoped (their `agent_did` is still null after the field was
@@ -1800,6 +1947,9 @@ pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()
     ensure_agent_response_reasoning_progress_migration(node.clone())
         .await
         .context("ensure AgentResponse reasoning progress migration")?;
+    ensure_agent_request_terminal_durability_migrations(node.clone())
+        .await
+        .context("ensure AgentRequest terminal durability migrations")?;
     ensure_conversation_scope_key_migrations(node)
         .await
         .context("ensure conversation agent_did scope-key migrations")?;
@@ -2234,6 +2384,18 @@ mod patch_kind_tests {
             created_at: String @index
         }
     "#;
+    const PARTIAL_TERMINAL_DURABILITY_AGENT_REQUEST_SCHEMA: &str = r#"
+        type AgentRequest @branchable {
+            request_id: String @index
+            agent_did: String @index
+            session_id: String @index
+            content: String
+            status: String @index
+            lifecycle_state: String @index
+            created_at: String @index
+            terminalized_at: String
+        }
+    "#;
     const OLD_AGENT_RESPONSE_SCHEMA: &str = r#"
         type AgentResponse @branchable {
             response_key: String @index(unique: true)
@@ -2288,6 +2450,75 @@ mod patch_kind_tests {
             created_at: DateTime @index(direction: DESC)
         }
     "#;
+
+    #[tokio::test]
+    async fn terminal_durability_migration_resumes_partial_schema_and_backfill() {
+        #[derive(Deserialize)]
+        struct MigratedRequestRow {
+            terminalized_at: Option<String>,
+            terminal_redrive_attempts: Option<i64>,
+        }
+
+        let node = test_node().await;
+        node.add_schema(PARTIAL_TERMINAL_DURABILITY_AGENT_REQUEST_SCHEMA)
+            .await
+            .unwrap();
+        let response = node
+            .execute(
+                r#"mutation { create_AgentRequest(input: {
+                    request_id: "terminal-migration-request",
+                    agent_did: "did:defra-agent:terminal-migration",
+                    session_id: "terminal-migration-session",
+                    content: "done",
+                    status: "completed",
+                    lifecycle_state: "completed",
+                    created_at: "2026-01-01T00:00:00Z",
+                    terminalized_at: "2026-01-02T00:00:00Z"
+                }) { _docID } }"#,
+            )
+            .await;
+        assert!(!response.has_errors(), "seed row: {:?}", response.errors);
+
+        ensure_agent_request_terminal_durability_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_agent_request_terminal_durability_migrations(node.clone())
+            .await
+            .unwrap();
+
+        let collection = node
+            .get_collection("AgentRequest")
+            .unwrap()
+            .expect("AgentRequest collection");
+        assert!(collection_has_field(&collection, "terminalized_at"));
+        assert!(collection_has_field(
+            &collection,
+            "terminal_redrive_attempts"
+        ));
+
+        let response = node
+            .execute(
+                r#"{ AgentRequest(filter: { request_id: { _eq: "terminal-migration-request" } }) {
+                    terminalized_at
+                    terminal_redrive_attempts
+                } }"#,
+            )
+            .await;
+        assert!(!response.has_errors(), "query row: {:?}", response.errors);
+        let rows: Vec<MigratedRequestRow> = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].terminalized_at.as_deref(),
+            Some("2026-01-02T00:00:00Z"),
+            "partial backfill must preserve an existing terminal timestamp"
+        );
+        assert_eq!(rows[0].terminal_redrive_attempts, Some(0));
+    }
 
     #[tokio::test]
     async fn subagent_extension_migration_adds_immutable_spawn_target_did() {

@@ -25,27 +25,36 @@ fn request_view_is_terminal(view: &RequestViewRow) -> bool {
 
 impl RequestLifecycle {
     pub async fn record_failure_reason(&mut self, reason: &str) -> Result<()> {
-        let doc_id = &self.request.doc_id;
+        // Latch before I/O so the subsequent atomic terminal mutation still
+        // carries the reason if this best-effort standalone write fails.
+        self.failure_reason = Some(reason.to_string());
+        let doc_id = escape_graphql_string(&self.request.doc_id);
+        let agent_did = escape_graphql_string(&self.request.agent_did);
         let escaped_reason = escape_graphql_string(reason);
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
-                    filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                    filter: {{
+                        _docID: {{ _eq: "{doc_id}" }},
+                        agent_did: {{ _eq: "{agent_did}" }}
+                    }},
                     input: {{ failure_reason: "{escaped_reason}" }}
                 ) {{ _docID }}
             }}"#
         );
 
-        let resp = self.node.execute(&mutation).await;
-        if resp.has_errors() {
-            anyhow::bail!(
-                "recording failure reason for request {} doc_id={doc_id}: {:?}",
-                self.request.request_id,
-                resp.errors
-            );
-        }
-
-        self.failure_reason = Some(reason.to_string());
+        crate::retry::execute_graphql_with_terminal_persistence_retry(
+            &self.node,
+            &mutation,
+            "record_request_failure_reason",
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "recording failure reason for request {} doc_id={doc_id}",
+                self.request.request_id
+            )
+        })?;
         Ok(())
     }
 
@@ -186,28 +195,36 @@ impl RequestLifecycle {
     /// persisted vocabulary, but they are not modeled interruptible runtime
     /// states.
     pub async fn transition_to_interrupted(&mut self) -> Result<()> {
-        let doc_id = &self.request.doc_id;
+        let doc_id = escape_graphql_string(&self.request.doc_id);
+        let agent_did = escape_graphql_string(&self.request.agent_did);
         let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
         // Keep the status guard as a defensive check for replicated rows whose
         // status/lifecycle_state fields are temporarily divergent.
+        let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
+                        agent_did: {{ _eq: "{agent_did}" }},
                         lifecycle_state: {{ _in: {active_runtime_states} }},
                         status: {{ _nin: ["completed", "interrupted", "dead", "superseded", "error"] }}
                     }},
                     input: {{
                         status: "interrupted",
-                        lifecycle_state: "interrupted"
+                        lifecycle_state: "interrupted",
+                        terminalized_at: "{terminalized_at}",
+                        terminal_redrive_attempts: 0
                     }}
                 ) {{ _docID }}
             }}"#
         );
-        let resp =
-            session::execute_mutation_with_retry(&self.node, &mutation, "transition_interrupted")
-                .await?;
+        let resp = crate::retry::execute_graphql_with_terminal_persistence_retry(
+            &self.node,
+            &mutation,
+            "transition_interrupted",
+        )
+        .await?;
         if resp
             .data
             .as_ref()
@@ -333,6 +350,14 @@ impl RequestLifecycle {
         Ok(())
     }
 
+    /// Atomically persist the failure reason with the request's terminal edge.
+    /// The reason is latched in memory before any storage attempt, so callers do
+    /// not depend on a separate `failure_reason` mutation succeeding first.
+    pub async fn fail_with_reason(&mut self, reason: &str) -> Result<()> {
+        self.failure_reason = Some(reason.to_string());
+        self.fail().await
+    }
+
     /// Transition a request status/lifecycle pair through a modeled terminal
     /// edge. `from_lifecycle_states` is part of the transition precondition:
     /// callers must pass only Lean-modeled source states for the requested
@@ -344,13 +369,18 @@ impl RequestLifecycle {
         target_status: &str,
         target_lifecycle_state: PersistedLifecycleState,
     ) -> Result<RequestStatusTransition> {
-        let doc_id = &self.request.doc_id;
+        let doc_id = escape_graphql_string(&self.request.doc_id);
+        let agent_did = escape_graphql_string(&self.request.agent_did);
+        let from_status = escape_graphql_string(from_status);
+        let target_status = escape_graphql_string(target_status);
         let from_lifecycle_states = lifecycle_state_graphql_list_for(from_lifecycle_states);
+        let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
+                        agent_did: {{ _eq: "{agent_did}" }},
                         status: {{ _eq: "{from_status}" }},
                         lifecycle_state: {{ _in: {from_lifecycle_states} }}
                     }},
@@ -360,7 +390,9 @@ impl RequestLifecycle {
                         behavior_id: "{behavior_id}",
                         backend_id: "{backend_id}",
                         execution_origin: "{execution_origin}",
-                        failure_reason: "{failure_reason}"
+                        failure_reason: "{failure_reason}",
+                        terminalized_at: "{terminalized_at}",
+                        terminal_redrive_attempts: 0
                     }}
                 ) {{ _docID }}
             }}"#,
@@ -372,15 +404,18 @@ impl RequestLifecycle {
                 escape_graphql_string(self.failure_reason.as_deref().unwrap_or_default()),
         );
 
-        let resp = self.node.execute(&mutation).await;
-        if resp.has_errors() {
-            anyhow::bail!(
-                "updating request status {} -> {} for doc_id={doc_id}: {:?}",
-                from_status,
-                target_status,
-                resp.errors
-            );
-        }
+        let resp = crate::retry::execute_graphql_with_terminal_persistence_retry(
+            &self.node,
+            &mutation,
+            "transition_request_terminal_status",
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "updating request status {} -> {} for doc_id={doc_id}",
+                from_status, target_status
+            )
+        })?;
 
         if resp
             .data

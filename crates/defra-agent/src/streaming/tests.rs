@@ -226,6 +226,7 @@ fn build_finalize_mutation_clears_tail_without_buffer() {
             session_id: None,
             content: String::new(),
             status: "streaming".to_string(),
+            error_message: None,
             token_count: 0,
             interrupted_at: None,
         }),
@@ -235,6 +236,7 @@ fn build_finalize_mutation_clears_tail_without_buffer() {
         None,
         None,
         RequestFinalizeMode::UpdateRequest,
+        "did:defra-agent:test",
     );
 
     assert!(mutation.contains(r#"status: "complete""#));
@@ -242,11 +244,43 @@ fn build_finalize_mutation_clears_tail_without_buffer() {
     assert!(mutation.contains(r#"update_AgentRequest("#));
     assert!(mutation.contains(r#"request_id: { _eq: "req-1" }"#));
     assert!(mutation.contains(r#"lifecycle_state: "completed""#));
+    assert!(mutation.contains(r#"terminal_redrive_attempts: 0"#));
     // content and reasoning are cleared to "" on finalize (issue #64 contract)
     assert!(mutation.contains(r#"content: """#));
     assert!(mutation.contains(r#"reasoning: """#));
     // token_count is NOT present on the crash-recovery (None) path
     assert!(!mutation.contains("token_count:"));
+}
+
+#[test]
+fn build_error_finalize_atomically_carries_response_and_request_reason() {
+    let mutation = build_finalize_mutation(
+        Some(&PersistedResponseState {
+            doc_id: "doc-1".to_string(),
+            request_id: "req-1".to_string(),
+            agent_did: None,
+            behavior_id: None,
+            session_id: None,
+            content: String::new(),
+            status: "streaming".to_string(),
+            error_message: None,
+            token_count: 0,
+            interrupted_at: None,
+        }),
+        "doc-1",
+        &StreamStatus::Error,
+        "2026-03-24T00:00:00Z",
+        None,
+        Some("provider failed"),
+        RequestFinalizeMode::UpdateRequest,
+        "did:defra-agent:test",
+    );
+
+    assert!(mutation.contains(r#"status: "error""#));
+    assert!(mutation.contains(r#"error_message: "provider failed""#));
+    assert!(mutation.contains(r#"lifecycle_state: "failed""#));
+    assert!(mutation.contains(r#"failure_reason: "provider failed""#));
+    assert!(mutation.contains(r#"agent_did: { _eq: "did:defra-agent:test" }"#));
 }
 
 #[tokio::test]

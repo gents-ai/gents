@@ -39,6 +39,13 @@ pub(super) struct StatusRow {
     pub(super) status: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub(super) struct ResponseTerminalRow {
+    pub(super) status: String,
+    #[serde(default)]
+    pub(super) error_message: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(super) struct RequestViewRow {
     pub(super) status: String,

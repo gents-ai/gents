@@ -39,10 +39,22 @@ def recoverySweepCases : List RecoverySweepCase :=
       "formal-coverage-audit-2026-05-13-gap-6"
   , recoveryCase
       requestRecoverySweep
+      "request_processing_terminal_response_recovery_to_completed"
+      "processing"
+      "completed"
+      "defra-agent-664-durable-terminal-repair"
+  , recoveryCase
+      requestRecoverySweep
       "request_processing_recovery_to_failed"
       "processing"
       "failed"
       "formal-coverage-audit-2026-05-13-gap-6"
+  , recoveryCase
+      requestRecoverySweep
+      "request_processing_interrupted_response_recovery_to_interrupted"
+      "processing"
+      "interrupted"
+      "defra-agent-664-durable-terminal-repair"
   , recoveryCase
       responseRecoverySweep
       "response_streaming_recovery_to_error"

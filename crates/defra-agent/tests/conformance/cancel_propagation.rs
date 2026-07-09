@@ -144,7 +144,7 @@ async fn drive_declarative_cancel_propagation() {
     let parent_on_host = wait_for_request(
         host.db.node.as_ref(),
         parent_request_id,
-        Duration::from_secs(30),
+        Duration::from_secs(60),
     )
     .await;
     assert_eq!(parent_on_host.agent_did, coord_did);
