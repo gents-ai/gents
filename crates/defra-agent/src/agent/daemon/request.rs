@@ -345,6 +345,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     if let Err(error) = crate::lifecycle::queue::drain_automated_wakeups(
                         &self.node,
                         &request.session_id,
+                        &request.agent_did,
                         "automated wake-up drained because active request was interrupted",
                     )
                     .await

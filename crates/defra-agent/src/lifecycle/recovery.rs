@@ -10,15 +10,190 @@ impl RequestLifecycle {
             conversations_recovered: recover_stuck_conversations(node, agent_did).await?,
         })
     }
+
+    /// Owner-scoped terminal-convergence re-drive (#664).
+    ///
+    /// Under `subagent-host` replication an `AgentRequest` is replicated onto
+    /// non-owning peers. Safety already holds (the watcher `agent_did` filter
+    /// never lets a peer claim a foreign replica), but liveness does not: when
+    /// the owner terminalizes, the terminal delta reaches replicas via a single
+    /// one-shot PushLog that can drop, and there is no per-doc anti-entropy on a
+    /// running peer (defradb.rs#1074) to re-request it. This re-drive is the
+    /// owner side of the fix — periodically re-asserting the current terminal
+    /// value of recently-terminalized own-requests. A same-value re-write is a
+    /// genuine higher-priority CRDT delta (it does not no-op), so it flows
+    /// through the normal PushLog path and a lagging replica accepts it (LWW,
+    /// higher priority ⇒ applied).
+    ///
+    /// BOUNDED, NOT CONVERGENCE-OBSERVING. The owner has no back-channel telling
+    /// it whether a peer has caught up, so it CANNOT stop "when converged" — it
+    /// re-asserts each terminal row a fixed [`TERMINAL_REDRIVE_CAP`] times and
+    /// then stops, whether or not every replica actually converged. This is a
+    /// deliberate bound (unbounded re-writes would grow each field's CRDT
+    /// history): it tolerates up to `CAP - 1` lost/late deliveries within the
+    /// re-drive window; a replica partitioned past that window does not converge
+    /// via this path and instead relies on the next organic write to the row (or
+    /// a peer restart). The TLA+ model states this as a conditional theorem —
+    /// convergence holds iff the per-peer emit budget exceeds the delivery loss;
+    /// see `proofs/tla/ReplicatedRequestConvergence.tla`. Each pass scans at most
+    /// [`TERMINAL_REDRIVE_BATCH_LIMIT`] rows, ordered `created_at DESC` — a
+    /// recency heuristic, not a terminalization-time order (no `terminalized_at`
+    /// field exists), so under a high creation rate a row terminalized long after
+    /// it was created can fall outside the window; that too falls back to the
+    /// next organic write. See #664 for the `terminalized_at`/`convergence_seq`
+    /// follow-up that would close both gaps.
+    ///
+    /// `agent_did` MUST be the runtime's own DID: only the owner re-asserts its
+    /// own documents; peers stay passive (a peer-authored delta to a foreign doc
+    /// would fork the CRDT, not converge it). `agent_did` itself is never
+    /// written (it is `@immutable`); only the mutable terminal `status` and
+    /// `lifecycle_state` columns are re-asserted, to their current values.
+    ///
+    /// `budget` is the caller-owned, in-memory per-doc re-emit counter, carried
+    /// across ticks so a row stops being re-driven once it has been re-asserted
+    /// `CAP` times. It is pruned to the current candidate window each pass, so it
+    /// stays bounded; losing it on restart is harmless because this re-drive
+    /// re-scans the terminal rows and refills each budget from `CAP` on the next
+    /// tick (startup recovery handles stuck NON-terminal rows, not this path).
+    pub async fn redrive_terminal_convergence(
+        node: &EmbeddedNode,
+        agent_did: &str,
+        budget: &mut std::collections::HashMap<String, u32>,
+    ) -> Result<TerminalRedriveReport> {
+        let escaped_agent_did = escape_graphql_string(agent_did);
+        let terminal_states = crate::lifecycle::terminal_lifecycle_state_graphql_list();
+        let query = format!(
+            r#"{{
+                AgentRequest(
+                    filter: {{
+                        agent_did: {{ _eq: "{escaped_agent_did}" }},
+                        lifecycle_state: {{ _in: {terminal_states} }}
+                    }},
+                    order: [{{ created_at: DESC }}, {{ request_id: DESC }}],
+                    limit: {limit}
+                ) {{
+                    _docID
+                    request_id
+                    status
+                    lifecycle_state
+                }}
+            }}"#,
+            limit = TERMINAL_REDRIVE_BATCH_LIMIT,
+        );
+
+        let resp = node.execute(&query).await;
+        if resp.has_errors() {
+            anyhow::bail!("querying terminal requests to re-drive: {:?}", resp.errors);
+        }
+
+        let rows: Vec<serde_json::Value> = resp
+            .data
+            .as_ref()
+            .and_then(|d| d.get("AgentRequest"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        // Collect the bounded candidate window and prune the carried-over budget
+        // to it, so the in-memory map never outgrows the query window.
+        let mut candidates: Vec<(String, String, String, String)> = Vec::new();
+        for row in &rows {
+            let doc_id = row.get("_docID").and_then(|v| v.as_str()).unwrap_or("");
+            let request_id = row.get("request_id").and_then(|v| v.as_str()).unwrap_or("");
+            let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            let lifecycle_state = row
+                .get("lifecycle_state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if doc_id.is_empty() || status.is_empty() || lifecycle_state.is_empty() {
+                continue;
+            }
+            candidates.push((
+                doc_id.to_string(),
+                request_id.to_string(),
+                status.to_string(),
+                lifecycle_state.to_string(),
+            ));
+        }
+        let candidate_ids: std::collections::HashSet<&str> = candidates
+            .iter()
+            .map(|(doc_id, ..)| doc_id.as_str())
+            .collect();
+        budget.retain(|doc_id, _| candidate_ids.contains(doc_id.as_str()));
+
+        let scanned = candidates.len();
+        let mut reasserted = 0usize;
+        for (doc_id, request_id, status, lifecycle_state) in &candidates {
+            let remaining = budget.entry(doc_id.clone()).or_insert(TERMINAL_REDRIVE_CAP);
+            if *remaining == 0 {
+                continue;
+            }
+
+            let escaped_doc_id = escape_graphql_string(doc_id);
+            let escaped_status = escape_graphql_string(status);
+            let escaped_lifecycle_state = escape_graphql_string(lifecycle_state);
+            // Defense-in-depth: the candidate query is already `agent_did == self`
+            // scoped, but keep the mutation itself owner-scoped too, matching the
+            // queue.rs seam guards — a re-drive must never touch a foreign replica.
+            let mutation = format!(
+                r#"mutation {{
+                    update_AgentRequest(
+                        filter: {{
+                            _docID: {{ _eq: "{escaped_doc_id}" }},
+                            agent_did: {{ _eq: "{escaped_agent_did}" }}
+                        }},
+                        input: {{
+                            status: "{escaped_status}",
+                            lifecycle_state: "{escaped_lifecycle_state}"
+                        }}
+                    ) {{ _docID }}
+                }}"#,
+            );
+
+            let resp = node.execute(&mutation).await;
+            if resp.has_errors() {
+                tracing::warn!(
+                    doc_id = %doc_id,
+                    request_id = %request_id,
+                    status = %status,
+                    errors = ?resp.errors,
+                    "failed to re-drive terminal request convergence"
+                );
+                continue;
+            }
+
+            *remaining -= 1;
+            reasserted += 1;
+            tracing::debug!(
+                doc_id = %doc_id,
+                request_id = %request_id,
+                status = %status,
+                lifecycle_state = %lifecycle_state,
+                remaining_reemits = *remaining,
+                "re-asserted terminal request state to converge replicas"
+            );
+        }
+
+        Ok(TerminalRedriveReport {
+            reasserted,
+            scanned,
+        })
+    }
 }
 
 async fn recover_stuck_requests(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
+    // Key the stale predicate on `lifecycle_state ∈ {claimed, processing}` to
+    // mirror the Lean `Recovery.requestRecoveryStale` model exactly, rather than
+    // on the coarser `status = "processing"`. A stuck `claimed` own-request is
+    // now recovered even if its `status` is not `"processing"`.
+    let stale_states = crate::lifecycle::stuck_request_lifecycle_state_graphql_list();
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
-                    agent_did: {{ _eq: "{agent_did}" }},
-                    status: {{ _eq: "processing" }}
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    lifecycle_state: {{ _in: {stale_states} }}
                 }}
             ) {{
                 _docID
