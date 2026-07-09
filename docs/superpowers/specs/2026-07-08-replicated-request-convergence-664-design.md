@@ -100,10 +100,56 @@ delta"); only the Rust action differs.
    owner's terminal for an unconverged replica. Registered in the conformance
    module (and the structure fence if a Lean model is added).
 
+## Adversarial-review outcomes (folded in)
+
+An adversarial verification pass (liveness + safety + Rust binding, each
+independently re-running TLC and the cargo gate) accepted the liveness proof and
+the Rust binding, and surfaced two safety must-fixes, both addressed here:
+
+1. **`SingleClaimer` was vacuous.** With `Delta.value : TerminalKind`, a peer in
+   `Claimed`/`Processing` was type-impossible, so the invariant could never be
+   falsified — its green run proved nothing. Added an `AllowPeerClaim`-gated
+   `PeerClaimsForeign` action and a third config
+   (`MCReplicatedRequestConvergencePeerClaim`) in which `SingleClaimer` is
+   reachably VIOLATED, mirroring the `Reemit` red/green that makes
+   `TerminalConverges` load-bearing.
+2. **Seam-completeness gap.** There is no write-ACL on `AgentRequest`
+   (`agent_did` is `@immutable` so a peer cannot *steal* a request, but the DB
+   does not block a peer writing a foreign replica's mutable fields). Two
+   `queue.rs` seams (`reconcile_coalesced_pending_request`,
+   `drain_pending_session_requests_where`) transitioned rows scoped by
+   `session_id` only, safe merely under an unenforced single-DID-per-session
+   invariant. Added an `agent_did == self` conjunct to both the candidate
+   queries and the mutations (belt-and-suspenders; the fence is now local, not
+   an implicit invariant), threaded through all callers, with two conformance
+   tests proving a foreign replica is never superseded/drained.
+
+The binding-soundness question ("does a same-value re-write no-op?") was resolved
+in Phase 0 against defradb.rs at the pinned rev `63c0be62`: it does **not**
+no-op — `modified_fields` is the patch's key set (not an old-vs-new diff), the
+write path has no value-equality short-circuit, and every write takes
+`priority = max+1`, so a same-value terminal re-assert is a genuine
+higher-priority CRDT delta that flows through the normal PushLog path and a
+lagging replica accepts by LWW.
+
 ## Validation
 
-`./scripts/run-tlc.sh MCReplicatedRequestConvergence` (green) and the `Stuck`
-diagnostic (expected violation); `cargo test -p defra-agent`;
-`cargo check --workspace --all-targets`. Conformance fence verified red-then-green.
+Model: `MCReplicatedRequestConvergence` green; `MCReplicatedRequestConvergenceStuck`
+(liveness) and `MCReplicatedRequestConvergencePeerClaim` (safety) expected
+violations. Code: `cargo test -p defra-agent` (full) + `cargo check --workspace
+--all-targets`. Every conformance fence verified red-then-green.
+
+## Known follow-ups (not blocking)
+
+- Wedge-window observability + `finalize_request_failure` terminal-write
+  robustness (the ~98% CPU incident cause is undetermined; unlogged window) —
+  tracked on #664.
+- `created_at DESC` is a proxy for terminalization time; under very high
+  request-creation rate a long-running task's recently-terminalized row could
+  fall outside the top-`N` window. Eliminable with a `terminalized_at` /
+  `convergence_seq` field (deliberately not added now to avoid schema churn).
+- Remaining raw `agent_did` interpolation in the sibling `recover_stuck_*`
+  functions this PR does not touch (pre-existing; `recover_stuck_requests` is
+  fixed here since it is modified).
 
 Refs #664, #661, #663, #630. defradb.rs#1074.

@@ -10,6 +10,7 @@ See `../README.md` for how this fits the broader formal-verification model.
 - `SubagentCompletion` — background subagent terminal projection where the parent bridge row lives on deployment A and the child terminalizes on deployment B. Spec design: `docs/superpowers/specs/2026-05-12-subagent-completion-cross-deployment-tla-design.md` (removed from the tree; see git history). Implementation plan: `docs/superpowers/plans/2026-05-12-subagent-completion-cross-deployment-tla-spec.md` (removed from the tree; see git history).
 - `SubagentCancelPropagation` - cascade-cancel delivery from a parent bridge row on deployment A to the child request owner on deployment B. Spec design: `docs/superpowers/specs/2026-05-13-subagent-cancel-propagation-tla-design.md` (removed from the tree; see git history). Implementation plan: `docs/superpowers/plans/2026-05-13-subagent-cancel-propagation-tla.md` (removed from the tree; see git history).
 - `PairingTransport` — connection establishment + replication liveness for one directed pairing edge, the transport layer *below* `ReversePairing`. `ReversePairing` and the Lean `PairingReconcile` model both assume the transport carries the install RPC / that `connect` succeeds; neither models *establishing* the link, so the live #511 fleet hang was outside the modeled world. This spec closes that gap. It distinguishes the **three real failure modes** (grounded in the production code) with two independent BOOLEAN constants — `Dialable` (the connect-gate ticket form) and `ReplicatorInstallable` (whether `add_replicator` can succeed once connected) — exercised by a **three-config diagnostic**: `MCPairingTransportDialable` (both true: the shareable-address fix — all properties hold); `MCPairingTransportUndialable` (MODE A — `Dialable = FALSE`: connect-fails-first, the *literal* #511 hang, never reaches `Connected` so nothing subscribes and no applied row is written); `MCPairingTransportReplicatorStuck` (MODE B/C — `ReplicatorInstallable = FALSE`: connect OK and collections subscribe but the replicator install never succeeds — the durable "subscribed collections, `replicator_addresses` null" partial row). Companion to the Lean `PairingReconcile` `dialFailed` (MODE A) and `reconcileInstallReplicatorFailed` (MODE B/C) transitions and the `convergence_requires_successful_install` obligation.
+- `ReplicatedRequestConvergence` — terminal-state convergence of a replicated `AgentRequest` document across an owning node and its non-owning peer replicas (issue #664, incident #661). SAFETY (`SingleClaimer`) is the existing `agent_did` watcher filter (`watcher/query.rs`): peers are strictly passive — a peer's only lifecycle action is applying a delivered owner delta, so it never claims/processes a foreign replica of its own volition. LIVENESS (`TerminalConverges`) is the fix: because DefraDB has no per-doc anti-entropy re-drive on a running peer (defradb.rs#1074) and recovery is owner-scoped + startup-only, a one-shot terminal PushLog that drops leaves peers permanently stuck non-terminal. The model abstracts the design's **owner re-drive** (the Phase-0 Rust binding — idempotent same-value terminal re-assert / `convergence_seq` bump) as a **re-emittable** `EmitTerminalDelta` action, and shows that owner re-emit + `WF` fairness on delivery/persistence is what forces convergence over a lossy channel. Exercised by a **three-config diagnostic** driven by two BOOLEAN constants `Reemit` (liveness) and `AllowPeerClaim` (safety falsifiability): `MCReplicatedRequestConvergence` (`Reemit = TRUE`, `AllowPeerClaim = FALSE` — owner re-drive on: `SingleClaimer` holds AND `TerminalConverges` holds); `MCReplicatedRequestConvergenceStuck` (`Reemit = FALSE` — single-shot per peer, the pre-fix one-shot delivery: `TerminalConverges` is intentionally VIOLATED with the reachable stuck trace — owner terminal, a peer's only delta dropped, no enabled fixing action); `MCReplicatedRequestConvergencePeerClaim` (`AllowPeerClaim = TRUE` — arms the adversarial `PeerClaimsForeign` action: a peer drives itself into `Claimed`, reachably VIOLATING `SingleClaimer` — this proves the safety property's clause (1) is not vacuous, so its green result elsewhere is real evidence the `agent_did` fence holds). Spec design: `docs/superpowers/specs/2026-07-08-replicated-request-convergence-664-design.md`.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -60,6 +61,21 @@ The other two configs are diagnostics and are EXPECTED to report violations — 
 MODE B/C (connect OK, replicator install never succeeds) violates `PartialApplyHasProgress` and returns the exact "subscribed collections, null replicator" partial row:
 ```bash
 ./scripts/run-tlc.sh MCPairingTransportReplicatorStuck
+```
+
+For ReplicatedRequestConvergence — the green model checks clean (both properties hold):
+```bash
+./scripts/run-tlc.sh MCReplicatedRequestConvergence
+```
+
+The `Stuck` config is a diagnostic and is EXPECTED to report a violation: with owner re-drive disabled (`Reemit = FALSE`), a single-shot terminal delta that is dropped strands a peer, violating `TerminalConverges` with the reachable stuck trace (owner terminal, peer non-terminal, no enabled fixing action):
+```bash
+./scripts/run-tlc.sh MCReplicatedRequestConvergenceStuck
+```
+
+The `PeerClaim` config is the safety diagnostic and is EXPECTED to report a violation: with the adversarial peer-claim action armed (`AllowPeerClaim = TRUE`), a peer drives itself into `Claimed`, reachably VIOLATING `INVARIANT SingleClaimer`. This proves `SingleClaimer` clause (1) is falsifiable — its green result in the two configs above is evidence the `agent_did` watcher fence holds, not a type artifact:
+```bash
+./scripts/run-tlc.sh MCReplicatedRequestConvergencePeerClaim
 ```
 
 The script runs TLC with parallel workers and writes state-graph artifacts to `states/` (gitignored).
@@ -113,6 +129,19 @@ Current parameters in `MCSubagentCancelPropagation.cfg`:
 | `MaxCrashes` | `1` | A and B can each crash once |
 | `MaxDrops` | `1` | One cancel or ack RPC can be dropped before fair retry/delivery |
 | `StateBound` | `\A child : ~cancelHandledB[child] => FreshIds(1)` | Excludes finite-id-pool exhaustion before B can allocate the handling ack; real RPC ids are unbounded |
+
+Current parameters in `MCReplicatedRequestConvergence.cfg` / `MCReplicatedRequestConvergenceStuck.cfg`:
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| `Owner` | `o` | The owning node — the request's `agent_did` holder and the only node that drives the lifecycle |
+| `ReplicaHolder` | `{p1, p2}` | Two non-owning peer replicas — the minimum to make convergence non-trivial across more than one holder |
+| `DeltaId` | `{d1, d2, d3, d4, d5, d6}` | Bounded id pool for terminal re-emissions; `StateBound` caps consumption below the pool size |
+| `MaxDrops` | `1` | One terminal delta may drop before fair re-emission converges (green) / strands a peer (stuck) |
+| `MaxCrashes` | `1` | One total node crash (owner restart or a peer losing volatile inbound) |
+| `TerminalKind` | `{Completed, Failed}` | The peer must converge to the *specific* terminal the owner reached, not merely some terminal |
+| `Reemit` | `TRUE` (green) / `FALSE` (stuck) | The single knob: `TRUE` = owner re-drive enabled (re-emittable); `FALSE` = single-shot per peer, the pre-fix behavior |
+| `StateBound` | `Cardinality(deltaIdsUsed) <= 4` | Caps total re-emissions at the worst-case convergence path (2 successes + 2 bounded waste events), cutting off duplicate re-drive churn that is not meaningful with unbounded real ids |
 
 ## What TLC checks
 
@@ -168,6 +197,20 @@ The two diagnostic configs each reproduce one real failure mode (the production 
 
 The key structural result: `DialSucceed` requires `Dialable` and `InstallReplicator` requires `ReplicatorInstallable`, and no fairness annotation can enable a disabled action. The reconciler's retries (SF on `Dial`/`Redial`, WF on the install) cannot make an un-dialable ticket dialable or make a non-installable replicator install — both are *transport/materialization preconditions the layer above must supply* (dial the shareable public address, not a listen-form address; resolve every replicated collection's schema so `add_replicator`'s cid lookup and filter validation pass). This is the TLA+ counterpart of the Lean `convergence_requires_successful_install` obligation: a connect/install *failure* step leaves the disagreement count unchanged and `> 0`, so convergence requires a *successful* install, which requires both a live connection and an installable replicator.
 
+Active lines from `MCReplicatedRequestConvergence.cfg` (`Reemit = TRUE`, both properties hold):
+
+- **`INVARIANT TypeOK`** — `reqState`, the gossip `messages`/`pendingInbound` sets, `deltaIdsUsed`, and the drop/crash counters stay in their declared domains.
+- **`INVARIANT SingleClaimer`** — every non-owner peer only ever holds `Pending` or the owner's terminal (delivered by an owner delta); it never sits in `Claimed`/`Processing`. A peer claiming/processing of its own volition would violate this — it is the model fence for the `agent_did` watcher filter.
+- **`INVARIANT DeltaBackedByOwnerTerminal`** — every in-flight terminal delta carries the owner's (absorbing) terminal value; no peer can converge to a value the owner never reached.
+- **`INVARIANT DeltaIdsTracked`** — every in-flight delta's id is recorded in `deltaIdsUsed`; no id reuse.
+- **`PROPERTY TerminalConverges`** (`owner-terminal ~> every peer reflects it`) — under owner re-emit (`Reemit = TRUE`) and `WF` fairness on `EmitTerminalDelta`/`DeliverDelta`/`PersistDeltaOnPeer`, every replica holder eventually converges to the owner's terminal despite a bounded drop and a bounded crash.
+- **`CONSTRAINT StateBound`** — bounds total terminal re-emissions to keep TLC from exploring re-drive churn that is not meaningful with unbounded real delta ids.
+
+Two diagnostic configs reproduce the pre-fix convergence gap (liveness) and prove the safety property is falsifiable (safety):
+
+- **`MCReplicatedRequestConvergenceStuck.cfg`** (`Reemit = FALSE`) — the invariants still hold (the failure is purely liveness). `EmitTerminalDelta` is single-shot per peer, modeling the pre-fix one-shot terminal PushLog with no anti-entropy re-drive on a running peer. `PROPERTY TerminalConverges` is intentionally VIOLATED: the counterexample terminalizes the owner, emits one delta per peer, drops one peer's only delta (`dropCount = 1`), and — because `Reemit = FALSE ∧ peer ∈ emittedTargets` disables re-emit and there is no other enabled action — that peer stutters forever at `Pending` while the owner is terminal. This is the model-level "owner=terminal, replica=non-terminal, no enabled fixing action" stuck state that names the fix: no fairness annotation can converge it, because the fixing action (`EmitTerminalDelta`) is *disabled*, not merely unfair. Only owner re-drive (`Reemit = TRUE`) restores convergence.
+- **`MCReplicatedRequestConvergencePeerClaim.cfg`** (`AllowPeerClaim = TRUE`) — arms the `PeerClaimsForeign` action, which drives a peer from `Pending` into `Claimed` of its own volition (the exact thing the `agent_did` watcher filter forbids, and what a peer-side write to a foreign replica would do). `INVARIANT SingleClaimer` is intentionally VIOLATED. Without this config, `SingleClaimer` clause (1) (`reqState[n] ∉ {Claimed, Processing}`) would be vacuously true — no other action can put a peer in those states — so its green result would prove nothing. With a config in which the property actually breaks, the green runs above are real evidence the fence holds. Mirrors the `Reemit` red/green that makes `TerminalConverges` load-bearing.
+
 ## Fairness annotations
 
 The spec uses two fairness flavors:
@@ -196,6 +239,13 @@ It deliberately has no fairness on child terminal writes, document drops, crashe
 - A-side `Timeout`
 
 It deliberately has no fairness on `InvokeBridgeCancelCascade`, `NaturalTerminalize`, `Drop`, or `Crash`.
+
+`ReplicatedRequestConvergence` uses weak fairness on the owner re-drive workers only:
+
+- per-peer `EmitTerminalDelta` (the re-emittable owner terminal re-drive)
+- `DeliverDelta` and `PersistDeltaOnPeer`
+
+It deliberately has no fairness on the owner lifecycle (`Claim`/`Process`/`Terminalize`), `DropDelta`, `CrashPeer`, or `CrashOwner` — those are voluntary. This isolation is the load-bearing result: `TerminalConverges` holds only because `EmitTerminalDelta` is *both* re-emittable (owner re-drive) *and* weakly fair; the `Stuck` config keeps the identical fairness but makes `EmitTerminalDelta` single-shot, and convergence fails — proving the re-emit, not the fairness alone, is what closes the gap.
 
 ## Convergence form
 
