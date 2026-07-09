@@ -99,6 +99,12 @@ delta"); only the Rust action differs.
    claimable by the watcher; (b) `TerminalConverges` — the re-drive re-emits the
    owner's terminal for an unconverged replica. Registered in the conformance
    module (and the structure fence if a Lean model is added).
+4. **Multi-node e2e** — `tests/e2e_lifecycle/replicated_request_convergence_p2p_e2e.rs`
+   closes the distributed half of `TerminalConverges`: a real second node applies
+   intermediate (`processing`) and terminal owner deltas over P2P; the owner
+   re-drive re-pushes a same-value higher-priority delta without forking the peer;
+   a late-join scenario forces re-drive after the peer connects post-terminalize.
+   (Does not fault-inject a dropped PushLog — no DefraDB hook for that yet.)
 
 ## Review pass 2 — proof↔implementation fidelity (folded in)
 
@@ -129,6 +135,9 @@ Fixed by making the model faithful:
   (it handles stuck non-terminal rows; the re-drive itself refills its budget on the
   next tick). Added an `agent_did == self` conjunct to the re-drive mutation filter for
   defense-in-depth parity with the queue seams.
+- Multi-node e2e added (review follow-up): single-node conformance remains the owner
+  re-drive fence; `e2e_lifecycle/replicated_request_convergence_p2p_e2e.rs` validates
+  peer apply over real P2P plus re-drive after late peer join.
 
 ## Adversarial-review outcomes (folded in)
 

@@ -1,0 +1,513 @@
+//! Multi-node e2e for #664 `TerminalConverges` (owner re-drive + P2P apply).
+//!
+//! Single-node conformance (`conformance/replicated_request_convergence.rs`)
+//! fences the owner half of `EmitTerminalDelta` (scope, terminal-only, cap,
+//! DID guards). This file closes the distributed half the review called out:
+//! a real second node must observe the owner's terminal state over P2P, and
+//! the owner re-drive must re-push a higher-priority same-value delta without
+//! forking the peer's view.
+//!
+//! Topology (mirrors `event_trigger_p2p_e2e` / R5 cross-deployment plumbing):
+//!   - Owner: writes + terminalizes + re-drives (no full agent boot required —
+//!     re-drive is a pure lifecycle seam).
+//!   - Peer: passive replica (different DID); only applies owner deltas.
+//!
+//! We deliberately do **not** fault-inject a dropped PushLog (no DefraDB hook
+//! for that yet). The load-bearing checks are:
+//!   1. intermediate `processing` replicates (the #661 peer-visible shape),
+//!   2. owner terminal update converges on the peer,
+//!   3. owner re-drive re-asserts and the peer stays on the same terminal
+//!      (LWW higher-priority same-value write does not regress or fork).
+//!
+//! A second scenario seeds the terminal **before** the peer joins, then uses
+//! re-drive after install to force the terminal delta through PushLog again —
+//! covering the case where initial sync alone is not the only recovery path.
+
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+use defra_agent::defra_node::EmbeddedNode;
+use defra_agent::graphql::escape_graphql_string;
+use defra_agent::{
+    RequestLifecycle, TERMINAL_REDRIVE_CAP,
+};
+use serde::Deserialize;
+
+use crate::support::test_p2p_db;
+
+const OWNER_DID: &str = "did:defra-agent:convergence-p2p-owner";
+const PEER_DID: &str = "did:defra-agent:convergence-p2p-peer";
+const BEHAVIOR_ID: &str = "convergence-p2p-behavior";
+
+#[derive(Debug, Clone, Deserialize)]
+struct RequestRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    agent_did: String,
+    status: String,
+    lifecycle_state: String,
+}
+
+// --- Two-node P2P plumbing (same shape as event_trigger_p2p_e2e / R5) ---
+
+async fn install_one_way_replicator(
+    sender: &EmbeddedNode,
+    receiver: &EmbeddedNode,
+    collections: &[&str],
+) {
+    let sender_addr = wait_for_listen_addr(sender).await;
+    let receiver_addr = wait_for_listen_addr(receiver).await;
+    let sender_p2p = sender.p2p().expect("sender p2p");
+    let receiver_p2p = receiver.p2p().expect("receiver p2p");
+
+    sender_p2p
+        .connect_peer(&receiver_addr)
+        .await
+        .expect("connect sender to receiver");
+    wait_for_connected_peer(sender).await;
+    wait_for_connected_peer(receiver).await;
+
+    let collection_names = collections
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<Vec<_>>();
+    sender_p2p
+        .add_collections(collection_names.clone())
+        .await
+        .expect("add sender p2p collections");
+    receiver_p2p
+        .add_collections(collection_names.clone())
+        .await
+        .expect("add receiver p2p collections");
+    // DefraDB needs both the sender-side push target and the receiver-side
+    // authorization record. Data-flow under test remains sender -> receiver.
+    receiver_p2p
+        .add_replicator(
+            collection_names.clone(),
+            Some(&sender_addr),
+            Default::default(),
+            Vec::new(),
+            None,
+        )
+        .await
+        .expect("authorize sender as receiver-side replicator");
+    sender_p2p
+        .add_replicator(
+            collection_names,
+            Some(&receiver_addr),
+            Default::default(),
+            Vec::new(),
+            None,
+        )
+        .await
+        .expect("install sender to receiver replicator");
+}
+
+async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let addrs = node
+            .p2p()
+            .expect("p2p should be enabled")
+            .listen_addresses()
+            .await
+            .expect("listen addresses");
+        if let Some(addr) = addrs.first() {
+            return addr.clone();
+        }
+        if Instant::now() >= deadline {
+            panic!("node never exposed a P2P listen address; last_addrs={addrs:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn wait_for_connected_peer(node: &EmbeddedNode) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let peers = node
+            .p2p()
+            .expect("p2p should be enabled")
+            .connected_peers()
+            .await
+            .expect("connected peers");
+        if !peers.is_empty() {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("node never reported a connected peer; last_peers={peers:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+// --- AgentRequest helpers ---
+
+async fn create_request(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    status: &str,
+    lifecycle_state: &str,
+) {
+    let request_id = escape_graphql_string(request_id);
+    let session_id = escape_graphql_string(session_id);
+    let agent_did = escape_graphql_string(agent_did);
+    let status = escape_graphql_string(status);
+    let lifecycle_state = escape_graphql_string(lifecycle_state);
+    let created_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "{agent_did}",
+                behavior_id: "{BEHAVIOR_ID}",
+                session_id: "{session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "convergence p2p e2e",
+                status: "{status}",
+                lifecycle_state: "{lifecycle_state}",
+                backend_id: "",
+                execution_origin: "interactive",
+                failure_reason: "",
+                created_at: "{created_at}",
+                retry_count: 0,
+                max_retries: 3,
+                subagent_depth: 0
+            }}) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create AgentRequest failed: {:?}",
+        resp.errors
+    );
+}
+
+async fn terminalize_request(
+    node: &EmbeddedNode,
+    request_id: &str,
+    agent_did: &str,
+    status: &str,
+    lifecycle_state: &str,
+) {
+    let request_id = escape_graphql_string(request_id);
+    let agent_did = escape_graphql_string(agent_did);
+    let status = escape_graphql_string(status);
+    let lifecycle_state = escape_graphql_string(lifecycle_state);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{
+                    request_id: {{ _eq: "{request_id}" }},
+                    agent_did: {{ _eq: "{agent_did}" }}
+                }},
+                input: {{
+                    status: "{status}",
+                    lifecycle_state: "{lifecycle_state}"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "terminalize AgentRequest failed: {:?}",
+        resp.errors
+    );
+}
+
+async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<RequestRow> {
+    let request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
+                _docID
+                agent_did
+                status
+                lifecycle_state
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        return None;
+    }
+    resp.data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .and_then(|rows| rows.first())
+        .cloned()
+        .and_then(|row| serde_json::from_value(row).ok())
+}
+
+async fn wait_for_request_lifecycle(
+    node: &EmbeddedNode,
+    request_id: &str,
+    expected_lifecycle: &str,
+    timeout: Duration,
+    label: &str,
+) -> RequestRow {
+    let deadline = Instant::now() + timeout;
+    let mut last: Option<RequestRow> = None;
+    loop {
+        if let Some(row) = fetch_request(node, request_id).await {
+            if row.lifecycle_state == expected_lifecycle {
+                return row;
+            }
+            last = Some(row);
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out waiting for AgentRequest({request_id}) \
+                 lifecycle_state={expected_lifecycle} on {label}; last={last:?}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Live path: intermediate processing replicates, owner terminal converges on
+/// the peer, then owner re-drive re-asserts without changing the peer's view.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
+    let owner = test_p2p_db("convergence-p2p-owner-live").await;
+    let peer = test_p2p_db("convergence-p2p-peer-live").await;
+
+    install_one_way_replicator(
+        owner.node.as_ref(),
+        peer.node.as_ref(),
+        &["AgentRequest"],
+    )
+    .await;
+
+    let request_id = "convergence-p2p-live-req";
+    let session_id = "convergence-p2p-live-session";
+
+    // 1. Owner writes a non-terminal request (the #661 intermediate shape).
+    create_request(
+        owner.node.as_ref(),
+        request_id,
+        session_id,
+        OWNER_DID,
+        "processing",
+        "processing",
+    )
+    .await;
+
+    let on_peer_processing = wait_for_request_lifecycle(
+        peer.node.as_ref(),
+        request_id,
+        "processing",
+        Duration::from_secs(30),
+        "peer (intermediate)",
+    )
+    .await;
+    assert_eq!(
+        on_peer_processing.agent_did, OWNER_DID,
+        "peer replica must retain the owner's DID (peer is passive)"
+    );
+    // Sanity: peer DID is not the owner — the replica is foreign on the peer node.
+    assert_ne!(on_peer_processing.agent_did, PEER_DID);
+
+    // 2. Owner terminalizes — the primary PushLog path under test.
+    terminalize_request(
+        owner.node.as_ref(),
+        request_id,
+        OWNER_DID,
+        "completed",
+        "completed",
+    )
+    .await;
+
+    let on_owner = wait_for_request_lifecycle(
+        owner.node.as_ref(),
+        request_id,
+        "completed",
+        Duration::from_secs(5),
+        "owner",
+    )
+    .await;
+    assert_eq!(on_owner.status, "completed");
+
+    let on_peer_terminal = wait_for_request_lifecycle(
+        peer.node.as_ref(),
+        request_id,
+        "completed",
+        Duration::from_secs(30),
+        "peer (terminal, first delivery)",
+    )
+    .await;
+    assert_eq!(on_peer_terminal.status, "completed");
+    assert_eq!(on_peer_terminal.agent_did, OWNER_DID);
+    assert_eq!(
+        on_peer_terminal.lifecycle_state, on_owner.lifecycle_state,
+        "peer must match owner terminal exactly"
+    );
+
+    // 3. Owner re-drive: same-value re-assert (higher-priority CRDT delta).
+    //    Peer must remain at the owner terminal — no fork / no regression.
+    let mut budget = HashMap::new();
+    let first = RequestLifecycle::redrive_terminal_convergence(
+        owner.node.as_ref(),
+        OWNER_DID,
+        &mut budget,
+    )
+    .await
+    .expect("redrive");
+    assert!(
+        first.reasserted >= 1,
+        "owner re-drive must re-assert at least the terminal row; report={first:?}"
+    );
+
+    // Give PushLog a moment, then confirm peer is still converged.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let after_redrive = wait_for_request_lifecycle(
+        peer.node.as_ref(),
+        request_id,
+        "completed",
+        Duration::from_secs(15),
+        "peer (after re-drive)",
+    )
+    .await;
+    assert_eq!(after_redrive.status, "completed");
+    assert_eq!(after_redrive.agent_did, OWNER_DID);
+    assert_eq!(after_redrive.doc_id, on_peer_terminal.doc_id);
+
+    // 4. Cap exhaust: remaining re-asserts drain the budget; peer stays put.
+    let mut total_reasserted = first.reasserted;
+    for _ in 0..TERMINAL_REDRIVE_CAP {
+        let report = RequestLifecycle::redrive_terminal_convergence(
+            owner.node.as_ref(),
+            OWNER_DID,
+            &mut budget,
+        )
+        .await
+        .expect("redrive drain");
+        total_reasserted += report.reasserted;
+        if report.reasserted == 0 {
+            break;
+        }
+    }
+    assert!(
+        total_reasserted <= TERMINAL_REDRIVE_CAP as usize,
+        "redrive must not exceed TERMINAL_REDRIVE_CAP={TERMINAL_REDRIVE_CAP}, got {total_reasserted}"
+    );
+    let exhausted = RequestLifecycle::redrive_terminal_convergence(
+        owner.node.as_ref(),
+        OWNER_DID,
+        &mut budget,
+    )
+    .await
+    .expect("redrive after cap");
+    assert_eq!(
+        exhausted.reasserted, 0,
+        "after CAP re-asserts the row must self-drop from the re-drive budget"
+    );
+
+    let final_peer = fetch_request(peer.node.as_ref(), request_id)
+        .await
+        .expect("peer still has the request");
+    assert_eq!(final_peer.lifecycle_state, "completed");
+    assert_eq!(final_peer.agent_did, OWNER_DID);
+
+    owner.node.shutdown().await;
+    peer.node.shutdown().await;
+}
+
+/// Late-join path: owner terminalizes *before* the peer is connected, then the
+/// re-drive re-pushes the terminal delta after replication is installed.
+///
+/// This is the closest multi-node stand-in for "first PushLog missed / peer was
+/// offline" without fault-injecting the gossip channel: the re-drive is what
+/// forces a fresh higher-priority delta through PushLog after the peer comes up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p2p_redrive_converges_terminal_after_late_peer_join() {
+    let owner = test_p2p_db("convergence-p2p-owner-late").await;
+    let peer = test_p2p_db("convergence-p2p-peer-late").await;
+
+    let request_id = "convergence-p2p-late-req";
+    let session_id = "convergence-p2p-late-session";
+
+    // Owner reaches terminal with no peer yet.
+    create_request(
+        owner.node.as_ref(),
+        request_id,
+        session_id,
+        OWNER_DID,
+        "completed",
+        "completed",
+    )
+    .await;
+    let on_owner = wait_for_request_lifecycle(
+        owner.node.as_ref(),
+        request_id,
+        "completed",
+        Duration::from_secs(5),
+        "owner (pre-join)",
+    )
+    .await;
+    assert_eq!(on_owner.status, "completed");
+
+    // Peer comes online and replication is installed after the terminal write.
+    install_one_way_replicator(
+        owner.node.as_ref(),
+        peer.node.as_ref(),
+        &["AgentRequest"],
+    )
+    .await;
+
+    // Some DefraDB builds may already anti-entropy on install; either way the
+    // re-drive must be a safe, higher-priority re-push of the terminal value.
+    let mut budget = HashMap::new();
+    let mut reasserted_total = 0usize;
+    for _ in 0..TERMINAL_REDRIVE_CAP {
+        let report = RequestLifecycle::redrive_terminal_convergence(
+            owner.node.as_ref(),
+            OWNER_DID,
+            &mut budget,
+        )
+        .await
+        .expect("redrive after late join");
+        reasserted_total += report.reasserted;
+        // After each re-assert, give the peer a chance to apply.
+        if let Some(row) = fetch_request(peer.node.as_ref(), request_id).await {
+            if row.lifecycle_state == "completed" && row.agent_did == OWNER_DID {
+                assert!(
+                    reasserted_total >= 1,
+                    "peer converged but re-drive never re-asserted; \
+                     initial sync alone closed the gap (still OK, but we want \
+                     at least one re-drive emission for the binding)"
+                );
+                owner.node.shutdown().await;
+                peer.node.shutdown().await;
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+
+    // Final wait: peer must hold the owner terminal after the re-drive window.
+    let on_peer = wait_for_request_lifecycle(
+        peer.node.as_ref(),
+        request_id,
+        "completed",
+        Duration::from_secs(30),
+        "peer (after late-join re-drive)",
+    )
+    .await;
+    assert_eq!(on_peer.agent_did, OWNER_DID);
+    assert_eq!(on_peer.status, "completed");
+    assert!(
+        reasserted_total >= 1,
+        "owner re-drive must have fired at least once after late join; total={reasserted_total}"
+    );
+
+    owner.node.shutdown().await;
+    peer.node.shutdown().await;
+}

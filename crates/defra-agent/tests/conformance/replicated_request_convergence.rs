@@ -7,7 +7,9 @@
 //!   `next_request`).
 //! - `TerminalConverges` (LIVENESS): once the owner terminalizes, its owner-side
 //!   re-drive re-asserts the terminal state so a lagging replica converges. The
-//!   re-drive is owner-scoped, idempotent, and bounded.
+//!   re-drive is owner-scoped, idempotent, and bounded. Multi-node peer apply
+//!   (real P2P + late-join re-drive) lives in
+//!   `tests/e2e_lifecycle/replicated_request_convergence_p2p_e2e.rs`.
 //!
 //! Plus the recovery-drift fix: `recover_stuck_requests` keys the stale set on
 //! `lifecycle_state ∈ {claimed, processing}` (the Lean `requestRecoveryStale`
