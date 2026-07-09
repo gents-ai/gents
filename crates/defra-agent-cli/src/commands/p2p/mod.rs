@@ -1,4 +1,5 @@
 mod access;
+mod claim;
 mod collections;
 mod connect;
 mod documents;
@@ -32,6 +33,7 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
             P2pPairingsCommand::Remove(args) => pairings::p2p_pairings_remove(args).await,
             P2pPairingsCommand::Invite(args) => invite::p2p_invite(args).await,
             P2pPairingsCommand::Join(args) => join::p2p_join(args).await,
+            P2pPairingsCommand::Claim(args) => claim::p2p_claim(args).await,
         },
         P2pCommand::Network { command } => match command {
             P2pNetworkCommand::Register(args) => network::p2p_network_register(args).await,

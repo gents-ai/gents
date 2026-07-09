@@ -4,6 +4,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_agent::{graphql::escape_graphql_string, AgentIdentity, KeyIdentity};
+use defra_agent_protocol::bearer_token::{
+    bearer_signing_payload, encode_bearer, BearerInviteToken, BEARER_TOKEN_VERSION,
+};
 use defra_agent_protocol::network_token::{MembershipRecord, NetworkRecord};
 use defra_agent_protocol::pairing_token::{encode as encode_invite, signing_payload, InviteToken};
 use serde_json::json;
@@ -20,6 +23,9 @@ use super::output::resolve_p2p_peer_id;
 use super::pairings::resolve_pairing_template;
 
 pub(super) async fn p2p_invite(args: P2pInviteArgs) -> Result<()> {
+    if args.bearer {
+        return p2p_invite_bearer(args).await;
+    }
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let home_dir = resolve_home_dir(args.home.as_deref());
     let template = resolve_pairing_template(&args.template)?;
@@ -76,6 +82,136 @@ pub(super) async fn p2p_invite(args: P2pInviteArgs) -> Result<()> {
         "join_command": format!("defra-agent p2p pairings join {encoded}"),
     }))?;
     Ok(())
+}
+
+/// Mint an audience-unbound bearer invite (`dabear1-`): no membership grant is
+/// embedded and no reciprocal intent is recorded — the running daemon's
+/// bearer-claim reconciler authors both at claim time, bound to whichever DID
+/// presents a valid self-signed claim first. Single-use (issuer-side nonce
+/// burn) and 5-minute expiry.
+async fn p2p_invite_bearer(args: P2pInviteArgs) -> Result<()> {
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    let template = resolve_pairing_template(&args.template)?;
+    let (access, _) =
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+    let network = load_single_network_record(&access)
+        .await
+        .context("loading local AgentNetwork for bearer invite")?;
+    let identity = resolve_home_identity(args.home.as_deref())
+        .context("resolving local agent identity for bearer invite signing")?;
+    if identity.did() != network.admin_did {
+        anyhow::bail!(
+            "local DID {} is not network admin {}; only admin-issued bearer invites are supported",
+            identity.did(),
+            network.admin_did
+        );
+    }
+
+    let (peer_id, ticket) = resolve_invite_transport(args.home.as_deref(), &graphql).await?;
+    let mut token = BearerInviteToken {
+        v: BEARER_TOKEN_VERSION,
+        issuer_did: identity.did().to_string(),
+        peer_id,
+        ticket,
+        nonce: mint_nonce(),
+        network_id: network.network_id.clone(),
+        issued_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        template: template.clone(),
+        network,
+        sig: Vec::new(),
+    };
+    token.sig = identity
+        .sign(&bearer_signing_payload(&token))
+        .await
+        .context("signing bearer invite token")?;
+    let encoded = encode_bearer(&token)?;
+
+    if args.qr {
+        // QR goes to stderr so stdout stays a single parseable JSON object.
+        let code = qrcode::QrCode::new(encoded.as_bytes())
+            .context("encoding bearer invite token as a QR code")?;
+        let rendered = code
+            .render::<qrcode::render::unicode::Dense1x2>()
+            .quiet_zone(true)
+            .build();
+        eprintln!("{rendered}");
+        eprintln!("scan within 5 minutes; the invite is single-use");
+    }
+
+    print_json(&json!({
+        "status": "bearer_invite_created",
+        "home": home_dir,
+        "graphql": graphql,
+        "token": encoded,
+        "peer_id": token.peer_id,
+        "issuer_did": token.issuer_did,
+        "network_id": token.network_id,
+        "template": token.template,
+        "ticket": token.ticket,
+        "expires_in": "5m",
+        "claim_command": format!("defra-agent p2p pairings claim {encoded}"),
+    }))?;
+    Ok(())
+}
+
+/// Resolve this node's (peer id, dialable ticket) for an invite: prefer the
+/// LIVE shareable address (see `current_invite_token_signed` for why), fall
+/// back to the persisted listen address only when the daemon is unreachable.
+async fn resolve_invite_transport(home: Option<&Path>, graphql: &str) -> Result<(String, String)> {
+    use crate::http::version::{NodeIdentityResponse, P2pShareableAddressResponse};
+
+    let live = async {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .context("building P2P invite HTTP client")?;
+        let api_base = crate::graphql_access::graphql_api_base(graphql)?;
+        let node_identity =
+            http_get_json::<NodeIdentityResponse>(&client, &format!("{api_base}/node/identity"))
+                .await
+                .ok();
+        let shareable_address: P2pShareableAddressResponse =
+            http_get_json(&client, &format!("{api_base}/p2p/shareable-address"))
+                .await
+                .context("loading shareable P2P address")?;
+        let ticket = normalize_optional_string(shareable_address.address.as_deref())
+            .context("runtime did not report a shareable P2P address")?;
+        let peer_id = resolve_p2p_peer_id(
+            node_identity.as_ref().and_then(|id| id.peer_id.as_deref()),
+            Some(&ticket),
+            &[],
+            None,
+        )
+        .context("runtime reported a shareable P2P address but no usable peer id")?;
+        Ok::<(String, String), anyhow::Error>((peer_id, ticket))
+    }
+    .await;
+
+    match live {
+        Ok(transport) => Ok(transport),
+        Err(live_err) => {
+            let home_dir = resolve_home_dir(home);
+            let Some(runtime_state) = read_runtime_state(&home_dir)? else {
+                return Err(live_err);
+            };
+            if runtime_state.graphql != graphql {
+                return Err(live_err);
+            }
+            let Some(peer_id) = normalize_optional_string(runtime_state.p2p_peer_id.as_deref())
+            else {
+                return Err(live_err);
+            };
+            let Some(ticket) = runtime_state
+                .p2p_listen_addresses
+                .iter()
+                .find_map(|address| normalize_optional_string(Some(address.as_str())))
+            else {
+                return Err(live_err);
+            };
+            Ok((peer_id, ticket))
+        }
+    }
 }
 
 async fn current_invite_token_signed(
