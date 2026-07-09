@@ -140,6 +140,7 @@ mod tests {
             backend_health: None,
             p2p_admission: None,
             p2p_metrics_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            p2p_http_client: reqwest::Client::new(),
         }
     }
 

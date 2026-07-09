@@ -352,6 +352,89 @@ async fn wait_for_peer_request(
     }
 }
 
+// --- Teardown scope guard (#670 leak follow-up) ---
+
+/// Owns the live topology so panic / `?` early-return still tears down agent +
+/// embedded nodes instead of relying on process exit. Happy-path callers should
+/// still `await shutdown()` for orderly async stop; `Drop` is best-effort.
+struct LiveTopologyGuard {
+    agent: Option<BootedAgent>,
+    owner: Option<TestDb>,
+    peer_a: Option<TestDb>,
+    peer_b: Option<TestDb>,
+    shut_down: bool,
+}
+
+impl LiveTopologyGuard {
+    fn new(owner: TestDb, peer_a: TestDb, peer_b: TestDb) -> Self {
+        Self {
+            agent: None,
+            owner: Some(owner),
+            peer_a: Some(peer_a),
+            peer_b: Some(peer_b),
+            shut_down: false,
+        }
+    }
+
+    fn set_agent(&mut self, agent: BootedAgent) {
+        self.agent = Some(agent);
+    }
+
+    fn owner(&self) -> &TestDb {
+        self.owner.as_ref().expect("owner still held")
+    }
+
+    fn peer_a(&self) -> &TestDb {
+        self.peer_a.as_ref().expect("peer_a still held")
+    }
+
+    fn peer_b(&self) -> &TestDb {
+        self.peer_b.as_ref().expect("peer_b still held")
+    }
+
+    async fn shutdown(mut self) {
+        self.shut_down = true;
+        if let Some(agent) = self.agent.take() {
+            agent.shutdown().await;
+        }
+        if let Some(db) = self.owner.take() {
+            db.node.shutdown().await;
+        }
+        if let Some(db) = self.peer_a.take() {
+            db.node.shutdown().await;
+        }
+        if let Some(db) = self.peer_b.take() {
+            db.node.shutdown().await;
+        }
+    }
+}
+
+impl Drop for LiveTopologyGuard {
+    fn drop(&mut self) {
+        if self.shut_down {
+            return;
+        }
+        // Best-effort: BootedAgent::Drop aborts the agent task. Schedule node
+        // shutdown on the current runtime when available so iroh sockets/ports
+        // are released even on panic unwind (test process still exits soon).
+        if let Some(agent) = self.agent.take() {
+            drop(agent);
+        }
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let nodes: Vec<_> = [self.owner.take(), self.peer_a.take(), self.peer_b.take()]
+                .into_iter()
+                .flatten()
+                .map(|db| db.node.clone())
+                .collect();
+            handle.spawn(async move {
+                for node in nodes {
+                    node.shutdown().await;
+                }
+            });
+        }
+    }
+}
+
 // --- The live concurrent multi-wave test ---
 
 /// Concurrent real-inference completions under a single push worker must still
@@ -381,13 +464,31 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Re
     let peer_a = test_p2p_db_with_admission("p2p-adm-live-peer-a", admission.clone()).await;
     let peer_b = test_p2p_db_with_admission("p2p-adm-live-peer-b", admission).await;
 
-    install_one_way_replicator(owner.node.as_ref(), peer_a.node.as_ref(), REPLICATED).await;
-    install_one_way_replicator(owner.node.as_ref(), peer_b.node.as_ref(), REPLICATED).await;
+    let mut topo = LiveTopologyGuard::new(owner, peer_a, peer_b);
+
+    install_one_way_replicator(
+        topo.owner().node.as_ref(),
+        topo.peer_a().node.as_ref(),
+        REPLICATED,
+    )
+    .await;
+    install_one_way_replicator(
+        topo.owner().node.as_ref(),
+        topo.peer_b().node.as_ref(),
+        REPLICATED,
+    )
+    .await;
 
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("p2p-adm-live-owner"));
-    let (agent_did, behavior_id) =
-        bind_live_backend(owner.node.as_ref(), identity.as_ref(), &endpoint, &model).await;
-    let agent = boot_live_agent(&owner, identity).await?;
+    let (agent_did, behavior_id) = bind_live_backend(
+        topo.owner().node.as_ref(),
+        identity.as_ref(),
+        &endpoint,
+        &model,
+    )
+    .await;
+    let agent = boot_live_agent(topo.owner(), identity).await?;
+    topo.set_agent(agent);
     eprintln!("[p2p-admission-live] owner ready did={agent_did}");
 
     // Fire concurrent waves WITHOUT awaiting peer convergence between submits.
@@ -403,7 +504,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Re
     let submit_start = Instant::now();
     for (i, request_id) in wave_ids.iter().enumerate() {
         create_runtime_request(
-            owner.node.as_ref(),
+            topo.owner().node.as_ref(),
             &agent_did,
             &behavior_id,
             request_id,
@@ -421,7 +522,8 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Re
     // Owner: every wave terminalizes (real inference ran).
     let owner_deadline = Duration::from_secs(180);
     for request_id in &wave_ids {
-        let state = wait_for_terminal(owner.node.as_ref(), request_id, owner_deadline).await;
+        let state =
+            wait_for_terminal(topo.owner().node.as_ref(), request_id, owner_deadline).await;
         assert_eq!(
             state, "completed",
             "owner wave {request_id} must complete against live d4f, got {state}"
@@ -434,7 +536,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Re
     let peer_deadline = Duration::from_secs(180);
     for request_id in &wave_ids {
         wait_for_peer_request(
-            peer_a.node.as_ref(),
+            topo.peer_a().node.as_ref(),
             request_id,
             &agent_did,
             peer_deadline,
@@ -442,7 +544,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Re
         )
         .await;
         wait_for_peer_request(
-            peer_b.node.as_ref(),
+            topo.peer_b().node.as_ref(),
             request_id,
             &agent_did,
             peer_deadline,
@@ -452,10 +554,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Re
         eprintln!("[p2p-admission-live] both peers have {request_id}");
     }
 
-    agent.shutdown().await;
-    owner.node.shutdown().await;
-    peer_a.node.shutdown().await;
-    peer_b.node.shutdown().await;
+    topo.shutdown().await;
     eprintln!("[p2p-admission-live] PASS concurrent multi-wave under single push worker");
     Ok(())
 }

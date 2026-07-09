@@ -47,6 +47,9 @@ pub(crate) struct RuntimeHttpState {
     /// Last successful live P2P peer/replicator snapshot for non-blocking
     /// `/metrics` scrapes. Shared across clones of this state.
     pub(crate) p2p_metrics_cache: Arc<Mutex<Option<P2pMetricsSnapshot>>>,
+    /// Shared HTTP client for P2P self-status fetches on the scrape path
+    /// (reuses connection pool; do not rebuild per scrape — #670).
+    pub(crate) p2p_http_client: reqwest::Client,
 }
 
 pub(crate) fn runtime_contract_router(
@@ -61,6 +64,14 @@ pub(crate) fn runtime_contract_router(
     p2p_admission: Option<P2pAdmissionState>,
 ) -> Router {
     let graphql_for_mcp = graphql.clone();
+    // Prefer the process-wide P2P client so CLI admin paths and /metrics share
+    // one pool. Fall back to a one-off builder only if OnceLock init fails.
+    let p2p_http_client = crate::commands::p2p::p2p_http_client().unwrap_or_else(|_| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("fallback P2P HTTP client")
+    });
     let state = RuntimeHttpState {
         graphql,
         agent_name,
@@ -70,6 +81,7 @@ pub(crate) fn runtime_contract_router(
         backend_health,
         p2p_admission,
         p2p_metrics_cache: Arc::new(Mutex::new(None)),
+        p2p_http_client,
     };
 
     let mut router = Router::new()
@@ -140,7 +152,11 @@ async fn load_p2p_metrics_for_scrape(state: &RuntimeHttpState) -> P2pMetricsSnap
         .ok()
         .and_then(|guard| guard.clone());
 
-    let fetch = crate::commands::p2p::fetch_live_http_p2p_status(None, &state.graphql);
+    let fetch = crate::commands::p2p::fetch_live_http_p2p_status_with_client(
+        None,
+        &state.graphql,
+        &state.p2p_http_client,
+    );
     match tokio::time::timeout(P2P_METRICS_FETCH_BUDGET, fetch).await {
         Ok(Ok(status)) => {
             let mut snap = p2p_metrics_from_status(&status, state.p2p_admission.as_ref());
@@ -499,6 +515,7 @@ mod tests {
             backend_health: None,
             p2p_admission: None,
             p2p_metrics_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            p2p_http_client: reqwest::Client::new(),
         }
     }
 

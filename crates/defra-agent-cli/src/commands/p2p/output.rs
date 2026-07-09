@@ -123,23 +123,31 @@ pub(crate) async fn load_live_http_p2p_status(home: Option<&Path>, graphql: &str
     }
 }
 
-/// Live multi-hop P2P status via the node's own HTTP API. Prefer
-/// [`load_live_http_p2p_status`] for CLI/status surfaces; `/metrics` uses this
-/// under a hard overall timeout so scrapes never block on self-HTTP.
+/// Live multi-hop P2P status via the node's own HTTP API using the process-wide
+/// shared client ([`super::p2p_http_client`]). Prefer
+/// [`load_live_http_p2p_status`] for CLI/status surfaces; `/metrics` uses
+/// [`fetch_live_http_p2p_status_with_client`] under a hard overall timeout.
 pub(crate) async fn fetch_live_http_p2p_status(
     home: Option<&Path>,
     graphql: &str,
 ) -> Result<Value> {
+    let client = super::p2p_http_client()?;
+    fetch_live_http_p2p_status_with_client(home, graphql, &client).await
+}
+
+/// Like [`fetch_live_http_p2p_status`], but reuses a caller-owned client (the
+/// serve-path `RuntimeHttpState` holds one for scrapes).
+pub(crate) async fn fetch_live_http_p2p_status_with_client(
+    home: Option<&Path>,
+    graphql: &str,
+    client: &reqwest::Client,
+) -> Result<Value> {
     use crate::http::version::{NodeIdentityResponse, P2pShareableAddressResponse};
     let home_dir = resolve_home_dir(home);
     let runtime_state = read_runtime_state(&home_dir)?.filter(|state| state.graphql == graphql);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .context("building P2P status HTTP client")?;
     let api_base = crate::graphql_access::graphql_api_base(graphql)?;
     let identity =
-        http_get_json::<NodeIdentityResponse>(&client, &format!("{api_base}/node/identity"))
+        http_get_json::<NodeIdentityResponse>(client, &format!("{api_base}/node/identity"))
             .await
             .ok();
     let transport = runtime_state
@@ -148,9 +156,9 @@ pub(crate) async fn fetch_live_http_p2p_status(
         .filter(|transport| !transport.is_empty())
         .unwrap_or(P2pTransportArg::None.as_str());
     let listen_addresses: Vec<String> =
-        http_get_json(&client, &format!("{api_base}/p2p/info")).await?;
+        http_get_json(client, &format!("{api_base}/p2p/info")).await?;
     let shareable_address: P2pShareableAddressResponse =
-        http_get_json(&client, &format!("{api_base}/p2p/shareable-address")).await?;
+        http_get_json(client, &format!("{api_base}/p2p/shareable-address")).await?;
     let shareable_address = normalize_optional_string(shareable_address.address.as_deref())
         .context("runtime reported an empty shareable P2P address")?;
     let peer_id = resolve_p2p_peer_id(
@@ -165,16 +173,15 @@ pub(crate) async fn fetch_live_http_p2p_status(
     )
     .context("runtime reported a shareable P2P address but no usable peer id")?;
     let peer_rows: Vec<P2pPeerRow> =
-        http_get_json(&client, &format!("{api_base}/p2p/peers")).await?;
+        http_get_json(client, &format!("{api_base}/p2p/peers")).await?;
     let connected_peers = peer_rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
     // Replicator list is best-effort: older nodes or permission gaps should not
     // fail the whole P2P status surface used by /status and /metrics.
-    let replicator_count = match http_get_json::<Vec<Value>>(&client, &format!("{api_base}/p2p/replicators"))
-        .await
-    {
-        Ok(rows) => rows.len(),
-        Err(_) => 0,
-    };
+    let replicator_count =
+        match http_get_json::<Vec<Value>>(client, &format!("{api_base}/p2p/replicators")).await {
+            Ok(rows) => rows.len(),
+            Err(_) => 0,
+        };
     let p2p_admission = runtime_state
         .as_ref()
         .and_then(|state| state.p2p_admission.as_ref())
