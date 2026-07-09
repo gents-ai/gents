@@ -57,18 +57,16 @@ def noDesiredDocReferencesTarget (desired : List ContractDoc) (target : DocRef) 
   !(desired.any fun doc => docReferencesTarget doc target)
 
 def diffDelete (scenario : ApplyReconcileScenario) : List DocRef :=
-  if scenario.pruneMode then
-    productionPruneOrder.flatMap fun collection =>
-      (sortedDocRefs <|
-        scenario.preDesired.filterMap fun doc =>
-          if collectionBEq doc.ref.collection collection &&
-              !(containsDoc scenario.manifest doc.ref) &&
-              noDesiredDocReferencesTarget scenario.preDesired doc.ref then
-            some doc.ref
-          else
-            none)
-  else
-    []
+  productionPruneOrder.flatMap fun collection =>
+    (sortedDocRefs <|
+      scenario.preDesired.filterMap fun doc =>
+        if (scenario.pruneMode || collection.manifestAuthoritative) &&
+            collectionBEq doc.ref.collection collection &&
+            !(containsDoc scenario.manifest doc.ref) &&
+            noDesiredDocReferencesTarget scenario.preDesired doc.ref then
+          some doc.ref
+        else
+          none)
 
 def diffDeleteSteps (scenario : ApplyReconcileScenario) : List ContractStep :=
   (diffDelete scenario).map deleteStep

@@ -145,22 +145,44 @@ lemma noLiveReferencesIn_deleteSafe
   rw [htrue] at hfalse
   cases hfalse
 
+/-- Deletes for live-only rows whose collection is provenance-scoped to the
+    current manifest owner. These rows converge on manifest absence without
+    enabling generic prune mode. -/
+noncomputable def managedDeletes
+    (M : Manifest) (L : LiveState) (support : LiveSupport) : List ApplyStep :=
+  (support.toList.filterMap (fun d =>
+    if d.collection.manifestAuthoritative then
+      if M.contains d then none
+      else if L.contains d then
+        if noLiveReferencesIn L support d then some (ApplyStep.delete d) else none
+      else none
+    else none)).mergeSort ApplyStep.deleteLe
+
 /-- Prune-mode delete steps for live-only desired rows. The default `diff`
     above remains byte-for-byte create/update only; callers opt into these
-    deletes explicitly and must supply the finite live desired support. -/
+    deletes explicitly and must supply the finite live desired support.
+    Manifest-authoritative rows are excluded because `managedDeletes` owns
+    their retraction in every mode. -/
 noncomputable def pruneDeletes
     (M : Manifest) (L : LiveState) (support : LiveSupport) : List ApplyStep :=
   (support.toList.filterMap (fun d =>
-    if M.contains d then none
+    if d.collection.manifestAuthoritative then none
+    else if M.contains d then none
     else if L.contains d then
       if noLiveReferencesIn L support d then some (ApplyStep.delete d) else none
     else none)).mergeSort ApplyStep.deleteLe
 
+/-- Default config convergence: create/update writes followed by retractions
+    from manifest-authoritative, provenance-scoped collections. -/
+noncomputable def diffManaged
+    (M : Manifest) (L : LiveState) (support : LiveSupport) : List ApplyStep :=
+  diff M L ++ managedDeletes M L support
+
 /-- Prune-mode apply diff: write desired create/update steps first, then the
-    opt-in delete sequence over live-only rows. -/
+    always-on managed retractions and opt-in generic delete sequence. -/
 noncomputable def diffPrune
     (M : Manifest) (L : LiveState) (support : LiveSupport) : List ApplyStep :=
-  diff M L ++ pruneDeletes M L support
+  diffManaged M L support ++ pruneDeletes M L support
 
 /-- Extract rank and id-level obligations from a true `DocRef.le`. -/
 private lemma DocRef.le_elim {a b : DocRef} (h : DocRef.le a b = true) :
@@ -282,6 +304,36 @@ theorem delete_order_referrers_before_dependencies
   unfold ApplyStep.deleteLe ApplyStep.target
   exact DocRef.le_intro (Or.inl hrank)
 
+/-- Every automatic manifest-authoritative delete is globally safe, provided
+    the owner-scoped live support is complete. -/
+theorem managedDeletes_emits_only_safe_deletes
+    {M : Manifest} {L : LiveState} {support : LiveSupport} {s : ApplyStep}
+    (hcomplete : LiveSupportComplete L support)
+    (hmem : s ∈ managedDeletes M L support) :
+    ∃ d, s = ApplyStep.delete d ∧ deleteSafe L d := by
+  unfold managedDeletes at hmem
+  rw [List.mem_mergeSort, List.mem_filterMap] at hmem
+  rcases hmem with ⟨d, _hd, hprod⟩
+  by_cases hOwned : d.collection.manifestAuthoritative = true
+  · by_cases hM : M.contains d = true
+    · simp [hOwned, hM] at hprod
+    · have hMfalse : M.contains d = false := by
+        cases h : M.contains d <;> simp [h] at hM ⊢
+      by_cases hL : L.contains d = true
+      · by_cases hcheck : noLiveReferencesIn L support d = true
+        · simp [hOwned, hMfalse, hL, hcheck] at hprod
+          subst hprod
+          exact ⟨d, rfl, noLiveReferencesIn_deleteSafe hcomplete hcheck⟩
+        · have hcheckFalse : noLiveReferencesIn L support d = false := by
+            cases h : noLiveReferencesIn L support d <;> simp [h] at hcheck ⊢
+          simp [hOwned, hMfalse, hL, hcheckFalse] at hprod
+      · have hLfalse : L.contains d = false := by
+          cases h : L.contains d <;> simp [h] at hL ⊢
+        simp [hOwned, hMfalse, hLfalse] at hprod
+  · have hOwnedFalse : d.collection.manifestAuthoritative = false := by
+      cases h : d.collection.manifestAuthoritative <;> simp [h] at hOwned ⊢
+    simp [hOwnedFalse] at hprod
+
 /-- Every emitted prune-delete is globally delete-safe, provided the finite
     support supplied to prune generation covers every live desired row. -/
 theorem pruneDeletes_emits_only_safe_deletes
@@ -292,21 +344,25 @@ theorem pruneDeletes_emits_only_safe_deletes
   unfold pruneDeletes at hmem
   rw [List.mem_mergeSort, List.mem_filterMap] at hmem
   rcases hmem with ⟨d, _hd, hprod⟩
-  by_cases hM : M.contains d = true
-  · simp [hM] at hprod
-  · have hMfalse : M.contains d = false := by
-      cases h : M.contains d <;> simp [h] at hM ⊢
-    by_cases hL : L.contains d = true
-    · by_cases hcheck : noLiveReferencesIn L support d = true
-      · simp [hMfalse, hL, hcheck] at hprod
-        subst hprod
-        exact ⟨d, rfl, noLiveReferencesIn_deleteSafe hcomplete hcheck⟩
-      · have hcheckFalse : noLiveReferencesIn L support d = false := by
-          cases h : noLiveReferencesIn L support d <;> simp [h] at hcheck ⊢
-        simp [hMfalse, hL, hcheckFalse] at hprod
-    · have hLfalse : L.contains d = false := by
-        cases h : L.contains d <;> simp [h] at hL ⊢
-      simp [hMfalse, hLfalse] at hprod
+  by_cases hOwned : d.collection.manifestAuthoritative = true
+  · simp [hOwned] at hprod
+  · have hOwnedFalse : d.collection.manifestAuthoritative = false := by
+      cases h : d.collection.manifestAuthoritative <;> simp [h] at hOwned ⊢
+    by_cases hM : M.contains d = true
+    · simp [hOwnedFalse, hM] at hprod
+    · have hMfalse : M.contains d = false := by
+        cases h : M.contains d <;> simp [h] at hM ⊢
+      by_cases hL : L.contains d = true
+      · by_cases hcheck : noLiveReferencesIn L support d = true
+        · simp [hOwnedFalse, hMfalse, hL, hcheck] at hprod
+          subst hprod
+          exact ⟨d, rfl, noLiveReferencesIn_deleteSafe hcomplete hcheck⟩
+        · have hcheckFalse : noLiveReferencesIn L support d = false := by
+            cases h : noLiveReferencesIn L support d <;> simp [h] at hcheck ⊢
+          simp [hOwnedFalse, hMfalse, hL, hcheckFalse] at hprod
+      · have hLfalse : L.contains d = false := by
+          cases h : L.contains d <;> simp [h] at hL ⊢
+        simp [hOwnedFalse, hMfalse, hLfalse] at hprod
 
 theorem pruneDeletes_deleteSafe
     {M : Manifest} {L : LiveState} {support : LiveSupport} {d : DocRef}
@@ -317,6 +373,27 @@ theorem pruneDeletes_deleteSafe
   cases hstep
   exact hsafe
 
+theorem managedDeletes_deleteSafe
+    {M : Manifest} {L : LiveState} {support : LiveSupport} {d : DocRef}
+    (hcomplete : LiveSupportComplete L support)
+    (hmem : ApplyStep.delete d ∈ managedDeletes M L support) :
+    deleteSafe L d := by
+  rcases managedDeletes_emits_only_safe_deletes hcomplete hmem with ⟨d', hstep, hsafe⟩
+  cases hstep
+  exact hsafe
+
+theorem diffManaged_deleteSafe
+    {M : Manifest} {L : LiveState} {support : LiveSupport} {d : DocRef}
+    (hcomplete : LiveSupportComplete L support)
+    (hmem : ApplyStep.delete d ∈ diffManaged M L support) :
+    deleteSafe L d := by
+  unfold diffManaged at hmem
+  rw [List.mem_append] at hmem
+  rcases hmem with hdiff | hmanaged
+  · have hpayload := diff_step_payload_isSome hdiff
+    simp [ApplyStep.payload?] at hpayload
+  · exact managedDeletes_deleteSafe hcomplete hmanaged
+
 theorem diffPrune_deleteSafe
     {M : Manifest} {L : LiveState} {support : LiveSupport} {d : DocRef}
     (hcomplete : LiveSupportComplete L support)
@@ -324,10 +401,18 @@ theorem diffPrune_deleteSafe
     deleteSafe L d := by
   unfold diffPrune at hmem
   rw [List.mem_append] at hmem
-  rcases hmem with hdiff | hprune
-  · have hpayload := diff_step_payload_isSome hdiff
-    simp [ApplyStep.payload?] at hpayload
+  rcases hmem with hmanaged | hprune
+  · exact diffManaged_deleteSafe hcomplete hmanaged
   · exact pruneDeletes_deleteSafe hcomplete hprune
+
+/-- T-Managed-delete-safety: default-mode retraction of a provenance-scoped
+    manifest-authoritative row never removes a structurally referenced row. -/
+theorem t_managed_delete_safety
+    {M : Manifest} {L : LiveState} {support : LiveSupport} {d : DocRef}
+    (hcomplete : LiveSupportComplete L support)
+    (hmem : ApplyStep.delete d ∈ diffManaged M L support) :
+    ∀ referrer : DocRef, ¬ liveReferences L referrer d :=
+  diffManaged_deleteSafe hcomplete hmem
 
 /-- T-Delete-safety: any delete emitted by prune-mode diff has no structural
     live referrer at the state where the diff is computed, assuming the finite

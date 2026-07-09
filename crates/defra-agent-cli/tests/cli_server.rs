@@ -634,31 +634,56 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
     )
     .await?;
     wait_for_inference_call_state(&graphql, &request_id, "running").await?;
-    let active_calls = active_inference_calls_for_backend(&graphql, &backend_id).await?;
-    let expected_backend_running = count_inference_calls(&active_calls, None, "running");
-    let expected_backend_queued = count_inference_calls(&active_calls, None, "queued");
-    let expected_behavior_running =
-        count_inference_calls(&active_calls, Some(&default_behavior_id), "running");
-    let expected_behavior_queued =
-        count_inference_calls(&active_calls, Some(&default_behavior_id), "queued");
+
+    let client = reqwest::Client::new();
+    let stable_deadline = Instant::now() + Duration::from_secs(5);
+    let (
+        snapshot,
+        active_calls,
+        expected_backend_running,
+        expected_backend_queued,
+        expected_behavior_running,
+        expected_behavior_queued,
+    ) = loop {
+        let response = client
+            .get(format!("http://127.0.0.1:{port}/fleet/slots"))
+            .send()
+            .await
+            .context("fetching /fleet/slots")?;
+        assert!(
+            response.status().is_success(),
+            "unexpected /fleet/slots response: {response:?}"
+        );
+        let snapshot: Value = response.json().await.context("reading /fleet/slots body")?;
+        let active_calls = active_inference_calls_for_backend(&graphql, &backend_id).await?;
+        let backend_running = count_inference_calls(&active_calls, None, "running");
+        let backend_queued = count_inference_calls(&active_calls, None, "queued");
+        let snapshot_running = snapshot.pointer("/totals/assigned").and_then(Value::as_i64);
+        let snapshot_queued = snapshot.pointer("/totals/queued").and_then(Value::as_i64);
+        if snapshot_running == Some(backend_running) && snapshot_queued == Some(backend_queued) {
+            break (
+                snapshot,
+                active_calls.clone(),
+                backend_running,
+                backend_queued,
+                count_inference_calls(&active_calls, Some(&default_behavior_id), "running"),
+                count_inference_calls(&active_calls, Some(&default_behavior_id), "queued"),
+            );
+        }
+        if Instant::now() >= stable_deadline {
+            return Err(anyhow!(
+                "fleet slot snapshot did not stabilize with active inference calls; snapshot={snapshot}; active_calls={}",
+                Value::Array(active_calls)
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
     let expected_available = 1_i64.saturating_sub(expected_backend_running);
     assert!(
         expected_backend_running >= 1,
         "test setup should hold at least one running call; active calls={}",
-        Value::Array(active_calls.clone())
+        Value::Array(active_calls)
     );
-
-    let client = reqwest::Client::new();
-    let response = client
-        .get(format!("http://127.0.0.1:{port}/fleet/slots"))
-        .send()
-        .await
-        .context("fetching /fleet/slots")?;
-    assert!(
-        response.status().is_success(),
-        "unexpected /fleet/slots response: {response:?}"
-    );
-    let snapshot: Value = response.json().await.context("reading /fleet/slots body")?;
 
     assert_eq!(
         snapshot.pointer("/source").and_then(Value::as_str),

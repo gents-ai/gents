@@ -26,11 +26,17 @@ pub async fn wait_for_runtime_ready(
                 escape_graphql_string(agent_did),
             ),
         )
-        .await?;
-        if let Ok(row) = first_graphql_row(&response, "AgentRuntime") {
-            if row.get("process_state").and_then(Value::as_str) == Some("ready") {
-                return Ok(());
+        .await;
+        match response {
+            Ok(response) => {
+                if let Ok(row) = first_graphql_row(&response, "AgentRuntime") {
+                    if row.get("process_state").and_then(Value::as_str) == Some("ready") {
+                        return Ok(());
+                    }
+                }
             }
+            Err(error) if agent_runtime_schema_is_starting(&error) => {}
+            Err(error) => return Err(error),
         }
 
         if Instant::now() >= deadline {
@@ -178,17 +184,28 @@ pub async fn wait_for_runtime_doc_id(graphql: &str, agent_did: &str) -> Result<S
                 escape_graphql_string(agent_did),
             ),
         )
-        .await?;
-        if let Ok(row) = first_graphql_row(&response, "AgentRuntime") {
-            if let Some(doc_id) = row.get("_docID").and_then(Value::as_str) {
-                return Ok(doc_id.to_string());
+        .await;
+        match response {
+            Ok(response) => {
+                if let Ok(row) = first_graphql_row(&response, "AgentRuntime") {
+                    if let Some(doc_id) = row.get("_docID").and_then(Value::as_str) {
+                        return Ok(doc_id.to_string());
+                    }
+                }
             }
+            Err(error) if agent_runtime_schema_is_starting(&error) => {}
+            Err(error) => return Err(error),
         }
         if Instant::now() >= deadline {
             bail!("timed out waiting for AgentRuntime _docID for {agent_did}");
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+}
+
+fn agent_runtime_schema_is_starting(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("Cannot query field") && message.contains("AgentRuntime")
 }
 
 pub async fn wait_for_request(

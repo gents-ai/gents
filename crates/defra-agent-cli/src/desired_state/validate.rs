@@ -37,6 +37,90 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
         errors.push("agent-principal.json must contain a non-empty agent_did".to_string());
     }
 
+    let mut pairing_dids = BTreeSet::new();
+    let mut pairing_peer_ids = BTreeSet::new();
+    for pairing in &manifest.peer_pairings {
+        let peer_did = pairing.peer_did.trim();
+        if peer_did.is_empty() {
+            errors.push("peer-pairings manifest contains an empty peer_did".to_string());
+        } else {
+            if !pairing_dids.insert(peer_did.to_string()) {
+                errors.push(format!(
+                    "duplicate peer_did in peer-pairings manifest: {peer_did}"
+                ));
+            }
+            if !principal_agent_did.is_empty() && peer_did == principal_agent_did {
+                errors.push(format!(
+                    "peer pairing {peer_did} points at this manifest's own agent_did"
+                ));
+            }
+        }
+
+        let template = pairing.template.trim();
+        if template.is_empty() {
+            errors.push(format!(
+                "peer pairing {peer_did:?} must contain a non-empty template"
+            ));
+        } else {
+            use defra_agent::agent::p2p_reconcile::templates::{
+                builtin_templates, resolve_template, APP_COLLECTIONS_TEMPLATE,
+            };
+            if template == APP_COLLECTIONS_TEMPLATE {
+                errors.push(format!(
+                    "peer pairing {peer_did:?} uses data-plane-only template {template:?}"
+                ));
+            } else if resolve_template(template).is_none() {
+                let known = builtin_templates()
+                    .iter()
+                    .map(|template| template.id)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                errors.push(format!(
+                    "peer pairing {peer_did:?} has unknown template {template:?}; known templates: {known}"
+                ));
+            }
+        }
+
+        if pairing.enabled && pairing.addresses.is_empty() {
+            errors.push(format!(
+                "enabled peer pairing {peer_did:?} must contain at least one address"
+            ));
+        }
+        let mut row_peer_id = None::<String>;
+        for address in &pairing.addresses {
+            match p2p::iroh::parse_public_peer_addr(address.trim()) {
+                Ok((peer_id, _)) => {
+                    let peer_id = peer_id.to_string();
+                    if let Err(error) = peer_id.parse::<iroh::EndpointId>() {
+                        errors.push(format!(
+                            "peer pairing {peer_did:?} address {address:?} has invalid iroh peer id {peer_id:?}: {error}"
+                        ));
+                        continue;
+                    }
+                    if let Some(expected) = row_peer_id.as_deref() {
+                        if expected != peer_id {
+                            errors.push(format!(
+                                "peer pairing {peer_did:?} mixes addresses for peer ids {expected:?} and {peer_id:?}"
+                            ));
+                        }
+                    } else {
+                        row_peer_id = Some(peer_id);
+                    }
+                }
+                Err(error) => errors.push(format!(
+                    "peer pairing {peer_did:?} has invalid address {address:?}: {error}"
+                )),
+            }
+        }
+        if let Some(peer_id) = row_peer_id {
+            if !pairing_peer_ids.insert(peer_id.clone()) {
+                errors.push(format!(
+                    "duplicate peer_id {peer_id:?} derived by peer-pairings manifest"
+                ));
+            }
+        }
+    }
+
     let mut behavior_ids = BTreeSet::new();
     let mut backend_ids = BTreeSet::new();
     let mut tool_selection_ids = BTreeSet::new();
@@ -882,9 +966,11 @@ fn validate_schedule_cadence(schedule: &super::DesiredSchedule, errors: &mut Vec
 
 /// Live-DB validation that complements the pure `validate_manifest`.
 ///
-/// Unlike `validate_manifest`, this probes the live database schema and
-/// filter syntax for every `EventTrigger`. It is only invoked from code
-/// paths that already hold a live `ConfigAccess` (i.e. `config apply`).
+/// Unlike `validate_manifest`, this checks pairing ownership and probes the
+/// live database schema and filter syntax for every `EventTrigger`. The full
+/// validator is an apply-time gate. `config diff` invokes only the narrower
+/// pairing ownership check so it can report an unsafe plan without hiding the
+/// rest of the diff.
 ///
 /// Two checks per trigger:
 ///
@@ -904,7 +990,7 @@ pub(crate) async fn validate_manifest_against_live(
     manifest: &DesiredStateManifest,
     access: &ConfigAccess,
 ) -> Result<Vec<String>> {
-    let mut errors = Vec::new();
+    let mut errors = validate_peer_pairing_ownership_against_live(manifest, access).await?;
     for trig in &manifest.event_triggers {
         // Skip triggers that failed basic structural validation; the pure
         // validator already reported those and live probes on empty
@@ -1025,6 +1111,68 @@ pub(crate) async fn validate_manifest_against_live(
     // fields, unique names) happens in `validate_manifest`; cross-node
     // resolution is handled out-of-band via P2P at runtime.
 
+    Ok(errors)
+}
+
+pub(crate) async fn validate_peer_pairing_ownership_against_live(
+    manifest: &DesiredStateManifest,
+    access: &ConfigAccess,
+) -> Result<Vec<String>> {
+    let mut errors = Vec::new();
+    if manifest.peer_pairings.is_empty() {
+        return Ok(errors);
+    }
+
+    let rows = crate::graphql_rows(
+        access,
+        "PeerPairingDesired",
+        r#"query {
+            PeerPairingDesired {
+                peer_id
+                agent_did
+                source
+            }
+        }"#,
+    )
+    .await?;
+    let desired_dids = manifest
+        .peer_pairings
+        .iter()
+        .map(|pairing| pairing.peer_did.trim())
+        .filter(|peer_did| !peer_did.is_empty())
+        .collect::<BTreeSet<_>>();
+    let desired_peer_ids = manifest
+        .peer_pairings
+        .iter()
+        .filter_map(|pairing| pairing.resolved_peer_id())
+        .collect::<BTreeSet<_>>();
+    let expected_source = super::peer_pairing_manifest_source(&manifest.agent_principal.agent_did);
+
+    for row in rows {
+        let peer_id = row
+            .get("peer_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        let peer_did = row
+            .get("agent_did")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        if !desired_dids.contains(peer_did) && !desired_peer_ids.contains(peer_id) {
+            continue;
+        }
+        let source = row
+            .get("source")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .unwrap_or("operator");
+        if source != expected_source {
+            errors.push(format!(
+                "peer pairing {peer_did:?} (peer_id {peer_id:?}) is owned by source {source:?}, not this manifest; refusing to overwrite or delete it"
+            ));
+        }
+    }
     Ok(errors)
 }
 
@@ -1284,6 +1432,7 @@ mod tests {
             inference_profiles: Vec::new(),
             tool_service_registries: Vec::new(),
             projection_acp_bindings: Vec::new(),
+            peer_pairings: Vec::new(),
             tasks: task_prompt
                 .map(|prompt| {
                     vec![DesiredTask {
@@ -1480,6 +1629,7 @@ mod live_tests {
             inference_profiles: Vec::new(),
             tool_service_registries: Vec::new(),
             projection_acp_bindings: Vec::new(),
+            peer_pairings: Vec::new(),
             tasks: Vec::new(),
             schedules: Vec::new(),
             event_triggers: Vec::new(),
@@ -1551,6 +1701,382 @@ mod live_tests {
                 .any(|msg| msg.contains("amy-research") || msg.contains("live-test-sel")),
             "expected no subagent errors for known target, got {errors:?}"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn live_validate_rejects_non_manifest_pairing_collision_and_diff_reports_it() -> Result<()>
+    {
+        use super::super::DesiredPeerPairing;
+        use crate::commands::config::binding::{
+            BoundDesiredManifest, ManifestBindMode, ManifestBindingContext,
+        };
+        use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
+        use crate::config_import::apply_desired_state_changes;
+        use crate::desired_state::{diff_manifests, export_bundle_from_manifest};
+        use defra_agent::graphql::escape_graphql_string;
+
+        let tempdir = tempfile::tempdir()?;
+        let node = EmbeddedNode::builder()
+            .data_path(tempdir.path().join("data"))
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(node);
+        let peer_id = "aa".repeat(32);
+        let peer_did = "did:key:remote";
+        let address = format!("{peer_id}@127.0.0.1:4100");
+        access
+            .execute(&format!(
+                r#"mutation {{ create_PeerPairingDesired(input: {{
+                    peer_id: "{}",
+                    agent_did: "{}",
+                    collections: ["AgentRequest"],
+                    replicator_addresses: ["{}"],
+                    template: "conversation",
+                    source: "operator"
+                }}) {{ _docID }} }}"#,
+                escape_graphql_string(&peer_id),
+                escape_graphql_string(peer_did),
+                escape_graphql_string(&address),
+            ))
+            .await?;
+
+        let mut manifest = manifest_with_subagent_targets(Vec::new());
+        manifest.peer_pairings.push(DesiredPeerPairing {
+            peer_did: peer_did.to_string(),
+            addresses: vec![address],
+            template: "conversation".to_string(),
+            enabled: false,
+            peer_id,
+        });
+        let errors = validate_manifest_against_live(&manifest, &access).await?;
+        assert!(errors.iter().any(|error| {
+            error.contains("source \"operator\"")
+                && error.contains("refusing to overwrite or delete")
+        }));
+
+        // Diff remains available as an observability command. The collision
+        // marks the report non-OK and is carried next to the planned drift
+        // instead of replacing the entire report with an error.
+        let owner_did = manifest.agent_principal.agent_did.clone();
+        let bound = BoundDesiredManifest {
+            context: ManifestBindingContext {
+                bind_mode: ManifestBindMode::Manifest,
+                target_agent_did: owner_did.clone(),
+                source_manifest_dids: std::collections::BTreeSet::from([owner_did]),
+            },
+            manifest: manifest.clone(),
+        };
+        let report = crate::commands::config::diff::diff_bound_desired_manifest(
+            std::path::Path::new("/ownership-collision"),
+            &access,
+            &bound,
+        )
+        .await?;
+        assert_eq!(report.status, "diffed");
+        assert!(!report.ok);
+        assert!(report.live_validation_errors.iter().any(|error| {
+            error.contains("source \"operator\"")
+                && error.contains("refusing to overwrite or delete")
+        }));
+
+        // Removing the manifest entry entirely does not make the operator row
+        // managed: the live projection only includes this root's provenance,
+        // so apply plans no pairing deletion and leaves the row intact.
+        manifest.peer_pairings.clear();
+        manifest.tool_selections.clear();
+        let live_bundle = build_desired_state_live_bundle(&access, &manifest).await?;
+        let (live_principal, live_manifest) = live_manifest_from_bundle(&manifest, &live_bundle)?;
+        let planned = diff_manifests(
+            std::path::Path::new("/ownership-safe"),
+            access.mode(),
+            &manifest,
+            live_principal.as_ref(),
+            &live_manifest,
+            false,
+        );
+        assert!(planned.collections.peer_pairings.delete.is_empty());
+        let bundle = export_bundle_from_manifest(&manifest, access.mode())?;
+        let txn = access.begin_apply_txn().await?;
+        apply_desired_state_changes(&txn, &bundle, &planned).await?;
+        txn.commit().await?;
+        let rows = crate::graphql_rows(
+            &access,
+            "PeerPairingDesired",
+            "{ PeerPairingDesired { peer_id source } }",
+        )
+        .await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["source"], "operator");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn preboot_pairing_apply_is_idempotent_and_restart_loader_consumes_seed() -> Result<()> {
+        use std::sync::Arc;
+
+        use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
+        use crate::config_import::apply_desired_state_changes;
+        use crate::desired_state::{diff_manifests, export_bundle_from_manifest};
+        use defra_agent::agent::p2p_reconcile::{
+            reconcile_peer_tick, GraphqlPairingStateStore, PairingFilters, PairingStateStore,
+            RemoteP2pAdmin, RemoteP2pAdminResult, RemoteReplicator,
+        };
+        use defra_agent::KeyIdentity;
+
+        let tempdir = tempfile::tempdir()?;
+        let data_path = tempdir.path().join("data");
+        let node = EmbeddedNode::builder()
+            .data_path(&data_path)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(node);
+        let peer_id = "bb".repeat(32);
+        let address = format!("{peer_id}@127.0.0.1:4100");
+        let mut manifest = manifest_with_subagent_targets(Vec::new());
+        manifest.tool_selections.clear();
+        manifest
+            .peer_pairings
+            .push(super::super::DesiredPeerPairing {
+                peer_did: "did:key:remote".to_string(),
+                addresses: vec![address.clone()],
+                template: "conversation".to_string(),
+                enabled: true,
+                peer_id: peer_id.clone(),
+            });
+
+        let live_bundle = build_desired_state_live_bundle(&access, &manifest).await?;
+        let (live_principal, live_manifest) = live_manifest_from_bundle(&manifest, &live_bundle)?;
+        let planned = diff_manifests(
+            std::path::Path::new("/preboot"),
+            access.mode(),
+            &manifest,
+            live_principal.as_ref(),
+            &live_manifest,
+            false,
+        );
+        assert_eq!(
+            planned.collections.peer_pairings.create,
+            vec![peer_id.clone()]
+        );
+        let bundle = export_bundle_from_manifest(&manifest, access.mode())?;
+        let txn = access.begin_apply_txn().await?;
+        let counts = apply_desired_state_changes(&txn, &bundle, &planned).await?;
+        txn.commit().await?;
+        assert_eq!(counts.peer_pairings, 1);
+
+        let live_bundle = build_desired_state_live_bundle(&access, &manifest).await?;
+        let (live_principal, live_manifest) = live_manifest_from_bundle(&manifest, &live_bundle)?;
+        let noop = diff_manifests(
+            std::path::Path::new("/preboot"),
+            access.mode(),
+            &manifest,
+            live_principal.as_ref(),
+            &live_manifest,
+            false,
+        );
+        assert_eq!(
+            noop.collections.peer_pairings.unchanged,
+            vec![peer_id.clone()]
+        );
+        assert!(!noop.counts.has_pending_apply());
+        let txn = access.begin_apply_txn().await?;
+        let repeated = apply_desired_state_changes(&txn, &bundle, &noop).await?;
+        txn.commit().await?;
+        assert_eq!(repeated.peer_pairings, 0);
+        drop(access);
+
+        // A freshly-created reconciler store (the restart boundary) reads the
+        // exact desired document seeded before any runtime was started.
+        let identity = Arc::new(KeyIdentity::load_or_create(
+            tempdir.path().join("restart-identity.key"),
+            None,
+        )?);
+        let restarted_node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(&data_path)
+                .with_storage_backend(StorageBackend::RocksDb)
+                .build()
+                .await?,
+        );
+        let restarted_store =
+            GraphqlPairingStateStore::new(restarted_node.clone(), identity.clone());
+        let loaded = restarted_store
+            .load_desired(&peer_id)
+            .await?
+            .expect("seeded pairing is visible to restarted reconciler");
+        assert!(loaded.replicator_addresses.contains(&address));
+
+        #[derive(Default)]
+        struct RestartAdmin {
+            added_replicators: std::sync::Mutex<Vec<String>>,
+        }
+
+        #[async_trait::async_trait]
+        impl RemoteP2pAdmin for RestartAdmin {
+            async fn peer_info(&self) -> RemoteP2pAdminResult<Vec<String>> {
+                Ok(Vec::new())
+            }
+            async fn active_peers(&self) -> RemoteP2pAdminResult<Vec<String>> {
+                Ok(Vec::new())
+            }
+            async fn connect(&self, _addresses: &[String]) -> RemoteP2pAdminResult<()> {
+                Ok(())
+            }
+            async fn list_replicators(&self) -> RemoteP2pAdminResult<Vec<RemoteReplicator>> {
+                Ok(self
+                    .added_replicators
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|address| RemoteReplicator {
+                        id: Some(address.clone()),
+                        collections: Vec::new(),
+                        address: Some(address.clone()),
+                    })
+                    .collect())
+            }
+            async fn add_replicator(
+                &self,
+                addresses: &[String],
+                _collections: &[String],
+                _filters: &PairingFilters,
+            ) -> RemoteP2pAdminResult<()> {
+                self.added_replicators
+                    .lock()
+                    .unwrap()
+                    .extend_from_slice(addresses);
+                Ok(())
+            }
+            async fn delete_replicator(
+                &self,
+                id: &str,
+                _collections: &[String],
+            ) -> RemoteP2pAdminResult<()> {
+                self.added_replicators
+                    .lock()
+                    .unwrap()
+                    .retain(|address| address != id);
+                Ok(())
+            }
+            async fn list_p2p_collections(&self) -> RemoteP2pAdminResult<Vec<String>> {
+                Ok(Vec::new())
+            }
+            async fn resolve_collection_id(
+                &self,
+                name: &str,
+            ) -> RemoteP2pAdminResult<Option<String>> {
+                Ok(Some(name.to_string()))
+            }
+            async fn resolve_collection_name(
+                &self,
+                id: &str,
+            ) -> RemoteP2pAdminResult<Option<String>> {
+                Ok(Some(id.to_string()))
+            }
+            async fn add_p2p_collections(
+                &self,
+                _collections: &[String],
+            ) -> RemoteP2pAdminResult<()> {
+                Ok(())
+            }
+            async fn delete_p2p_collections(
+                &self,
+                _collections: &[String],
+            ) -> RemoteP2pAdminResult<()> {
+                Ok(())
+            }
+            async fn list_p2p_documents(&self) -> RemoteP2pAdminResult<Vec<String>> {
+                Ok(Vec::new())
+            }
+            async fn add_p2p_documents(&self, _doc_ids: &[String]) -> RemoteP2pAdminResult<()> {
+                Ok(())
+            }
+            async fn delete_p2p_documents(&self, _doc_ids: &[String]) -> RemoteP2pAdminResult<()> {
+                Ok(())
+            }
+            async fn sync_documents(
+                &self,
+                _collection_name: &str,
+                _doc_ids: &[String],
+                _timeout: Option<std::time::Duration>,
+            ) -> RemoteP2pAdminResult<()> {
+                Ok(())
+            }
+            async fn sync_collection_versions(
+                &self,
+                _version_ids: &[String],
+                _timeout: Option<std::time::Duration>,
+            ) -> RemoteP2pAdminResult<()> {
+                Ok(())
+            }
+            async fn sync_branchable_collection(
+                &self,
+                _collection_id: &str,
+                _timeout: Option<std::time::Duration>,
+            ) -> RemoteP2pAdminResult<()> {
+                Ok(())
+            }
+        }
+
+        let admin = RestartAdmin::default();
+        let outcome = reconcile_peer_tick(&admin, &restarted_store, &peer_id).await?;
+        assert!(!outcome.ops_applied.is_empty());
+        assert_eq!(
+            admin.added_replicators.lock().unwrap().as_slice(),
+            &[address.clone()]
+        );
+        drop(restarted_store);
+        drop(restarted_node);
+
+        manifest.peer_pairings[0].enabled = false;
+        let node = EmbeddedNode::builder()
+            .data_path(&data_path)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        let access = ConfigAccess::Local(node);
+        let live_bundle = build_desired_state_live_bundle(&access, &manifest).await?;
+        let (live_principal, live_manifest) = live_manifest_from_bundle(&manifest, &live_bundle)?;
+        let removal = diff_manifests(
+            std::path::Path::new("/preboot"),
+            access.mode(),
+            &manifest,
+            live_principal.as_ref(),
+            &live_manifest,
+            false,
+        );
+        assert_eq!(
+            removal.collections.peer_pairings.delete,
+            vec![peer_id.clone()]
+        );
+        let bundle = export_bundle_from_manifest(&manifest, access.mode())?;
+        let txn = access.begin_apply_txn().await?;
+        apply_desired_state_changes(&txn, &bundle, &removal).await?;
+        txn.commit().await?;
+        let rows = crate::graphql_rows(
+            &access,
+            "PeerPairingDesired",
+            "{ PeerPairingDesired { peer_id } }",
+        )
+        .await?;
+        assert!(rows.is_empty());
+        drop(access);
+        let removal_node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(&data_path)
+                .with_storage_backend(StorageBackend::RocksDb)
+                .build()
+                .await?,
+        );
+        let removal_store = GraphqlPairingStateStore::new(removal_node, identity);
+        let outcome = reconcile_peer_tick(&admin, &removal_store, &peer_id).await?;
+        assert!(!outcome.ops_applied.is_empty());
+        assert!(admin.added_replicators.lock().unwrap().is_empty());
         Ok(())
     }
 
@@ -1651,6 +2177,7 @@ mod live_tests {
                 inference_profiles: Vec::new(),
                 tool_service_registries: Vec::new(),
                 projection_acp_bindings: Vec::new(),
+                peer_pairings: Vec::new(),
                 tasks: Vec::new(),
                 schedules: Vec::new(),
                 event_triggers: Vec::new(),
@@ -1836,6 +2363,7 @@ mod live_tests {
                 inference_profiles: Vec::new(),
                 tool_service_registries: Vec::new(),
                 projection_acp_bindings: Vec::new(),
+                peer_pairings: Vec::new(),
                 tasks: Vec::new(),
                 schedules: Vec::new(),
                 event_triggers: Vec::new(),

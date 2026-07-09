@@ -25,6 +25,7 @@ fn empty_manifest(agent_did: &str) -> DesiredStateManifest {
         inference_profiles: Vec::new(),
         tool_service_registries: Vec::new(),
         projection_acp_bindings: Vec::new(),
+        peer_pairings: Vec::new(),
         tasks: Vec::new(),
         schedules: Vec::new(),
         event_triggers: Vec::new(),
@@ -109,6 +110,208 @@ fn profile(id: &str) -> DesiredInferenceProfile {
         retry_allow_repair: None,
         retry_interactive_max: None,
     }
+}
+
+fn peer_pairing(
+    peer_did: &str,
+    peer_id: &str,
+    template: &str,
+    enabled: bool,
+) -> DesiredPeerPairing {
+    DesiredPeerPairing {
+        peer_did: peer_did.to_string(),
+        addresses: vec![format!("{peer_id}@127.0.0.1:4100")],
+        template: template.to_string(),
+        enabled,
+        peer_id: peer_id.to_string(),
+    }
+}
+
+fn pairing_diff(
+    desired: &DesiredStateManifest,
+    live: &DesiredStateManifest,
+) -> DesiredStateCollectionDiff {
+    diff_manifests(
+        &PathBuf::from("/tmp/fake-root"),
+        "local",
+        desired,
+        Some(&live.agent_principal),
+        live,
+        false,
+    )
+    .collections
+    .peer_pairings
+}
+
+#[test]
+fn peer_pairing_diff_covers_create_update_unchanged_and_remove() {
+    let peer_a = "11".repeat(32);
+    let peer_b = "22".repeat(32);
+    let mut desired = empty_manifest("did:key:owner");
+    desired.peer_pairings.push(peer_pairing(
+        "did:key:peer-a",
+        &peer_a,
+        "conversation",
+        true,
+    ));
+    desired.peer_pairings.push(peer_pairing(
+        "did:key:peer-b",
+        &peer_b,
+        "agent-config",
+        true,
+    ));
+
+    let mut live = empty_manifest("did:key:owner");
+    live.peer_pairings.push(peer_pairing(
+        "did:key:peer-b",
+        &peer_b,
+        "conversation",
+        true,
+    ));
+    let stale_id = "33".repeat(32);
+    live.peer_pairings.push(peer_pairing(
+        "did:key:stale",
+        &stale_id,
+        "conversation",
+        true,
+    ));
+
+    let diff = pairing_diff(&desired, &live);
+    assert_eq!(diff.create, vec![peer_a]);
+    assert_eq!(diff.update, vec![peer_b]);
+    assert_eq!(diff.delete, vec![stale_id]);
+    assert!(diff.unchanged.is_empty());
+
+    live.peer_pairings = desired.peer_pairings.clone();
+    let diff = pairing_diff(&desired, &live);
+    assert_eq!(diff.unchanged, vec!["11".repeat(32), "22".repeat(32)]);
+    assert!(diff.create.is_empty());
+    assert!(diff.update.is_empty());
+    assert!(diff.delete.is_empty());
+}
+
+#[test]
+fn disabled_or_absent_manifest_pairing_removes_stale_enabled_owned_row() {
+    let peer_id = "44".repeat(32);
+    let mut live = empty_manifest("did:key:owner");
+    live.peer_pairings
+        .push(peer_pairing("did:key:peer", &peer_id, "conversation", true));
+
+    let absent = empty_manifest("did:key:owner");
+    assert_eq!(pairing_diff(&absent, &live).delete, vec![peer_id.clone()]);
+
+    let mut disabled = empty_manifest("did:key:owner");
+    disabled.peer_pairings.push(peer_pairing(
+        "did:key:peer",
+        &peer_id,
+        "conversation",
+        false,
+    ));
+    let diff = pairing_diff(&disabled, &live);
+    assert_eq!(diff.delete, vec![peer_id]);
+    assert!(diff.update.is_empty(), "disabled is absence, not an update");
+}
+
+#[test]
+fn pairing_address_surface_forms_compare_semantically() {
+    let peer_id = "55".repeat(32);
+    let mut desired = empty_manifest("did:key:owner");
+    desired
+        .peer_pairings
+        .push(peer_pairing("did:key:peer", &peer_id, "conversation", true));
+    let mut live = desired.clone();
+    live.peer_pairings[0].addresses = vec![format!("127.0.0.1:4100/p2p/{peer_id}")];
+
+    assert_eq!(pairing_diff(&desired, &live).unchanged, vec![peer_id]);
+}
+
+#[test]
+fn pairing_did_correction_updates_the_existing_peer_id() {
+    let peer_id = "5a".repeat(32);
+    let mut desired = empty_manifest("did:key:owner");
+    desired.peer_pairings.push(peer_pairing(
+        "did:key:corrected",
+        &peer_id,
+        "conversation",
+        true,
+    ));
+    let mut live = empty_manifest("did:key:owner");
+    live.peer_pairings.push(peer_pairing(
+        "did:key:stale",
+        &peer_id,
+        "conversation",
+        true,
+    ));
+
+    let diff = pairing_diff(&desired, &live);
+    assert_eq!(diff.update, vec![peer_id]);
+    assert!(diff.create.is_empty());
+    assert!(diff.delete.is_empty());
+}
+
+#[test]
+fn peer_pairing_validation_rejects_unsafe_shapes() {
+    let peer_a = "66".repeat(32);
+    let peer_b = "77".repeat(32);
+    let mut manifest = empty_manifest("did:key:owner");
+    manifest.peer_pairings.push(DesiredPeerPairing {
+        peer_did: "did:key:owner".to_string(),
+        addresses: vec![
+            format!("{peer_a}@127.0.0.1:4100"),
+            format!("{peer_b}@127.0.0.1:4200"),
+        ],
+        template: "app-collections".to_string(),
+        enabled: true,
+        peer_id: String::new(),
+    });
+    let mut errors = Vec::new();
+    validate_manifest(&manifest, &mut errors);
+    assert!(errors.iter().any(|error| error.contains("own agent_did")));
+    assert!(errors.iter().any(|error| error.contains("data-plane-only")));
+    assert!(errors.iter().any(|error| error.contains("mixes addresses")));
+
+    manifest.peer_pairings[0].peer_did = "did:key:peer".to_string();
+    manifest.peer_pairings[0].addresses.clear();
+    manifest.peer_pairings[0].template = "conversation".to_string();
+    errors.clear();
+    validate_manifest(&manifest, &mut errors);
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("must contain at least one address")));
+
+    manifest.peer_pairings[0].addresses = vec!["not-a-peer@127.0.0.1:4100".to_string()];
+    errors.clear();
+    validate_manifest(&manifest, &mut errors);
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("invalid iroh peer id")));
+}
+
+#[test]
+fn pairing_apply_bundle_stamps_owner_provenance_and_omits_disabled_rows() {
+    let peer_id = "88".repeat(32);
+    let mut manifest = empty_manifest("did:key:owner");
+    manifest.peer_pairings.push(peer_pairing(
+        "did:key:enabled",
+        &peer_id,
+        "conversation",
+        true,
+    ));
+    manifest.peer_pairings.push(DesiredPeerPairing {
+        peer_did: "did:key:disabled".to_string(),
+        addresses: Vec::new(),
+        template: "conversation".to_string(),
+        enabled: false,
+        peer_id: String::new(),
+    });
+
+    let bundle = export_bundle_from_manifest(&manifest, "local").unwrap();
+    assert_eq!(bundle.as_bundle().peer_pairings.len(), 1);
+    let row = &bundle.as_bundle().peer_pairings[0];
+    assert_eq!(row["peer_id"], peer_id);
+    assert_eq!(row["agent_did"], "did:key:enabled");
+    assert_eq!(row["source"], "manifest:did:key:owner");
+    assert!(row["profiles"].is_null());
 }
 
 fn deletes_contain(
@@ -596,6 +799,7 @@ fn round_trip_load_write_load_is_identity() {
         loaded.tool_service_registries,
         original.tool_service_registries
     );
+    assert_eq!(loaded.peer_pairings, original.peer_pairings);
     assert_eq!(loaded.tasks, original.tasks);
     assert_eq!(loaded.schedules, original.schedules);
 }
@@ -645,6 +849,32 @@ mod load_manifest_root {
         assert_eq!(manifest.agent_principal.agent_did, "did:key:example");
         assert_eq!(manifest.agent_behaviors.len(), 1);
         assert!(manifest.tasks.is_empty());
+    }
+
+    #[test]
+    fn loads_peer_pairing_from_human_readable_handle() {
+        let tmp = tempdir().unwrap();
+        write_minimal_root(tmp.path());
+        let peer_id = "bb".repeat(32);
+        let pairing_dir = tmp.path().join("peer-pairings").join("coding-steward");
+        fs::create_dir_all(&pairing_dir).unwrap();
+        fs::write(
+            pairing_dir.join("object.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "peer_did": "did:key:remote",
+                "addresses": [format!("{peer_id}@127.0.0.1:4100")],
+                "template": "subagent-coordinator",
+                "enabled": true
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let (manifest, report) = load_manifest_root(tmp.path());
+        assert!(report.ok, "errors: {:?}", report.errors);
+        let pairing = &manifest.unwrap().peer_pairings[0];
+        assert_eq!(pairing.peer_did, "did:key:remote");
+        assert_eq!(pairing.peer_id, peer_id);
     }
 
     #[test]
@@ -2441,6 +2671,7 @@ pub(super) mod write_manifest_root {
             inference_profiles: Vec::new(),
             tool_service_registries: Vec::new(),
             projection_acp_bindings: Vec::new(),
+            peer_pairings: Vec::new(),
             tasks: vec![DesiredTask {
                 task_id: "seed-health".to_string(),
                 name: "Seed fleet health".to_string(),

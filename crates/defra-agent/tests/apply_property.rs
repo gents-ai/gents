@@ -17,6 +17,7 @@ fn collection_strategy() -> impl Strategy<Value = Collection> {
         Just(Collection::InferenceProfile),
         Just(Collection::ToolServiceRegistry),
         Just(Collection::ProjectionAcpBinding),
+        Just(Collection::PeerPairingDesired),
         Just(Collection::Task),
         Just(Collection::Schedule),
         Just(Collection::EventTrigger),
@@ -32,6 +33,7 @@ const LEAF_COLLECTIONS: &[Collection] = &[
     Collection::ToolSelection,
     Collection::InferenceProfile,
     Collection::ToolServiceRegistry,
+    Collection::PeerPairingDesired,
 ];
 
 fn leaf_docref_strategy() -> impl Strategy<Value = DocRef> {
@@ -41,6 +43,7 @@ fn leaf_docref_strategy() -> impl Strategy<Value = DocRef> {
             Just(Collection::ToolSelection),
             Just(Collection::InferenceProfile),
             Just(Collection::ToolServiceRegistry),
+            Just(Collection::PeerPairingDesired),
         ],
         "[a-z]{1,4}",
     )

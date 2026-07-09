@@ -7,7 +7,10 @@ use super::validate::{
     normalize_tool_service_mcp_path, normalize_tool_service_string, optional_i64_from_value,
     optional_string_from_value,
 };
-use super::{DesiredStateManifest, DesiredToolServiceRegistry, TOOL_SERVICE_ADDRESS_FIELDS};
+use super::{
+    peer_pairing_manifest_source, DesiredPeerPairing, DesiredStateManifest,
+    DesiredToolServiceRegistry, TOOL_SERVICE_ADDRESS_FIELDS,
+};
 
 pub(crate) fn tool_service_registry_from_live_value(
     value: &Value,
@@ -239,6 +242,11 @@ pub(crate) fn manifest_from_export_bundle(
                 )
             })
             .collect::<Result<Vec<_>>>()?,
+        peer_pairings: bundle
+            .peer_pairings
+            .iter()
+            .map(peer_pairing_from_live_value)
+            .collect::<Result<Vec<_>>>()?,
         tasks: bundle
             .tasks
             .iter()
@@ -344,6 +352,12 @@ pub(crate) fn export_bundle_from_manifest(
             .iter()
             .map(serde_json::to_value)
             .collect::<serde_json::Result<Vec<_>>>()?,
+        peer_pairings: manifest
+            .peer_pairings
+            .iter()
+            .filter(|pairing| pairing.enabled)
+            .map(|pairing| peer_pairing_apply_value(pairing, manifest))
+            .collect::<Result<Vec<_>>>()?,
         tasks: manifest
             .tasks
             .iter()
@@ -361,6 +375,78 @@ pub(crate) fn export_bundle_from_manifest(
             .collect::<serde_json::Result<Vec<_>>>()?,
     };
     Ok(super::DesiredApplyBundle::from_trusted_bundle(bundle))
+}
+
+fn peer_pairing_from_live_value(value: &Value) -> Result<DesiredPeerPairing> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow!("expected PeerPairingDesired live row to be an object"))?;
+    let peer_id = object
+        .get("peer_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("PeerPairingDesired live row is missing peer_id"))?;
+    let peer_did = object
+        .get("agent_did")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let addresses = object
+        .get("replicator_addresses")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let template = object
+        .get("template")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(defra_agent::agent::p2p_reconcile::engine::DEFAULT_PAIRING_TEMPLATE);
+
+    Ok(DesiredPeerPairing {
+        peer_did: peer_did.to_string(),
+        addresses,
+        template: template.to_string(),
+        enabled: true,
+        peer_id: peer_id.to_string(),
+    })
+}
+
+fn peer_pairing_apply_value(
+    pairing: &DesiredPeerPairing,
+    manifest: &DesiredStateManifest,
+) -> Result<Value> {
+    let peer_id = pairing.resolved_peer_id().ok_or_else(|| {
+        anyhow!(
+            "enabled peer pairing {:?} has no derivable peer_id",
+            pairing.peer_did
+        )
+    })?;
+    let template = defra_agent::agent::p2p_reconcile::resolve_template(&pairing.template)
+        .ok_or_else(|| anyhow!("unknown peer pairing template {:?}", pairing.template))?;
+    let collections = template
+        .collections
+        .iter()
+        .map(|collection| Value::String((*collection).to_string()))
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({
+        "peer_id": peer_id,
+        "agent_did": pairing.peer_did,
+        "collections": collections,
+        "replicator_addresses": pairing.addresses,
+        "profiles": Value::Null,
+        "template": pairing.template,
+        "source": peer_pairing_manifest_source(&manifest.agent_principal.agent_did),
+    }))
 }
 
 pub(crate) fn desired_from_value<T>(value: &Value, allowed_fields: &[&str]) -> Result<T>

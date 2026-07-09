@@ -214,6 +214,7 @@ fn generated_apply_reconcile_cases_drive_apply_model_and_production_ordering() {
         "backend_before_behavior_ordering",
         "update_existing_backend",
         "live_only_no_op",
+        "managed_pairing_absent_retracts_without_prune",
         "prune_live_only_unreferenced_backend",
         "prune_blocks_referenced_dependency",
         "prefix_retry_convergence_idempotence",
