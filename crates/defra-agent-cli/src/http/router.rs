@@ -1,4 +1,5 @@
-use std::time::Instant;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::{Query, State},
@@ -24,6 +25,10 @@ use crate::shared::P2pAdmissionState;
 use defra_agent::defra_query::CollectionScope;
 
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
+/// Hard budget for the multi-hop P2P self-fetch on the scrape path. Must stay
+/// well under Prometheus's typical 10s scrape_timeout so inference/backend
+/// metrics still return during hub saturation (#630 review on #670).
+const P2P_METRICS_FETCH_BUDGET: Duration = Duration::from_millis(750);
 
 #[derive(Clone)]
 pub(crate) struct RuntimeHttpState {
@@ -39,6 +44,9 @@ pub(crate) struct RuntimeHttpState {
     pub(crate) backend_health: Option<defra_agent::BackendHealthMap>,
     /// P2P admission knobs resolved at serve start (`None` when P2P disabled).
     pub(crate) p2p_admission: Option<P2pAdmissionState>,
+    /// Last successful live P2P peer/replicator snapshot for non-blocking
+    /// `/metrics` scrapes. Shared across clones of this state.
+    pub(crate) p2p_metrics_cache: Arc<Mutex<Option<P2pMetricsSnapshot>>>,
 }
 
 pub(crate) fn runtime_contract_router(
@@ -61,6 +69,7 @@ pub(crate) fn runtime_contract_router(
         started_instant: Instant::now(),
         backend_health,
         p2p_admission,
+        p2p_metrics_cache: Arc::new(Mutex::new(None)),
     };
 
     let mut router = Router::new()
@@ -101,15 +110,16 @@ async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {
         Some(map) => map.snapshot().await,
         None => Default::default(),
     };
-    let p2p_live = crate::commands::p2p::load_live_http_p2p_status(None, &state.graphql).await;
-    let p2p_metrics = p2p_metrics_from_status(&p2p_live, state.p2p_admission.as_ref());
+    // Never block the whole scrape on multi-hop P2P self-HTTP. Prefer a short
+    // budget + last-known counts so inference/backend metrics still ship.
+    let p2p_metrics = load_p2p_metrics_for_scrape(&state).await;
     match render_prometheus_metrics(
         &state.graphql,
         &state.agent_did,
         &measured_backend_health,
         Some(&p2p_metrics),
     )
-        .await
+    .await
     {
         Ok(body) => ([(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)], body).into_response(),
         Err(error) => (
@@ -118,6 +128,50 @@ async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {
             format!("metrics render failed: {error}"),
         )
             .into_response(),
+    }
+}
+
+/// Refresh live P2P counts under a hard budget; on timeout/error hold the last
+/// successful snapshot (or admission-only bootstrap) and mark `stale`.
+async fn load_p2p_metrics_for_scrape(state: &RuntimeHttpState) -> P2pMetricsSnapshot {
+    let cached = state
+        .p2p_metrics_cache
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone());
+
+    let fetch = crate::commands::p2p::fetch_live_http_p2p_status(None, &state.graphql);
+    match tokio::time::timeout(P2P_METRICS_FETCH_BUDGET, fetch).await {
+        Ok(Ok(status)) => {
+            let mut snap = p2p_metrics_from_status(&status, state.p2p_admission.as_ref());
+            snap.stale = false;
+            if let Ok(mut guard) = state.p2p_metrics_cache.lock() {
+                *guard = Some(snap.clone());
+            }
+            snap
+        }
+        Ok(Err(_)) | Err(_) => {
+            if let Some(mut snap) = cached {
+                // Hold last-known peer/replicator counts; refresh admission from
+                // the serve-start snapshot so knobs stay accurate even when stale.
+                snap.admission = state.p2p_admission.clone();
+                snap.enabled = state.p2p_admission.is_some() || snap.enabled;
+                snap.stale = true;
+                snap
+            } else {
+                p2p_metrics_admission_only(state, /*stale=*/ true)
+            }
+        }
+    }
+}
+
+fn p2p_metrics_admission_only(state: &RuntimeHttpState, stale: bool) -> P2pMetricsSnapshot {
+    P2pMetricsSnapshot {
+        enabled: state.p2p_admission.is_some(),
+        connected_peers: 0,
+        replicators: 0,
+        admission: state.p2p_admission.clone(),
+        stale,
     }
 }
 
@@ -162,11 +216,21 @@ fn p2p_metrics_from_status(
         .and_then(Value::as_u64)
         .map(|n| n as usize)
         .unwrap_or(0);
+    // Prefer serve-start admission over anything embedded in the HTTP status
+    // payload so knobs stay authoritative even if runtime.json is stale.
+    let admission = admission
+        .cloned()
+        .or_else(|| {
+            p2p.get("p2p_admission")
+                .cloned()
+                .and_then(|v| serde_json::from_value(v).ok())
+        });
     P2pMetricsSnapshot {
         enabled,
         connected_peers,
         replicators,
-        admission: admission.cloned(),
+        admission,
+        stale: false,
     }
 }
 
@@ -434,6 +498,7 @@ mod tests {
             started_instant: Instant::now(),
             backend_health: None,
             p2p_admission: None,
+            p2p_metrics_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 

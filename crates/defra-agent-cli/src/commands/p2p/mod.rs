@@ -19,7 +19,9 @@ use crate::cli::args::{
     P2pPairingsCommand, P2pReplicatorsCommand, P2pTemplatesCommand,
 };
 
-pub(crate) use output::{flatten_p2p_fields, load_live_http_p2p_status, persisted_p2p_status};
+pub(crate) use output::{
+    fetch_live_http_p2p_status, flatten_p2p_fields, load_live_http_p2p_status, persisted_p2p_status,
+};
 
 pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
     match command {

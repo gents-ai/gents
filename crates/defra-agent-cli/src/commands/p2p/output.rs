@@ -123,7 +123,10 @@ pub(crate) async fn load_live_http_p2p_status(home: Option<&Path>, graphql: &str
     }
 }
 
-pub(super) async fn fetch_live_http_p2p_status(
+/// Live multi-hop P2P status via the node's own HTTP API. Prefer
+/// [`load_live_http_p2p_status`] for CLI/status surfaces; `/metrics` uses this
+/// under a hard overall timeout so scrapes never block on self-HTTP.
+pub(crate) async fn fetch_live_http_p2p_status(
     home: Option<&Path>,
     graphql: &str,
 ) -> Result<Value> {

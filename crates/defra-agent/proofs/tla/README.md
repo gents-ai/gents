@@ -64,17 +64,24 @@ MODE B/C (connect OK, replicator install never succeeds) violates `PartialApplyH
 ./scripts/run-tlc.sh MCPairingTransportReplicatorStuck
 ```
 
-For P2PBackpressure — the green model checks clean:
+For P2PBackpressure — **modeled, not yet TLC-checked** on the reference
+runner (no recorded-runs row; TLC was not executed when this model landed).
+The configs below are the intended green/red suite; treat the prose outcomes
+as design claims until real TLC rows are pasted into "Recorded runs":
 ```bash
 ./scripts/run-tlc.sh MCP2PBackpressureGreen
 ```
 
-The other two configs are diagnostics and are EXPECTED to report violations. `TimeoutStall` violates `HealthyPeersDeliver` by filling the only push slot with a nonresponsive peer that never releases it:
+The other two configs are diagnostics and are **designed** to report
+violations (unverified until TLC is run). `TimeoutStall` is intended to
+violate `HealthyPeersDeliver` by filling the only push slot with a
+nonresponsive peer that never releases it:
 ```bash
 ./scripts/run-tlc.sh MCP2PBackpressureTimeoutStall
 ```
 
-`BadAck` violates `SuccessAckBacked` by success-acking at pending-DAG capacity without registering or merging the DAG:
+`BadAck` is intended to violate `SuccessAckBacked` by success-acking at
+pending-DAG capacity without registering or merging the DAG:
 ```bash
 ./scripts/run-tlc.sh MCP2PBackpressureBadAck
 ```
@@ -225,7 +232,7 @@ The two diagnostic configs each reproduce one real failure mode (the production 
 
 The key structural result: `DialSucceed` requires `Dialable` and `InstallReplicator` requires `ReplicatorInstallable`, and no fairness annotation can enable a disabled action. The reconciler's retries (SF on `Dial`/`Redial`, WF on the install) cannot make an un-dialable ticket dialable or make a non-installable replicator install — both are *transport/materialization preconditions the layer above must supply* (dial the shareable public address, not a listen-form address; resolve every replicated collection's schema so `add_replicator`'s cid lookup and filter validation pass). This is the TLA+ counterpart of the Lean `convergence_requires_successful_install` obligation: a connect/install *failure* step leaves the disagreement count unchanged and `> 0`, so convergence requires a *successful* install, which requires both a live connection and an installable replicator.
 
-Active lines from `MCP2PBackpressureGreen.cfg` (`TimeoutReleasesSlot = TRUE`, `AckWithoutPendingAllowed = FALSE`, all hold):
+Active lines from `MCP2PBackpressureGreen.cfg` (`TimeoutReleasesSlot = TRUE`, `AckWithoutPendingAllowed = FALSE`) — **modeled properties; TLC not yet run** (no recorded-runs row):
 
 - **`INVARIANT TypeOK`** — outbound states and inbound admission sets stay in their declared bounded domains.
 - **`INVARIANT PushSlotsBounded`** — in-flight outbound PushLog sends never exceed `PushWorkers`.
@@ -235,10 +242,10 @@ Active lines from `MCP2PBackpressureGreen.cfg` (`TimeoutReleasesSlot = TRUE`, `A
 - **`PROPERTY HealthyPeersDeliver`** — every responsive peer eventually reaches `Delivered`, even if the nonresponsive peer gets the first worker slot.
 - **`PROPERTY InboundSettles`** — every inbound PushLog eventually receives either success or nack.
 
-The diagnostics each reproduce one load-bearing failure:
+The diagnostics are **designed** to reproduce one load-bearing failure each (claims, not TLC-verified results):
 
-- **`MCP2PBackpressureTimeoutStall.cfg`** (`TimeoutReleasesSlot = FALSE`) — TLC can start `slow` first, fill the only worker slot, and leave healthy peers queued forever. `HealthyPeersDeliver` is intentionally VIOLATED. This shows **necessity** of slot release in a one-worker toy: if timeout does not free the semaphore, healthy delivery can fail even under fairness. It is **not** a sufficiency claim that Amy hub saturation is solved when the green BOOLEAN holds (production can still fail via multi-slow-peer fill, re-queue storms, Bitswap stalls, or gossip-loop death after the permit is released).
-- **`MCP2PBackpressureBadAck.cfg`** (`AckWithoutPendingAllowed = TRUE`) — TLC can fill the pending-DAG map and then success-ack a second inbound PushLog without merging or registering it. `SuccessAckBacked` is intentionally VIOLATED. This is the formal counterpart of the production invariant (defradb.rs #1089 / pinned hub admission) that pending-DAG capacity overflow must return the backpressure nack, not success.
+- **`MCP2PBackpressureTimeoutStall.cfg`** (`TimeoutReleasesSlot = FALSE`) — intended counterexample: start `slow` first, fill the only worker slot, leave healthy peers queued forever so `HealthyPeersDeliver` fails. This encodes **necessity** of slot release in a one-worker toy: if timeout does not free the semaphore, healthy delivery can fail even under fairness. It is **not** a sufficiency claim that Amy hub saturation is solved when the green BOOLEAN holds (production can still fail via multi-slow-peer fill, re-queue storms, Bitswap stalls, or gossip-loop death after the permit is released).
+- **`MCP2PBackpressureBadAck.cfg`** (`AckWithoutPendingAllowed = TRUE`) — intended counterexample: fill the pending-DAG map and success-ack a second inbound PushLog without merging or registering it so `SuccessAckBacked` fails. Formal counterpart of the production invariant (defradb.rs #1089 / pinned hub admission) that pending-DAG capacity overflow must return the backpressure nack, not success.
 
 Active lines from `MCReplicatedRequestConvergence.cfg` (`Cap = 3`, both properties hold):
 

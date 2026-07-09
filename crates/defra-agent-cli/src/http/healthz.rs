@@ -139,6 +139,7 @@ mod tests {
             started_instant: Instant::now(),
             backend_health: None,
             p2p_admission: None,
+            p2p_metrics_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
