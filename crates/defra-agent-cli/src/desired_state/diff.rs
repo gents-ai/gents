@@ -64,6 +64,7 @@ pub(crate) fn diff_manifests(
         root: root.display().to_string(),
         access_mode: access_mode.to_string(),
         agent_did: desired.agent_principal.agent_did.clone(),
+        live_validation_errors: Vec::new(),
         counts,
         collections,
     }

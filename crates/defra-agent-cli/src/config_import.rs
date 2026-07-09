@@ -2142,6 +2142,7 @@ mod lean_apply_write_boundary_tests {
             root: format!("lean://{}", case.name),
             access_mode: "graphql".to_string(),
             agent_did: agent_did_for_case(case),
+            live_validation_errors: Vec::new(),
             counts,
             collections,
         }

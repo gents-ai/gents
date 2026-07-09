@@ -680,6 +680,8 @@ pub(crate) struct DesiredStateDiffReport {
     pub(crate) root: String,
     pub(crate) access_mode: String,
     pub(crate) agent_did: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) live_validation_errors: Vec<String>,
     pub(crate) counts: DesiredStateDiffCollectionsCounts,
     pub(crate) collections: DesiredStateDiffCollections,
 }

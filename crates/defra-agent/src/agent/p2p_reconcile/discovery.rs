@@ -13,6 +13,9 @@
 //! `"manifest:<owner-did>"`; registry rows use `"registry"`. Registry writes
 //! and deletes are still queried as an exact partition
 //! (`filter: { source: { _eq: "registry" } }`).
+//! The manifest owner DID is a stable part of that partition key: rotating a
+//! principal DID does not transfer existing manifest rows. Such rows remain in
+//! the old owner's partition and require explicit migration or deletion.
 //!
 //! Mirrored Lean properties:
 //! - `deriveRegistryDesired(self, registry)` = live, non-self registry entries

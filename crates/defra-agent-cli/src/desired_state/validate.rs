@@ -966,9 +966,11 @@ fn validate_schedule_cadence(schedule: &super::DesiredSchedule, errors: &mut Vec
 
 /// Live-DB validation that complements the pure `validate_manifest`.
 ///
-/// Unlike `validate_manifest`, this probes the live database schema and
-/// filter syntax for every `EventTrigger`. It is only invoked from code
-/// paths that already hold a live `ConfigAccess` (i.e. `config apply`).
+/// Unlike `validate_manifest`, this checks pairing ownership and probes the
+/// live database schema and filter syntax for every `EventTrigger`. The full
+/// validator is an apply-time gate. `config diff` invokes only the narrower
+/// pairing ownership check so it can report an unsafe plan without hiding the
+/// rest of the diff.
 ///
 /// Two checks per trigger:
 ///
@@ -988,8 +990,7 @@ pub(crate) async fn validate_manifest_against_live(
     manifest: &DesiredStateManifest,
     access: &ConfigAccess,
 ) -> Result<Vec<String>> {
-    let mut errors = Vec::new();
-    validate_peer_pairing_ownership_against_live(manifest, access, &mut errors).await?;
+    let mut errors = validate_peer_pairing_ownership_against_live(manifest, access).await?;
     for trig in &manifest.event_triggers {
         // Skip triggers that failed basic structural validation; the pure
         // validator already reported those and live probes on empty
@@ -1113,13 +1114,13 @@ pub(crate) async fn validate_manifest_against_live(
     Ok(errors)
 }
 
-async fn validate_peer_pairing_ownership_against_live(
+pub(crate) async fn validate_peer_pairing_ownership_against_live(
     manifest: &DesiredStateManifest,
     access: &ConfigAccess,
-    errors: &mut Vec<String>,
-) -> Result<()> {
+) -> Result<Vec<String>> {
+    let mut errors = Vec::new();
     if manifest.peer_pairings.is_empty() {
-        return Ok(());
+        return Ok(errors);
     }
 
     let rows = crate::graphql_rows(
@@ -1172,7 +1173,7 @@ async fn validate_peer_pairing_ownership_against_live(
             ));
         }
     }
-    Ok(())
+    Ok(errors)
 }
 
 fn format_variable_ref(var: &VariableRef) -> String {
@@ -1704,8 +1705,12 @@ mod live_tests {
     }
 
     #[tokio::test]
-    async fn live_validate_rejects_non_manifest_pairing_collision() -> Result<()> {
+    async fn live_validate_rejects_non_manifest_pairing_collision_and_diff_reports_it() -> Result<()>
+    {
         use super::super::DesiredPeerPairing;
+        use crate::commands::config::binding::{
+            BoundDesiredManifest, ManifestBindMode, ManifestBindingContext,
+        };
         use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
         use crate::config_import::apply_desired_state_changes;
         use crate::desired_state::{diff_manifests, export_bundle_from_manifest};
@@ -1748,6 +1753,31 @@ mod live_tests {
         });
         let errors = validate_manifest_against_live(&manifest, &access).await?;
         assert!(errors.iter().any(|error| {
+            error.contains("source \"operator\"")
+                && error.contains("refusing to overwrite or delete")
+        }));
+
+        // Diff remains available as an observability command. The collision
+        // marks the report non-OK and is carried next to the planned drift
+        // instead of replacing the entire report with an error.
+        let owner_did = manifest.agent_principal.agent_did.clone();
+        let bound = BoundDesiredManifest {
+            context: ManifestBindingContext {
+                bind_mode: ManifestBindMode::Manifest,
+                target_agent_did: owner_did.clone(),
+                source_manifest_dids: std::collections::BTreeSet::from([owner_did]),
+            },
+            manifest: manifest.clone(),
+        };
+        let report = crate::commands::config::diff::diff_bound_desired_manifest(
+            std::path::Path::new("/ownership-collision"),
+            &access,
+            &bound,
+        )
+        .await?;
+        assert_eq!(report.status, "diffed");
+        assert!(!report.ok);
+        assert!(report.live_validation_errors.iter().any(|error| {
             error.contains("source \"operator\"")
                 && error.contains("refusing to overwrite or delete")
         }));

@@ -31,24 +31,31 @@ pub(crate) async fn diff_bound_desired_manifest(
     bound: &super::binding::BoundDesiredManifest,
 ) -> Result<desired_state::DesiredStateDiffReport> {
     let desired_manifest = &bound.manifest;
-    let live_errors =
-        desired_state::validate::validate_manifest_against_live(desired_manifest, access).await?;
-    if !live_errors.is_empty() {
-        anyhow::bail!(
-            "{} live validation error(s): {}",
-            live_errors.len(),
-            live_errors.join("; ")
-        );
-    }
+    // Diff remains an observability command even when the desired state cannot
+    // currently be applied. Pairing ownership collisions are included in the
+    // structured report; apply still rejects them before opening a transaction.
+    // Other live validation (such as EventTrigger schema probes) remains an
+    // apply-time concern and must not hide the diff that helps diagnose it.
+    let live_validation_errors =
+        desired_state::validate::validate_peer_pairing_ownership_against_live(
+            desired_manifest,
+            access,
+        )
+        .await?;
     let live_bundle = build_desired_state_live_bundle(&access, desired_manifest).await?;
     let (live_principal, live_manifest) =
         live_manifest_from_bundle(desired_manifest, &live_bundle)?;
-    Ok(desired_state::diff_manifests(
+    let mut report = desired_state::diff_manifests(
         root,
         access.mode(),
         desired_manifest,
         live_principal.as_ref(),
         &live_manifest,
         false,
-    ))
+    );
+    if !live_validation_errors.is_empty() {
+        report.ok = false;
+        report.live_validation_errors = live_validation_errors;
+    }
+    Ok(report)
 }

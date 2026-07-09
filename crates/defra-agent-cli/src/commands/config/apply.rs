@@ -43,9 +43,10 @@ pub(crate) async fn apply_bound_desired_manifest(
     let desired_manifest = &bound.manifest;
 
     // Apply-time live validation complements the static desired-state
-    // validation. It probes the live node's GraphQL schema for EventTrigger
-    // filter syntax and `doc.*` field resolution. We only run it from the
-    // apply path, where we already hold a live `ConfigAccess`.
+    // validation. It checks pairing ownership and probes the live node's
+    // GraphQL schema for EventTrigger filter syntax and `doc.*` field
+    // resolution. Apply rejects every error before opening a transaction;
+    // config diff reports only pairing ownership collisions alongside drift.
     let live_errs =
         desired_state::validate::validate_manifest_against_live(desired_manifest, &access).await?;
     if !live_errs.is_empty() {
