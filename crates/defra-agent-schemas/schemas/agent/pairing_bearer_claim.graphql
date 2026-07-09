@@ -11,7 +11,12 @@
 # it is a request. Authority lives entirely in the issuer-side reconciler's
 # signature checks and nonce ledger, so this collection is safe to accept from
 # unauthenticated peers; forged or replayed rows are inert.
-type PairingBearerClaim {
+#
+# `@branchable` is REQUIRED: the row replicates over P2P (claimant-authored
+# claims reach the issuer), matching NetworkJoinRequest — DefraDB only
+# P2P-syncs branchable collections. ReciprocalConversationIntent stays
+# NON-branchable by design: its trust basis is local-only writes.
+type PairingBearerClaim @branchable {
     # The full encoded dabear1- token being redeemed.
     token: String
     claimant_did: String @index

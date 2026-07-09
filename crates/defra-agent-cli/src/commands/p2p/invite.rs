@@ -150,6 +150,7 @@ async fn p2p_invite_bearer(args: P2pInviteArgs) -> Result<()> {
         "template": token.template,
         "ticket": token.ticket,
         "expires_in": "5m",
+        "note": "single-use; the issuer daemon must be running to process the claim — if it is down past the 5m window, mint a fresh invite",
         "claim_command": format!("defra-agent p2p pairings claim {encoded}"),
     }))?;
     Ok(())

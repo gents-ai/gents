@@ -18,10 +18,11 @@
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_agent::graphql::escape_graphql_string;
-use defra_agent::AgentIdentity;
 use defra_agent_protocol::bearer_token::{
     bearer_signing_payload, check_bearer_freshness, decode_bearer, BearerClaimRecord,
+    BearerInviteToken,
 };
+use defra_agent_protocol::network_token::NetworkRecord;
 use serde_json::json;
 
 use crate::cli::args::P2pClaimArgs;
@@ -32,7 +33,7 @@ use crate::{
 };
 
 use super::invite::resolve_home_identity;
-use super::network_admin::write_agent_network;
+use super::network_admin::{load_optional_network_record, write_agent_network};
 use super::output::resolve_p2p_peer_id;
 use super::p2p_http_client;
 use super::pairings::{peer_pairing_exists, resolve_pairing_template, write_pairing_desired};
@@ -67,12 +68,41 @@ pub(super) async fn p2p_claim(args: P2pClaimArgs) -> Result<()> {
     check_bearer_freshness(&token, Utc::now())
         .context("bearer invite failed the freshness check (re-mint the QR)")?;
 
+    // Defense-in-depth on the token's network root (mint already enforces
+    // both, but a claimant must not trust mint): the issuer must BE the
+    // network admin, and the root must verify under that admin DID — a
+    // tampered token must not pin a forged root locally.
+    check_token_network_authority(&token)?;
+    let root_valid = identity
+        .verify(
+            &token.network.admin_did,
+            &token.network.signing_payload(),
+            &token.network.sig,
+        )
+        .await
+        .context("verifying bearer invite network root signature")?;
+    if !root_valid {
+        anyhow::bail!(
+            "bearer invite network root signature invalid for admin {}",
+            token.network.admin_did
+        );
+    }
+
     let template = resolve_pairing_template(&token.template)?;
     let collections = super::join::template_collections(&template);
     let addresses = vec![token.ticket.clone()];
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+
+    // Same local-network match gate as v5 join: a node already bound to a
+    // different network (or a different admin for the same id) must refuse the
+    // claim BEFORE any durable write — `write_agent_network` upserts and would
+    // otherwise overwrite the local root.
+    let local_network = load_optional_network_record(&access)
+        .await
+        .context("loading local AgentNetwork before claim")?;
+    check_local_network_match(local_network.as_ref(), &token)?;
 
     // Pin the token-carried signed network root locally (TOFU context for
     // later network-derived discovery). No membership is written here — the
@@ -184,6 +214,48 @@ async fn local_transport_info(graphql: &str) -> (String, String) {
     (node_id, address)
 }
 
+/// The bearer issuer must be the admin of the network its token carries:
+/// only admin-issued bearer invites exist (mint enforces it), so a token
+/// whose issuer is not the embedded root's admin is forged or corrupted.
+fn check_token_network_authority(token: &BearerInviteToken) -> Result<()> {
+    if token.issuer_did != token.network.admin_did {
+        anyhow::bail!(
+            "bearer invite issuer {} is not the network admin {}; claim rejected",
+            token.issuer_did,
+            token.network.admin_did
+        );
+    }
+    Ok(())
+}
+
+/// Mirror of v5 join's `enforce_local_network_match`: never let a claim
+/// overwrite an existing local `AgentNetwork` bound to a different network or
+/// a different admin.
+fn check_local_network_match(
+    local: Option<&NetworkRecord>,
+    token: &BearerInviteToken,
+) -> Result<()> {
+    let Some(local) = local else {
+        return Ok(());
+    };
+    if local.network_id != token.network.network_id {
+        anyhow::bail!(
+            "bearer invite is for network {} but this node is already bound to network {}; \
+             claim rejected",
+            token.network.network_id,
+            local.network_id
+        );
+    }
+    if local.admin_did != token.network.admin_did {
+        anyhow::bail!(
+            "bearer invite network admin {} does not match local network admin {}; claim rejected",
+            token.network.admin_did,
+            local.admin_did
+        );
+    }
+    Ok(())
+}
+
 fn bearer_claim_create_mutation(record: &BearerClaimRecord) -> String {
     let token = escape_graphql_string(&record.token);
     let claimant_did = escape_graphql_string(&record.claimant_did);
@@ -208,6 +280,77 @@ fn bearer_claim_create_mutation(record: &BearerClaimRecord) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use defra_agent_protocol::bearer_token::BEARER_TOKEN_VERSION;
+
+    fn network(network_id: &str, admin_did: &str) -> NetworkRecord {
+        NetworkRecord {
+            network_id: network_id.into(),
+            admin_did: admin_did.into(),
+            display_name: "Net".into(),
+            default_template: "network-control".into(),
+            created_at: "2026-07-08T00:00:00Z".into(),
+            sig: vec![1],
+        }
+    }
+
+    fn bearer(network_rec: NetworkRecord, issuer_did: &str) -> BearerInviteToken {
+        BearerInviteToken {
+            v: BEARER_TOKEN_VERSION,
+            issuer_did: issuer_did.into(),
+            peer_id: "peer-issuer".into(),
+            ticket: "/ticket/issuer".into(),
+            nonce: "nonce".into(),
+            network_id: network_rec.network_id.clone(),
+            issued_at: "2026-07-08T00:00:00Z".into(),
+            template: "conversation".into(),
+            network: network_rec,
+            sig: vec![2],
+        }
+    }
+
+    #[test]
+    fn claim_rejects_issuer_that_is_not_network_admin() {
+        let token = bearer(network("default", "did:key:admin"), "did:key:imposter");
+        let err = check_token_network_authority(&token)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not the network admin"), "unexpected: {err}");
+
+        let ok = bearer(network("default", "did:key:admin"), "did:key:admin");
+        assert!(check_token_network_authority(&ok).is_ok());
+    }
+
+    #[test]
+    fn claim_refuses_to_overwrite_a_different_local_network() {
+        let token = bearer(network("net-b", "did:key:admin-b"), "did:key:admin-b");
+
+        // No local network: fresh node, claim may pin the root.
+        assert!(check_local_network_match(None, &token).is_ok());
+
+        // Same network + admin: fine.
+        let local = network("net-b", "did:key:admin-b");
+        assert!(check_local_network_match(Some(&local), &token).is_ok());
+
+        // Different network id: refused before any durable write.
+        let local = network("net-a", "did:key:admin-a");
+        let err = check_local_network_match(Some(&local), &token)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("already bound to network"),
+            "unexpected: {err}"
+        );
+
+        // Same id, different admin: refused.
+        let local = network("net-b", "did:key:other-admin");
+        let err = check_local_network_match(Some(&local), &token)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("does not match local network admin"),
+            "unexpected: {err}"
+        );
+    }
 
     #[test]
     fn bearer_claim_mutation_escapes_all_fields_and_emits_no_empty_lists() {
