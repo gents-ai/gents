@@ -270,6 +270,9 @@ def boundaryPromptAssemblyProviderInputSanitizationId : String :=
 def boundaryModelNatTypedIdsTimeId : String :=
   "boundary.model.nat-typed-ids-time"
 
+def boundaryP2pBackpressureObligationModelId : String :=
+  "boundary.p2p-backpressure.obligation-model"
+
 def boundaries : List Boundary :=
   [ { id := boundaryRequestInputRequiredReservedId
     , domain := "RequestLifecycle"
@@ -420,6 +423,16 @@ def boundaries : List Boundary :=
         some "Collapsing distinct real identities to the same Nat equality could mask a cross-node identity bug class the distributed system can hit."
     , acceptedFollowUp :=
         some "Cross-node identity uniqueness is not claimed in Lean; load-bearing distributed identity/membership obligations live in tla/ (pairing/transport) and Rust integration tests. Targeted models only if a load-bearing collision class appears outside those fences (#558)."
+    }
+  , { id := boundaryP2pBackpressureObligationModelId
+    , domain := "P2PBackpressure"
+    , subject := "hub admission obligation model vs shipping flood safety"
+    , statement :=
+        "Proofs.P2PBackpressure and tla/P2PBackpressure are one-wave obligation models for success-ack backing, pending capacity, and timeout slot release. They do NOT refine the shipping p2p coordinator. Production still (a) spawns PushLog tasks before acquiring the push semaphore and retains JoinHandles until shutdown — so max_concurrent_push_tasks does not bound queued work under sustained multi-wave load, and (b) holds pending_dags in a process-local HashMap — success-ack after registration is not durable across receiver restart without anti-entropy/re-drive assumptions. Operator knobs on defra-agent server are a mitigation surface, not a flood-safety fence."
+    , acceptedFailureMode :=
+        some "Sustained writes can grow waiting push tasks and retained handles without bound even with a small worker count; a receiver crash can drop in-memory pending after the sender has stopped retrying on a success ack."
+    , acceptedFollowUp :=
+        some "defradb.rs: admit/bound the push queue before spawn, retire JoinHandles, export queued/in-flight diagnostics; either persist/recover pending-DAG registrations or delay success until merge / document anti-entropy. TLC-check MCP2PBackpressure* when Java is available. Tracked under #630."
     }
   ]
 

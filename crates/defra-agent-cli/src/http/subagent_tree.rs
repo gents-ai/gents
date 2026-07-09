@@ -543,6 +543,7 @@ mod tests {
             "did:key:z6Mksubagenttree".to_string(),
             None,
             None,
+            None,
         );
         tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;

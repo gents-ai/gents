@@ -138,6 +138,9 @@ mod tests {
             started_at: "2026-05-13T12:00:00Z".to_string(),
             started_instant: Instant::now(),
             backend_health: None,
+            p2p_admission: None,
+            p2p_metrics_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            p2p_http_client: reqwest::Client::new(),
         }
     }
 

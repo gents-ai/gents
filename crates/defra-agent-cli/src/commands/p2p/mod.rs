@@ -11,7 +11,7 @@ mod pairings;
 mod replicators;
 mod templates;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::{json, Value};
 
 use crate::cli::args::{
@@ -19,7 +19,10 @@ use crate::cli::args::{
     P2pPairingsCommand, P2pReplicatorsCommand, P2pTemplatesCommand,
 };
 
-pub(crate) use output::{flatten_p2p_fields, load_live_http_p2p_status, persisted_p2p_status};
+pub(crate) use output::{
+    fetch_live_http_p2p_status_with_client, flatten_p2p_fields, load_live_http_p2p_status,
+    persisted_p2p_status,
+};
 
 pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
     match command {
@@ -76,11 +79,22 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
     }
 }
 
-pub(super) fn p2p_http_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .context("building P2P HTTP client")
+/// Process-wide P2P admin HTTP client (cheap to clone; reuses the connection
+/// pool). Avoids rebuilding a reqwest client on every CLI command and every
+/// `/metrics` scrape (#670 leak follow-up).
+pub(crate) fn p2p_http_client() -> Result<reqwest::Client> {
+    use std::sync::OnceLock;
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    // `get_or_try_init` is still unstable on our MSRV; build failure is
+    // fatal/rare (TLS backend), so panicking the first init is acceptable.
+    Ok(CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+                .expect("building process-wide P2P HTTP client")
+        })
+        .clone())
 }
 
 pub(super) async fn p2p_probe_get(client: &reqwest::Client, url: &str) -> Value {

@@ -37,6 +37,10 @@ const P2P_SUPERVISOR_INTERVAL: Duration = Duration::from_secs(2);
 // short probe deadlines misclassify healthy peers as wedged.
 const P2P_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 const P2P_WEDGED_FAILURE_THRESHOLD: u32 = 3;
+// Desktop intentionally inflates fan-out / rate relative to server defaults:
+// the embedded client is often a leaf that must absorb hub bursts without
+// local-only backpressure starving interactive turns. Server operators get
+// the knobs; desktop keeps elevated UX defaults.
 const DESKTOP_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = 32;
 const DESKTOP_P2P_RATE_LIMIT_BURST: u32 = 5_000;
 const DESKTOP_P2P_RATE_LIMIT_RATE: f64 = 500.0;
@@ -52,6 +56,7 @@ pub struct ClientCoreOptions {
     pub max_concurrent_push_tasks: usize,
     pub rate_limit_burst: u32,
     pub rate_limit_rate: f64,
+    pub max_pending_dags: usize,
     pub install_replicators_on_bootstrap: bool,
 }
 
@@ -63,10 +68,11 @@ impl Default for ClientCoreOptions {
             relay_mode: IrohRelayModeConfig::default(),
             discovery: IrohDiscoveryConfig::default(),
             load_persisted_collections: false,
-            max_concurrent_dag_fetches: 4,
+            max_concurrent_dag_fetches: p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES,
             max_concurrent_push_tasks: DESKTOP_P2P_MAX_CONCURRENT_PUSH_TASKS,
             rate_limit_burst: DESKTOP_P2P_RATE_LIMIT_BURST,
             rate_limit_rate: DESKTOP_P2P_RATE_LIMIT_RATE,
+            max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
             install_replicators_on_bootstrap: true,
         }
     }

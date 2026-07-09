@@ -72,6 +72,31 @@ pub(crate) struct StoredInitConfig {
     pub(crate) tool_root: Option<String>,
 }
 
+/// Operator-visible P2P admission bounds in effect for this server process.
+///
+/// Persisted so `/status`, `defra-agent status`, and `/metrics` can report the
+/// knobs that matter during hub saturation (#630) without re-resolving CLI args.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct P2pAdmissionState {
+    pub(crate) max_pending_dags: usize,
+    pub(crate) max_concurrent_push_tasks: usize,
+    pub(crate) max_concurrent_dag_fetches: usize,
+    pub(crate) rate_limit_burst: u32,
+    pub(crate) rate_limit_rate: f64,
+}
+
+impl P2pAdmissionState {
+    pub(crate) fn to_json(&self) -> Value {
+        serde_json::json!({
+            "max_pending_dags": self.max_pending_dags,
+            "max_concurrent_push_tasks": self.max_concurrent_push_tasks,
+            "max_concurrent_dag_fetches": self.max_concurrent_dag_fetches,
+            "rate_limit_burst": self.rate_limit_burst,
+            "rate_limit_rate": self.rate_limit_rate,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StoredRuntimeState {
     pub(crate) home: String,
@@ -85,6 +110,10 @@ pub(crate) struct StoredRuntimeState {
     pub(crate) p2p_peer_id: Option<String>,
     #[serde(default)]
     pub(crate) p2p_listen_addresses: Vec<String>,
+    /// Admission knobs resolved at serve start (None when P2P is disabled or
+    /// the runtime.json was written by an older binary).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) p2p_admission: Option<P2pAdmissionState>,
 }
 
 fn default_p2p_transport() -> String {

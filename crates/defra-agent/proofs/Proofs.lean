@@ -26,6 +26,7 @@ import Proofs.CompletionRetry
 import Proofs.ManagedExec
 import Proofs.MCPHealth
 import Proofs.BackendHealth
+import Proofs.P2PBackpressure
 import Proofs.StreamingResponse
 import Proofs.Background
 import Proofs.Workflow

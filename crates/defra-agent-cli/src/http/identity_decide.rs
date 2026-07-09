@@ -313,6 +313,7 @@ mod tests {
             "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string(),
             None,
             None,
+            None,
         );
         tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;
