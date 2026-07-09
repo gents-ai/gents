@@ -237,6 +237,10 @@ pub struct ChildEdge {
     pub parent_tool_call_id: String,
     pub child_request_id: String,
     pub child_session_id: String,
+    /// Owning principal of the child request/session. #664: used to scope
+    /// queue drains/interrupts to the child's own DID so a foreign-DID replica
+    /// sharing the child session is never drained locally.
+    pub child_agent_did: String,
     pub behavior_id: String,
     pub await_mode: AwaitMode,
     pub lifecycle_state: String,
@@ -1270,10 +1274,11 @@ pub(crate) async fn active_session_request_id(
 pub(crate) async fn drain_automated_wakeups_returning_ids(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
     reason: &str,
 ) -> Result<Vec<String>> {
     let request_ids = pending_automated_wakeup_request_ids(node, session_id).await?;
-    drain_automated_wakeups(node, session_id, reason).await?;
+    drain_automated_wakeups(node, session_id, agent_did, reason).await?;
     Ok(request_ids)
 }
 
@@ -2006,6 +2011,7 @@ mod cross_deployment_timeout_tests {
 struct ChildRequestEdgeRow {
     request_id: String,
     session_id: String,
+    agent_did: Option<String>,
     behavior_id: Option<String>,
     caused_by_parent_request_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
@@ -2148,6 +2154,7 @@ pub(crate) async fn load_authorized_child_edge(
             ) {{
                 request_id
                 session_id
+                agent_did
                 behavior_id
                 caused_by_parent_request_id
                 caused_by_parent_tool_call_id
@@ -2179,6 +2186,10 @@ pub(crate) async fn load_authorized_child_edge(
         .behavior_id
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| anyhow!("child AgentRequest {child_request_id} has no behavior_id"))?;
+    let child_agent_did = child
+        .agent_did
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow!("child AgentRequest {child_request_id} has no agent_did"))?;
     let escaped_parent_session_id = escape_graphql_string(&parent_context.session_id);
     let escaped_parent_request_id = escape_graphql_string(&parent_context.request_id);
     let escaped_parent_tool_call_id = escape_graphql_string(&parent_tool_call_id);
@@ -2234,6 +2245,7 @@ pub(crate) async fn load_authorized_child_edge(
         parent_tool_call_id: tool_call.tool_call_id,
         child_request_id: child.request_id,
         child_session_id: child.session_id,
+        child_agent_did,
         behavior_id,
         await_mode,
         lifecycle_state: tool_call

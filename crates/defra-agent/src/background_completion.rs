@@ -1033,6 +1033,9 @@ struct BackgroundCompletionObserver {
     subscription: events::Subscription,
     collection_id_to_name: HashMap<String, String>,
     processed_child_request_ids: HashSet<String>,
+    /// Per-doc re-emit budget for the owner terminal-convergence re-drive (#664),
+    /// carried across ticks so a converged request stops being re-driven.
+    terminal_redrive_budget: HashMap<String, u32>,
 }
 
 impl BackgroundCompletionObserver {
@@ -1045,6 +1048,7 @@ impl BackgroundCompletionObserver {
             subscription,
             collection_id_to_name: HashMap::new(),
             processed_child_request_ids: HashSet::new(),
+            terminal_redrive_budget: HashMap::new(),
         }
     }
 
@@ -1106,7 +1110,7 @@ impl BackgroundCompletionObserver {
         Ok(())
     }
 
-    async fn run_reconcilers(&self) -> Result<()> {
+    async fn run_reconcilers(&mut self) -> Result<()> {
         for run in crate::periodic_recovery::run_periodic_recovery_sweeps(
             self.node.as_ref(),
             &self.local_did,
@@ -1135,6 +1139,23 @@ impl BackgroundCompletionObserver {
             tracing::debug!(
                 count = cancel_ack.len(),
                 "observed cross-deployment cancel acks"
+            );
+        }
+
+        // Owner-scoped terminal-convergence re-drive (#664): re-assert the
+        // terminal state of recently-terminalized own-requests so the terminal
+        // delta reaches replicas that missed the one-shot PushLog.
+        let redrive = crate::RequestLifecycle::redrive_terminal_convergence(
+            self.node.as_ref(),
+            &self.local_did,
+            &mut self.terminal_redrive_budget,
+        )
+        .await?;
+        if !redrive.is_noop() {
+            tracing::debug!(
+                reasserted = redrive.reasserted,
+                scanned = redrive.scanned,
+                "re-drove terminal request convergence to replicas"
             );
         }
         Ok(())

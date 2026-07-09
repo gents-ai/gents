@@ -1,10 +1,10 @@
 use super::*;
 
 #[derive(Debug, Clone)]
-pub(crate) struct EnqueuedAgentRequest {
-    pub(crate) doc_id: String,
-    pub(crate) request_id: String,
-    pub(crate) session_id: String,
+pub struct EnqueuedAgentRequest {
+    pub doc_id: String,
+    pub request_id: String,
+    pub session_id: String,
 }
 
 fn trigger_lineage_graphql_fields(trigger_lineage: &TriggerLineage) -> String {
