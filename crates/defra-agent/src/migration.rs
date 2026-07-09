@@ -143,6 +143,10 @@ const ADD_DATA_PLANE_PAIRING_DESIRED_SOURCE_PATCH: &str = r#"[
     {"op":"add","path":"/DataPlanePairingDesired/Fields/-","value":{"Name":"source","Kind":11}}
 ]"#;
 
+const ADD_CONSUMED_INVITE_NONCE_CLAIMANT_PATCH: &str = r#"[
+    {"op":"add","path":"/ConsumedInviteNonce/Fields/-","value":{"Name":"claimant_did","Kind":11}}
+]"#;
+
 const ADD_PEER_PAIRING_APPLIED_REPLICATOR_FILTER_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingApplied/Fields/-","value":{"Name":"replicator_filter","Kind":11}}
 ]"#;
@@ -1050,11 +1054,26 @@ pub async fn ensure_peer_registry_migrations(node: Arc<EmbeddedNode>) -> Result<
 /// the migration is a no-op there; it only adds the schema on a database
 /// upgraded from before C2 landed (mirrors `ensure_peer_registry_migrations`).
 pub async fn ensure_consumed_invite_nonce_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
-    if node
+    if let Some(collection) = node
         .get_collection("ConsumedInviteNonce")
         .context("get ConsumedInviteNonce collection")?
-        .is_some()
     {
+        if !collection_has_field(&collection, "claimant_did") {
+            let next = node
+                .patch_collection(
+                    "ConsumedInviteNonce",
+                    ADD_CONSUMED_INVITE_NONCE_CLAIMANT_PATCH,
+                )
+                .await
+                .context("patch_collection ConsumedInviteNonce claimant_did")?;
+            node.set_active_collection_version(&next.version_id)
+                .await
+                .context("set_active_collection_version ConsumedInviteNonce claimant_did")?;
+            tracing::info!(
+                version = %next.version_id,
+                "ConsumedInviteNonce patched with claimant_did field"
+            );
+        }
         return Ok(());
     }
 
@@ -1092,6 +1111,30 @@ pub async fn ensure_reciprocal_conversation_intent_migrations(
         Ok(()) => Ok(()),
         Err(error) if error.to_string().contains("already exists") => Ok(()),
         Err(error) => Err(error).context("add ReciprocalConversationIntent schema"),
+    }
+}
+
+/// Idempotent migration ensuring the `PairingBearerClaim` collection exists.
+/// Claimant devices push these rows to the invite issuer; the bearer-claim
+/// reconciler validates and consumes them. The rows themselves grant nothing.
+/// Fresh databases get the collection from `schemas::ALL`; upgraded databases
+/// add it here.
+pub async fn ensure_pairing_bearer_claim_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    if node
+        .get_collection("PairingBearerClaim")
+        .context("get PairingBearerClaim collection")?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    match node
+        .add_schema(defra_agent_protocol::schemas::PAIRING_BEARER_CLAIM)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
+        Err(error) => Err(error).context("add PairingBearerClaim schema"),
     }
 }
 
@@ -1825,6 +1868,9 @@ pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()
     ensure_reciprocal_conversation_intent_migrations(node.clone())
         .await
         .context("ensure ReciprocalConversationIntent migrations")?;
+    ensure_pairing_bearer_claim_migrations(node.clone())
+        .await
+        .context("ensure PairingBearerClaim migrations")?;
     ensure_agent_network_migrations(node.clone())
         .await
         .context("ensure AgentNetwork migrations")?;
@@ -2983,6 +3029,61 @@ mod patch_kind_tests {
         }
     }
 
+    #[tokio::test]
+    async fn pairing_bearer_claim_migration_creates_collection_with_all_fields() {
+        let node = test_node().await;
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+        // Idempotent: calling twice must not fail.
+        ensure_pairing_bearer_claim_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_pairing_bearer_claim_migrations(node.clone())
+            .await
+            .unwrap();
+
+        let collection = node
+            .get_collection("PairingBearerClaim")
+            .unwrap()
+            .expect("PairingBearerClaim collection must exist after migration");
+
+        for field in &[
+            "token",
+            "claimant_did",
+            "claimant_node_id",
+            "claimant_address",
+            "claimed_at",
+            "binding_sig",
+        ] {
+            assert!(
+                collection_has_field(&collection, field),
+                "PairingBearerClaim must have field '{field}'"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn consumed_invite_nonce_migration_adds_claimant_did() {
+        let node = test_node().await;
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+        ensure_consumed_invite_nonce_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_consumed_invite_nonce_migrations(node.clone())
+            .await
+            .unwrap();
+
+        let collection = node
+            .get_collection("ConsumedInviteNonce")
+            .unwrap()
+            .expect("ConsumedInviteNonce collection must exist after migration");
+        assert!(
+            collection_has_field(&collection, "claimant_did"),
+            "ConsumedInviteNonce must have claimant_did after migration"
+        );
+    }
+
     /// Regression for the host-drift bug (Finding #3 / Pattern 3): CLI-local
     /// paths used to hand-enumerate a SUBSET of migrations
     /// (`ensure_tool_call_migrations` + `ensure_subagent_extensions_migrations`)
@@ -3064,6 +3165,10 @@ mod patch_kind_tests {
                 .unwrap()
                 .is_some(),
             "ReciprocalConversationIntent must exist after ensure_all_runtime_migrations"
+        );
+        assert!(
+            node.get_collection("PairingBearerClaim").unwrap().is_some(),
+            "PairingBearerClaim must exist after ensure_all_runtime_migrations"
         );
     }
 
