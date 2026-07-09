@@ -8,19 +8,38 @@ import Mathlib.Data.Finset.Card
 Per-node admission *obligation* model for the #630 hub backpressure work.
 
 This is **not** a conformance-fenced refinement of the shipping `p2p` /
-`defradb.rs` coordinator. It records the local transition obligations that the
-TLA+ hub model (`proofs/tla/P2PBackpressure.tla`) and the live fleet depend on:
+`defradb.rs` coordinator, and it is **not** a flood-safety proof. It records
+local transition obligations that the TLA+ hub model
+(`proofs/tla/P2PBackpressure.tla`) and the operator surface care about:
 
-* a successful inbound PushLog ack remains backed by either a pending-DAG
-  registration or a merge;
-* pending-DAG registration preserves the configured capacity bound;
+* a successful inbound PushLog ack is backed by either a **process-local**
+  pending-DAG registration or a merge (see durability caveat below);
+* pending registration preserves the configured capacity bound;
 * a timeout/failure transition of an in-flight peer **strictly** frees its
   outbound worker slot.
 
-Pending entries are keyed by peer here (and in the TLA model) as a one-wave
-abstraction; production capacity is keyed by DAG root / CID. Multi-wave load,
-rate limiting, Bitswap stall lifetime, and gossip send-loop health are outside
-this model — see `proofs/tla/README.md`.
+## Explicit non-claims (production gaps)
+
+1. **No multi-wave queue admission.** The model is one outbound update per peer
+   and one inbound DAG per peer. Shipping code can spawn PushLog tasks *before*
+   acquiring the push semaphore and retain `JoinHandle`s until shutdown, so
+   `max_concurrent_push_tasks` does **not** bound queued work under sustained
+   organic writes. Lowering workers can worsen backlog. Queue admission before
+   spawn + diagnostics live in defradb.rs (#630 follow-up).
+
+2. **Pending is not durable across restart.** `successAckBacked` is a
+   *process-local* tracking invariant: pending is an in-memory map in the
+   shipping coordinator. A receiver crash can erase pending after a success
+   ack if the sender has stopped retrying. Durable recovery requires
+   persistence, delayed success-until-merge, or anti-entropy/re-drive
+   assumptions outside this model.
+
+3. **Peer-keyed pending, one-wave only.** Production capacity is keyed by DAG
+   root / CID. Rate limits, Bitswap stall lifetime, and gossip send-loop
+   health are out of scope.
+
+See `boundary.p2p-backpressure.obligation-model` in
+`Proofs/Conformance/Boundaries.lean` and `proofs/tla/README.md`.
 -/
 
 namespace P2PBackpressure
@@ -36,7 +55,13 @@ structure InboundState where
   capacity : Nat
   deriving DecidableEq
 
-/-- Every success ack is backed by durable local work. -/
+/--
+Every success ack is backed by process-local tracked work (pending
+registration or merge).
+
+**Not durable across restart:** shipping `pending_dags` is an in-memory
+HashMap; this property does not survive receiver crash without anti-entropy.
+-/
 def successAckBacked (s : InboundState) : Prop :=
   ∀ peer, peer ∈ s.acked → peer ∈ s.pending ∨ peer ∈ s.merged
 

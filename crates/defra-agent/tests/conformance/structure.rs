@@ -86,6 +86,17 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             "Persistence",
             Boundary("fail-open/closed policies are an accepted boundary (Boundaries.lean)"),
         ),
+        // Operator admission knobs + local obligation model only. Production
+        // flood safety (queue admission before spawn, JoinHandle retention,
+        // durable pending-DAG recovery) lives in pinned defradb.rs / p2p and
+        // is not refined by this model — see Boundaries.lean
+        // `boundary.p2p-backpressure.obligation-model` and #630.
+        (
+            "P2PBackpressure",
+            Boundary(
+                "obligation model + operator surface for #630; not a flood-safety fence — queue-admission, retained JoinHandles, and durable pending-DAG recovery require defradb.rs work (boundary.p2p-backpressure.obligation-model)",
+            ),
+        ),
         ("Process", Module("conformance/process.rs")),
         ("PromptAssembly", Module("conformance/prompt_assembly.rs")),
         ("Recovery", Module("conformance/recovery_sweeps.rs")),

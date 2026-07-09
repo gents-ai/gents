@@ -140,7 +140,13 @@ async fn install_one_way_replicator(
         .await
         .expect("authorize sender on receiver");
     sender_p2p
-        .add_replicator(names, Some(&receiver_addr), Default::default(), Vec::new(), None)
+        .add_replicator(
+            names,
+            Some(&receiver_addr),
+            Default::default(),
+            Vec::new(),
+            None,
+        )
         .await
         .expect("install sender → receiver replicator");
 }
@@ -522,8 +528,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Re
     // Owner: every wave terminalizes (real inference ran).
     let owner_deadline = Duration::from_secs(180);
     for request_id in &wave_ids {
-        let state =
-            wait_for_terminal(topo.owner().node.as_ref(), request_id, owner_deadline).await;
+        let state = wait_for_terminal(topo.owner().node.as_ref(), request_id, owner_deadline).await;
         assert_eq!(
             state, "completed",
             "owner wave {request_id} must complete against live d4f, got {state}"

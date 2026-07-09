@@ -38,10 +38,11 @@ boundaries.
 local lemmas only — not listed as fenced proven areas):
 
 - P2P backpressure/admission (`Proofs/P2PBackpressure.lean` + TLA
-  `P2PBackpressure`): success-ack backing, pending-DAG capacity, and strict
-  outbound push-slot release under timeout. These record the obligations the
-  live hub depends on; they do **not** yet refine the shipping
-  `defradb.rs` / `p2p` coordinator.
+  `P2PBackpressure`): one-wave success-ack backing, pending capacity, and
+  strict outbound push-slot release. **Operator mitigation / obligation
+  model only** — not a flood-safety fence. Shipping still may spawn PushLog
+  work before the push semaphore and keeps pending in memory (not durable
+  across restart). See `boundary.p2p-backpressure.obligation-model`.
 
 ## Quick Start
 

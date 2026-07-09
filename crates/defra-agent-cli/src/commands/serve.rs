@@ -124,9 +124,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     // Snapshot admission knobs for ready-status / runtime.json / metrics before
     // the node builder consumes the config (P2PConfig is not Clone).
     let p2p_admission_state = p2p_config.as_ref().map(p2p_admission_state);
-    let p2p_admission = p2p_admission_state
-        .as_ref()
-        .map(P2pAdmissionState::to_json);
+    let p2p_admission = p2p_admission_state.as_ref().map(P2pAdmissionState::to_json);
     // One measured-health handle shared between the runtime's prober (writer)
     // and the /metrics endpoint (reader), so the probe-status metric reports
     // measurement instead of the stored document constant (#640).
@@ -649,9 +647,15 @@ fn resolve_server_p2p_config(
     }))
 }
 
-/// Reject degenerate admission values before the node starts. Upstream clamps
-/// some zeros to `1`, but an explicit zero is almost always an operator footgun
-/// during a live hub incident (effective freeze or silent clamp).
+/// Upper bound matching `tokio::sync::Semaphore::MAX_PERMITS` (`usize::MAX >> 3`).
+/// Worker counts flow into `Semaphore::new` and panic above this.
+const MAX_P2P_SEMAPHORE_PERMITS: usize = usize::MAX >> 3;
+/// Prometheus gauges cast these to `i64`; keep requested values representable.
+const MAX_P2P_METRICS_GAUGE: usize = i64::MAX as usize;
+
+/// Reject degenerate or unrepresentable admission values before the node starts.
+/// Upstream clamps some zeros to `1`, but an explicit zero is almost always an
+/// operator footgun. Huge values can panic `Semaphore::new` or wrap i64 metrics.
 fn validate_p2p_admission_config(
     max_pending_dags: usize,
     max_concurrent_push_tasks: usize,
@@ -662,11 +666,26 @@ fn validate_p2p_admission_config(
     if max_pending_dags == 0 {
         anyhow::bail!("--p2p-max-pending-dags must be > 0");
     }
+    if max_pending_dags > MAX_P2P_METRICS_GAUGE {
+        anyhow::bail!(
+            "--p2p-max-pending-dags must be <= {MAX_P2P_METRICS_GAUGE} (metrics gauge limit)"
+        );
+    }
     if max_concurrent_push_tasks == 0 {
         anyhow::bail!("--p2p-max-concurrent-push-tasks must be > 0");
     }
+    if max_concurrent_push_tasks > MAX_P2P_SEMAPHORE_PERMITS {
+        anyhow::bail!(
+            "--p2p-max-concurrent-push-tasks must be <= {MAX_P2P_SEMAPHORE_PERMITS} (tokio Semaphore::MAX_PERMITS)"
+        );
+    }
     if max_concurrent_dag_fetches == 0 {
         anyhow::bail!("--p2p-max-concurrent-dag-fetches must be > 0");
+    }
+    if max_concurrent_dag_fetches > MAX_P2P_SEMAPHORE_PERMITS {
+        anyhow::bail!(
+            "--p2p-max-concurrent-dag-fetches must be <= {MAX_P2P_SEMAPHORE_PERMITS} (tokio Semaphore::MAX_PERMITS)"
+        );
     }
     if rate_limit_burst == 0 {
         anyhow::bail!("--p2p-rate-limit-burst must be > 0");
@@ -868,5 +887,14 @@ mod shim_host_tests {
         // Use `=` form so clap does not treat a leading `-` as another flag.
         let negative_rate = parse_server(&["--p2p-rate-limit-rate=-1.0"]);
         assert!(resolve_server_p2p_config(tempdir.path(), &negative_rate).is_err());
+
+        // tokio::Semaphore::new panics above MAX_PERMITS (usize::MAX >> 3).
+        let huge_push = parse_server(&["--p2p-max-concurrent-push-tasks", &usize::MAX.to_string()]);
+        assert!(resolve_server_p2p_config(tempdir.path(), &huge_push).is_err());
+
+        // Metrics gauges cast pending capacity to i64; reject values that wrap.
+        let over_gauge = ((i64::MAX as u128) + 1).to_string();
+        let huge_pending = parse_server(&["--p2p-max-pending-dags", &over_gauge]);
+        assert!(resolve_server_p2p_config(tempdir.path(), &huge_pending).is_err());
     }
 }

@@ -218,10 +218,7 @@ fn p2p_metrics_from_status(
     p2p: &Value,
     admission: Option<&P2pAdmissionState>,
 ) -> P2pMetricsSnapshot {
-    let enabled = p2p
-        .get("enabled")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let enabled = p2p.get("enabled").and_then(Value::as_bool).unwrap_or(false);
     let connected_peers = p2p
         .get("p2p_connected_peers")
         .and_then(Value::as_array)
@@ -234,13 +231,11 @@ fn p2p_metrics_from_status(
         .unwrap_or(0);
     // Prefer serve-start admission over anything embedded in the HTTP status
     // payload so knobs stay authoritative even if runtime.json is stale.
-    let admission = admission
-        .cloned()
-        .or_else(|| {
-            p2p.get("p2p_admission")
-                .cloned()
-                .and_then(|v| serde_json::from_value(v).ok())
-        });
+    let admission = admission.cloned().or_else(|| {
+        p2p.get("p2p_admission")
+            .cloned()
+            .and_then(|v| serde_json::from_value(v).ok())
+    });
     P2pMetricsSnapshot {
         enabled,
         connected_peers,
