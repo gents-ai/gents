@@ -17,3 +17,7 @@ mod lifecycle_queue;
 mod lifecycle_recovery;
 #[path = "e2e_lifecycle/lifecycle_terminal.rs"]
 mod lifecycle_terminal;
+#[path = "e2e_lifecycle/p2p_admission_backpressure_e2e.rs"]
+mod p2p_admission_backpressure_e2e;
+#[path = "e2e_lifecycle/replicated_request_convergence_p2p_e2e.rs"]
+mod replicated_request_convergence_p2p_e2e;

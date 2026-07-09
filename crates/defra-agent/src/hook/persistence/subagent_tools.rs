@@ -319,6 +319,7 @@ impl DefraSessionHook {
             let post_interrupt_drained = drain_automated_wakeups_returning_ids(
                 &self.node,
                 &edge.child_session_id,
+                &edge.child_agent_did,
                 "automated wake-up drained because subagent was steered with interrupt=true",
             )
             .await?;
@@ -443,6 +444,7 @@ impl DefraSessionHook {
         let mut queued_drained = crate::interrupt::cancel_subagent_session_queue(
             &self.node,
             &edge.child_session_id,
+            &edge.child_agent_did,
             reason,
         )
         .await?;
@@ -462,6 +464,7 @@ impl DefraSessionHook {
         queued_drained += crate::interrupt::cancel_subagent_session_queue(
             &self.node,
             &edge.child_session_id,
+            &edge.child_agent_did,
             reason,
         )
         .await?;

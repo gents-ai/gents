@@ -10,7 +10,7 @@ use crate::watcher::AgentRequest;
 mod claim;
 mod lookup;
 pub mod manual;
-mod materialize;
+pub(crate) mod materialize;
 mod query;
 pub(crate) mod queue;
 mod recovery;
@@ -182,6 +182,30 @@ pub(crate) fn active_runtime_lifecycle_state_graphql_list() -> String {
     )
 }
 
+/// The stale set startup recovery sweeps: `claimed ∨ processing`, mirroring the
+/// Lean `Recovery.requestRecoveryStale` predicate exactly. Deliberately keyed on
+/// `lifecycle_state` (the modeled field), not on the coarser `status` column, so
+/// a stuck `claimed` own-request is recovered even if a future transition ever
+/// writes `lifecycle_state=claimed` with a `status` other than `"processing"`.
+pub(crate) fn stuck_request_lifecycle_state_graphql_list() -> String {
+    lifecycle_state_graphql_list([
+        PersistedLifecycleState::Claimed,
+        PersistedLifecycleState::Processing,
+    ])
+}
+
+/// The terminal lifecycle states (`completed`, `failed`, `superseded`, `dead`,
+/// `interrupted`). Used by the owner terminal-convergence re-drive (#664) to
+/// scope its re-assert to already-terminalized rows.
+pub(crate) fn terminal_lifecycle_state_graphql_list() -> String {
+    lifecycle_state_graphql_list(
+        PersistedLifecycleState::ALL
+            .iter()
+            .copied()
+            .filter(|state| state.is_terminal()),
+    )
+}
+
 fn lifecycle_state_graphql_list_for(states: &[PersistedLifecycleState]) -> String {
     lifecycle_state_graphql_list(states.iter().copied())
 }
@@ -219,6 +243,32 @@ pub struct RecoveryReport {
     pub requests_recovered: usize,
     pub responses_recovered: usize,
     pub conversations_recovered: usize,
+}
+
+/// Max number of times the owner re-asserts a single terminalized request's
+/// terminal state before it self-terminates from the re-drive. Bounds per-field
+/// CRDT history growth on the re-asserted `status`/`lifecycle_state` columns —
+/// each re-assert is a genuine higher-priority delta, so this cap keeps the
+/// document DAG finite (#664; defradb.rs#1074).
+pub const TERMINAL_REDRIVE_CAP: u32 = 3;
+
+/// Per-tick batch cap on how many terminalized requests the owner re-drives, so
+/// a single reconcile pass stays bounded regardless of terminal-row backlog.
+pub const TERMINAL_REDRIVE_BATCH_LIMIT: usize = 64;
+
+/// Outcome of one owner terminal-convergence re-drive pass (#664).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TerminalRedriveReport {
+    /// Terminal own-requests re-asserted this pass (still under their cap).
+    pub reasserted: usize,
+    /// Terminal own-requests scanned this pass (the bounded candidate window).
+    pub scanned: usize,
+}
+
+impl TerminalRedriveReport {
+    pub fn is_noop(&self) -> bool {
+        self.reasserted == 0
+    }
 }
 
 fn resolve_behavior_id(default_behavior_id: &str, requested_behavior_id: Option<&str>) -> String {

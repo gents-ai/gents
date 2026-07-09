@@ -114,6 +114,8 @@ mod r5_cross_deployment;
 mod reciprocal_conversation;
 #[path = "conformance/recovery_sweeps.rs"]
 mod recovery_sweeps;
+#[path = "conformance/replicated_request_convergence.rs"]
+mod replicated_request_convergence;
 #[path = "conformance/request_lifecycle.rs"]
 mod request_lifecycle;
 #[path = "conformance/session_recovery.rs"]
@@ -145,6 +147,32 @@ fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract()
 #[tokio::test]
 async fn subagent_liveness_reconciliation_converges_expired_processing_to_zero() {
     recovery_sweeps::subagent_liveness_reconciliation_converges_expired_processing_to_zero().await;
+}
+
+#[tokio::test]
+async fn single_claimer_watcher_never_claims_foreign_replica() {
+    replicated_request_convergence::single_claimer_watcher_never_claims_foreign_replica().await;
+}
+
+#[tokio::test]
+async fn terminal_convergence_redrive_reasserts_unconverged_terminal() {
+    replicated_request_convergence::terminal_convergence_redrive_reasserts_unconverged_terminal()
+        .await;
+}
+
+#[tokio::test]
+async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
+    replicated_request_convergence::recover_stuck_requests_recovers_claimed_lifecycle_state().await;
+}
+
+#[tokio::test]
+async fn reconcile_coalesce_never_supersedes_foreign_replica() {
+    replicated_request_convergence::reconcile_coalesce_never_supersedes_foreign_replica().await;
+}
+
+#[tokio::test]
+async fn drain_wakeups_never_interrupts_foreign_replica() {
+    replicated_request_convergence::drain_wakeups_never_interrupts_foreign_replica().await;
 }
 
 #[test]

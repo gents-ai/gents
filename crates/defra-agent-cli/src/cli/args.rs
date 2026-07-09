@@ -546,6 +546,36 @@ pub(crate) struct ServeArgs {
     pub(crate) p2p_relay_mode: P2pRelayModeArg,
     #[arg(long, value_enum, default_value_t = P2pDiscoveryArg::Disabled)]
     pub(crate) p2p_discovery: P2pDiscoveryArg,
+    #[arg(
+        long,
+        env = "DEFRA_P2P_MAX_PENDING_DAGS",
+        help = "Maximum pending DAG registrations retained while Bitswap resolves missing links (must be > 0)"
+    )]
+    pub(crate) p2p_max_pending_dags: Option<usize>,
+    #[arg(
+        long,
+        env = "DEFRA_P2P_MAX_CONCURRENT_PUSH_TASKS",
+        help = "Maximum concurrent outbound PushLog worker slots (must be > 0). This is the hub fan-out semaphore that must free on timeout"
+    )]
+    pub(crate) p2p_max_concurrent_push_tasks: Option<usize>,
+    #[arg(
+        long,
+        env = "DEFRA_P2P_MAX_CONCURRENT_DAG_FETCHES",
+        help = "Maximum concurrent Bitswap DAG fetches while resolving missing links (must be > 0)"
+    )]
+    pub(crate) p2p_max_concurrent_dag_fetches: Option<usize>,
+    #[arg(
+        long,
+        env = "DEFRA_P2P_RATE_LIMIT_BURST",
+        help = "Per-peer P2P rate-limit burst capacity (must be > 0)"
+    )]
+    pub(crate) p2p_rate_limit_burst: Option<u32>,
+    #[arg(
+        long,
+        env = "DEFRA_P2P_RATE_LIMIT_RATE",
+        help = "Per-peer P2P rate-limit refill rate in tokens per second (must be finite and > 0)"
+    )]
+    pub(crate) p2p_rate_limit_rate: Option<f64>,
 }
 
 #[derive(clap::Args)]
@@ -1166,6 +1196,30 @@ pub(crate) enum ToolSelectionCommand {
         alias = "remove"
     )]
     Rm(ConfigShowArgs),
+    #[command(
+        name = "subagent-target-entry",
+        about = "Build a single --subagent-target JSON entry from its parts",
+        after_help = "Example:\n  defra-agent config tools set --graphql <url> --agent-did <did> \\\n    --selection-id main --subagent-target \"$(defra-agent config tools \\\n    subagent-target-entry --name researcher --agent-did did:key:z... \\\n    --behavior-id did:key:z...:default)\""
+    )]
+    SubagentTargetEntry(SubagentTargetEntryArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct SubagentTargetEntryArgs {
+    #[arg(long, help = "Model-facing name used by spawn_subagent")]
+    pub(crate) name: String,
+    #[arg(
+        long,
+        help = "DID of the agent that owns the target behavior (local or remote)"
+    )]
+    pub(crate) agent_did: String,
+    #[arg(long, help = "Behavior id on the owning agent")]
+    pub(crate) behavior_id: String,
+    #[arg(
+        long,
+        help = "Optional human-readable description surfaced to the model"
+    )]
+    pub(crate) description: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -1480,7 +1534,11 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) clear_defra_query_collections: bool,
     #[arg(
         long = "subagent-target",
-        help = "SubagentTarget JSON entry allowed for spawn_subagent (repeatable); omit to preserve existing targets"
+        help = "SubagentTarget JSON entry allowed for spawn_subagent, e.g. \
+                {\"name\":\"researcher\",\"agent_did\":\"did:key:...\",\"behavior_id\":\"did:key:...:default\",\"description\":\"...\"} \
+                (repeatable); or @path/@- to read one entry or a JSON array of entries from a \
+                file/stdin; omit to preserve existing targets. See `config tools \
+                subagent-target-entry --help` to build a single entry from its parts."
     )]
     pub(crate) subagent_targets: Vec<String>,
     #[arg(
@@ -2699,6 +2757,42 @@ pub(crate) struct ResponseWaitArgs {
 mod tests {
     use super::*;
     use clap::Parser;
+    use std::sync::{Mutex, OnceLock};
+
+    struct EnvVarGuard {
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EnvVarGuard {
+        fn set(vars: &[(&'static str, &'static str)]) -> Self {
+            let lock = env_lock().lock().expect("env lock poisoned");
+            let saved = vars
+                .iter()
+                .map(|(name, _)| (*name, std::env::var_os(name)))
+                .collect();
+            for (name, value) in vars {
+                std::env::set_var(name, value);
+            }
+            Self { saved, _lock: lock }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            for (name, value) in &self.saved {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     fn parse_tools_set(extra: &[&str]) -> ToolSelectionUpsertArgs {
         let mut argv = vec![
@@ -2733,6 +2827,16 @@ mod tests {
         match cli.command {
             Command::Init(args) => args,
             _ => panic!("expected `init`"),
+        }
+    }
+
+    fn parse_server(extra: &[&str]) -> ServeArgs {
+        let mut argv = vec!["defra-agent", "server"];
+        argv.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(argv).expect("server should parse");
+        match cli.command {
+            Command::Server(args) => args,
+            _ => panic!("expected `server`"),
         }
     }
 
@@ -2847,6 +2951,47 @@ mod tests {
             Cli::try_parse_from(["defra-agent", "init", "--write", "--yolo"]).is_err(),
             "--write and --yolo conflict"
         );
+    }
+
+    #[test]
+    fn server_p2p_admission_flags_parse() {
+        let args = parse_server(&[
+            "--p2p-max-pending-dags",
+            "321",
+            "--p2p-max-concurrent-push-tasks",
+            "16",
+            "--p2p-max-concurrent-dag-fetches",
+            "12",
+            "--p2p-rate-limit-burst",
+            "654",
+            "--p2p-rate-limit-rate",
+            "98.5",
+        ]);
+
+        assert_eq!(args.p2p_max_pending_dags, Some(321));
+        assert_eq!(args.p2p_max_concurrent_push_tasks, Some(16));
+        assert_eq!(args.p2p_max_concurrent_dag_fetches, Some(12));
+        assert_eq!(args.p2p_rate_limit_burst, Some(654));
+        assert_eq!(args.p2p_rate_limit_rate, Some(98.5));
+    }
+
+    #[test]
+    fn server_p2p_admission_env_parse() {
+        let _env = EnvVarGuard::set(&[
+            ("DEFRA_P2P_MAX_PENDING_DAGS", "1234"),
+            ("DEFRA_P2P_MAX_CONCURRENT_PUSH_TASKS", "24"),
+            ("DEFRA_P2P_MAX_CONCURRENT_DAG_FETCHES", "9"),
+            ("DEFRA_P2P_RATE_LIMIT_BURST", "5678"),
+            ("DEFRA_P2P_RATE_LIMIT_RATE", "42.25"),
+        ]);
+
+        let args = parse_server(&[]);
+
+        assert_eq!(args.p2p_max_pending_dags, Some(1234));
+        assert_eq!(args.p2p_max_concurrent_push_tasks, Some(24));
+        assert_eq!(args.p2p_max_concurrent_dag_fetches, Some(9));
+        assert_eq!(args.p2p_rate_limit_burst, Some(5678));
+        assert_eq!(args.p2p_rate_limit_rate, Some(42.25));
     }
 
     #[test]

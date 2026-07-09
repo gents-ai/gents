@@ -105,7 +105,23 @@ struct OpenAiModelRecord {
 
 #[derive(Deserialize)]
 struct ChatGptCodexModelRecord {
-    slug: String,
+    /// ChatGPT Codex returns `slug`; llama.cpp/llama-server and other OpenAI-compatible
+    /// servers commonly return `id`, `name`, or `model` under a top-level `models` array.
+    /// All fields are optional so a non-Codex `models` entry cannot reject an otherwise valid
+    /// OpenAI `data[].id` response during deserialization.
+    slug: Option<String>,
+    id: Option<String>,
+    name: Option<String>,
+    model: Option<String>,
+}
+
+impl ChatGptCodexModelRecord {
+    fn identifier(self) -> Option<String> {
+        [self.slug, self.id, self.name, self.model]
+            .into_iter()
+            .flatten()
+            .find(|value| !value.trim().is_empty())
+    }
 }
 
 pub async fn discover_models(
@@ -207,10 +223,16 @@ pub async fn discover_models(
         };
 
         let openai_models = models.data.into_iter().map(|model| model.id);
-        let chatgpt_codex_models = models.models.into_iter().map(|model| model.slug);
-        let models = openai_models
-            .chain(chatgpt_codex_models)
-            .collect::<Vec<_>>();
+        let chatgpt_codex_models = models
+            .models
+            .into_iter()
+            .filter_map(ChatGptCodexModelRecord::identifier);
+        let mut models = Vec::new();
+        for model in openai_models.chain(chatgpt_codex_models) {
+            if !models.contains(&model) {
+                models.push(model);
+            }
+        }
         tracing::Span::current().record("model_count", models.len() as i64);
         Ok(models)
     }
@@ -288,6 +310,46 @@ mod tests {
         .expect("model discovery should accept the Codex-compatible models shape");
 
         assert_eq!(models, vec!["codex-mini-latest"]);
+    }
+
+    #[tokio::test]
+    async fn discover_models_accepts_llama_models_response_with_non_slug_models() {
+        let (endpoint, _requests) = spawn_model_discovery_server(
+            r#"{"object":"list","data":[{"id":"google/gemma-4-12B-it-qat-q4_0-gguf","object":"model"}],"models":[{"name":"google/gemma-4-12B-it-qat-q4_0-gguf","model":"google/gemma-4-12B-it-qat-q4_0-gguf","modified_at":1710000000}]}"#,
+        )
+        .await;
+
+        let models = discover_models(
+            &Client::new(),
+            BackendProviderKind::OpenAiCompatible,
+            &endpoint,
+            None,
+            None,
+        )
+        .await
+        .expect("model discovery should accept llama.cpp OpenAI-compatible models shape");
+
+        assert_eq!(models, vec!["google/gemma-4-12B-it-qat-q4_0-gguf"]);
+    }
+
+    #[tokio::test]
+    async fn discover_models_accepts_common_models_id_name_model_fields() {
+        let (endpoint, _requests) = spawn_model_discovery_server(
+            r#"{"models":[{"id":"from-id"},{"name":"from-name"},{"model":"from-model"}]}"#,
+        )
+        .await;
+
+        let models = discover_models(
+            &Client::new(),
+            BackendProviderKind::OpenAiCompatible,
+            &endpoint,
+            None,
+            None,
+        )
+        .await
+        .expect("model discovery should accept common non-Codex models fields");
+
+        assert_eq!(models, vec!["from-id", "from-name", "from-model"]);
     }
 
     #[tokio::test]

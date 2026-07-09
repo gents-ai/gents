@@ -28,7 +28,7 @@ pub(crate) struct QueueHints {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum QueueSource {
+pub enum QueueSource {
     User,
     #[serde(alias = "subagent_completion")]
     BackgroundCompletion,
@@ -130,9 +130,14 @@ pub(crate) async fn enqueue_session_request(
     let behavior_id = parent_behavior_id(node, parent).await?;
 
     if let Some(key) = coalesce_key(&queue_hints) {
-        if let Some(existing) =
-            reconcile_coalesced_pending_request(node, &parent.session_id, queue_hints.source, key)
-                .await?
+        if let Some(existing) = reconcile_coalesced_pending_request(
+            node,
+            &parent.session_id,
+            &parent.agent_did,
+            queue_hints.source,
+            key,
+        )
+        .await?
         {
             return Ok(existing);
         }
@@ -193,10 +198,15 @@ pub(crate) async fn enqueue_session_request(
     };
 
     if let Some(key) = coalesce_key(&queue_hints) {
-        enqueued =
-            reconcile_coalesced_pending_request(node, &parent.session_id, queue_hints.source, key)
-                .await?
-                .unwrap_or(enqueued);
+        enqueued = reconcile_coalesced_pending_request(
+            node,
+            &parent.session_id,
+            &parent.agent_did,
+            queue_hints.source,
+            key,
+        )
+        .await?
+        .unwrap_or(enqueued);
         if enqueued.request_id != request_id {
             return Ok(enqueued);
         }
@@ -225,17 +235,26 @@ pub(crate) async fn enqueue_session_request(
     Ok(enqueued)
 }
 
-async fn reconcile_coalesced_pending_request(
+// SAFETY (#664): `agent_did` scopes the candidate query AND the supersede
+// mutation to the owning principal. Under P2P replication a foreign-DID
+// `AgentRequest` sharing this `session_id` can be replicated onto this node;
+// without the owner guard the session-only filter would supersede that foreign
+// replica locally. Defense in depth: the foreign row never becomes a candidate,
+// and the write is DID-scoped even if it somehow did.
+pub async fn reconcile_coalesced_pending_request(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
     source: QueueSource,
     key: &str,
 ) -> Result<Option<EnqueuedAgentRequest>> {
-    let matching = matching_coalesced_pending_requests(node, session_id, source, key).await?;
+    let matching =
+        matching_coalesced_pending_requests(node, session_id, agent_did, source, key).await?;
     let Some(survivor) = matching.first().and_then(queue_row_to_enqueued_request) else {
         return Ok(None);
     };
 
+    let escaped_agent_did = escape_graphql_string(agent_did);
     for duplicate in matching.iter().skip(1) {
         let duplicate_doc_id = escape_graphql_string(&duplicate.doc_id);
         let survivor_request_id = escape_graphql_string(&survivor.request_id);
@@ -244,6 +263,7 @@ async fn reconcile_coalesced_pending_request(
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{duplicate_doc_id}" }},
+                        agent_did: {{ _eq: "{escaped_agent_did}" }},
                         status: {{ _eq: "pending" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
@@ -270,15 +290,18 @@ async fn reconcile_coalesced_pending_request(
 async fn matching_coalesced_pending_requests(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
     source: QueueSource,
     key: &str,
 ) -> Result<Vec<PendingQueueRow>> {
     let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
                     session_id: {{ _eq: "{escaped_session_id}" }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
                     status: {{ _eq: "pending" }},
                     lifecycle_state: {{ _eq: "pending" }}
                 }},
@@ -440,12 +463,13 @@ async fn lookup_request_doc_id(node: &EmbeddedNode, request_id: &str) -> Result<
     })
 }
 
-pub(crate) async fn drain_automated_wakeups(
+pub async fn drain_automated_wakeups(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
     reason: &str,
 ) -> Result<usize> {
-    drain_pending_session_requests_where(node, session_id, reason, |row| {
+    drain_pending_session_requests_where(node, session_id, agent_did, reason, |row| {
         row.execution_origin.as_deref() == Some("scheduled")
             && is_automated_wakeup(row.metadata.as_deref())
     })
@@ -455,26 +479,34 @@ pub(crate) async fn drain_automated_wakeups(
 pub(crate) async fn drain_subagent_owned_queue(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
     reason: &str,
 ) -> Result<usize> {
-    drain_pending_session_requests_where(node, session_id, reason, |row| {
+    drain_pending_session_requests_where(node, session_id, agent_did, reason, |row| {
         is_subagent_owned_queue(row.metadata.as_deref())
     })
     .await
 }
 
+// SAFETY (#664): `agent_did` scopes both the pending-row scan AND the interrupt
+// mutation to the owning principal. A foreign-DID replica sharing this
+// `session_id` (P2P replication) is neither surfaced as a drain candidate nor
+// interrupted by this owner's drain. Defense in depth on the query and the write.
 async fn drain_pending_session_requests_where(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
     reason: &str,
     should_drain: impl Fn(&PendingQueueRow) -> bool,
 ) -> Result<usize> {
     let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
                     session_id: {{ _eq: "{escaped_session_id}" }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
                     status: {{ _eq: "pending" }},
                     lifecycle_state: {{ _eq: "pending" }}
                 }}
@@ -510,6 +542,7 @@ async fn drain_pending_session_requests_where(
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{escaped_doc_id}" }},
+                        agent_did: {{ _eq: "{escaped_agent_did}" }},
                         status: {{ _eq: "pending" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
@@ -989,6 +1022,7 @@ mod tests {
         let reconciled = reconcile_coalesced_pending_request(
             &db.node,
             session_id,
+            TEST_AGENT_DID,
             QueueSource::BackgroundCompletion,
             &key,
         )

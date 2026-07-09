@@ -157,10 +157,25 @@ where
     Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_else(|| "unknown".to_string()))
 }
 
+/// Live + configured P2P hub admission observability for Prometheus scrapes.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct P2pMetricsSnapshot {
+    pub(crate) enabled: bool,
+    pub(crate) connected_peers: usize,
+    pub(crate) replicators: usize,
+    pub(crate) admission: Option<crate::shared::P2pAdmissionState>,
+    /// True when peer/replicator counts are held from a prior successful
+    /// refresh (or admission-only bootstrap) because the live self-fetch
+    /// timed out or failed. Prevents "all peers gone" false alerts during
+    /// hub saturation when `/metrics` must not block on multi-hop HTTP.
+    pub(crate) stale: bool,
+}
+
 pub(crate) async fn render_prometheus_metrics(
     graphql: &str,
     local_agent_did: &str,
     measured_backend_health: &HashMap<String, defra_agent::BackendHealthSnapshot>,
+    p2p: Option<&P2pMetricsSnapshot>,
 ) -> Result<String> {
     let data = load_metrics_query_data(graphql, local_agent_did).await?;
     let data = with_local_native_executors(data);
@@ -405,9 +420,135 @@ pub(crate) async fn render_prometheus_metrics(
     );
 
     render_inference_metrics(&mut lines, &inference_metrics);
+    render_p2p_metrics(&mut lines, p2p);
 
     lines.push(String::new());
     Ok(lines.join("\n"))
+}
+
+fn render_p2p_metrics(lines: &mut Vec<String>, p2p: Option<&P2pMetricsSnapshot>) {
+    let snapshot = p2p.cloned().unwrap_or_default();
+
+    push_metric_prelude(
+        lines,
+        "defra_agent_p2p_enabled",
+        "1 when this process has P2P transport enabled.",
+    );
+    push_metric_sample(
+        lines,
+        "defra_agent_p2p_enabled",
+        &[],
+        if snapshot.enabled { 1 } else { 0 },
+    );
+
+    push_metric_prelude(
+        lines,
+        "defra_agent_p2p_status_stale",
+        "1 when connected-peer / replicator counts are last-known or admission-only because the live self-fetch timed out or failed.",
+    );
+    push_metric_sample(
+        lines,
+        "defra_agent_p2p_status_stale",
+        &[],
+        if snapshot.stale { 1 } else { 0 },
+    );
+
+    push_metric_prelude(
+        lines,
+        "defra_agent_p2p_connected_peers",
+        "Connected P2P peers (last successful live fetch; held when status_stale=1).",
+    );
+    push_metric_sample(
+        lines,
+        "defra_agent_p2p_connected_peers",
+        &[],
+        snapshot.connected_peers as i64,
+    );
+
+    push_metric_prelude(
+        lines,
+        "defra_agent_p2p_replicators",
+        "Configured P2P replicators (last successful live fetch; held when status_stale=1).",
+    );
+    push_metric_sample(
+        lines,
+        "defra_agent_p2p_replicators",
+        &[],
+        snapshot.replicators as i64,
+    );
+
+    // Requested admission bounds from serve-start args — not necessarily the
+    // effective upstream floors (e.g. rate may be clamped to MIN_REQUEST_REFILL_RATE).
+    // Live semaphore occupancy / pending-DAG depth still live in pinned
+    // defradb.rs SyncDiagnostics and are not yet exported through P2POperations.
+    push_metric_prelude(
+        lines,
+        "defra_agent_p2p_admission_max_pending_dags",
+        "Requested max pending-DAG registrations at serve start (not the effective post-clamp bound).",
+    );
+    push_metric_prelude(
+        lines,
+        "defra_agent_p2p_admission_max_concurrent_push_tasks",
+        "Requested max concurrent outbound PushLog worker slots at serve start.",
+    );
+    push_metric_prelude(
+        lines,
+        "defra_agent_p2p_admission_max_concurrent_dag_fetches",
+        "Requested max concurrent Bitswap DAG fetches at serve start.",
+    );
+    push_metric_prelude(
+        lines,
+        "defra_agent_p2p_admission_rate_limit_burst",
+        "Requested per-peer P2P rate-limit burst at serve start.",
+    );
+    push_metric_prelude(
+        lines,
+        "defra_agent_p2p_admission_rate_limit_rate",
+        "Requested per-peer P2P rate-limit refill rate (tokens/s) at serve start; upstream may floor below 1.0.",
+    );
+
+    if let Some(admission) = snapshot.admission.as_ref() {
+        push_metric_sample(
+            lines,
+            "defra_agent_p2p_admission_max_pending_dags",
+            &[],
+            admission.max_pending_dags as i64,
+        );
+        push_metric_sample(
+            lines,
+            "defra_agent_p2p_admission_max_concurrent_push_tasks",
+            &[],
+            admission.max_concurrent_push_tasks as i64,
+        );
+        push_metric_sample(
+            lines,
+            "defra_agent_p2p_admission_max_concurrent_dag_fetches",
+            &[],
+            admission.max_concurrent_dag_fetches as i64,
+        );
+        push_metric_sample(
+            lines,
+            "defra_agent_p2p_admission_rate_limit_burst",
+            &[],
+            admission.rate_limit_burst as i64,
+        );
+        push_metric_sample(
+            lines,
+            "defra_agent_p2p_admission_rate_limit_rate",
+            &[],
+            admission.rate_limit_rate,
+        );
+    } else {
+        for name in [
+            "defra_agent_p2p_admission_max_pending_dags",
+            "defra_agent_p2p_admission_max_concurrent_push_tasks",
+            "defra_agent_p2p_admission_max_concurrent_dag_fetches",
+            "defra_agent_p2p_admission_rate_limit_burst",
+            "defra_agent_p2p_admission_rate_limit_rate",
+        ] {
+            push_metric_sample(lines, name, &[], 0);
+        }
+    }
 }
 
 async fn load_inference_metrics_query_data(graphql: &str) -> Result<InferenceMetricsQueryData> {
@@ -997,6 +1138,56 @@ mod tests {
         // No last_probe series at all when neither measurement nor doc has one.
         assert!(!rendered
             .contains(r#"defra_agent_backend_last_probe_seconds{backend_id="unprobed-unknown"}"#));
+    }
+
+    #[test]
+    fn p2p_metrics_render_configured_admission_and_live_counts() {
+        let mut lines = Vec::new();
+        render_p2p_metrics(
+            &mut lines,
+            Some(&P2pMetricsSnapshot {
+                enabled: true,
+                connected_peers: 3,
+                replicators: 2,
+                admission: Some(crate::shared::P2pAdmissionState {
+                    max_pending_dags: 1000,
+                    max_concurrent_push_tasks: 8,
+                    max_concurrent_dag_fetches: 4,
+                    rate_limit_burst: 500,
+                    rate_limit_rate: 50.0,
+                }),
+                stale: false,
+            }),
+        );
+        let rendered = lines.join("\n");
+        assert!(rendered.contains("defra_agent_p2p_enabled 1"));
+        assert!(rendered.contains("defra_agent_p2p_status_stale 0"));
+        assert!(rendered.contains("defra_agent_p2p_connected_peers 3"));
+        assert!(rendered.contains("defra_agent_p2p_replicators 2"));
+        assert!(rendered.contains("defra_agent_p2p_admission_max_pending_dags 1000"));
+        assert!(rendered.contains("defra_agent_p2p_admission_max_concurrent_push_tasks 8"));
+        assert!(rendered.contains("defra_agent_p2p_admission_max_concurrent_dag_fetches 4"));
+        assert!(rendered.contains("defra_agent_p2p_admission_rate_limit_burst 500"));
+        assert!(rendered.contains("defra_agent_p2p_admission_rate_limit_rate 50"));
+    }
+
+    #[test]
+    fn p2p_metrics_render_stale_holds_last_known_counts() {
+        let mut lines = Vec::new();
+        render_p2p_metrics(
+            &mut lines,
+            Some(&P2pMetricsSnapshot {
+                enabled: true,
+                connected_peers: 7,
+                replicators: 4,
+                admission: None,
+                stale: true,
+            }),
+        );
+        let rendered = lines.join("\n");
+        assert!(rendered.contains("defra_agent_p2p_status_stale 1"));
+        assert!(rendered.contains("defra_agent_p2p_connected_peers 7"));
+        assert!(rendered.contains("defra_agent_p2p_replicators 4"));
     }
 
     #[test]

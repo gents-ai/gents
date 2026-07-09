@@ -199,3 +199,75 @@ fn layered_desired_merge_absent_data_plane_preserves_control_only() {
 
     assert_eq!(merged, control);
 }
+
+/// Mirrors Lean `PairingReconcile.Layering.appCollections_subscription_survives`
+/// / `nonApp_none_base_no_subscription`: an `app-collections` data-plane layer's
+/// subscription set survives `merge_layered_desired`, so an `InstallCollection`
+/// op can reach the diff; a network-control-only data-plane layer's subscription
+/// is still cleared (conversation data must never gossip unfiltered).
+#[test]
+fn merge_preserves_app_collections_subscription_only() {
+    // app-collections data-plane layer: subscription set must survive.
+    let app_layer = PairingDesired {
+        collections: set(&["ChangeProposed"]),
+        replicator_addresses: set(&["addr-b"]),
+        replicator_collections: set(&["ChangeProposed"]),
+        replicator_filter: Default::default(),
+        template_ids: set(&["app-collections"]),
+    };
+    let merged = merge_layered_desired(None, Some(app_layer)).expect("merged");
+    assert!(
+        merged.collections.contains("ChangeProposed"),
+        "app-collections subscription must survive the merge: {merged:?}"
+    );
+
+    // network-control data-plane layer: subscription still cleared.
+    let nc_layer = PairingDesired {
+        collections: set(&["AgentRequest"]),
+        replicator_addresses: set(&["addr-b"]),
+        replicator_collections: set(&["AgentRequest"]),
+        replicator_filter: Default::default(),
+        template_ids: set(&["network-control"]),
+    };
+    let merged_nc = merge_layered_desired(None, Some(nc_layer)).expect("merged nc");
+    assert!(
+        merged_nc.collections.is_empty(),
+        "non-app-collections data-plane subscription must be cleared: {merged_nc:?}"
+    );
+}
+
+/// Spec conformance case (iii); mirrors Lean `PairingReconcile.Layering.base_preserved`:
+/// an app-collections data-plane layer merges with a co-existing control
+/// (network-control) base pairing without cross-contaminating their subscriptions
+/// or replicator filters — the control pairing is undisturbed.
+#[test]
+fn app_collections_coexists_with_control_pairing() {
+    let base = PairingDesired {
+        collections: set(&["AgentNetwork", "NetworkMembership"]),
+        replicator_addresses: set(&["addr-b"]),
+        replicator_collections: set(&["AgentNetwork", "NetworkMembership"]),
+        replicator_filter: Default::default(),
+        template_ids: set(&["network-control"]),
+    };
+    let app_layer = PairingDesired {
+        collections: set(&["ChangeProposed"]),
+        replicator_addresses: set(&["addr-b"]),
+        replicator_collections: set(&["ChangeProposed"]),
+        replicator_filter: Default::default(),
+        template_ids: set(&["app-collections"]),
+    };
+    let merged = merge_layered_desired(Some(base), Some(app_layer)).expect("merged");
+    // Control-plane subscriptions preserved AND the app-collections subscription added.
+    assert!(merged.collections.contains("AgentNetwork"));
+    assert!(merged.collections.contains("NetworkMembership"));
+    assert!(merged.collections.contains("ChangeProposed"));
+    // Both replicator collection sets present; no filter cross-contamination.
+    assert!(merged.replicator_collections.contains("AgentNetwork"));
+    assert!(merged.replicator_collections.contains("ChangeProposed"));
+    assert!(
+        merged.replicator_filter.is_empty(),
+        "both layers unscoped => no filter"
+    );
+    assert!(merged.template_ids.contains("network-control"));
+    assert!(merged.template_ids.contains("app-collections"));
+}

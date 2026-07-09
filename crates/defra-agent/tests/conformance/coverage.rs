@@ -282,6 +282,7 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.streaming-response.idle-timeout-deadline",
         "boundary.prompt-assembly.provider-input-sanitization",
         "boundary.model.nat-typed-ids-time",
+        "boundary.p2p-backpressure.obligation-model",
     ]
     .into_iter()
     .map(str::to_string)

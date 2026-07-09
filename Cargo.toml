@@ -37,7 +37,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.6.5"
+version = "0.6.6"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/sourcenetwork/defra-agent"
@@ -136,11 +136,12 @@ tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev 
 # `reasoning` vs `reasoning_content` mismatch on Chat Completions). Without the
 # fork our Responses-API reasoning capture is silently empty.
 rig-core = { git = "https://github.com/sourcenetwork/rig", rev = "81c34131627e1331f02d36bd12742155d1fa9865" }
-# noq 1.0.1 crash-fixes until n0-computer/noq ships a release with #743 + #723:
+# noq 1.0.1 crash-fixes until n0-computer/noq ships a release with #732 + #743 + #723:
+# - proto: discard late packets for paths whose state has already been abandoned
 # - proto: edge-trigger Draining on terminal state (duplicate stateless reset)
 # - endpoint: don't panic in EndpointDriver::Drop on a poisoned mutex
 # - endpoint: fence active_connections underflow on duplicate Draining
-# See third_party/README.md and defra-agent#634.
+# See third_party/README.md, defradb.rs#1090, and defra-agent#634.
 noq = { path = "third_party/noq" }
 noq-proto = { path = "third_party/noq-proto" }
 

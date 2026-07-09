@@ -52,6 +52,7 @@ pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<
             ) {{
                 request_id
                 session_id
+                agent_did
                 interrupt_requested_at
             }}
         }}"#
@@ -141,9 +142,10 @@ pub(crate) async fn interrupt_active_session_request(
 pub(crate) async fn cancel_subagent_session_queue(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
     reason: &str,
 ) -> Result<usize> {
-    drain_subagent_owned_queue(node, session_id, reason).await
+    drain_subagent_owned_queue(node, session_id, agent_did, reason).await
 }
 
 async fn active_session_request_id(
@@ -207,9 +209,25 @@ async fn drain_request_queue_after_interrupt(
         return;
     };
 
+    // #664: scope the drain to the interrupted request's own principal so a
+    // foreign-DID replica sharing this session is never drained locally.
+    let Some(agent_did) = row
+        .get("agent_did")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+    else {
+        tracing::warn!(
+            request_id = %request_id,
+            session_id = %session_id,
+            "interrupted request has no agent_did; cannot drain automated wake-ups"
+        );
+        return;
+    };
+
     let drained = match drain_automated_wakeups(
         node,
         session_id,
+        agent_did,
         "automated wake-up drained because active request was interrupted",
     )
     .await

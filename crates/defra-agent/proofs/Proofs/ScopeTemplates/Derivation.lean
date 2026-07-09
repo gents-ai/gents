@@ -187,6 +187,23 @@ theorem subagentHost_in_catalog :
     resolveTemplate builtinCatalog "subagent-host" = some subagentHostTemplate := by
   decide
 
+/-- Concrete catalog membership: the app-collections (bring-your-own) template
+resolves from the built-in catalog. Its collection set is empty by contract —
+the DataPlanePairingDesired row supplies the collections. -/
+theorem appCollections_in_catalog :
+    resolveTemplate builtinCatalog "app-collections" = some appCollectionsTemplate := by
+  decide
+
+/-- The app-collections template carries no fixed collections: its set is
+row-supplied, not catalog-fixed. -/
+theorem appCollections_collections_empty :
+    appCollectionsTemplate.collections = (∅ : Finset String) := rfl
+
+/-- The app-collections template is whole-collection replicate (no per-peer
+filter): Unscoped scope yields no filters for any collection list. -/
+theorem appCollections_unscoped_no_filter (collections : List String) (peerDid localDid : Did) :
+    scopeFilter appCollectionsTemplate.scope collections peerDid localDid = [] := rfl
+
 /-- Supporting no-third-party corollary: every per-collection filter value is one
 of the local/peer DIDs. The exact-equality theorems above are the load-bearing
 crossing proof; this only backs the no-third-party value statement. -/

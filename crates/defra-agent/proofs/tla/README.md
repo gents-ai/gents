@@ -10,6 +10,8 @@ See `../README.md` for how this fits the broader formal-verification model.
 - `SubagentCompletion` — background subagent terminal projection where the parent bridge row lives on deployment A and the child terminalizes on deployment B. Spec design: `docs/superpowers/specs/2026-05-12-subagent-completion-cross-deployment-tla-design.md` (removed from the tree; see git history). Implementation plan: `docs/superpowers/plans/2026-05-12-subagent-completion-cross-deployment-tla-spec.md` (removed from the tree; see git history).
 - `SubagentCancelPropagation` - cascade-cancel delivery from a parent bridge row on deployment A to the child request owner on deployment B. Spec design: `docs/superpowers/specs/2026-05-13-subagent-cancel-propagation-tla-design.md` (removed from the tree; see git history). Implementation plan: `docs/superpowers/plans/2026-05-13-subagent-cancel-propagation-tla.md` (removed from the tree; see git history).
 - `PairingTransport` — connection establishment + replication liveness for one directed pairing edge, the transport layer *below* `ReversePairing`. `ReversePairing` and the Lean `PairingReconcile` model both assume the transport carries the install RPC / that `connect` succeeds; neither models *establishing* the link, so the live #511 fleet hang was outside the modeled world. This spec closes that gap. It distinguishes the **three real failure modes** (grounded in the production code) with two independent BOOLEAN constants — `Dialable` (the connect-gate ticket form) and `ReplicatorInstallable` (whether `add_replicator` can succeed once connected) — exercised by a **three-config diagnostic**: `MCPairingTransportDialable` (both true: the shareable-address fix — all properties hold); `MCPairingTransportUndialable` (MODE A — `Dialable = FALSE`: connect-fails-first, the *literal* #511 hang, never reaches `Connected` so nothing subscribes and no applied row is written); `MCPairingTransportReplicatorStuck` (MODE B/C — `ReplicatorInstallable = FALSE`: connect OK and collections subscribe but the replicator install never succeeds — the durable "subscribed collections, `replicator_addresses` null" partial row). Companion to the Lean `PairingReconcile` `dialFailed` (MODE A) and `reconcileInstallReplicatorFailed` (MODE B/C) transitions and the `convergence_requires_successful_install` obligation.
+- `P2PBackpressure` — hub fan-in/fan-out admission **obligation** model for #630 (**operator mitigation surface**, not a multi-wave flood-safety proof). `PairingTransport` proves a single edge can connect/install; this model starts after that. One-wave *necessity* obligations: outbound timeouts must release push-worker slots; inbound success acks must be backed by process-local pending registration or merge (pending is **not** durable across restart). Out of scope / production gaps: continuous multi-wave organic writes, **queue admission before PushLog spawn** (shipping can grow waiting tasks + retained JoinHandles unbounded), Bitswap stalls, rate-limit buckets, gossip send-loop, multi-slow-peer fill with `PushWorkers > 1`, peer-vs-CID pending. See `boundary.p2p-backpressure.obligation-model`. Green/red configs (`MCP2PBackpressureGreen` / `TimeoutStall` / `BadAck`) are **modeled, not yet TLC-checked**.
+- `ReplicatedRequestConvergence` — terminal-state convergence of a replicated `AgentRequest` document across an owning node and its non-owning peer replicas (issue #664, incident #661). SAFETY (`SingleClaimer`) is the existing `agent_did` watcher filter (`watcher/query.rs`): peers are strictly passive — a peer's only lifecycle action is applying a delivered owner delta, so it never claims/processes a foreign replica of its own volition. LIVENESS (`TerminalConverges`) is the fix: because DefraDB has no per-doc anti-entropy re-drive on a running peer (defradb.rs#1074) and recovery is owner-scoped + startup-only, a one-shot terminal PushLog that drops leaves peers permanently stuck non-terminal. The model abstracts the design's **owner re-drive** (the Phase-0 Rust binding — idempotent same-value terminal re-assert) as an `EmitTerminalDelta` action bounded by a per-peer budget `Cap` — **faithful to the shipping `TERMINAL_REDRIVE_CAP`**: the owner re-asserts each peer at most `Cap` times *without observing whether it converged* (there is no back-channel), then stops. `TerminalConverges` is therefore a **conditional theorem** — it holds iff the budget `Cap` exceeds the delivery loss a peer suffers (`MaxDrops + MaxCrashes`), which is exactly the shipping behavior: within the cap window bounded loss is tolerated, and beyond it the code falls back to the next organic write (out of model scope). Two documented modeling assumptions: (i) at most one re-assert per peer is outstanding at a time, reflecting that the 5s reconcile ticks are spaced so each PushLog resolves before the next; (ii) a peer replica is modeled as receiving only *terminal* deltas — in production it also carries the owner's replicated *intermediate* states (`Claimed`/`Processing`, the literal #661 shape), which are benign (owner-originated, never self-claimed) and orthogonal to terminal convergence, so they are not modeled. Exercised by a **three-config diagnostic** driven by `Cap` (liveness) and `AllowPeerClaim` (safety falsifiability): `MCReplicatedRequestConvergence` (`Cap = 3` = the shipping cap, `MaxDrops = 1`, `MaxCrashes = 1`, `AllowPeerClaim = FALSE` — budget outlasts the loss: `SingleClaimer` holds AND `TerminalConverges` holds); `MCReplicatedRequestConvergenceStuck` (`Cap = 1` — budget too small for the loss: a single dropped emission strands a peer, `TerminalConverges` reachably VIOLATED — the shipping cap's failure mode when a peer's losses exceed its budget); `MCReplicatedRequestConvergencePeerClaim` (`AllowPeerClaim = TRUE` — arms the adversarial `PeerClaimsForeign` action: a peer drives itself into `Claimed`, reachably VIOLATING `SingleClaimer` — this proves the safety property's clause (1) is not vacuous, so its green result elsewhere is real evidence the `agent_did` fence holds). Single-node conformance fences the owner re-drive binding; multi-node e2e (`tests/e2e_lifecycle/replicated_request_convergence_p2p_e2e.rs`) exercises a real second node applying intermediate + terminal owner deltas over P2P and the re-drive re-push after a late peer join. Spec design: `docs/superpowers/specs/2026-07-08-replicated-request-convergence-664-design.md`.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -60,6 +62,43 @@ The other two configs are diagnostics and are EXPECTED to report violations — 
 MODE B/C (connect OK, replicator install never succeeds) violates `PartialApplyHasProgress` and returns the exact "subscribed collections, null replicator" partial row:
 ```bash
 ./scripts/run-tlc.sh MCPairingTransportReplicatorStuck
+```
+
+For P2PBackpressure — **modeled, not yet TLC-checked** on the reference
+runner (no recorded-runs row; TLC was not executed when this model landed).
+The configs below are the intended green/red suite; treat the prose outcomes
+as design claims until real TLC rows are pasted into "Recorded runs":
+```bash
+./scripts/run-tlc.sh MCP2PBackpressureGreen
+```
+
+The other two configs are diagnostics and are **designed** to report
+violations (unverified until TLC is run). `TimeoutStall` is intended to
+violate `HealthyPeersDeliver` by filling the only push slot with a
+nonresponsive peer that never releases it:
+```bash
+./scripts/run-tlc.sh MCP2PBackpressureTimeoutStall
+```
+
+`BadAck` is intended to violate `SuccessAckBacked` by success-acking at
+pending-DAG capacity without registering or merging the DAG:
+```bash
+./scripts/run-tlc.sh MCP2PBackpressureBadAck
+```
+
+For ReplicatedRequestConvergence — the green model checks clean (both properties hold):
+```bash
+./scripts/run-tlc.sh MCReplicatedRequestConvergence
+```
+
+The `Stuck` config is a diagnostic and is EXPECTED to report a violation: with the budget too small for the loss (`Cap = 1`), a peer's single re-assert is dropped and its budget is spent, stranding it — violating `TerminalConverges` with the reachable stuck trace (owner terminal, peer non-terminal, budget exhausted, no enabled fixing action). This is the shipping cap's failure mode when a peer's losses exceed its re-emit budget:
+```bash
+./scripts/run-tlc.sh MCReplicatedRequestConvergenceStuck
+```
+
+The `PeerClaim` config is the safety diagnostic and is EXPECTED to report a violation: with the adversarial peer-claim action armed (`AllowPeerClaim = TRUE`), a peer drives itself into `Claimed`, reachably VIOLATING `INVARIANT SingleClaimer`. This proves `SingleClaimer` clause (1) is falsifiable — its green result in the two configs above is evidence the `agent_did` watcher fence holds, not a type artifact:
+```bash
+./scripts/run-tlc.sh MCReplicatedRequestConvergencePeerClaim
 ```
 
 The script runs TLC with parallel workers and writes state-graph artifacts to `states/` (gitignored).
@@ -113,6 +152,31 @@ Current parameters in `MCSubagentCancelPropagation.cfg`:
 | `MaxCrashes` | `1` | A and B can each crash once |
 | `MaxDrops` | `1` | One cancel or ack RPC can be dropped before fair retry/delivery |
 | `StateBound` | `\A child : ~cancelHandledB[child] => FreshIds(1)` | Excludes finite-id-pool exhaustion before B can allocate the handling ack; real RPC ids are unbounded |
+
+Current parameters in `MCReplicatedRequestConvergence.cfg` / `MCReplicatedRequestConvergenceStuck.cfg`:
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| `Owner` | `o` | The owning node — the request's `agent_did` holder and the only node that drives the lifecycle |
+| `ReplicaHolder` | `{p1, p2}` | Two non-owning peer replicas — the minimum to make convergence non-trivial across more than one holder |
+| `DeltaId` | `{d1, d2, d3, d4, d5, d6}` | Bounded id pool for terminal re-emissions; `StateBound` caps consumption below the pool size |
+| `MaxDrops` | `1` | One terminal delta may drop before fair re-emission converges (green) / strands a peer (stuck) |
+| `MaxCrashes` | `1` | One total node crash (owner restart or a peer losing volatile inbound) |
+| `TerminalKind` | `{Completed, Failed}` | The peer must converge to the *specific* terminal the owner reached, not merely some terminal |
+| `Cap` | `3` (green) / `1` (stuck) | Per-peer re-emit budget = the shipping `TERMINAL_REDRIVE_CAP`. `3` outlasts `MaxDrops + MaxCrashes = 2` losses → converges; `1` is smaller than the loss → strands a peer. The theorem is conditional on `Cap > loss`. |
+| `StateBound` | `Cardinality(deltaIdsUsed) <= Cap * Cardinality(ReplicaHolder)` | Redundant safety net: `emitCount` already caps each peer at `Cap`, so total re-emissions never exceed `Cap * |ReplicaHolder|` |
+
+Current parameters in `MCP2PBackpressureGreen.cfg` / diagnostic configs:
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| `Peer` | `{slow, good1, good2}` | One nonresponsive replicator plus two healthy peers is the smallest hub fan-out that can show slot starvation. |
+| `ResponsivePeer` | `{good1, good2}` | Healthy peers must eventually receive the current push wave. `slow` can only time out/fail. |
+| `InboundPeer` | `{good1, good2}` | Two inbound senders are enough to fill a one-entry pending-DAG map and exercise the overflow behavior. |
+| `PushWorkers` | `1` | Smallest semaphore bound that makes timeout-slot release load-bearing. Larger bounds mask the diagnostic until enough slow peers fill them. |
+| `MaxPending` | `1` | Smallest pending-DAG capacity that can show a success-ack at capacity discarding tracking state. |
+| `TimeoutReleasesSlot` | `TRUE` green / `FALSE` timeout diagnostic | Models whether a timed-out outbound PushLog releases its semaphore slot. |
+| `AckWithoutPendingAllowed` | `FALSE` green / `TRUE` bad-ack diagnostic | Arms the forbidden success-ack path so `SuccessAckBacked` is falsifiable. |
 
 ## What TLC checks
 
@@ -168,6 +232,35 @@ The two diagnostic configs each reproduce one real failure mode (the production 
 
 The key structural result: `DialSucceed` requires `Dialable` and `InstallReplicator` requires `ReplicatorInstallable`, and no fairness annotation can enable a disabled action. The reconciler's retries (SF on `Dial`/`Redial`, WF on the install) cannot make an un-dialable ticket dialable or make a non-installable replicator install — both are *transport/materialization preconditions the layer above must supply* (dial the shareable public address, not a listen-form address; resolve every replicated collection's schema so `add_replicator`'s cid lookup and filter validation pass). This is the TLA+ counterpart of the Lean `convergence_requires_successful_install` obligation: a connect/install *failure* step leaves the disagreement count unchanged and `> 0`, so convergence requires a *successful* install, which requires both a live connection and an installable replicator.
 
+Active lines from `MCP2PBackpressureGreen.cfg` (`TimeoutReleasesSlot = TRUE`, `AckWithoutPendingAllowed = FALSE`) — **modeled properties; TLC not yet run** (no recorded-runs row):
+
+- **`INVARIANT TypeOK`** — outbound states and inbound admission sets stay in their declared bounded domains.
+- **`INVARIANT PushSlotsBounded`** — in-flight outbound PushLog sends never exceed `PushWorkers`.
+- **`INVARIANT PendingBounded`** — registered inbound pending DAGs never exceed `MaxPending`.
+- **`INVARIANT SuccessAckBacked`** — every inbound success ack is backed by either a merged block or a pending-DAG registration; overflow must nack.
+- **`INVARIANT FailedOnlyUnresponsive`** — healthy peers cannot be marked failed in the current push wave.
+- **`PROPERTY HealthyPeersDeliver`** — every responsive peer eventually reaches `Delivered`, even if the nonresponsive peer gets the first worker slot.
+- **`PROPERTY InboundSettles`** — every inbound PushLog eventually receives either success or nack.
+
+The diagnostics are **designed** to reproduce one load-bearing failure each (claims, not TLC-verified results):
+
+- **`MCP2PBackpressureTimeoutStall.cfg`** (`TimeoutReleasesSlot = FALSE`) — intended counterexample: start `slow` first, fill the only worker slot, leave healthy peers queued forever so `HealthyPeersDeliver` fails. This encodes **necessity** of slot release in a one-worker toy: if timeout does not free the semaphore, healthy delivery can fail even under fairness. It is **not** a sufficiency claim that Amy hub saturation is solved when the green BOOLEAN holds (production can still fail via multi-slow-peer fill, re-queue storms, Bitswap stalls, or gossip-loop death after the permit is released).
+- **`MCP2PBackpressureBadAck.cfg`** (`AckWithoutPendingAllowed = TRUE`) — intended counterexample: fill the pending-DAG map and success-ack a second inbound PushLog without merging or registering it so `SuccessAckBacked` fails. Formal counterpart of the production invariant (defradb.rs #1089 / pinned hub admission) that pending-DAG capacity overflow must return the backpressure nack, not success.
+
+Active lines from `MCReplicatedRequestConvergence.cfg` (`Cap = 3`, both properties hold):
+
+- **`INVARIANT TypeOK`** — `reqState`, the gossip `messages`/`pendingInbound` sets, `deltaIdsUsed`, and the drop/crash counters stay in their declared domains.
+- **`INVARIANT SingleClaimer`** — every non-owner peer only ever holds `Pending` or the owner's terminal (delivered by an owner delta); it never sits in `Claimed`/`Processing`. A peer claiming/processing of its own volition would violate this — it is the model fence for the `agent_did` watcher filter.
+- **`INVARIANT DeltaBackedByOwnerTerminal`** — every in-flight terminal delta carries the owner's (absorbing) terminal value; no peer can converge to a value the owner never reached.
+- **`INVARIANT DeltaIdsTracked`** — every in-flight delta's id is recorded in `deltaIdsUsed`; no id reuse.
+- **`PROPERTY TerminalConverges`** (`owner-terminal ~> every peer reflects it`) — CONDITIONAL on the budget: with `Cap = 3` outlasting the `MaxDrops + MaxCrashes = 2` loss, and `WF` fairness on `EmitTerminalDelta`/`DeliverDelta`/`PersistDeltaOnPeer`, every replica holder eventually converges to the owner's terminal. The budget, not fairness alone, is what closes the gap — see the `Stuck` config where `Cap = 1 < loss` and convergence fails.
+- **`CONSTRAINT StateBound`** — bounds total terminal re-emissions to keep TLC from exploring re-drive churn that is not meaningful with unbounded real delta ids.
+
+Two diagnostic configs reproduce the pre-fix convergence gap (liveness) and prove the safety property is falsifiable (safety):
+
+- **`MCReplicatedRequestConvergenceStuck.cfg`** (`Cap = 1`) — the invariants still hold (the failure is purely liveness). The budget is too small for the loss: each peer gets one re-assert, and `PROPERTY TerminalConverges` is intentionally VIOLATED when that single emission is dropped (`dropCount = 1`) — `emitCount[peer] = 1 = Cap` disables further re-emit, so with no in-flight delta and no budget left that peer stutters forever at `Pending` while the owner is terminal. This is the model-level "owner=terminal, replica=non-terminal, budget exhausted, no enabled fixing action" stuck state — the shipping cap's real failure mode when a peer's losses exceed its budget. It is NOT converged by fairness (the fixing action is *disabled*, not merely unfair); only a budget larger than the loss (green, `Cap = 3`) converges. This is the faithful counterpart of the code's `TERMINAL_REDRIVE_CAP`: beyond the budget, convergence relies on the next organic write, which is out of model scope.
+- **`MCReplicatedRequestConvergencePeerClaim.cfg`** (`AllowPeerClaim = TRUE`) — arms the `PeerClaimsForeign` action, which drives a peer from `Pending` into `Claimed` of its own volition (the exact thing the `agent_did` watcher filter forbids, and what a peer-side write to a foreign replica would do). `INVARIANT SingleClaimer` is intentionally VIOLATED. Without this config, `SingleClaimer` clause (1) (`reqState[n] ∉ {Claimed, Processing}`) would be vacuously true — no other action can put a peer in those states — so its green result would prove nothing. With a config in which the property actually breaks, the green runs above are real evidence the fence holds. Mirrors the `Cap` red/green that makes `TerminalConverges` load-bearing.
+
 ## Fairness annotations
 
 The spec uses two fairness flavors:
@@ -196,6 +289,13 @@ It deliberately has no fairness on child terminal writes, document drops, crashe
 - A-side `Timeout`
 
 It deliberately has no fairness on `InvokeBridgeCancelCascade`, `NaturalTerminalize`, `Drop`, or `Crash`.
+
+`ReplicatedRequestConvergence` uses weak fairness on the owner re-drive workers only:
+
+- per-peer `EmitTerminalDelta` (the re-emittable owner terminal re-drive)
+- `DeliverDelta` and `PersistDeltaOnPeer`
+
+It deliberately has no fairness on the owner lifecycle (`Claim`/`Process`/`Terminalize`), `DropDelta`, `CrashPeer`, or `CrashOwner` — those are voluntary. This isolation is the load-bearing result: `TerminalConverges` holds only because `EmitTerminalDelta` is weakly fair *and* its per-peer budget `Cap` exceeds the loss; the `Stuck` config keeps the identical fairness but sets `Cap = 1 < loss`, and convergence fails — proving the re-emit *budget*, not the fairness alone, is what closes the gap. Because `EmitTerminalDelta` is gated by `emitCount[peer] < Cap` (never by whether the peer converged), the model's fairness cannot manufacture convergence the shipping cap would not deliver.
 
 ## Convergence form
 
