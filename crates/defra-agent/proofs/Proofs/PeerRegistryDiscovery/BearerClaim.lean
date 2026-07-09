@@ -163,7 +163,7 @@ theorem replay_rejected_across_claimants {s : ClaimState} {c c' : Claim}
   intro ⟨_, _, _, hnotbound⟩
   exact hnotbound
     ⟨(c.token.nonce, c.claimant), claimStep_binds_nonce hadm,
-      by simp [hnonce], by simpa using hdid⟩
+      by simp [hnonce], by simpa using hdid.symm⟩
 
 /-! ## (3) Idempotence: re-processing an admitted claim converges -/
 
