@@ -4,6 +4,7 @@ type DataPlanePairingDesired {
     collections: [String!]!
     replicator_addresses: [String!]!
     template: String @index
+    source: String @index
     created_at: DateTime @index(direction: DESC)
     updated_at: DateTime @index(direction: DESC)
 }

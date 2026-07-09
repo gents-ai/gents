@@ -9,6 +9,7 @@ pub mod error_class;
 pub mod intervals;
 pub mod network;
 pub mod profiles;
+pub mod reciprocal;
 pub mod registry;
 pub mod templates;
 pub mod trait_def;
@@ -36,6 +37,10 @@ pub use network::{
     GraphqlNetworkStore, NetworkEndpointEntry, NetworkStore, NetworkTickOutcome, SOURCE_NETWORK,
 };
 pub use profiles::{expand_p2p_collection_profile_ids, P2pCollectionProfile};
+pub use reciprocal::{
+    derive_reciprocal_desired, reconcile_reciprocal_tick, run_reciprocal_reconciler,
+    GraphqlReciprocalStore, ReciprocalRowState, ReciprocalStore, ReciprocalTickOutcome,
+};
 pub use registry::{
     registry_upsert_mutation, resolve_network_id, run_registry_heartbeat, RegistryEntry,
     UpsertKind, DEFAULT_NETWORK_ID, NETWORK_ID_ENV, REGISTRY_HEARTBEAT_INTERVAL,

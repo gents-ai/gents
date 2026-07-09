@@ -9,7 +9,7 @@ use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use tokio::process::{Child, Command};
 
-use defra_agent::agent::p2p_reconcile::resolve_template;
+use defra_agent::agent::p2p_reconcile::{resolve_template, SOURCE_OPERATOR};
 use defra_agent::graphql::escape_graphql_string;
 
 use crate::graphql_access::post_graphql;
@@ -243,13 +243,19 @@ async fn upsert_data_plane(
     let addr = escape_graphql_string(address);
     let cols = data_plane_collections_literal(template)?;
     let template = escape_graphql_string(template);
+    let source = escape_graphql_string(SOURCE_OPERATOR);
     let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    // Stamp `source: "operator"` on both branches: the filter is peer_id-only,
+    // so an operator upsert deliberately takes ownership of a reciprocal- or
+    // legacy-null-sourced row for the same peer. Taking ownership is what
+    // protects the row — the reciprocal reconciler only refreshes/deletes rows
+    // whose source is "reciprocal" and treats every other source as blocked.
     let mutation = format!(
         r#"mutation {{
   upsert_DataPlanePairingDesired(
     filter: {{ peer_id: {{ _eq: "{peer}" }} }},
-    add: {{ peer_id: "{peer}", agent_did: "{did}", collections: {cols}, replicator_addresses: ["{addr}"], template: "{template}", created_at: "{now}", updated_at: "{now}" }},
-    update: {{ agent_did: "{did}", collections: {cols}, replicator_addresses: ["{addr}"], template: "{template}", updated_at: "{now}" }}
+    add: {{ peer_id: "{peer}", agent_did: "{did}", collections: {cols}, replicator_addresses: ["{addr}"], template: "{template}", source: "{source}", created_at: "{now}", updated_at: "{now}" }},
+    update: {{ agent_did: "{did}", collections: {cols}, replicator_addresses: ["{addr}"], template: "{template}", source: "{source}", updated_at: "{now}" }}
   ) {{ _docID }}
 }}"#
     );

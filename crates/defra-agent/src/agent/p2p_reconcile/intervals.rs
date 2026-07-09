@@ -49,6 +49,23 @@ pub fn stale_after() -> Duration {
         .unwrap_or_else(|| heartbeat_interval() * DEFAULT_STALE_MULTIPLE)
 }
 
+/// Default staleness window for reciprocal conversation endpoints.
+pub const DEFAULT_RECIPROCAL_STALE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Staleness window for reciprocal conversation endpoints (mobile peers).
+///
+/// Deliberately much wider than the fleet `stale_after` window: a fleet node
+/// heartbeats continuously, so 3× the heartbeat is a meaningful liveness
+/// signal, but a phone stops heartbeating the moment the app backgrounds. With
+/// the fleet window every background/foreground cycle would retract the
+/// reciprocal desired row, uninstall the push replicator, and replay history on
+/// re-add. A stale reciprocal endpoint costs only replicator retries against an
+/// unreachable address; deliberate revocation is intent removal, which retracts
+/// immediately regardless of freshness.
+pub fn reciprocal_stale_after() -> Duration {
+    env_ms("DEFRA_AGENT_RECIPROCAL_STALE_MS").unwrap_or(DEFAULT_RECIPROCAL_STALE)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,6 +76,7 @@ mod tests {
         "DEFRA_AGENT_PAIRING_SWEEP_MS",
         "DEFRA_AGENT_ENDPOINT_HEARTBEAT_MS",
         "DEFRA_AGENT_REGISTRY_STALE_MS",
+        "DEFRA_AGENT_RECIPROCAL_STALE_MS",
     ];
 
     fn env_lock() -> &'static Mutex<()> {
@@ -107,6 +125,7 @@ mod tests {
         assert_eq!(sweep_interval(), Duration::from_secs(30));
         assert_eq!(endpoint_interval(), Duration::from_secs(30));
         assert_eq!(stale_after(), Duration::from_secs(90));
+        assert_eq!(reciprocal_stale_after(), Duration::from_secs(24 * 60 * 60));
     }
 
     #[test]
@@ -116,11 +135,13 @@ mod tests {
         std::env::set_var("DEFRA_AGENT_PAIRING_SWEEP_MS", "500");
         std::env::set_var("DEFRA_AGENT_ENDPOINT_HEARTBEAT_MS", "750");
         std::env::set_var("DEFRA_AGENT_REGISTRY_STALE_MS", "2500");
+        std::env::set_var("DEFRA_AGENT_RECIPROCAL_STALE_MS", "4500");
 
         assert_eq!(heartbeat_interval(), Duration::from_millis(1250));
         assert_eq!(sweep_interval(), Duration::from_millis(500));
         assert_eq!(endpoint_interval(), Duration::from_millis(750));
         assert_eq!(stale_after(), Duration::from_millis(2500));
+        assert_eq!(reciprocal_stale_after(), Duration::from_millis(4500));
     }
 
     #[test]

@@ -15,6 +15,7 @@ use crate::graphql::escape_graphql_string;
 use crate::identity::AgentIdentity;
 
 use super::network::{GraphqlNetworkStore, NetworkEndpointEntry, NetworkStore};
+use super::reciprocal::GraphqlReciprocalStore;
 use super::templates::{
     resolve_template, scope_filter, Delivery, DidSource, PairingFilters, Scope,
     APP_COLLECTIONS_TEMPLATE,
@@ -451,6 +452,10 @@ pub struct GraphqlPairingStateStore {
     /// per peer (avoids O(N²) crypto). `None` ⇒ no cached set, fall back to a
     /// live read (also the path for the very first read or a refresh failure).
     materializable_cache: Arc<Mutex<Option<Vec<NetworkEndpointEntry>>>>,
+    /// Per-sweep cache of reciprocal conversation endpoints. Mirrors
+    /// `materializable_cache` so the Layer-2 reciprocal gate does not re-read and
+    /// re-verify every invited endpoint once per peer.
+    reciprocal_materializable_cache: Arc<Mutex<Option<Vec<NetworkEndpointEntry>>>>,
 }
 
 impl GraphqlPairingStateStore {
@@ -459,6 +464,7 @@ impl GraphqlPairingStateStore {
             node,
             identity,
             materializable_cache: Arc::new(Mutex::new(None)),
+            reciprocal_materializable_cache: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -476,11 +482,41 @@ impl GraphqlPairingStateStore {
                 network.load_materializable_entries().await?
             }
         };
-        Ok(
-            super::network::materializable_entry_for_peer(&entries, peer_id, self.identity.did())
-                .cloned(),
-        )
+        if let Some(entry) =
+            data_plane_materialized_entry_from_sources(&entries, &[], peer_id, self.identity.did())
+        {
+            return Ok(Some(entry));
+        }
+
+        let cached = self.reciprocal_materializable_cache.lock().unwrap().clone();
+        let reciprocal_entries = match cached {
+            Some(entries) => entries,
+            None => {
+                let reciprocal =
+                    GraphqlReciprocalStore::new(self.node.clone(), self.identity.clone());
+                reciprocal.load_materializable_entries().await?
+            }
+        };
+        Ok(data_plane_materialized_entry_from_sources(
+            &[],
+            &reciprocal_entries,
+            peer_id,
+            self.identity.did(),
+        ))
     }
+}
+
+fn data_plane_materialized_entry_from_sources(
+    network_entries: &[NetworkEndpointEntry],
+    reciprocal_entries: &[NetworkEndpointEntry],
+    peer_id: &str,
+    self_did: &str,
+) -> Option<NetworkEndpointEntry> {
+    super::network::materializable_entry_for_peer(network_entries, peer_id, self_did)
+        .or_else(|| {
+            super::network::materializable_entry_for_peer(reciprocal_entries, peer_id, self_did)
+        })
+        .cloned()
 }
 
 #[async_trait]
@@ -644,6 +680,19 @@ impl PairingStateStore for GraphqlPairingStateStore {
             }
         };
         *self.materializable_cache.lock().unwrap() = refreshed;
+
+        let reciprocal = GraphqlReciprocalStore::new(self.node.clone(), self.identity.clone());
+        let reciprocal_refreshed = match reciprocal.load_materializable_entries().await {
+            Ok(entries) => Some(entries),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "reciprocal materializable-set refresh failed; per-peer gate will read live this sweep"
+                );
+                None
+            }
+        };
+        *self.reciprocal_materializable_cache.lock().unwrap() = reciprocal_refreshed;
         Ok(())
     }
 }
@@ -1125,6 +1174,63 @@ mod tests {
         );
         assert_eq!(merged.replicator_collections, set(&["AgentRequest"]));
         assert!(merged.replicator_filter.contains_key("AgentRequest"));
+    }
+
+    #[test]
+    fn data_plane_gate_accepts_network_membership_endpoint() {
+        let network_entries = vec![NetworkEndpointEntry {
+            peer_id: "peer-network".to_string(),
+            agent_did: "did:key:network".to_string(),
+            address: "/ticket/network".to_string(),
+        }];
+
+        let entry = data_plane_materialized_entry_from_sources(
+            &network_entries,
+            &[],
+            "peer-network",
+            "did:key:self",
+        )
+        .expect("network endpoint should pass gate");
+
+        assert_eq!(entry.address, "/ticket/network");
+    }
+
+    #[test]
+    fn data_plane_gate_accepts_reciprocal_endpoint_without_network_membership() {
+        let reciprocal_entries = vec![NetworkEndpointEntry {
+            peer_id: "peer-phone".to_string(),
+            agent_did: "did:key:phone".to_string(),
+            address: "/ticket/phone".to_string(),
+        }];
+
+        let entry = data_plane_materialized_entry_from_sources(
+            &[],
+            &reciprocal_entries,
+            "peer-phone",
+            "did:key:server",
+        )
+        .expect("reciprocal endpoint should pass Layer-2 gate without NetworkMembership");
+
+        assert_eq!(entry.agent_did, "did:key:phone");
+        assert_eq!(entry.address, "/ticket/phone");
+    }
+
+    #[test]
+    fn data_plane_gate_rejects_self_endpoint_from_both_sources() {
+        let reciprocal_entries = vec![NetworkEndpointEntry {
+            peer_id: "peer-self".to_string(),
+            agent_did: "did:key:self".to_string(),
+            address: "/ticket/self".to_string(),
+        }];
+
+        let entry = data_plane_materialized_entry_from_sources(
+            &[],
+            &reciprocal_entries,
+            "peer-self",
+            "did:key:self",
+        );
+
+        assert!(entry.is_none());
     }
 
     #[test]

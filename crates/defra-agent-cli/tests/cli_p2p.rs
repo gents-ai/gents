@@ -51,6 +51,110 @@ fn mint_network_control_invite_for(home: &std::path::Path, member_did: &str) -> 
     )
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p2p_invite_conversation_records_reciprocal_intent() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_a = tempdir.path().join("intent-a");
+    let home_b = tempdir.path().join("intent-b");
+    fs::create_dir_all(&home_a)?;
+    fs::create_dir_all(&home_b)?;
+
+    let model_name = format!("mock-p2p-intent-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+
+    let port_a = allocate_port()?;
+    let agent_name_a = format!("cli-intent-a-{}", Uuid::new_v4().simple());
+    let agent_name_b = format!("cli-intent-b-{}", Uuid::new_v4().simple());
+    let graphql_a = graphql_url(port_a);
+
+    let init_a = run_init_json(
+        &home_a,
+        &[
+            "--agent-name",
+            &agent_name_a,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let init_b = run_init_json(
+        &home_b,
+        &[
+            "--agent-name",
+            &agent_name_b,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did_a = agent_did_from_init(&init_a)?;
+    let agent_did_b = agent_did_from_init(&init_b)?;
+
+    let (mut serve_a, _readiness_a) = spawn_server_with_ready_json(
+        &home_a,
+        port_a,
+        &[
+            "--p2p-bind-addr",
+            "127.0.0.1",
+            "--p2p-port",
+            "0",
+            "--p2p-relay-mode",
+            "disabled",
+            "--p2p-discovery",
+            "disabled",
+        ],
+        &[],
+    )?;
+    wait_for_port(port_a, &mut serve_a)?;
+    wait_for_runtime_ready(&graphql_a, &agent_did_a, Duration::from_secs(30)).await?;
+
+    create_network(&home_a, "Conversation Intent Fleet")?;
+    grant_member(&home_a, &agent_did_b)?;
+
+    let invite = run_cli_json(
+        &home_a,
+        &[
+            "p2p",
+            "pairings",
+            "invite",
+            "--member-did",
+            &agent_did_b,
+            "--template",
+            "conversation",
+        ],
+    )?;
+    assert_eq!(
+        invite.get("status").and_then(Value::as_str),
+        Some("invite_created"),
+        "invite output: {invite}"
+    );
+
+    let escaped_member = escape_graphql_string(&agent_did_b);
+    let response = graphql_query(
+        &graphql_a,
+        &format!(
+            r#"query {{
+                ReciprocalConversationIntent(filter: {{ member_did: {{ _eq: "{escaped_member}" }} }}) {{
+                    member_did
+                    template
+                }}
+            }}"#
+        ),
+    )
+    .await?;
+    let row = first_graphql_row(&response, "ReciprocalConversationIntent")?;
+    assert_eq!(
+        row.get("member_did").and_then(Value::as_str),
+        Some(agent_did_b.as_str())
+    );
+    assert_eq!(
+        row.get("template").and_then(Value::as_str),
+        Some("conversation")
+    );
+
+    Ok(())
+}
+
 /// Task C2 (#16): an invite token is single-use. The first join consuming its
 /// nonce succeeds and records it in the `ConsumedInviteNonce` ledger; a second
 /// join presenting the *same* token (same nonce) is rejected as a replay, even
