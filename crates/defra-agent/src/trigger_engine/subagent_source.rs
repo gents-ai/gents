@@ -538,6 +538,9 @@ impl SubagentSource {
 
         let parent = self.load_parent_request(&parent_request_id).await?;
         let snapshot = self.snapshot_rx.borrow().clone();
+        // SECURITY (#377): under the current replication-trust posture this
+        // self-declared bridge DID is trusted once it names a configured paired
+        // peer; ACP signing must eventually bind it to the actual remote author.
         let bridge_authoring_did = non_empty(row.agent_did.as_deref()).map(ToOwned::to_owned);
         if let (Some(bridge_did), Some(parent_did)) = (
             bridge_authoring_did.as_deref(),

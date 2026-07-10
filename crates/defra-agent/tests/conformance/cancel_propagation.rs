@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use defra_agent::agent::p2p_reconcile::resolve_template;
+use defra_agent::agent::p2p_reconcile::{
+    resolve_template, EmbeddedRemoteP2pAdmin, FilterPredicate, PairingFilters, RemoteP2pAdmin,
+};
 use defra_agent::background_completion::{observe_cancel_cascade_ack, CancelAckOutcome};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
@@ -186,14 +188,13 @@ async fn drive_declarative_cancel_propagation() {
     );
     bridge.start_running().await.expect("persist bridge");
 
-    let replicated_bridge = wait_for_bridge(
+    let replicated_bridge = replay_and_wait_for_bridge(
         host.db.node.as_ref(),
+        coord_node.clone(),
+        &host_addr,
+        &host_did,
         parent_session_id,
         parent_tool_call_id,
-        // A selective CAR lookup can consume a full 30s transport attempt.
-        // Allow multiple bounded attempts plus persisted backoff/scheduler
-        // margin under the saturated package suite (defradb.rs#1101).
-        Duration::from_secs(120),
     )
     .await;
     assert_eq!(
@@ -576,6 +577,60 @@ async fn wait_for_bridge(
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+async fn replay_and_wait_for_bridge(
+    receiver: &EmbeddedNode,
+    sender: Arc<EmbeddedNode>,
+    receiver_addr: &str,
+    receiver_did: &str,
+    session_id: &str,
+    tool_call_id: &str,
+) -> BridgeRow {
+    // The pinned DefraDB selective-CAR path can strand the initial targeted
+    // push (#1101). Production pairing recovery repairs that state by
+    // reinstalling the replicator, which triggers a bounded full replay. Make
+    // that recovery deterministic here: ordinary initial delivery is covered
+    // by the R5 and filtered-replay suites, while this fixture must isolate
+    // application-level cancellation from #1101. The coordinator daemon is
+    // deliberately stopped so its background-completion loop cannot consume
+    // the synthetic remote child.
+    let admin = EmbeddedRemoteP2pAdmin::new(sender);
+    let collections = vec!["AgentToolCall".to_string()];
+    let replicators = admin
+        .list_replicators()
+        .await
+        .expect("list coordinator replicators for bridge replay");
+    if let Some(existing) = replicators
+        .into_iter()
+        .find(|replicator| replicator.address.as_deref() == Some(receiver_addr))
+    {
+        let id = existing.id.unwrap_or_else(|| receiver_addr.to_string());
+        let old_collections = if existing.collections.is_empty() {
+            collections.clone()
+        } else {
+            existing.collections
+        };
+        admin
+            .delete_replicator(&id, &old_collections)
+            .await
+            .expect("remove coordinator replicator for bridge replay");
+    }
+
+    let mut filters = PairingFilters::new();
+    filters.insert(
+        "AgentToolCall".to_string(),
+        FilterPredicate {
+            field: "spawn_target_did".to_string(),
+            value: receiver_did.to_string(),
+        },
+    );
+    admin
+        .add_replicator(&[receiver_addr.to_string()], &collections, &filters)
+        .await
+        .expect("reinstall coordinator replicator for bridge replay");
+
+    wait_for_bridge(receiver, session_id, tool_call_id, Duration::from_secs(60)).await
 }
 
 async fn wait_for_bridge_cancel_intent(
