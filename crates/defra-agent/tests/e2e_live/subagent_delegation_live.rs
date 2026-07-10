@@ -23,10 +23,9 @@
 //! declarative `PeerPairingDesired` rows — no test "pump".
 //!
 //! Subagent targets are named `(agent_did, behavior_id)` pairs. The orchestrator
-//! on A writes the child `AgentRequest` LOCALLY stamped with the TARGET's
-//! `agent_did` (= DID-B). Bidirectional replication carries that child to B,
-//! where B's daemon + SubagentSource claim and run it against the live model;
-//! the terminal child request + its response replicate back to A. The full
+//! on A writes a targeted bridge; B's SubagentSource materializes the child
+//! `AgentRequest` locally with `agent_did = DID-B` and `requester_did = DID-A`.
+//! The terminal child request + its response replicate back only to A. The full
 //! assertions (bridge on A -> child materialized + run on B with a non-empty
 //! live answer -> terminal replicated back to A) all run live.
 
@@ -300,10 +299,9 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     .await;
 
     // The named (agent_did, behavior_id) target is owned by DID-B: a REMOTE
-    // delegation target. Post-AB-fix, A authors the bridge + writes the child
-    // request LOCALLY stamped with DID-B WITHOUT resolving B's behavior locally,
-    // so we do NOT mirror B's AgentBehavior onto A. Replication carries the
-    // child to B.
+    // delegation target. A authors only the targeted bridge; B resolves no
+    // friendly name and materializes the child locally from the resolved args,
+    // so we do NOT mirror B's AgentBehavior onto A.
     authorize_subagents(
         db_a.node.as_ref(),
         &did_a,
@@ -329,8 +327,9 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
 
     // Pairing rows exist on BOTH nodes BEFORE the agents boot. The running
     // pairing reconcilers perform the actual installation: A's coordinator leg
-    // carries parent+bridge docs to B; B's host leg carries B-owned child docs
-    // back to A. The rows carry the peer's real listen address, never `[]`.
+    // carries only bridges targeted to B; B's host leg carries routed B-owned
+    // child requests back to A. The rows carry the peer's real listen address,
+    // never `[]`.
     write_pairing(
         db_a.node.as_ref(),
         "peer-b",
@@ -413,6 +412,11 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     assert_eq!(
         child_on_b.agent_did, did_b,
         "child must be owned by DID-B (claimed + run by node B)"
+    );
+    assert_eq!(
+        child_on_b.requester_did.as_deref(),
+        Some(did_a.as_str()),
+        "child request must route only to its DID-A coordinator"
     );
     assert_eq!(child_on_b.behavior_id, RESEARCHER_BEHAVIOR_ID);
 
@@ -1045,6 +1049,7 @@ async fn wait_for_subagent_bridge(
 struct CrossRequestRow {
     request_id: String,
     agent_did: String,
+    requester_did: Option<String>,
     behavior_id: String,
     lifecycle_state: Option<String>,
 }
@@ -1054,7 +1059,7 @@ async fn fetch_request_on_node(node: &EmbeddedNode, request_id: &str) -> Option<
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{
-                request_id agent_did behavior_id lifecycle_state
+                request_id agent_did requester_did behavior_id lifecycle_state
             }}
         }}"#
     );

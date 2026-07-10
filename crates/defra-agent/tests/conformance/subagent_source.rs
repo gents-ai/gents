@@ -7,8 +7,9 @@ use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::interrupt::{fetch_interrupt_requested_at, interrupt_request};
 use defra_agent::tool_call_lifecycle::{
-    create_subagent_request_with_request_id, AwaitMode, CancelPolicy, IllegalToolCallTransition,
-    ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
+    create_subagent_request_with_request_id,
+    create_subagent_request_with_trusted_parent_request_id, AwaitMode, CancelPolicy,
+    IllegalToolCallTransition, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use defra_agent::{
     default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior,
@@ -156,6 +157,7 @@ async fn ensure_parent_subagent_authorization(
 struct ChildRequestRow {
     request_id: String,
     agent_did: String,
+    requester_did: Option<String>,
     behavior_id: String,
     content: String,
     lifecycle_state: Option<String>,
@@ -183,6 +185,7 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
             ) {{
                 request_id
                 agent_did
+                requester_did
                 behavior_id
                 content
                 lifecycle_state
@@ -206,6 +209,88 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// #683 party-scope fence: the targeted bridge is the complete remote parent
+/// edge. A host must materialize without a replicated parent AgentRequest and
+/// stamp the coordinator DID onto the child request's immutable return route.
+#[tokio::test]
+async fn trusted_path_uses_targeted_bridge_without_parent_request() {
+    let db = test_db("r3-subagent-source-xdep-targeted-bridge").await;
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("r3-xdep-targeted-bridge"));
+    let local_did = identity.did().to_string();
+    let coordinator_did = "did:key:zTargetedCoordinator";
+    let target_behavior_id = "xdep-target-targeted-bridge";
+    let parent_request_id = "r3-parent-targeted-bridge-not-replicated";
+    let parent_tool_call_id = "r3-tc-targeted-bridge";
+    let child_request_id = "r3-child-targeted-bridge";
+
+    upsert_target_behavior_with_cross_deployment(
+        db.node.as_ref(),
+        &local_did,
+        target_behavior_id,
+        true,
+    )
+    .await;
+
+    let mut paired = std::collections::HashSet::new();
+    paired.insert(coordinator_did.to_string());
+    let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
+        db.node.clone(),
+        &local_did,
+        target_behavior_id,
+        target_behavior_id,
+        paired,
+    );
+    wait_for_subagent_source_subscription().await;
+
+    write_targeted_cross_deployment_bridge(
+        db.node.as_ref(),
+        coordinator_did,
+        parent_request_id,
+        parent_tool_call_id,
+        child_request_id,
+        target_behavior_id,
+        &local_did,
+        1,
+    )
+    .await;
+
+    let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
+    assert_eq!(child.agent_did, local_did);
+    assert_eq!(child.requester_did.as_deref(), Some(coordinator_did));
+    assert_eq!(child.subagent_depth, Some(2));
+    assert_eq!(
+        child.caused_by_parent_request_id.as_deref(),
+        Some(parent_request_id)
+    );
+}
+
+#[tokio::test]
+async fn trusted_path_normalizes_requester_did_before_stamping_route() {
+    let db = test_db("r3-subagent-source-xdep-requester-normalization").await;
+    let child_request_id = "r3-child-normalized-requester";
+
+    create_subagent_request_with_trusted_parent_request_id(
+        db.node.as_ref(),
+        child_request_id.to_string(),
+        "r3-parent-not-replicated".to_string(),
+        "r3-tc-normalized-requester".to_string(),
+        0,
+        crate::support::AGENT_DID.to_string(),
+        "test".to_string(),
+        "prompt".to_string(),
+        None,
+        "  did:key:zNormalizedRequester  ".to_string(),
+    )
+    .await
+    .expect("trusted child request should normalize requester DID");
+
+    let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
+    assert_eq!(
+        child.requester_did.as_deref(),
+        Some("did:key:zNormalizedRequester")
+    );
 }
 
 /// Bounded wait for the parent-interrupt latch to propagate to a child
@@ -774,6 +859,27 @@ async fn create_subagent_request_enforces_depth_boundary() {
             Some(IllegalToolCallTransition::SubagentDepthExceeded)
         ),
         "expected SubagentDepthExceeded, got {error:?}"
+    );
+
+    let overflow_error = create_subagent_request_with_request_id(
+        db.node.as_ref(),
+        "r3-child-depth-overflow".to_string(),
+        "r3-parent-depth".to_string(),
+        "r3-tc-depth-overflow".to_string(),
+        u32::MAX,
+        crate::support::AGENT_DID.to_string(),
+        "test".to_string(),
+        "prompt".to_string(),
+        None,
+    )
+    .await
+    .expect_err("u32::MAX parent depth must be rejected without overflow");
+    assert!(
+        matches!(
+            overflow_error.downcast_ref::<IllegalToolCallTransition>(),
+            Some(IllegalToolCallTransition::SubagentDepthExceeded)
+        ),
+        "expected overflow-safe SubagentDepthExceeded, got {overflow_error:?}"
     );
 }
 
@@ -2011,6 +2117,68 @@ async fn upsert_target_behavior_with_cross_deployment(
         created_at: Some("2026-06-04T00:00:00Z".to_string()),
     };
     upsert_agent_behavior(node, &behavior).await.unwrap();
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn write_targeted_cross_deployment_bridge(
+    node: &EmbeddedNode,
+    coordinator_did: &str,
+    parent_request_id: &str,
+    parent_tool_call_id: &str,
+    child_request_id: &str,
+    target_behavior_id: &str,
+    target_agent_did: &str,
+    parent_subagent_depth: u32,
+) {
+    let parent_session_id = format!("session-{parent_tool_call_id}");
+    let tool_call_key = format!("{parent_session_id}:{parent_tool_call_id}");
+    let args = serde_json::json!({
+        "name": target_behavior_id,
+        "agent_did": target_agent_did,
+        "behavior_id": target_behavior_id,
+        "prompt": "targeted cross-deployment child prompt",
+        "parent_subagent_depth": parent_subagent_depth,
+    })
+    .to_string();
+    let started_at = chrono::Utc::now().to_rfc3339();
+    let deadline_at = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentToolCall(input: {{
+                tool_call_key: "{tool_call_key}",
+                request_id: "{parent_request_id}",
+                session_id: "{parent_session_id}",
+                agent_did: "{coordinator_did}",
+                message_sequence: 1,
+                tool_name: "spawn_subagent",
+                tool_call_id: "{parent_tool_call_id}",
+                args: "{args}",
+                result: "",
+                status: "called",
+                lifecycle_state: "running",
+                started_at: "{started_at}",
+                deadline_at: "{deadline_at}",
+                child_request_id: "{child_request_id}",
+                spawn_target_did: "{target_agent_did}",
+                await_mode: "background",
+                cancel_policy: "cascade"
+            }}) {{ _docID }}
+        }}"#,
+        tool_call_key = escape_graphql_string(&tool_call_key),
+        parent_request_id = escape_graphql_string(parent_request_id),
+        parent_session_id = escape_graphql_string(&parent_session_id),
+        coordinator_did = escape_graphql_string(coordinator_did),
+        parent_tool_call_id = escape_graphql_string(parent_tool_call_id),
+        args = escape_graphql_string(&args),
+        child_request_id = escape_graphql_string(child_request_id),
+        target_agent_did = escape_graphql_string(target_agent_did),
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create targeted AgentToolCall failed: {:?}",
+        response.errors
+    );
 }
 
 /// Write a parent `AgentRequest` authored by a remote (paired-peer) DID, as it

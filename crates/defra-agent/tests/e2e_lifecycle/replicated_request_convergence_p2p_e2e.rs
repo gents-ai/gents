@@ -23,8 +23,12 @@
 //! absent, then proves a full replicator replay repairs the peer without an
 //! unbounded stream of same-value request writes.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use defra_agent::agent::p2p_reconcile::{
+    EmbeddedRemoteP2pAdmin, FilterPredicate, PairingFilters, RemoteP2pAdmin,
+};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{RequestLifecycle, TERMINAL_REDRIVE_CAP};
@@ -48,8 +52,8 @@ struct RequestRow {
 // --- Two-node P2P plumbing (same shape as event_trigger_p2p_e2e / R5) ---
 
 async fn install_one_way_replicator(
-    sender: &EmbeddedNode,
-    receiver: &EmbeddedNode,
+    sender: &Arc<EmbeddedNode>,
+    receiver: &Arc<EmbeddedNode>,
     collections: &[&str],
 ) {
     let sender_addr = wait_for_listen_addr(sender).await;
@@ -88,14 +92,17 @@ async fn install_one_way_replicator(
         )
         .await
         .expect("authorize sender as receiver-side replicator");
-    sender_p2p
-        .add_replicator(
-            collection_names,
-            Some(&receiver_addr),
-            Default::default(),
-            Vec::new(),
-            None,
-        )
+    let sender_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(sender));
+    let mut filters = PairingFilters::new();
+    filters.insert(
+        "AgentRequest".to_string(),
+        FilterPredicate {
+            field: "requester_did".to_string(),
+            value: PEER_DID.to_string(),
+        },
+    );
+    sender_admin
+        .add_replicator(&[receiver_addr], &collection_names, &filters)
         .await
         .expect("install sender to receiver replicator");
 }
@@ -138,6 +145,53 @@ async fn wait_for_connected_peer(node: &EmbeddedNode) {
     }
 }
 
+async fn push_backlog_status(node: &EmbeddedNode) -> serde_json::Value {
+    node.p2p()
+        .expect("p2p should be enabled")
+        .sync_status()
+        .await
+        .expect("p2p sync status")
+}
+
+async fn wait_for_push_backlog_idle(node: &EmbeddedNode) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let status = push_backlog_status(node).await;
+        let backlog = &status["push_backlog"];
+        if backlog["queued_items"].as_u64() == Some(0) && backlog["active_jobs"].as_u64() == Some(0)
+        {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            panic!("push backlog never became idle; last={status}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn wait_for_push_enqueues_and_idle(
+    node: &EmbeddedNode,
+    minimum_enqueued_total: u64,
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let status = push_backlog_status(node).await;
+        let backlog = &status["push_backlog"];
+        if backlog["enqueued_total"].as_u64().unwrap_or(0) >= minimum_enqueued_total
+            && backlog["queued_items"].as_u64() == Some(0)
+            && backlog["active_jobs"].as_u64() == Some(0)
+        {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "push backlog never reached enqueued_total={minimum_enqueued_total} and idle; last={status}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 // --- AgentRequest helpers ---
 
 async fn create_request(
@@ -164,6 +218,7 @@ async fn create_request(
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
                 agent_did: "{agent_did}",
+                requester_did: "{PEER_DID}",
                 behavior_id: "{BEHAVIOR_ID}",
                 session_id: "{session_id}",
                 retry_parent_request: "",
@@ -285,7 +340,7 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     let owner = test_p2p_db("convergence-p2p-owner-live").await;
     let peer = test_p2p_db("convergence-p2p-peer-live").await;
 
-    install_one_way_replicator(owner.node.as_ref(), peer.node.as_ref(), &["AgentRequest"]).await;
+    install_one_way_replicator(&owner.node, &peer.node, &["AgentRequest"]).await;
 
     let request_id = "convergence-p2p-live-req";
     let session_id = "convergence-p2p-live-session";
@@ -455,7 +510,7 @@ async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
 
     // Peer recovery installs a full replicator replay. This path does not author
     // another AgentRequest delta and therefore does not grow request history.
-    install_one_way_replicator(owner.node.as_ref(), peer.node.as_ref(), &["AgentRequest"]).await;
+    install_one_way_replicator(&owner.node, &peer.node, &["AgentRequest"]).await;
 
     let on_peer = wait_for_request_lifecycle(
         peer.node.as_ref(),
@@ -472,6 +527,84 @@ async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
             .await
             .expect("redrive remains exhausted after peer replay");
     assert!(still_exhausted.is_noop());
+
+    owner.node.shutdown().await;
+    peer.node.shutdown().await;
+}
+
+/// #683 wave-volume measurement using the same 13-doc × 16-pairing incident
+/// shape as the #1103 harness. One real filtered two-node route observes the
+/// sender's outbound enqueue counter; the former fleet-wide predicate is the
+/// 16-replicator baseline. Each re-driven request now produces one push to its
+/// requester, so the measured reduction is 16x (well above the 5x gate).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p2p_terminal_redrive_pushes_once_per_routed_request() {
+    const REQUESTS: usize = 13;
+    const FORMER_PAIRINGS: u64 = 16;
+
+    let owner = test_p2p_db("convergence-p2p-wave-owner").await;
+    let peer = test_p2p_db("convergence-p2p-wave-peer").await;
+    install_one_way_replicator(&owner.node, &peer.node, &["AgentRequest"]).await;
+
+    for index in 0..REQUESTS {
+        let request_id = format!("convergence-p2p-wave-{index:02}");
+        let session_id = format!("convergence-p2p-wave-session-{index:02}");
+        create_request(
+            owner.node.as_ref(),
+            &request_id,
+            &session_id,
+            OWNER_DID,
+            "completed",
+            "completed",
+        )
+        .await;
+        wait_for_request_lifecycle(
+            peer.node.as_ref(),
+            &request_id,
+            "completed",
+            Duration::from_secs(30),
+            "peer (wave seed)",
+        )
+        .await;
+    }
+
+    let baseline = wait_for_push_backlog_idle(owner.node.as_ref()).await;
+    let enqueued_before = baseline["push_backlog"]["enqueued_total"]
+        .as_u64()
+        .expect("enqueued_total counter");
+    let failed_before = baseline["push_backlog"]["failed_total"]
+        .as_u64()
+        .expect("failed_total counter");
+
+    let report = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
+        .await
+        .expect("terminal redrive wave");
+    assert_eq!(report.reasserted, REQUESTS);
+
+    let after =
+        wait_for_push_enqueues_and_idle(owner.node.as_ref(), enqueued_before + REQUESTS as u64)
+            .await;
+    let enqueued_after = after["push_backlog"]["enqueued_total"]
+        .as_u64()
+        .expect("enqueued_total counter");
+    let failed_after = after["push_backlog"]["failed_total"]
+        .as_u64()
+        .expect("failed_total counter");
+    assert_eq!(
+        failed_after, failed_before,
+        "wave measurement requires a retry-free transport window; failed pushes would be re-admitted and inflate enqueued_total"
+    );
+    let measured_pushes = enqueued_after - enqueued_before;
+    assert_eq!(
+        measured_pushes, REQUESTS as u64,
+        "one request-party route must enqueue one outbound push per re-driven document"
+    );
+
+    let former_pushes = REQUESTS as u64 * FORMER_PAIRINGS;
+    assert!(
+        former_pushes / measured_pushes >= 5,
+        "request wave-volume reduction must be at least 5x; former={former_pushes}, current={measured_pushes}"
+    );
 
     owner.node.shutdown().await;
     peer.node.shutdown().await;

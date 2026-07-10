@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use defra_agent::agent::p2p_reconcile::resolve_template;
+use defra_agent::agent::p2p_reconcile::{
+    resolve_template, EmbeddedRemoteP2pAdmin, FilterPredicate, PairingFilters, RemoteP2pAdmin,
+};
 use defra_agent::background_completion::{observe_cancel_cascade_ack, CancelAckOutcome};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
@@ -145,15 +147,9 @@ async fn drive_declarative_cancel_propagation() {
         0,
         None,
         None,
+        None,
     )
     .await;
-    let parent_on_host = wait_for_request(
-        host.db.node.as_ref(),
-        parent_request_id,
-        Duration::from_secs(60),
-    )
-    .await;
-    assert_eq!(parent_on_host.agent_did, coord_did);
 
     create_processing_request(
         host.db.node.as_ref(),
@@ -165,6 +161,7 @@ async fn drive_declarative_cancel_propagation() {
         1,
         Some(parent_request_id),
         Some(parent_tool_call_id),
+        Some(&coord_did),
     )
     .await;
 
@@ -191,11 +188,13 @@ async fn drive_declarative_cancel_propagation() {
     );
     bridge.start_running().await.expect("persist bridge");
 
-    let replicated_bridge = wait_for_bridge(
+    let replicated_bridge = replay_and_wait_for_bridge(
         host.db.node.as_ref(),
+        coord_node.clone(),
+        &host_addr,
+        &host_did,
         parent_session_id,
         parent_tool_call_id,
-        Duration::from_secs(30),
     )
     .await;
     assert_eq!(
@@ -205,6 +204,12 @@ async fn drive_declarative_cancel_propagation() {
     assert_eq!(
         replicated_bridge.child_request_id.as_deref(),
         Some(child_request_id)
+    );
+    assert!(
+        fetch_request(host.db.node.as_ref(), parent_request_id)
+            .await
+            .is_none(),
+        "coordinator parent request must not replicate to the host"
     );
     let coord_bridge_before_cancel = wait_for_bridge(
         coord_node.as_ref(),
@@ -233,7 +238,7 @@ async fn drive_declarative_cancel_propagation() {
         host.db.node.as_ref(),
         parent_session_id,
         parent_tool_call_id,
-        Duration::from_secs(30),
+        Duration::from_secs(120),
     )
     .await;
     assert_eq!(host_bridge.lifecycle_state.as_deref(), Some("cancelled"));
@@ -381,6 +386,7 @@ async fn create_processing_request(
     subagent_depth: u32,
     parent_request_id: Option<&str>,
     parent_tool_call_id: Option<&str>,
+    requester_did: Option<&str>,
 ) {
     let request_id = escape_graphql_string(request_id);
     let session_id = escape_graphql_string(session_id);
@@ -393,6 +399,7 @@ async fn create_processing_request(
     let parent_request = graphql_nullable_string(parent_request_id);
     let parent_tool = graphql_nullable_string(parent_tool_call_id);
     let trigger_id = graphql_nullable_string(parent_tool_call_id);
+    let requester_did = graphql_nullable_string(requester_did);
     let trigger_kind = if parent_tool_call_id.is_some() {
         "\"subagent\"".to_string()
     } else {
@@ -403,6 +410,7 @@ async fn create_processing_request(
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
                 agent_did: "{agent_did}",
+                requester_did: {requester_did},
                 behavior_id: "{behavior_id}",
                 session_id: "{session_id}",
                 retry_parent_request: "",
@@ -514,19 +522,6 @@ async fn wait_for_replicator_installed(node: &EmbeddedNode, peer_id: &str, timeo
     }
 }
 
-async fn wait_for_request(node: &EmbeddedNode, request_id: &str, timeout: Duration) -> RequestRow {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(row) = fetch_request(node, request_id).await {
-            return row;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out waiting for AgentRequest({request_id})");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
 async fn wait_for_interrupt_requested_at(
     node: &EmbeddedNode,
     request_id: &str,
@@ -582,6 +577,60 @@ async fn wait_for_bridge(
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+async fn replay_and_wait_for_bridge(
+    receiver: &EmbeddedNode,
+    sender: Arc<EmbeddedNode>,
+    receiver_addr: &str,
+    receiver_did: &str,
+    session_id: &str,
+    tool_call_id: &str,
+) -> BridgeRow {
+    // The pinned DefraDB selective-CAR path can strand the initial targeted
+    // push (#1101). Production pairing recovery repairs that state by
+    // reinstalling the replicator, which triggers a bounded full replay. Make
+    // that recovery deterministic here: ordinary initial delivery is covered
+    // by the R5 and filtered-replay suites, while this fixture must isolate
+    // application-level cancellation from #1101. The coordinator daemon is
+    // deliberately stopped so its background-completion loop cannot consume
+    // the synthetic remote child.
+    let admin = EmbeddedRemoteP2pAdmin::new(sender);
+    let collections = vec!["AgentToolCall".to_string()];
+    let replicators = admin
+        .list_replicators()
+        .await
+        .expect("list coordinator replicators for bridge replay");
+    if let Some(existing) = replicators
+        .into_iter()
+        .find(|replicator| replicator.address.as_deref() == Some(receiver_addr))
+    {
+        let id = existing.id.unwrap_or_else(|| receiver_addr.to_string());
+        let old_collections = if existing.collections.is_empty() {
+            collections.clone()
+        } else {
+            existing.collections
+        };
+        admin
+            .delete_replicator(&id, &old_collections)
+            .await
+            .expect("remove coordinator replicator for bridge replay");
+    }
+
+    let mut filters = PairingFilters::new();
+    filters.insert(
+        "AgentToolCall".to_string(),
+        FilterPredicate {
+            field: "spawn_target_did".to_string(),
+            value: receiver_did.to_string(),
+        },
+    );
+    admin
+        .add_replicator(&[receiver_addr.to_string()], &collections, &filters)
+        .await
+        .expect("reinstall coordinator replicator for bridge replay");
+
+    wait_for_bridge(receiver, session_id, tool_call_id, Duration::from_secs(60)).await
 }
 
 async fn wait_for_bridge_cancel_intent(

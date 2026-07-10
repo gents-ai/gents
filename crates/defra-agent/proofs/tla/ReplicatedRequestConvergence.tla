@@ -8,8 +8,9 @@ EXTENDS Naturals, FiniteSets, TLC
 (*   docs/superpowers/specs/2026-07-08-replicated-request-convergence-     *)
 (*   664-design.md                                                         *)
 (*                                                                         *)
-(* Under subagent-host replication one AgentRequest document is replicated *)
-(* onto non-owning peer nodes. SAFETY already holds: the watcher filters   *)
+(* Under party-scoped subagent-host replication one AgentRequest document  *)
+(* is replicated only to its requesting peer. SAFETY already holds: the    *)
+(* watcher filters                                                         *)
 (* agent_did == self on both claim seams (watcher/query.rs), so a peer     *)
 (* never claims or processes a foreign replica. LIVENESS did not: the      *)
 (* owner's terminal delta could drop and never converge to the peers,      *)
@@ -40,13 +41,13 @@ EXTENDS Naturals, FiniteSets, TLC
 
 CONSTANTS
   Owner,          \* the owning node (the request's agent_did holder)
-  ReplicaHolder,  \* the set of non-owning peer replicas (|ReplicaHolder| >= 2)
+  ReplicaHolder,  \* non-owning request-party replicas (never unrelated fleet peers)
   DeltaId,        \* bounded pool of terminal-delta ids (PushLog re-emissions)
   MaxDrops,       \* how many terminal deltas the gossip channel may drop
   MaxCrashes,     \* total node crashes across owner + peers
   TerminalKind,   \* the terminal lifecycle states (e.g. Completed, Failed)
   Cap,            \* per-request re-emit budget (shipping TERMINAL_REDRIVE_CAP):
-                  \* one owner write fans out to every online replicator;
+                  \* one owner write fans out to every online authorized party;
                   \* it occurs AT MOST Cap times without a convergence back-channel
   ReplayOnRecovery, \* TRUE in production: reconnect forces one full replay
   AllowPeerClaim  \* FALSE normally; TRUE arms the adversarial peer-claim action
@@ -59,7 +60,7 @@ LifecycleState == NonTerminal \cup TerminalKind
 
 ASSUME OwnerNotAReplica == Owner \notin ReplicaHolder
 ASSUME ReplicaHolderIsFiniteSet == IsFiniteSet(ReplicaHolder)
-ASSUME AtLeastTwoReplicas == Cardinality(ReplicaHolder) >= 2
+ASSUME ReplicaHolderNonEmpty == ReplicaHolder # {}
 ASSUME DeltaIdIsFiniteSet == IsFiniteSet(DeltaId)
 ASSUME MaxDropsIsNat == MaxDrops \in Nat
 ASSUME MaxCrashesIsNat == MaxCrashes \in Nat
@@ -158,7 +159,7 @@ Terminalize(k) ==
 (***************************************************************************)
 (* Owner terminal re-drive. Abstracts the Rust binding (idempotent         *)
 (* same-value terminal re-assert) as a delta onto the gossip channel,      *)
-(* fanned out to every currently online configured peer.                    *)
+(* fanned out to every currently online authorized request-party peer.      *)
 (*                                                                         *)
 (* Gated by the per-request budget emitCount < Cap — NOT by whether peers   *)
 (* peer has converged. This is the crux of fidelity to the shipping code:   *)
@@ -338,7 +339,8 @@ DeltaIdsTracked ==
   \A d \in AllDeltas : d.id \in deltaIdsUsed
 
 \* The total same-value request writes are bounded by the persisted request
-\* budget. One write may fan out a delivery delta to every online peer.
+\* budget. One write may fan out to every online request-party peer, never
+\* to unrelated fleet pairings.
 StateBound ==
   Cardinality(deltaIdsUsed) <= Cap
 
@@ -380,7 +382,7 @@ Fairness ==
 Spec == Init /\ [][Next]_vars /\ Fairness
 
 (***************************************************************************)
-(* Liveness: owner-terminal converges to every replica holder. Online peers *)
+(* Liveness: owner-terminal converges to every authorized replica holder.   *)
 (* converge through the bounded re-drive when its budget outlasts bounded   *)
 (* delivery loss. A peer partitioned beyond the entire cap converges after  *)
 (* fair recovery through one bounded full replay. The Stuck diagnostic      *)

@@ -152,7 +152,27 @@ impl CrossDeploymentCancelMirror {
             return Ok(());
         }
 
-        let Some(parent_did) = self.load_parent_authoring_did(&row.request_id).await? else {
+        let bridge_authoring_did = non_empty(row.agent_did.as_deref()).map(ToOwned::to_owned);
+        let parent_authoring_did = self.load_parent_authoring_did(&row.request_id).await?;
+        if let (Some(bridge_did), Some(parent_did)) = (
+            bridge_authoring_did.as_deref(),
+            parent_authoring_did.as_deref(),
+        ) {
+            if bridge_did != parent_did {
+                tracing::warn!(
+                    bridge_agent_did = %bridge_did,
+                    parent_agent_did = %parent_did,
+                    parent_request_id = %row.request_id,
+                    "cancel mirror rejected incoherent bridge author"
+                );
+                return Ok(());
+            }
+        }
+        // This seam handles only cross-deployment cancellation, so the
+        // targeted bridge is authoritative. The parent row is a legacy
+        // coherence check/fallback; SubagentSource intentionally remains
+        // parent-first only for its same-node legacy materialization path.
+        let Some(parent_did) = bridge_authoring_did.or(parent_authoring_did) else {
             return Ok(());
         };
         let snapshot = self.snapshot_rx.borrow().clone();
@@ -210,6 +230,7 @@ impl CrossDeploymentCancelMirror {
                     limit: 1
                 ) {{
                     request_id
+                    agent_did
                     tool_call_id
                     child_request_id
                     cancel_cascade_intent_at
@@ -330,9 +351,18 @@ struct DocIdRow {
 #[derive(Debug, Deserialize)]
 struct BridgeCancelRow {
     request_id: String,
+    #[serde(default)]
+    agent_did: Option<String>,
     tool_call_id: String,
     child_request_id: Option<String>,
     cancel_cascade_intent_at: Option<String>,
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -425,23 +455,7 @@ mod tests {
         })
     }
 
-    async fn write_parent_and_bridge(node: &EmbeddedNode) {
-        exec(
-            node,
-            r#"mutation {
-                create_AgentRequest(input: {
-                    request_id: "parent-request",
-                    agent_did: "did:defra-agent:parent",
-                    behavior_id: "parent-behavior",
-                    session_id: "parent-session",
-                    content: "parent",
-                    status: "interrupted",
-                    lifecycle_state: "interrupted",
-                    created_at: "2026-05-15T00:00:00Z"
-                }) { _docID }
-            }"#,
-        )
-        .await;
+    async fn write_targeted_bridge_without_parent(node: &EmbeddedNode) {
         exec(
             node,
             r#"mutation {
@@ -449,6 +463,7 @@ mod tests {
                     tool_call_key: "parent-request:spawn",
                     request_id: "parent-request",
                     session_id: "parent-session",
+                    agent_did: "did:defra-agent:parent",
                     message_sequence: 1,
                     tool_name: "spawn_subagent",
                     tool_call_id: "spawn",
@@ -477,6 +492,7 @@ mod tests {
                 create_AgentRequest(input: {
                     request_id: "child-request",
                     agent_did: "did:defra-agent:child",
+                    requester_did: "did:defra-agent:parent",
                     behavior_id: "child-behavior",
                     session_id: "child-session",
                     content: "child",
@@ -520,7 +536,7 @@ mod tests {
     #[tokio::test]
     async fn pending_intent_is_retried_after_child_request_arrives() {
         let node = test_node().await;
-        write_parent_and_bridge(node.as_ref()).await;
+        write_targeted_bridge_without_parent(node.as_ref()).await;
         let (_tx, rx) = watch::channel(snapshot());
         let cancel = CancellationToken::new();
         let mut mirror = CrossDeploymentCancelMirror::new(node.clone(), rx, cancel);

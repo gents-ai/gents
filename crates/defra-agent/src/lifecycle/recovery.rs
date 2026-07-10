@@ -27,17 +27,19 @@ impl RequestLifecycle {
 
     /// Owner-scoped terminal-convergence re-drive (#664).
     ///
-    /// Under `subagent-host` replication an `AgentRequest` is replicated onto
-    /// non-owning peers. Safety already holds (the watcher `agent_did` filter
-    /// never lets a peer claim a foreign replica), but liveness does not: when
-    /// the owner terminalizes, the terminal delta reaches replicas via a single
-    /// one-shot PushLog that can drop, and there is no per-doc anti-entropy on a
-    /// running peer (defradb.rs#1074) to re-request it. This re-drive is the
-    /// owner side of the fix — periodically re-asserting the current terminal
-    /// value of recently-terminalized own-requests. A same-value re-write is a
-    /// genuine higher-priority CRDT delta (it does not no-op), so it flows
-    /// through the normal PushLog path and a lagging replica accepts it (LWW,
-    /// higher priority ⇒ applied).
+    /// Under `subagent-host` replication a routed `AgentRequest` is replicated
+    /// to its `requester_did` peer. Safety already holds (the watcher
+    /// `agent_did` filter never lets that peer claim a foreign replica), but
+    /// liveness does not: when the owner terminalizes, the terminal delta
+    /// reaches the requester via a single one-shot PushLog that can drop, and
+    /// there is no per-doc anti-entropy on a running peer (defradb.rs#1074) to
+    /// re-request it. This re-drive is the owner side of the fix — periodically
+    /// re-asserting the current terminal value of recently-terminalized routed
+    /// requests. Local-only requests are excluded because no peer consumes
+    /// their request state (#683). A same-value re-write is a genuine
+    /// higher-priority CRDT delta (it does not no-op), so it flows through the
+    /// normal PushLog path and a lagging requester accepts it (LWW, higher
+    /// priority ⇒ applied).
     ///
     /// BOUNDED, NOT CONVERGENCE-OBSERVING. The owner has no back-channel telling
     /// it whether a peer caught up. Each successful re-assert atomically advances
@@ -52,8 +54,9 @@ impl RequestLifecycle {
     /// `agent_did` MUST be the runtime's own DID: only the owner re-asserts its
     /// own documents; peers stay passive (a peer-authored delta to a foreign doc
     /// would fork the CRDT, not converge it). `agent_did` itself is never
-    /// written (it is `@immutable`); only the mutable terminal `status` and
-    /// `lifecycle_state` columns are re-asserted, to their current values.
+    /// written (it is `@immutable`); only the mutable terminal `status`,
+    /// `lifecycle_state`, and bounded attempt counter are written together in
+    /// one document update.
     ///
     pub async fn redrive_terminal_convergence(
         node: &EmbeddedNode,
@@ -66,6 +69,7 @@ impl RequestLifecycle {
                 AgentRequest(
                     filter: {{
                         agent_did: {{ _eq: "{escaped_agent_did}" }},
+                        requester_did: {{ _neq: null }},
                         lifecycle_state: {{ _in: {terminal_states} }},
                         terminal_redrive_attempts: {{ _lt: {cap} }}
                     }},
@@ -138,6 +142,7 @@ impl RequestLifecycle {
                         filter: {{
                             _docID: {{ _eq: "{escaped_doc_id}" }},
                             agent_did: {{ _eq: "{escaped_agent_did}" }},
+                            requester_did: {{ _neq: null }},
                             lifecycle_state: {{ _eq: "{escaped_lifecycle_state}" }},
                             terminal_redrive_attempts: {{ _eq: {attempts} }}
                         }},

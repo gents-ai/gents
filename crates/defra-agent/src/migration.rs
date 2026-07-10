@@ -46,6 +46,11 @@ const ADD_AGENT_REQUEST_TERMINALIZED_AT_FIELD: &str =
     r#"{"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"terminalized_at","Kind":11}}"#;
 const ADD_AGENT_REQUEST_TERMINAL_REDRIVE_ATTEMPTS_FIELD: &str = r#"{"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"terminal_redrive_attempts","Kind":4}}"#;
 
+// #683 request-party routing. `requester_did` is written only when a remote
+// paired coordinator causes a host-owned child request. It is an immutable
+// filter key so a request cannot drift between peer scopes after creation.
+const ADD_AGENT_REQUEST_REQUESTER_DID_FIELD: &str = r#"{"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"requester_did","Kind":11,"Immutable":true}}"#;
+
 // Kind 21 == ScalarArrayKind::NillableStringArray in defradb.rs. The SDL
 // `[String]` (nullable elements) for these fields compiles to that kind, so the
 // migration patch must use it. The previous value of 17 was a stale Go-DefraDB
@@ -1641,6 +1646,53 @@ pub async fn ensure_agent_request_terminal_durability_migrations(
     Ok(())
 }
 
+/// Add and validate the immutable request-party routing key (#683).
+///
+/// Existing rows remain null: the pinned DefraDB correctly rejects null-to-
+/// value writes on a patch-added immutable field, so legacy documents cannot
+/// be reclassified into a peer scope. New cross-deployment children stamp the
+/// key at create time.
+pub async fn ensure_agent_request_requester_did_migration(node: Arc<EmbeddedNode>) -> Result<()> {
+    let Some(collection) = node
+        .get_collection("AgentRequest")
+        .context("get AgentRequest collection")?
+    else {
+        return Ok(());
+    };
+
+    ensure_field_kind_matches_reference(
+        &collection,
+        "AgentRequest",
+        "requester_did",
+        &["agent_did"],
+        "String",
+    )?;
+
+    if collection_has_field(&collection, "requester_did") {
+        anyhow::ensure!(
+            field_is_immutable(&collection, "requester_did"),
+            "AgentRequest.requester_did exists but is not immutable; filtered request-party replication cannot be installed safely"
+        );
+        return Ok(());
+    }
+
+    let next = node
+        .patch_collection(
+            "AgentRequest",
+            &format!("[{ADD_AGENT_REQUEST_REQUESTER_DID_FIELD}]"),
+        )
+        .await
+        .context("patch_collection AgentRequest requester_did")?;
+    node.set_active_collection_version(&next.version_id)
+        .await
+        .context("set_active_collection_version AgentRequest requester_did")?;
+    tracing::info!(
+        version = %next.version_id,
+        "AgentRequest patched with immutable requester_did route key"
+    );
+    Ok(())
+}
+
 /// Backfill terminal scheduling metadata for requests owned by `agent_did`.
 ///
 /// The owner filter is present on both the page query and each guarded update:
@@ -2558,6 +2610,9 @@ pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()
     ensure_agent_response_reasoning_progress_migration(node.clone())
         .await
         .context("ensure AgentResponse reasoning progress migration")?;
+    ensure_agent_request_requester_did_migration(node.clone())
+        .await
+        .context("ensure AgentRequest requester_did migration")?;
     ensure_agent_request_terminal_durability_migrations(node.clone())
         .await
         .context("ensure AgentRequest terminal durability migrations")?;
@@ -3016,6 +3071,18 @@ mod patch_kind_tests {
             terminalized_at: String
         }
     "#;
+    const MUTABLE_REQUESTER_DID_AGENT_REQUEST_SCHEMA: &str = r#"
+        type AgentRequest @branchable {
+            request_id: String @index
+            agent_did: String @index
+            requester_did: String @index
+            session_id: String @index
+            content: String
+            status: String @index
+            lifecycle_state: String @index
+            created_at: String @index
+        }
+    "#;
     const CORRUPTED_TERMINALIZED_AT_AGENT_REQUEST_SCHEMA: &str = r#"
         type AgentRequest @branchable {
             request_id: String @index
@@ -3092,6 +3159,83 @@ mod patch_kind_tests {
             created_at: DateTime @index(direction: DESC)
         }
     "#;
+
+    #[tokio::test]
+    async fn requester_did_migration_adds_an_immutable_route_key() {
+        let node = test_node().await;
+        node.add_schema(OLD_AGENT_REQUEST_SCHEMA).await.unwrap();
+
+        ensure_agent_request_requester_did_migration(node.clone())
+            .await
+            .unwrap();
+        ensure_agent_request_requester_did_migration(node.clone())
+            .await
+            .unwrap();
+
+        let collection = node
+            .get_collection("AgentRequest")
+            .unwrap()
+            .expect("AgentRequest collection");
+        assert!(collection_has_field(&collection, "requester_did"));
+        assert!(field_is_immutable(&collection, "requester_did"));
+        assert_eq!(
+            field_kind_value(&collection, "requester_did"),
+            field_kind_value(&collection, "agent_did")
+        );
+
+        let create = node
+            .execute(
+                r#"mutation {
+                    create_AgentRequest(input: {
+                        request_id: "requester-route-key",
+                        agent_did: "did:defra-agent:host",
+                        requester_did: "did:defra-agent:coordinator",
+                        session_id: "requester-route-session",
+                        content: "hello",
+                        status: "pending",
+                        lifecycle_state: "pending",
+                        created_at: "2026-07-10T00:00:00Z"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !create.has_errors(),
+            "create routed request: {:?}",
+            create.errors
+        );
+
+        let rewrite = node
+            .execute(
+                r#"mutation {
+                    update_AgentRequest(
+                        filter: { request_id: { _eq: "requester-route-key" } },
+                        input: { requester_did: "did:defra-agent:other" }
+                    ) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            rewrite.has_errors(),
+            "requester_did must remain immutable after creation"
+        );
+    }
+
+    #[tokio::test]
+    async fn requester_did_migration_rejects_a_mutable_existing_field() {
+        let node = test_node().await;
+        node.add_schema(MUTABLE_REQUESTER_DID_AGENT_REQUEST_SCHEMA)
+            .await
+            .unwrap();
+
+        let error = ensure_agent_request_requester_did_migration(node)
+            .await
+            .expect_err("mutable route key must fail closed");
+        assert!(
+            format!("{error:#}").contains("not immutable"),
+            "migration must explain unsafe route-key mutability: {error:#}"
+        );
+    }
 
     #[tokio::test]
     async fn terminal_durability_backfill_is_owner_scoped_and_resumable() {

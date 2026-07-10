@@ -151,20 +151,41 @@ theorem scopeFilter_peerDid (f : String) (collections : List String)
 theorem scopeFilter_unscoped (collections : List String) (peerDid localDid : Did) :
     scopeFilter .unscoped collections peerDid localDid = [] := rfl
 
-/-- The coordinator subagent leg is exactly parent requests by local owner plus
-bridges addressed to the peer host. -/
+/-- The coordinator subagent leg carries only bridges addressed to the peer
+host. Coordinator-owned parent requests are not pair-specific and therefore
+must not cross every host pairing. -/
 theorem subagentCoordinator_filter_eq (peerDid localDid : Did) :
     scopeFilter (.perCollection subagentCoordinatorRules) [] peerDid localDid
-      = [ { collection := "AgentRequest",  field := "agent_did",        value := localDid }
-        , { collection := "AgentToolCall", field := "spawn_target_did", value := peerDid } ] := by
+      = [ { collection := "AgentToolCall", field := "spawn_target_did", value := peerDid } ] := by
   simp [scopeFilter, subagentCoordinatorRules]
 
-/-- The host subagent leg is exactly the conversation set owned by the local host. -/
+/-- The host subagent leg returns each child request only to the peer that
+requested it. The other conversation collections retain their existing
+host-owner scope; narrowing those collections is outside this request-state
+model. -/
 theorem subagentHost_filter_eq (peerDid localDid : Did) :
     scopeFilter (.perCollection subagentHostRules) [] peerDid localDid
-      = subagentHostCollections.map
-          (fun c => { collection := c, field := "agent_did", value := localDid }) := by
+      = [ { collection := "AgentRequest",      field := "requester_did", value := peerDid }
+        , { collection := "AgentResponse",     field := "agent_did",     value := localDid }
+        , { collection := "AgentMessage",      field := "agent_did",     value := localDid }
+        , { collection := "AgentToolCall",     field := "agent_did",     value := localDid }
+        , { collection := "AgentToolResult",   field := "agent_did",     value := localDid }
+        , { collection := "AgentSession",      field := "agent_did",     value := localDid }
+        , { collection := "AgentConversation", field := "agent_did",     value := localDid }
+        , { collection := "CompactionEntry",   field := "agent_did",     value := localDid } ] := by
   simp [scopeFilter, subagentHostRules, subagentHostCollections, conversationCollections]
+
+/-- Request-state crossing is party-scoped: coordinator-owned parent requests
+do not appear on the forward leg, while a host-owned child request is filtered
+on the paired requester's DID. -/
+theorem subagentRequest_crossing_is_peer_scoped (peerDid localDid : Did) :
+    (scopeFilter subagentCoordinatorTemplate.scope [] peerDid localDid).all
+        (fun k => k.collection ≠ "AgentRequest") = true ∧
+    (scopeFilter subagentHostTemplate.scope [] peerDid localDid).find?
+        (fun k => k.collection = "AgentRequest") =
+          some { collection := "AgentRequest", field := "requester_did", value := peerDid } := by
+  simp [scopeFilter, subagentCoordinatorTemplate, subagentCoordinatorRules,
+    subagentHostTemplate, subagentHostRules]
 
 /-- The coordinator per-collection rules cover exactly the template's declared
 collections. This is the non-vacuous collection-coverage fence for the

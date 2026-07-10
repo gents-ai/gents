@@ -58,6 +58,8 @@ struct ToolCallRow {
     tool_call_key: Option<String>,
     #[serde(default)]
     request_id: Option<String>,
+    #[serde(default)]
+    agent_did: Option<String>,
     tool_call_id: String,
     #[serde(default)]
     tool_name: String,
@@ -149,6 +151,10 @@ struct SpawnArgs {
     prompt: String,
     #[serde(default)]
     deadline: Option<String>,
+    /// Parent depth copied into the targeted bridge so a remote host can
+    /// enforce the recursion bound without receiving the parent request.
+    #[serde(default)]
+    parent_subagent_depth: Option<u32>,
 }
 
 impl SpawnArgs {
@@ -264,6 +270,7 @@ impl SubagentSource {
                     _docID
                     tool_call_key
                     request_id
+                    agent_did
                     tool_call_id
                     tool_name
                     args
@@ -529,13 +536,36 @@ impl SubagentSource {
             .and_then(AwaitMode::from_persisted)
             .unwrap_or(AwaitMode::Foreground);
 
-        let Some(parent) = self.load_parent_request(&parent_request_id).await? else {
-            anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
-        };
-
+        let parent = self.load_parent_request(&parent_request_id).await?;
         let snapshot = self.snapshot_rx.borrow().clone();
-        let parent_authoring_did = parent.agent_did.clone();
+        // SECURITY (#377): under the current replication-trust posture this
+        // self-declared bridge DID is trusted once it names a configured paired
+        // peer; ACP signing must eventually bind it to the actual remote author.
+        let bridge_authoring_did = non_empty(row.agent_did.as_deref()).map(ToOwned::to_owned);
+        if let (Some(bridge_did), Some(parent_did)) = (
+            bridge_authoring_did.as_deref(),
+            parent.as_ref().map(|parent| parent.agent_did.as_str()),
+        ) {
+            // A paired-peer bridge is a remote authority boundary, so its DID
+            // must agree with any legacy parent replica still present. Local
+            // legacy rows predate that invariant and keep using the parent row
+            // as their authority.
+            if bridge_did != parent_did
+                && (snapshot.paired_peer_dids.contains(bridge_did)
+                    || snapshot.paired_peer_dids.contains(parent_did))
+            {
+                anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
+            }
+        }
+        let parent_authoring_did = parent
+            .as_ref()
+            .map(|parent| parent.agent_did.clone())
+            .or(bridge_authoring_did)
+            .ok_or(IllegalToolCallTransition::ParentLinkageIncoherent)?;
         let trusted_paired_peer = snapshot.paired_peer_dids.contains(&parent_authoring_did);
+        if parent.is_none() && !trusted_paired_peer {
+            anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
+        }
         let tool_name = non_empty(Some(&row.tool_name)).unwrap_or("spawn_subagent");
         if trusted_paired_peer {
             let local_did = snapshot.local_did.trim();
@@ -682,7 +712,7 @@ impl SubagentSource {
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| parent.agent_did.trim());
+                .unwrap_or_else(|| parent_authoring_did.trim());
             if local_did.is_empty() || target_owner_did != local_did {
                 tracing::debug!(
                     parent_request_id = %parent_request_id,
@@ -701,10 +731,25 @@ impl SubagentSource {
             return Ok(None);
         }
 
-        let parent_depth = parent
-            .subagent_depth
-            .and_then(|depth| u32::try_from(depth).ok())
-            .unwrap_or(0);
+        let row_parent_depth = parent
+            .as_ref()
+            .and_then(|parent| parent.subagent_depth)
+            .and_then(|depth| u32::try_from(depth).ok());
+        if let (Some(bridge_depth), Some(row_depth)) =
+            (spawn_args.parent_subagent_depth, row_parent_depth)
+        {
+            if bridge_depth != row_depth {
+                anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
+            }
+        }
+        let parent_depth = spawn_args
+            .parent_subagent_depth
+            .or(row_parent_depth)
+            // Legacy same-node parent rows may omit the root depth; preserve
+            // the former `unwrap_or(0)` interpretation. A remote bridge with
+            // no parent row must carry the depth explicitly.
+            .or_else(|| parent.as_ref().map(|_| 0))
+            .ok_or(IllegalToolCallTransition::ParentLinkageIncoherent)?;
         let deadline =
             effective_deadline(row.deadline_at.as_deref(), spawn_args.deadline.as_deref());
         // The trusted-paired-peer claiming path takes local ownership; otherwise
@@ -713,7 +758,7 @@ impl SubagentSource {
         let child_agent_did = if trusted_paired_peer && !snapshot.local_did.trim().is_empty() {
             snapshot.local_did.clone()
         } else {
-            resolved_target_did.unwrap_or_else(|| parent.agent_did.clone())
+            resolved_target_did.unwrap_or_else(|| parent_authoring_did.clone())
         };
         let request_id = if trusted_paired_peer {
             create_subagent_request_with_trusted_parent_request_id(
@@ -726,6 +771,7 @@ impl SubagentSource {
                 spawn_args.behavior_id.clone(),
                 spawn_args.prompt.clone(),
                 deadline,
+                parent_authoring_did.clone(),
             )
             .await?
         } else {
@@ -792,21 +838,25 @@ impl SubagentSource {
                 }
             };
             // Parent interrupt latch — the exact signal the live cascade fires on.
-            let parent_interrupted = match crate::interrupt::fetch_interrupt_requested_at(
-                &self.node,
-                &parent_request_id,
-            )
-            .await
-            {
-                Ok(value) => value.is_some(),
-                Err(error) => {
-                    tracing::warn!(
-                        parent_request_id = %parent_request_id,
-                        %error,
-                        "subagent source failed to re-read parent interrupt latch after child create; assuming not interrupted",
-                    );
-                    false
+            let parent_interrupted = if parent.is_some() {
+                match crate::interrupt::fetch_interrupt_requested_at(&self.node, &parent_request_id)
+                    .await
+                {
+                    Ok(value) => value.is_some(),
+                    Err(error) => {
+                        tracing::warn!(
+                            parent_request_id = %parent_request_id,
+                            %error,
+                            "subagent source failed to re-read parent interrupt latch after child create; assuming not interrupted",
+                        );
+                        false
+                    }
                 }
+            } else {
+                // #683: the remote parent request is intentionally absent. Its
+                // targeted bridge is the cancellation channel and was re-read
+                // immediately above.
+                false
             };
             // The parent may have reached a CANCEL-WORTHY terminal state
             // (error/superseded/dead/interrupted — NOT clean `completed`) in the
@@ -814,20 +864,21 @@ impl SubagentSource {
             // cascade treats these as Failed/Cancelled and interrupts the Cascade
             // child; mirror that here. A vanished parent row is treated as
             // cancel-worthy so the orphan is reclaimed.
-            let parent_cancel_worthy_terminal = match self
-                .load_parent_terminal(&parent_request_id)
-                .await
-            {
-                Ok(Some(row)) => parent_reached_cancel_worthy_terminal(&row),
-                Ok(None) => true,
-                Err(error) => {
-                    tracing::warn!(
-                        parent_request_id = %parent_request_id,
-                        %error,
-                        "subagent source failed to re-read parent terminal state after child create; assuming not terminal",
-                    );
-                    false
+            let parent_cancel_worthy_terminal = if parent.is_some() {
+                match self.load_parent_terminal(&parent_request_id).await {
+                    Ok(Some(row)) => parent_reached_cancel_worthy_terminal(&row),
+                    Ok(None) => true,
+                    Err(error) => {
+                        tracing::warn!(
+                            parent_request_id = %parent_request_id,
+                            %error,
+                            "subagent source failed to re-read parent terminal state after child create; assuming not terminal",
+                        );
+                        false
+                    }
                 }
+            } else {
+                false
             };
             if bridge_cancelled || parent_interrupted || parent_cancel_worthy_terminal {
                 tracing::info!(

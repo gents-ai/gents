@@ -641,7 +641,7 @@ impl DefraSessionHook {
             }
         }
 
-        if parent_context.subagent_depth + 1 > MAX_SUBAGENT_DEPTH {
+        if parent_context.subagent_depth >= MAX_SUBAGENT_DEPTH {
             return self
                 .fail_spawn_subagent_tool_call(
                     session_id,
@@ -658,10 +658,9 @@ impl DefraSessionHook {
 
         // Persist a normalized bridge args payload that carries the RESOLVED
         // target `(agent_did, behavior_id)` alongside the model-facing `name`.
-        // `SubagentSource` reads these resolved fields directly, so the child
-        // `AgentRequest` is written with the TARGET's agent_did + behavior_id
-        // -- for a remote target this is the remote DID, and out-of-band
-        // replication carries the child to the owning node. The claiming
+        // `SubagentSource` reads these resolved fields directly. For a remote
+        // target, the targeted bridge reaches that host and the host writes the
+        // child `AgentRequest` with its local DID + behavior id. The claiming
         // deployment never needs to re-resolve the friendly name (it has no
         // access to the parent's target table), which is what removes the
         // resolution seam.
@@ -672,6 +671,7 @@ impl DefraSessionHook {
             "behavior_id": target.behavior_id,
             "prompt": parsed.prompt,
             "deadline": parsed.deadline,
+            "parent_subagent_depth": parent_context.subagent_depth,
         })
         .to_string();
 

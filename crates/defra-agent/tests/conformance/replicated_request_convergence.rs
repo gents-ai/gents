@@ -25,6 +25,7 @@ use defra_agent::{DefraWatcher, Watcher, TERMINAL_REDRIVE_CAP};
 const CONVERGENCE_CREATED_AT: &str = "2026-03-23T00:00:00Z";
 const OWNER_DID: &str = AGENT_DID;
 const FOREIGN_DID: &str = "did:defra-agent:foreign-owner";
+const REQUESTER_DID: &str = "did:defra-agent:requester";
 
 #[derive(Debug, Deserialize)]
 struct ConvergenceRow {
@@ -72,6 +73,57 @@ async fn create_owned_request_with_times(
     created_at: &str,
     terminalized_at: &str,
 ) -> String {
+    create_owned_request_with_times_and_requester(
+        node,
+        request_id,
+        session_id,
+        agent_did,
+        status,
+        lifecycle_state,
+        created_at,
+        terminalized_at,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_routed_owned_request_with_times(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    status: &str,
+    lifecycle_state: &str,
+    created_at: &str,
+    terminalized_at: &str,
+) -> String {
+    create_owned_request_with_times_and_requester(
+        node,
+        request_id,
+        session_id,
+        agent_did,
+        status,
+        lifecycle_state,
+        created_at,
+        terminalized_at,
+        Some(REQUESTER_DID),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_owned_request_with_times_and_requester(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    status: &str,
+    lifecycle_state: &str,
+    created_at: &str,
+    terminalized_at: &str,
+    requester_did: Option<&str>,
+) -> String {
     let is_terminal = matches!(
         lifecycle_state,
         "completed" | "failed" | "superseded" | "dead" | "interrupted"
@@ -83,6 +135,9 @@ async fn create_owned_request_with_times(
     let escaped_lifecycle_state = escape_graphql_string(lifecycle_state);
     let escaped_created_at = escape_graphql_string(created_at);
     let escaped_terminalized_at = escape_graphql_string(terminalized_at);
+    let requester_field = requester_did
+        .map(|did| format!("requester_did: \"{}\",", escape_graphql_string(did)))
+        .unwrap_or_default();
     let terminal_fields = if is_terminal {
         format!(", terminalized_at: \"{escaped_terminalized_at}\", terminal_redrive_attempts: 0")
     } else {
@@ -93,6 +148,7 @@ async fn create_owned_request_with_times(
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 agent_did: "{escaped_agent_did}",
+                {requester_field}
                 behavior_id: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
@@ -236,6 +292,33 @@ async fn fetch_convergence_row(node: &EmbeddedNode, request_id: &str) -> Converg
     first_row(&node.execute(&query).await, "AgentRequest")
 }
 
+/// Count composite document commits (`_C`) rather than field-level CRDT blocks.
+/// A multi-field GraphQL update is one logical document commit even though
+/// DefraDB stores linked field blocks underneath it.
+async fn composite_commit_count(node: &EmbeddedNode, doc_id: &str) -> usize {
+    let escaped_doc_id = escape_graphql_string(doc_id);
+    let query = format!(
+        r#"query {{
+            _commits(
+                docID: ["{escaped_doc_id}"],
+                filter: {{ fieldName: {{ _eq: "_C" }} }}
+            ) {{ cid }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "query composite request commits failed: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("_commits"))
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len)
+}
+
 /// SAFETY `SingleClaimer`: the watcher never surfaces a foreign-DID replica as
 /// claimable — not via the doc-targeted `try_fetch_request` seam, nor via the
 /// `pending_requests` scan reached through `next_request`. Non-vacuous: an
@@ -305,23 +388,27 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
     let db = test_db("convergence-terminal-redrive").await;
 
     // The owner reached terminal `failed` on its own request.
-    create_owned_request(
+    create_routed_owned_request_with_times(
         &db.node,
         "convergence-owned-failed",
         "convergence-owned-failed-session",
         OWNER_DID,
         "error",
         "failed",
+        CONVERGENCE_CREATED_AT,
+        CONVERGENCE_CREATED_AT,
     )
     .await;
     // A foreign terminal replica — owner-scope: we must NOT re-drive it.
-    create_owned_request(
+    create_routed_owned_request_with_times(
         &db.node,
         "convergence-foreign-failed",
         "convergence-foreign-failed-session",
         FOREIGN_DID,
         "error",
         "failed",
+        CONVERGENCE_CREATED_AT,
+        CONVERGENCE_CREATED_AT,
     )
     .await;
     // An own NON-terminal (processing) request — must NOT be re-driven.
@@ -332,6 +419,17 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
         OWNER_DID,
         "processing",
         "processing",
+    )
+    .await;
+    // An own terminal request with no remote requester has no replica to heal
+    // and must not consume a re-drive write.
+    create_owned_request(
+        &db.node,
+        "convergence-owned-local-terminal",
+        "convergence-owned-local-terminal-session",
+        OWNER_DID,
+        "completed",
+        "completed",
     )
     .await;
 
@@ -396,7 +494,7 @@ pub(super) async fn terminal_redrive_window_advances_past_sixty_four_rows() {
     let db = test_db("convergence-terminal-window").await;
 
     for index in 0..65 {
-        create_owned_request_with_times(
+        create_routed_owned_request_with_times(
             &db.node,
             &format!("convergence-newer-{index:02}"),
             &format!("convergence-newer-session-{index:02}"),
@@ -408,7 +506,7 @@ pub(super) async fn terminal_redrive_window_advances_past_sixty_four_rows() {
         )
         .await;
     }
-    create_owned_request_with_times(
+    create_routed_owned_request_with_times(
         &db.node,
         "convergence-old-late-terminal",
         "convergence-old-late-terminal-session",
@@ -447,7 +545,7 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
     let db = test_db("convergence-terminal-repair").await;
     let request_id = "convergence-terminal-repair-request";
     let session_id = "convergence-terminal-repair-session";
-    create_owned_request(
+    let request_doc_id = create_owned_request(
         &db.node,
         request_id,
         session_id,
@@ -456,6 +554,7 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
         "processing",
     )
     .await;
+    let request_commits_before_repair = composite_commit_count(&db.node, &request_doc_id).await;
     let response_doc_id =
         create_response_with_status(&db.node, request_id, request_id, session_id, "error").await;
     let escaped_response_doc_id = escape_graphql_string(&response_doc_id);
@@ -479,6 +578,11 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
         .unwrap();
     assert_eq!(repaired.repaired, 1);
     assert_eq!(repaired.failed, 0);
+    assert_eq!(
+        composite_commit_count(&db.node, &request_doc_id).await,
+        request_commits_before_repair + 1,
+        "one logical terminal repair must add one composite request commit"
+    );
     let row = fetch_convergence_row(&db.node, request_id).await;
     assert_eq!(row.status, "error");
     assert_eq!(row.lifecycle_state, "failed");
