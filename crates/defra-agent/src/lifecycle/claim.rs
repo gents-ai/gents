@@ -78,25 +78,33 @@ impl RequestLifecycle {
     }
 
     async fn transition_pending_to_interrupted(&mut self, _interrupt_at: &str) -> Result<()> {
-        let doc_id = &self.request.doc_id;
+        let doc_id = escape_graphql_string(&self.request.doc_id);
+        let agent_did = escape_graphql_string(&self.request.agent_did);
+        let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
+                        agent_did: {{ _eq: "{agent_did}" }},
                         status: {{ _eq: "pending" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
                     input: {{
                         status: "interrupted",
-                        lifecycle_state: "interrupted"
+                        lifecycle_state: "interrupted",
+                        terminalized_at: "{terminalized_at}",
+                        terminal_redrive_attempts: 0
                     }}
                 ) {{ _docID }}
             }}"#
         );
-        let resp =
-            session::execute_mutation_with_retry(&self.node, &mutation, "interrupt_before_claim")
-                .await?;
+        let resp = crate::retry::execute_graphql_with_terminal_persistence_retry(
+            &self.node,
+            &mutation,
+            "interrupt_before_claim",
+        )
+        .await?;
         if !resp
             .data
             .as_ref()
@@ -126,25 +134,34 @@ impl RequestLifecycle {
     }
 
     async fn transition_pending_to_dead_stale(&mut self) -> Result<()> {
-        let doc_id = &self.request.doc_id;
+        let doc_id = escape_graphql_string(&self.request.doc_id);
+        let agent_did = escape_graphql_string(&self.request.agent_did);
+        let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
+                        agent_did: {{ _eq: "{agent_did}" }},
                         status: {{ _eq: "pending" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
                     input: {{
                         status: "dead",
                         lifecycle_state: "dead",
-                        failure_reason: "Stale"
+                        failure_reason: "Stale",
+                        terminalized_at: "{terminalized_at}",
+                        terminal_redrive_attempts: 0
                     }}
                 ) {{ _docID }}
             }}"#
         );
-        let resp =
-            session::execute_mutation_with_retry(&self.node, &mutation, "expire_stale").await?;
+        let resp = crate::retry::execute_graphql_with_terminal_persistence_retry(
+            &self.node,
+            &mutation,
+            "expire_stale",
+        )
+        .await?;
         if !resp
             .data
             .as_ref()

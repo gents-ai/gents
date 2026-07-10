@@ -152,7 +152,8 @@ pub use interrupt::{fetch_interrupt_requested_at, interrupt_request};
 pub use lifecycle::{
     task_run_conversation_title, write_manual_agent_request,
     write_manual_agent_request_with_conversation_title, RecoveryReport, RequestLifecycle,
-    TerminalRedriveReport, TERMINAL_REDRIVE_BATCH_LIMIT, TERMINAL_REDRIVE_CAP,
+    TerminalRedriveReport, TerminalRepairReport, TERMINAL_REDRIVE_BATCH_LIMIT,
+    TERMINAL_REDRIVE_CAP,
 };
 pub use mcp_pool::McpPool;
 pub use meta_tools::build_meta_tools;

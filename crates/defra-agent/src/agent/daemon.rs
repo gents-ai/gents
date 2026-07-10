@@ -23,29 +23,20 @@ use crate::runtime_trace::{
 use crate::streaming::DefraStreamWriter;
 use crate::watcher::AgentRequest;
 
-/// Drive a request to its durable terminal `failed` state, surfacing — not
-/// swallowing — persistence errors. These writes go to the `AgentRequest` doc
-/// (independent of any `AgentResponse` write, which may itself be failing). A
-/// request whose terminal transition can't be persisted stays claimable and
-/// gets re-processed, so a failure here must be loud rather than a silent
-/// `let _ =` (#661).
+/// Drive a request to its durable terminal `failed` state. The reason is part
+/// of the same guarded mutation as the lifecycle edge; bounded immediate retry
+/// handles transient storage failures, and a terminal response remains the
+/// durable live/startup repair intent after exhaustion.
 async fn finalize_request_failure(
     lifecycle: &mut RequestLifecycle,
     reason: &str,
     request_id: &str,
 ) {
-    if let Err(error) = lifecycle.record_failure_reason(reason).await {
+    if let Err(error) = lifecycle.fail_with_reason(reason).await {
         tracing::error!(
             request_id,
             error = %error,
-            "failed to persist request failure_reason; request may remain non-terminal"
-        );
-    }
-    if let Err(error) = lifecycle.fail().await {
-        tracing::error!(
-            request_id,
-            error = %error,
-            "failed to transition request to failed; request may be re-claimed and re-processed"
+            "failed to transition request to failed after bounded retries; durable repair remains pending"
         );
     }
 }
@@ -307,8 +298,6 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     requested_behavior_id = %requested_behavior_id,
                     "rejecting request for unroutable behavior"
                 );
-                finalize_request_failure(&mut lifecycle, &error.to_string(), &request.request_id)
-                    .await;
                 let response_exists = lifecycle.response_exists().await.unwrap_or(false);
                 let response_written = if response_exists {
                     self.stream_writer
@@ -326,6 +315,8 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                         "failed to write behavior-mismatch response"
                     );
                 }
+                finalize_request_failure(&mut lifecycle, &error.to_string(), &request.request_id)
+                    .await;
                 return;
             }
         }
@@ -351,7 +342,6 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 error = %error,
                 "failed to prepare behavior-pinned session"
             );
-            finalize_request_failure(&mut lifecycle, &error.to_string(), &request.request_id).await;
             let response_exists = lifecycle.response_exists().await.unwrap_or(false);
             let response_written = if response_exists {
                 self.stream_writer
@@ -369,6 +359,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     "failed to write session-preparation response"
                 );
             }
+            finalize_request_failure(&mut lifecycle, &error.to_string(), &request.request_id).await;
             return;
         }
 
@@ -389,7 +380,14 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         match result {
             Ok(HandleRequestOutcome::Completed) => {
                 record_current_request_outcome("completed");
-                let _ = lifecycle.complete().await;
+                if let Err(error) = lifecycle.complete().await {
+                    record_current_failure_class(&error);
+                    tracing::error!(
+                        request_id = %request.request_id,
+                        error = %error,
+                        "failed to persist completed request after bounded retries; durable repair remains pending"
+                    );
+                }
             }
             Ok(HandleRequestOutcome::Interrupted) => {
                 record_current_request_outcome("interrupted");
@@ -423,8 +421,6 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     error = %error,
                     "request handling failed"
                 );
-                finalize_request_failure(&mut lifecycle, &error.to_string(), &request.request_id)
-                    .await;
                 let response_exists = lifecycle.response_exists().await.unwrap_or(false);
                 let response_written = if response_exists {
                     self.stream_writer
@@ -442,6 +438,8 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                         "failed to write error response"
                     );
                 }
+                finalize_request_failure(&mut lifecycle, &error.to_string(), &request.request_id)
+                    .await;
             }
         }
     }

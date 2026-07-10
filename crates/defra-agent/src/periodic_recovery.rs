@@ -8,6 +8,7 @@
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 
+use crate::lifecycle::{RequestLifecycle, TerminalRepairReport};
 use crate::llm::tool::BoxFuture;
 use crate::tool_call_lifecycle::{SubagentLivenessReport, ToolCallLifecycle};
 
@@ -15,6 +16,7 @@ const SUBAGENT_LIVENESS_SWEEP_IDS: &[&str] = &[
     "subagent_liveness_terminalize_expired_children",
     "subagent_liveness_interrupt_queued_descendants",
 ];
+const REQUEST_TERMINAL_REPAIR_SWEEP_IDS: &[&str] = &["request_lifecycle_recover_all_requests"];
 
 /// Lean-facing metadata for one Rust periodic recovery executor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,12 +32,14 @@ pub struct PeriodicRecoverySweepMetadata {
 /// Outcome from a periodic recovery executor.
 #[derive(Debug, PartialEq, Eq)]
 pub enum PeriodicRecoverySweepOutcome {
+    RequestTerminalRepair(TerminalRepairReport),
     SubagentLiveness(SubagentLivenessReport),
 }
 
 impl PeriodicRecoverySweepOutcome {
     pub fn is_noop(&self) -> bool {
         match self {
+            Self::RequestTerminalRepair(report) => report.is_noop(),
             Self::SubagentLiveness(report) => report.is_noop(),
         }
     }
@@ -62,17 +66,27 @@ struct PeriodicRecoverySweepExecutor {
     run: PeriodicRecoverySweepFn,
 }
 
-const PERIODIC_RECOVERY_SWEEP_METADATA: &[PeriodicRecoverySweepMetadata] =
-    &[PeriodicRecoverySweepMetadata {
+const PERIODIC_RECOVERY_SWEEP_METADATA: &[PeriodicRecoverySweepMetadata] = &[
+    PeriodicRecoverySweepMetadata {
+        sweep_ids: REQUEST_TERMINAL_REPAIR_SWEEP_IDS,
+        rust_function: "RequestLifecycle::repair_terminal_requests",
+    },
+    PeriodicRecoverySweepMetadata {
         sweep_ids: SUBAGENT_LIVENESS_SWEEP_IDS,
         rust_function: "ToolCallLifecycle::reconcile_subagent_liveness",
-    }];
+    },
+];
 
-const PERIODIC_RECOVERY_SWEEP_EXECUTORS: &[PeriodicRecoverySweepExecutor] =
-    &[PeriodicRecoverySweepExecutor {
+const PERIODIC_RECOVERY_SWEEP_EXECUTORS: &[PeriodicRecoverySweepExecutor] = &[
+    PeriodicRecoverySweepExecutor {
         metadata_index: 0,
+        run: repair_terminal_requests,
+    },
+    PeriodicRecoverySweepExecutor {
+        metadata_index: 1,
         run: reconcile_subagent_liveness,
-    }];
+    },
+];
 
 /// Registry metadata consumed by conformance tests and operator projections.
 pub fn periodic_recovery_sweep_metadata() -> &'static [PeriodicRecoverySweepMetadata] {
@@ -101,5 +115,16 @@ fn reconcile_subagent_liveness<'a>(
         ToolCallLifecycle::reconcile_subagent_liveness(node, agent_did)
             .await
             .map(PeriodicRecoverySweepOutcome::SubagentLiveness)
+    })
+}
+
+fn repair_terminal_requests<'a>(
+    node: &'a EmbeddedNode,
+    agent_did: &'a str,
+) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
+    Box::pin(async move {
+        RequestLifecycle::repair_terminal_requests(node, agent_did)
+            .await
+            .map(PeriodicRecoverySweepOutcome::RequestTerminalRepair)
     })
 }

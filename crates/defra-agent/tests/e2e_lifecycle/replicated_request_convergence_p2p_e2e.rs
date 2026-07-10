@@ -19,11 +19,10 @@
 //!   3. owner re-drive re-asserts and the peer stays on the same terminal
 //!      (LWW higher-priority same-value write does not regress or fork).
 //!
-//! A second scenario seeds the terminal **before** the peer joins, then uses
-//! re-drive after install to force the terminal delta through PushLog again —
-//! covering the case where initial sync alone is not the only recovery path.
+//! A second scenario exhausts the durable re-drive budget while the peer is
+//! absent, then proves a full replicator replay repairs the peer without an
+//! unbounded stream of same-value request writes.
 
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use defra_agent::defra_node::EmbeddedNode;
@@ -155,6 +154,11 @@ async fn create_request(
     let status = escape_graphql_string(status);
     let lifecycle_state = escape_graphql_string(lifecycle_state);
     let created_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let terminal_fields = if matches!(lifecycle_state.as_str(), "completed" | "failed") {
+        format!(", terminalized_at: \"{created_at}\", terminal_redrive_attempts: 0")
+    } else {
+        String::new()
+    };
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -175,6 +179,7 @@ async fn create_request(
                 retry_count: 0,
                 max_retries: 3,
                 subagent_depth: 0
+                {terminal_fields}
             }}) {{ _docID }}
         }}"#
     );
@@ -197,6 +202,7 @@ async fn terminalize_request(
     let agent_did = escape_graphql_string(agent_did);
     let status = escape_graphql_string(status);
     let lifecycle_state = escape_graphql_string(lifecycle_state);
+    let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
@@ -206,7 +212,9 @@ async fn terminalize_request(
                 }},
                 input: {{
                     status: "{status}",
-                    lifecycle_state: "{lifecycle_state}"
+                    lifecycle_state: "{lifecycle_state}",
+                    terminalized_at: "{terminalized_at}",
+                    terminal_redrive_attempts: 0
                 }}
             ) {{ _docID }}
         }}"#
@@ -345,11 +353,9 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
 
     // 3. Owner re-drive: same-value re-assert (higher-priority CRDT delta).
     //    Peer must remain at the owner terminal — no fork / no regression.
-    let mut budget = HashMap::new();
-    let first =
-        RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID, &mut budget)
-            .await
-            .expect("redrive");
+    let first = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
+        .await
+        .expect("redrive");
     assert!(
         first.reasserted >= 1,
         "owner re-drive must re-assert at least the terminal row; report={first:?}"
@@ -372,13 +378,9 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     // 4. Cap exhaust: remaining re-asserts drain the budget; peer stays put.
     let mut total_reasserted = first.reasserted;
     for _ in 0..TERMINAL_REDRIVE_CAP {
-        let report = RequestLifecycle::redrive_terminal_convergence(
-            owner.node.as_ref(),
-            OWNER_DID,
-            &mut budget,
-        )
-        .await
-        .expect("redrive drain");
+        let report = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
+            .await
+            .expect("redrive drain");
         total_reasserted += report.reasserted;
         if report.reasserted == 0 {
             break;
@@ -388,10 +390,9 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
         total_reasserted <= TERMINAL_REDRIVE_CAP as usize,
         "redrive must not exceed TERMINAL_REDRIVE_CAP={TERMINAL_REDRIVE_CAP}, got {total_reasserted}"
     );
-    let exhausted =
-        RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID, &mut budget)
-            .await
-            .expect("redrive after cap");
+    let exhausted = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
+        .await
+        .expect("redrive after cap");
     assert_eq!(
         exhausted.reasserted, 0,
         "after CAP re-asserts the row must self-drop from the re-drive budget"
@@ -407,14 +408,11 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     peer.node.shutdown().await;
 }
 
-/// Late-join path: owner terminalizes *before* the peer is connected, then the
-/// re-drive re-pushes the terminal delta after replication is installed.
-///
-/// This is the closest multi-node stand-in for "first PushLog missed / peer was
-/// offline" without fault-injecting the gossip channel: the re-drive is what
-/// forces a fresh higher-priority delta through PushLog after the peer comes up.
+/// Recovery path: the peer stays unavailable beyond the persisted re-drive cap.
+/// Installing the replicator then performs a full replay, which must converge
+/// the peer even though the owner is no longer eligible for same-value re-drive.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn p2p_redrive_converges_terminal_after_late_peer_join() {
+async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
     let owner = test_p2p_db("convergence-p2p-owner-late").await;
     let peer = test_p2p_db("convergence-p2p-peer-late").await;
 
@@ -441,54 +439,39 @@ async fn p2p_redrive_converges_terminal_after_late_peer_join() {
     .await;
     assert_eq!(on_owner.status, "completed");
 
-    // Peer comes online and replication is installed after the terminal write.
-    install_one_way_replicator(owner.node.as_ref(), peer.node.as_ref(), &["AgentRequest"]).await;
-
-    // Some DefraDB builds may already anti-entropy on install; either way the
-    // re-drive must be a safe, higher-priority re-push of the terminal value.
-    let mut budget = HashMap::new();
+    // Spend the entire persisted budget while the peer is unavailable.
     let mut reasserted_total = 0usize;
     for _ in 0..TERMINAL_REDRIVE_CAP {
-        let report = RequestLifecycle::redrive_terminal_convergence(
-            owner.node.as_ref(),
-            OWNER_DID,
-            &mut budget,
-        )
-        .await
-        .expect("redrive after late join");
+        let report = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
+            .await
+            .expect("redrive while peer unavailable");
         reasserted_total += report.reasserted;
-        // After each re-assert, give the peer a chance to apply.
-        if let Some(row) = fetch_request(peer.node.as_ref(), request_id).await {
-            if row.lifecycle_state == "completed" && row.agent_did == OWNER_DID {
-                assert!(
-                    reasserted_total >= 1,
-                    "peer converged but re-drive never re-asserted; \
-                     initial sync alone closed the gap (still OK, but we want \
-                     at least one re-drive emission for the binding)"
-                );
-                owner.node.shutdown().await;
-                peer.node.shutdown().await;
-                return;
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(400)).await;
     }
+    assert_eq!(reasserted_total, TERMINAL_REDRIVE_CAP as usize);
+    let exhausted = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
+        .await
+        .expect("redrive after persistent cap");
+    assert!(exhausted.is_noop(), "persistent cap must be exhausted");
 
-    // Final wait: peer must hold the owner terminal after the re-drive window.
+    // Peer recovery installs a full replicator replay. This path does not author
+    // another AgentRequest delta and therefore does not grow request history.
+    install_one_way_replicator(owner.node.as_ref(), peer.node.as_ref(), &["AgentRequest"]).await;
+
     let on_peer = wait_for_request_lifecycle(
         peer.node.as_ref(),
         request_id,
         "completed",
         Duration::from_secs(30),
-        "peer (after late-join re-drive)",
+        "peer (after full replay)",
     )
     .await;
     assert_eq!(on_peer.agent_did, OWNER_DID);
     assert_eq!(on_peer.status, "completed");
-    assert!(
-        reasserted_total >= 1,
-        "owner re-drive must have fired at least once after late join; total={reasserted_total}"
-    );
+    let still_exhausted =
+        RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
+            .await
+            .expect("redrive remains exhausted after peer replay");
+    assert!(still_exhausted.is_noop());
 
     owner.node.shutdown().await;
     peer.node.shutdown().await;
