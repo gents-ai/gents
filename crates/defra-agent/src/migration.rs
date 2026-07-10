@@ -1914,6 +1914,154 @@ pub async fn ensure_conversation_scope_key_migrations(node: Arc<EmbeddedNode>) -
 // and an upgraded DB failed reads with `Cannot query field "agent_did"`. The
 // individual `ensure_*` fns exist only as the building blocks of this function
 // (and the migration unit tests); new code adds a step HERE.
+/// Map a bundled-SDL scalar type to its DefraDB `FieldKind` code for additive
+/// field patches. Only the flat scalar/array types the agent schemas use are
+/// mapped; anything else (relations, embedded objects) returns `None` and is
+/// skipped with a warning — those still need a hand-written migration.
+fn sdl_type_to_field_kind(sdl_type: &str) -> Option<u8> {
+    // Strip the outer non-null marker: a field added by an additive patch is
+    // necessarily nillable for pre-existing rows, so `[String!]!` patches as a
+    // `[String!]` (StringArray) and `String!` as a `String`.
+    let sdl_type = sdl_type.strip_suffix('!').unwrap_or(sdl_type);
+    match sdl_type {
+        "Boolean" => Some(2),
+        "Int" => Some(4),
+        "Float" => Some(6),
+        "DateTime" => Some(10),
+        "String" => Some(11),
+        "Blob" => Some(13),
+        "JSON" => Some(14),
+        "[Boolean!]" => Some(3),
+        "[Int!]" => Some(5),
+        "[Float!]" => Some(7),
+        "[String!]" => Some(12),
+        "[Boolean]" => Some(18),
+        "[Int]" => Some(19),
+        "[Float]" => Some(20),
+        "[String]" => Some(21),
+        _ => None,
+    }
+}
+
+/// Parse the collections and scalar fields out of a bundled SDL document.
+/// Deliberately line-based and conservative: the bundled agent/inference
+/// schemas are flat `type Name { field: Type @directives }` declarations with
+/// comments; anything that does not match that shape is ignored.
+fn parse_sdl_fields(sdl: &str) -> Vec<(String, Vec<(String, String)>)> {
+    let mut collections = Vec::new();
+    let mut current: Option<(String, Vec<(String, String)>)> = None;
+    for raw in sdl.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("type ") {
+            let name = rest
+                .split(|c: char| c.is_whitespace() || c == '{' || c == '@')
+                .next()
+                .unwrap_or("")
+                .to_string();
+            if !name.is_empty() {
+                current = Some((name, Vec::new()));
+            }
+            continue;
+        }
+        if line.starts_with('}') {
+            if let Some(done) = current.take() {
+                collections.push(done);
+            }
+            continue;
+        }
+        let Some((_, fields)) = current.as_mut() else {
+            continue;
+        };
+        let Some((field_name, rest)) = line.split_once(':') else {
+            continue;
+        };
+        let field_name = field_name.trim();
+        if field_name.is_empty()
+            || !field_name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            continue;
+        }
+        let field_type = rest
+            .trim()
+            .split(|c: char| c.is_whitespace() || c == '@')
+            .next()
+            .unwrap_or("")
+            .to_string();
+        if !field_type.is_empty() {
+            fields.push((field_name.to_string(), field_type));
+        }
+    }
+    if let Some(done) = current.take() {
+        collections.push(done);
+    }
+    collections
+}
+
+/// Schema-driven additive field reconciliation: for every bundled collection
+/// that exists in this store, diff the live fields against the bundled SDL and
+/// patch in whatever is missing. This is the fix for the recurring upgrade
+/// bug class where a schema gains a field, the startup queries select it, and
+/// no hand-written migration ships (`tool_policy_version`, `write_tools`,
+/// `retry_max_transport`, ...): the bundled schema itself is now the migration
+/// source of truth. Purely additive — never removes, renames, or re-types.
+pub async fn ensure_bundled_schema_fields(node: Arc<EmbeddedNode>) -> Result<()> {
+    for sdl in defra_agent_protocol::schemas::ALL {
+        for (collection_name, fields) in parse_sdl_fields(sdl) {
+            let Some(collection) = node
+                .get_collection(&collection_name)
+                .with_context(|| format!("get {collection_name} collection"))?
+            else {
+                continue;
+            };
+
+            let mut operations = Vec::new();
+            for (field_name, field_type) in &fields {
+                if collection_has_field(&collection, field_name) {
+                    continue;
+                }
+                let Some(kind) = sdl_type_to_field_kind(field_type) else {
+                    tracing::warn!(
+                        collection = %collection_name,
+                        field = %field_name,
+                        sdl_type = %field_type,
+                        "bundled schema field has no scalar kind mapping; needs a hand-written migration"
+                    );
+                    continue;
+                };
+                operations.push(format!(
+                    r#"{{"op":"add","path":"/{collection_name}/Fields/-","value":{{"Name":"{field_name}","Kind":{kind}}}}}"#
+                ));
+            }
+            if operations.is_empty() {
+                continue;
+            }
+
+            let patch = format!("[{}]", operations.join(","));
+            let next = node
+                .patch_collection(&collection_name, &patch)
+                .await
+                .with_context(|| format!("patch_collection {collection_name} bundled fields"))?;
+            node.set_active_collection_version(&next.version_id)
+                .await
+                .with_context(|| {
+                    format!("set_active_collection_version {collection_name} bundled fields")
+                })?;
+            tracing::info!(
+                collection = %collection_name,
+                added = operations.len(),
+                version = %next.version_id,
+                "collection patched to match bundled schema"
+            );
+        }
+    }
+    Ok(())
+}
+
 pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
     ensure_agent_runtime_executor_status_migrations(node.clone())
         .await
@@ -1960,12 +2108,26 @@ pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()
     ensure_agent_behavior_migrations(node.clone())
         .await
         .context("ensure AgentBehavior migrations")?;
+    ensure_tool_call_migrations(node.clone())
+        .await
+        .context("ensure tool-call migrations")?;
+    ensure_subagent_extensions_migrations(node.clone())
+        .await
+        .context("ensure subagent extension migrations")?;
     ensure_agent_response_reasoning_progress_migration(node.clone())
         .await
         .context("ensure AgentResponse reasoning progress migration")?;
-    ensure_conversation_scope_key_migrations(node)
+    ensure_conversation_scope_key_migrations(node.clone())
         .await
         .context("ensure conversation agent_did scope-key migrations")?;
+    // LAST, after every hand-written migration: schema-driven reconciliation
+    // sweeps up any bundled-schema field that has no hand-written patch (the
+    // recurring upgrade-crash class: tool_policy_version, write_tools,
+    // retry_max_transport, ...). Hand-written migrations run first so fields
+    // with special handling keep it.
+    ensure_bundled_schema_fields(node)
+        .await
+        .context("ensure bundled schema fields")?;
     Ok(())
 }
 
@@ -3094,6 +3256,87 @@ mod patch_kind_tests {
                 collection_has_field(&collection, field),
                 "ReciprocalConversationIntent must have field '{field}'"
             );
+        }
+    }
+
+    /// The bug class this fences: a home whose ToolSelection predates weeks of
+    /// schema evolution must gain EVERY bundled-schema field at migration time
+    /// — the startup toolset load selects all of them, and ten of them
+    /// (write_tools, command_network_mode, defra_query_collections, ...) had
+    /// no hand-written patch at all. The schema-driven sweep is the fence.
+    #[tokio::test]
+    async fn bundled_schema_sweep_patches_ancient_tool_selection() {
+        let node = test_node().await;
+        const ANCIENT_TOOL_SELECTION: &str = r#"
+            type ToolSelection {
+                selection_id: String @index(unique: true)
+                agent_did: String @index
+                display_name: String
+                enable_file_tools: Boolean
+                enable_bash: Boolean
+                created_at: DateTime @index(direction: DESC)
+                updated_at: DateTime @index(direction: DESC)
+            }
+        "#;
+        node.add_schema(ANCIENT_TOOL_SELECTION).await.unwrap();
+
+        // Idempotent: run twice; the second sweep must be a write-free no-op.
+        ensure_bundled_schema_fields(node.clone()).await.unwrap();
+        ensure_bundled_schema_fields(node.clone()).await.unwrap();
+
+        let collection = node
+            .get_collection("ToolSelection")
+            .unwrap()
+            .expect("ToolSelection collection");
+        for field in &[
+            "tool_policy_version",
+            "write_tools",
+            "command_network_mode",
+            "defra_query_collections",
+            "enable_defra_query",
+            "read_only_command_allowlist",
+            "command_execution_policy",
+            "command_allowed_argv_prefixes",
+            "command_forbidden_argv_prefixes",
+            "cli_tool_names",
+            "allowed_mcp_service_ids",
+            "enable_memory",
+            "subagent_allow_cross_deployment",
+            "subagent_default_await_mode",
+            "enable_session_history_tool",
+            "enable_context_budget",
+        ] {
+            assert!(
+                collection_has_field(&collection, field),
+                "ToolSelection must have '{field}' after the bundled-schema sweep"
+            );
+        }
+    }
+
+    #[test]
+    fn sdl_parser_reads_bundled_schemas() {
+        let parsed = parse_sdl_fields(defra_agent_protocol::schemas::TOOL_SELECTION);
+        assert_eq!(parsed.len(), 1);
+        let (name, fields) = &parsed[0];
+        assert_eq!(name, "ToolSelection");
+        assert!(fields
+            .iter()
+            .any(|(f, t)| f == "tool_policy_version" && t == "String"));
+        assert!(fields
+            .iter()
+            .any(|(f, t)| f == "write_tools" && t == "[String]"));
+
+        // Every scalar type used across ALL bundled schemas must have a kind
+        // mapping (or the sweep would silently skip it forever).
+        for sdl in defra_agent_protocol::schemas::ALL {
+            for (collection, fields) in parse_sdl_fields(sdl) {
+                for (field, sdl_type) in fields {
+                    assert!(
+                        sdl_type_to_field_kind(&sdl_type).is_some(),
+                        "{collection}.{field}: unmapped SDL type {sdl_type:?}"
+                    );
+                }
+            }
         }
     }
 
