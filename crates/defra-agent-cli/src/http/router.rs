@@ -44,8 +44,8 @@ pub(crate) struct RuntimeHttpState {
     pub(crate) backend_health: Option<defra_agent::BackendHealthMap>,
     /// P2P admission knobs resolved at serve start (`None` when P2P disabled).
     pub(crate) p2p_admission: Option<P2pAdmissionState>,
-    /// Last successful live P2P peer/replicator snapshot for non-blocking
-    /// `/metrics` scrapes. Shared across clones of this state.
+    /// Last successful live P2P snapshot for non-blocking `/metrics` scrapes.
+    /// Shared across clones of this state.
     pub(crate) p2p_metrics_cache: Arc<Mutex<Option<P2pMetricsSnapshot>>>,
     /// Shared HTTP client for P2P self-status fetches on the scrape path
     /// (reuses connection pool; do not rebuild per scrape — #670).
@@ -143,7 +143,7 @@ async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {
     }
 }
 
-/// Refresh live P2P counts under a hard budget; on timeout/error hold the last
+/// Refresh live P2P state under a hard budget; on timeout/error hold the last
 /// successful snapshot (or admission-only bootstrap) and mark `stale`.
 async fn load_p2p_metrics_for_scrape(state: &RuntimeHttpState) -> P2pMetricsSnapshot {
     let cached = state
@@ -168,8 +168,8 @@ async fn load_p2p_metrics_for_scrape(state: &RuntimeHttpState) -> P2pMetricsSnap
         }
         Ok(Err(_)) | Err(_) => {
             if let Some(mut snap) = cached {
-                // Hold last-known peer/replicator counts; refresh admission from
-                // the serve-start snapshot so knobs stay accurate even when stale.
+                // Hold last-known live state; refresh admission from the
+                // serve-start snapshot so knobs stay accurate even when stale.
                 snap.admission = state.p2p_admission.clone();
                 snap.enabled = state.p2p_admission.is_some() || snap.enabled;
                 snap.stale = true;
@@ -187,6 +187,7 @@ fn p2p_metrics_admission_only(state: &RuntimeHttpState, stale: bool) -> P2pMetri
         connected_peers: 0,
         replicators: 0,
         admission: state.p2p_admission.clone(),
+        sync_status: None,
         stale,
     }
 }
@@ -236,11 +237,19 @@ fn p2p_metrics_from_status(
             .cloned()
             .and_then(|v| serde_json::from_value(v).ok())
     });
+    let sync_status = p2p
+        .get("p2p_sync_status")
+        .filter(|value| !value.is_null())
+        .and_then(|value| {
+            use defra_agent::P2pSyncStatusAdapter;
+            defra_agent::JsonP2pSyncStatusAdapter.adapt(value).ok()
+        });
     P2pMetricsSnapshot {
         enabled,
         connected_peers,
         replicators,
         admission,
+        sync_status,
         stale: false,
     }
 }
@@ -540,6 +549,60 @@ mod tests {
             last_reconcile_result: "applied".to_string(),
             last_reconcile_completed_at: "2026-06-04T00:00:00Z".to_string(),
         }
+    }
+
+    #[test]
+    fn p2p_metrics_snapshot_decodes_pinned_live_sync_status() {
+        let snapshot = p2p_metrics_from_status(
+            &json!({
+                "enabled": true,
+                "p2p_connected_peers": ["peer-a", "peer-b"],
+                "p2p_replicator_count": 2,
+                "p2p_sync_status": {
+                    "push_backlog": {
+                        "queue_item_capacity": 128,
+                        "queue_byte_capacity": 1048576,
+                        "per_peer_active_cap": 2,
+                        "worker_count": 8,
+                        "queued_items": 7,
+                        "queued_bytes": 4096,
+                        "active_jobs": 3,
+                        "enqueued_total": 101,
+                        "coalesced_total": 11,
+                        "rejected_items_total": 5,
+                        "rejected_bytes_total": 2,
+                        "completed_total": 79,
+                        "failed_total": 4,
+                        "per_peer": [{
+                            "peer_id": "peer-a",
+                            "queued_items": 4,
+                            "queued_bytes": 2048,
+                            "active_jobs": 1,
+                            "consecutive_failures": 3,
+                            "cooldown_remaining_ms": 750
+                        }]
+                    },
+                    "pending_dags": 13,
+                    "pending_dag_capacity": 1000,
+                    "persisted_pending_dags": 17,
+                    "persisted_pending_dag_capacity": 4000,
+                    "pending_resync_in_flight": true,
+                    "retained_background_tasks": 6,
+                    "missing_link_retries": 23,
+                    "pending_dag_resolved": 29,
+                    "pending_dag_expired": 31
+                }
+            }),
+            None,
+        );
+
+        assert_eq!(snapshot.connected_peers, 2);
+        assert_eq!(snapshot.replicators, 2);
+        let sync = snapshot.sync_status.expect("valid pinned sync status");
+        assert_eq!(sync.push_backlog.queued_items, 7);
+        assert_eq!(sync.push_backlog.per_peer[0].consecutive_failures, 3);
+        assert_eq!(sync.persisted_pending_dags, 17);
+        assert_eq!(sync.missing_link_retries, 23);
     }
 
     #[test]

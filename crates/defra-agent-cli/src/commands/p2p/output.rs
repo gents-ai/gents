@@ -96,6 +96,7 @@ pub(crate) fn flatten_p2p_fields(map: &mut serde_json::Map<String, Value>, p2p: 
         "p2p_connected_peers",
         "p2p_replicator_count",
         "p2p_admission",
+        "p2p_sync_status",
         "p2p_error",
     ] {
         map.insert(
@@ -182,6 +183,11 @@ pub(crate) async fn fetch_live_http_p2p_status_with_client(
             Ok(rows) => rows.len(),
             Err(_) => 0,
         };
+    // Best-effort for compatibility with older DefraDB pins. The typed agent
+    // adapter validates this value before it reaches Prometheus.
+    let sync_status = http_get_json::<Value>(client, &format!("{api_base}/p2p/sync/status"))
+        .await
+        .unwrap_or(Value::Null);
     let p2p_admission = runtime_state
         .as_ref()
         .and_then(|state| state.p2p_admission.as_ref())
@@ -200,6 +206,7 @@ pub(crate) async fn fetch_live_http_p2p_status_with_client(
         "p2p_connected_peers": connected_peers,
         "p2p_replicator_count": replicator_count,
         "p2p_admission": p2p_admission,
+        "p2p_sync_status": sync_status,
         "p2p_error": Value::Null,
     }))
 }
@@ -227,6 +234,7 @@ pub(crate) fn persisted_p2p_status(runtime_state: Option<&StoredRuntimeState>) -
                 .as_ref()
                 .map(|admission| admission.to_json())
                 .unwrap_or(Value::Null),
+            "p2p_sync_status": Value::Null,
             "p2p_error": Value::Null,
         }),
         None => json!({
@@ -238,6 +246,7 @@ pub(crate) fn persisted_p2p_status(runtime_state: Option<&StoredRuntimeState>) -
             "p2p_connected_peers": [],
             "p2p_replicator_count": 0,
             "p2p_admission": Value::Null,
+            "p2p_sync_status": Value::Null,
             "p2p_error": Value::Null,
         }),
     }

@@ -34,6 +34,7 @@ pub mod interrupt;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
 pub mod openai_wire;
+pub mod p2p_observability;
 
 /// Shared in-crate test utilities.
 #[cfg(test)]
@@ -160,6 +161,10 @@ pub use meta_tools::build_meta_tools;
 pub use native_executor_status::{active_native_executors, NativeExecutorStatus};
 pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
 pub use openai_wire::OpenAiWireApi;
+pub use p2p_observability::{
+    JsonP2pSyncStatusAdapter, P2pPeerBacklogSnapshot, P2pPushBacklogSnapshot, P2pSyncStatusAdapter,
+    P2pSyncStatusSnapshot,
+};
 pub use periodic_recovery::{
     periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps, PeriodicRecoverySweepMetadata,
     PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,

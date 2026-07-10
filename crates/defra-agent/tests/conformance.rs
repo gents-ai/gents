@@ -104,6 +104,8 @@ mod interrupts_manual;
 mod managed_exec;
 #[path = "conformance/mcp_health.rs"]
 mod mcp_health;
+#[path = "conformance/p2p_observability.rs"]
+mod p2p_observability;
 #[path = "conformance/process.rs"]
 mod process;
 #[path = "conformance/prompt_template.rs"]
