@@ -102,7 +102,9 @@ uuid = { version = "1", features = ["v4"] }
 lto = true
 codegen-units = 1
 panic = "abort"
-strip = true
+# Keep the symbol table in shipped binaries so production `sample`/`atos`
+# captures resolve Rust frames. Discard DWARF sections to limit artifact size.
+strip = "debuginfo"
 overflow-checks = true
 debug = "line-tables-only"
 
