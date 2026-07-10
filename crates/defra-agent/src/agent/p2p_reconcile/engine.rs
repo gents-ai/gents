@@ -280,21 +280,16 @@ async fn sweep_pairings(
             match reconcile_peer_tick_with_replay(admin, store, &peer_id, force_replay).await {
                 Ok(outcome) => {
                     if outcome.desired_read_failed {
-                        // Desired-state failure performs no topology work, but
-                        // the connectivity observation is still valid. Record
-                        // it before continuing so a first-sweep read failure
-                        // does not leave the peer absent from the tracker and
-                        // manufacture a startup/reconnect replay on the next
-                        // healthy read. Preserve an existing false -> true edge,
-                        // though: that false also means replay is pending, and
-                        // the failed desired read gave us no chance to perform it.
-                        let replay_pending = active_before
-                            && replay_connections
-                                .get(&peer_id)
-                                .is_some_and(|active| !active);
-                        if !replay_pending {
-                            replay_connections.insert(peer_id.clone(), active_before);
-                        }
+                        // Desired-state failure performs no topology work, so a
+                        // replay obligation can only be kept or created here,
+                        // never discharged. An absent entry (daemon startup) and
+                        // an existing `false` (reconnect edge already observed)
+                        // both stay `false` so the pending replay fires on the
+                        // first healthy sweep; a previously-active peer only
+                        // stays `true` while it remains active, so a drop during
+                        // the degraded read still schedules its replay.
+                        let was_active = replay_connections.get(&peer_id).copied().unwrap_or(false);
+                        replay_connections.insert(peer_id.clone(), was_active && active_before);
                         continue;
                     }
                     if !outcome.ops_applied.is_empty() {
@@ -1668,7 +1663,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn desired_read_failure_records_connectivity_without_spurious_replay() {
+    async fn degraded_first_sweep_preserves_startup_replay_without_repeats() {
         let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
         let desired = PairingDesired {
             replicator_addresses: set(&["addr1"]),
@@ -1700,21 +1695,38 @@ mod tests {
         );
         let mut replay_connections = BTreeMap::new();
 
+        // A degraded first sweep must keep the startup replay pending. The
+        // startup replay compensates for reconnect edges missed while this
+        // daemon was down; recording the peer as already-seen-active here would
+        // silently discharge that obligation without performing it.
         sweep_pairings(&admin, &store, &mut replay_connections)
             .await
             .expect("degraded desired-read sweep");
-        assert_eq!(replay_connections.get("peer-a"), Some(&true));
+        assert_eq!(replay_connections.get("peer-a"), Some(&false));
 
         *store.desired.lock().unwrap() = Ok(Some(desired));
         sweep_pairings(&admin, &store, &mut replay_connections)
             .await
             .expect("healthy follow-up sweep");
 
-        assert!(
-            admin.emitted.lock().unwrap().is_empty(),
-            "a desired-read recovery without a connection edge must not delete+reinstall"
+        assert_eq!(
+            *admin.emitted.lock().unwrap(),
+            vec![
+                DiffOp::TeardownReplicator("addr1".into()),
+                DiffOp::InstallReplicator("addr1".into()),
+            ],
+            "the deferred startup replay must fire on the first healthy sweep"
         );
         assert_eq!(replay_connections.get("peer-a"), Some(&true));
+
+        sweep_pairings(&admin, &store, &mut replay_connections)
+            .await
+            .expect("steady-state sweep");
+        assert_eq!(
+            admin.emitted.lock().unwrap().len(),
+            2,
+            "a steady-state sweep without a connection edge must not replay again"
+        );
     }
 
     #[tokio::test]

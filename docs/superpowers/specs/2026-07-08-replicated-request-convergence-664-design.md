@@ -184,9 +184,11 @@ contract:
    all-storage-error retry. If retries exhaust after the response is durable,
    startup and periodic `RequestLifecycle::repair_terminal_requests` finish the
    matching `claimed`/`processing` request without re-executing it. The closed
-   response's reserved runtime-interrupt sentinel (or its `interrupted_at`
-   stamp) repairs to the interrupted request terminal; ordinary provider error
-   text, including the literal word `interrupted`, repairs to failed.
+   response's `interrupted_at` stamp — guaranteed by the interrupt finalize,
+   which stamps it atomically when the earlier standalone write was lost —
+   repairs to the interrupted request terminal; the human-readable error text
+   is never consulted, so ordinary provider error text, including the literal
+   word `interrupted`, repairs to failed.
 2. `failure_reason` is latched before I/O and included in the terminal request
    mutation. The durable response's `error_message` is the restart-safe source
    for repair, so a failed standalone reason write cannot lose the terminal

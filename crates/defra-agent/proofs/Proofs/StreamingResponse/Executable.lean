@@ -309,7 +309,9 @@ def daemonInterruptTerminalizesResponseAndRequest : ResponseInterruptFlowCase :=
   , postResponseStatus := "error"
   , preInferenceCallState := "running"
   , postInferenceCallState := "cancelled"
-  , responseErrorReason := "__defra_agent_runtime_interrupted__"
+  -- Human-readable: this text surfaces verbatim in timeline projections.
+  -- `interruptedAtRequired` is the machine marker request repair classifies on.
+  , responseErrorReason := "interrupted"
   , interruptedAtRequired := true
   , completedAtRequired := true
   , liveTailCleared := true

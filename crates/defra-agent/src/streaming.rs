@@ -25,12 +25,6 @@ use queries::{
 
 const MAX_LIVE_REASONING_BYTES: usize = 64 * 1024;
 
-/// Reserved durable marker for a response finalized by the runtime interrupt
-/// path. This must not overlap plausible provider error text: request repair
-/// uses it to distinguish an interrupt from a provider failure whose message
-/// happens to be the ordinary word "interrupted".
-pub(crate) const INTERRUPTED_RESPONSE_ERROR_SENTINEL: &str = "__defra_agent_runtime_interrupted__";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamStatus {
     Streaming,
@@ -323,18 +317,25 @@ impl DefraStreamWriter {
             StreamStatus::Error,
             Some(error_message),
             RequestFinalizeMode::UpdateRequest,
+            false,
         )
         .await
     }
 
     /// Complete the response-side interrupt edge without rewriting
     /// `AgentRequest`, which is terminalized separately as `interrupted`.
+    ///
+    /// `interrupted_at` — not the human-readable error text — is the durable
+    /// marker request repair classifies on, so this finalize stamps it
+    /// atomically whenever the earlier standalone `write_interrupted_at` did
+    /// not survive.
     pub async fn finalize_interrupted_response(&self, doc_id: &str) -> Result<StreamResult> {
         self.finalize_inner(
             doc_id,
             StreamStatus::Error,
-            Some(INTERRUPTED_RESPONSE_ERROR_SENTINEL),
+            Some("interrupted"),
             RequestFinalizeMode::ResponseOnly,
+            true,
         )
         .await
     }
@@ -383,6 +384,7 @@ impl DefraStreamWriter {
         status: StreamStatus,
         error_message: Option<&str>,
         request_mode: RequestFinalizeMode,
+        mark_interrupted: bool,
     ) -> Result<StreamResult> {
         let existing = load_response_state(&self.node, doc_id).await?;
         let snapshot = {
@@ -438,6 +440,7 @@ impl DefraStreamWriter {
                 error_message,
                 request_mode,
                 &self.agent_did,
+                mark_interrupted,
             );
             let operation = if snapshot.is_some() {
                 "finalize_streaming_response"
@@ -676,8 +679,14 @@ impl StreamWriter for DefraStreamWriter {
     }
 
     async fn finalize(&self, doc_id: &str, status: StreamStatus) -> Result<StreamResult> {
-        self.finalize_inner(doc_id, status, None, RequestFinalizeMode::UpdateRequest)
-            .await
+        self.finalize_inner(
+            doc_id,
+            status,
+            None,
+            RequestFinalizeMode::UpdateRequest,
+            false,
+        )
+        .await
     }
 }
 
@@ -715,6 +724,7 @@ fn tail_window(value: &str, max_bytes: usize) -> &str {
     &value[start..]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_finalize_mutation(
     existing: Option<&PersistedResponseState>,
     doc_id: &str,
@@ -724,6 +734,7 @@ fn build_finalize_mutation(
     error_message: Option<&str>,
     request_mode: RequestFinalizeMode,
     owner_did: &str,
+    mark_interrupted: bool,
 ) -> String {
     let escaped_doc_id = escape_graphql_string(doc_id);
     let escaped_now = escape_graphql_string(now);
@@ -731,6 +742,17 @@ fn build_finalize_mutation(
         StreamStatus::Error => error_message
             .or_else(|| existing.and_then(|response| response.error_message.as_deref())),
         StreamStatus::Complete | StreamStatus::Streaming => None,
+    };
+    // Repair classifies the interrupt on `interrupted_at`, so an interrupt
+    // finalize must guarantee the stamp durably — but never move an earlier,
+    // more accurate one.
+    let interrupted_at_already_set = existing
+        .and_then(|response| response.interrupted_at.as_deref())
+        .is_some_and(|value| !value.trim().is_empty());
+    let interrupted_at_input = if mark_interrupted && !interrupted_at_already_set {
+        format!(r#"interrupted_at: "{escaped_now}","#)
+    } else {
+        String::new()
     };
     let request_transition = match request_mode {
         RequestFinalizeMode::UpdateRequest => existing
@@ -769,6 +791,7 @@ fn build_finalize_mutation(
                         reasoning: "",
                         status: "{status}",
                         {error_message_input}
+                        {interrupted_at_input}
                         token_count: {token_count},
                         completed_at: "{escaped_now}"
                     }}
@@ -790,6 +813,7 @@ fn build_finalize_mutation(
                         reasoning: "",
                         status: "{status}",
                         {error_message_input}
+                        {interrupted_at_input}
                         completed_at: "{escaped_now}"
                     }}
                 ) {{ _docID }}

@@ -495,8 +495,8 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
     assert_eq!(duplicate.repaired, 0, "duplicate observation is idempotent");
 
     // A provider is allowed to return the ordinary text "interrupted". That
-    // must remain a failed outcome unless the response carries the runtime's
-    // reserved interrupt sentinel or an interrupted_at stamp.
+    // must remain a failed outcome: only the `interrupted_at` stamp — never
+    // the human-readable error text — classifies a repair as an interrupt.
     let provider_request_id = "convergence-provider-interrupted-message";
     let provider_session_id = "convergence-provider-interrupted-session";
     create_owned_request(
@@ -543,9 +543,12 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
     assert_eq!(provider_row.lifecycle_state, "failed");
     assert_eq!(provider_row.failure_reason.as_deref(), Some("interrupted"));
 
-    // The reserved durable marker remains sufficient even if the earlier
-    // interrupted_at stamp exhausted its own retries before response finalize.
-    let runtime_interrupt_request_id = "convergence-runtime-interrupt-sentinel";
+    // The interrupt finalize stamps `interrupted_at` atomically with the
+    // terminal response write, so the stamp is durable even if the earlier
+    // standalone `write_interrupted_at` exhausted its own retries. A response
+    // carrying only the stamp (with a human "interrupted" error text) must
+    // repair the owner request to interrupted.
+    let runtime_interrupt_request_id = "convergence-runtime-interrupt-stamp";
     let runtime_interrupt_session_id = "convergence-runtime-interrupt-session";
     create_owned_request(
         &db.node,
@@ -572,14 +575,17 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
             r#"mutation {{
                 update_AgentResponse(
                     filter: {{ _docID: {{ _eq: "{escaped_runtime_interrupt_response_doc_id}" }} }},
-                    input: {{ error_message: "__defra_agent_runtime_interrupted__" }}
+                    input: {{
+                        error_message: "interrupted",
+                        interrupted_at: "2026-07-10T00:00:00Z"
+                    }}
                 ) {{ _docID }}
             }}"#
         ))
         .await;
     assert!(
         !response.has_errors(),
-        "seed runtime interrupt sentinel: {:?}",
+        "seed runtime interrupt stamp: {:?}",
         response.errors
     );
 

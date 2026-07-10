@@ -255,11 +255,15 @@ impl RequestLifecycle {
                 .error_message
                 .as_deref()
                 .unwrap_or_default();
+            // `interrupted_at` is the sole durable interrupt marker: the
+            // interrupt flow stamps it standalone and again atomically inside
+            // the response finalize. The human-readable error text is never
+            // consulted, so a provider error whose message happens to be
+            // "interrupted" still repairs to failed.
             let response_was_interrupted = terminal_response
                 .interrupted_at
                 .as_deref()
-                .is_some_and(|value| !value.trim().is_empty())
-                || response_reason == crate::streaming::INTERRUPTED_RESPONSE_ERROR_SENTINEL;
+                .is_some_and(|value| !value.trim().is_empty());
             let (next_status, next_lifecycle_state) =
                 if matches!(response_status.as_str(), "complete" | "completed") {
                     ("completed", PersistedLifecycleState::Completed.as_str())

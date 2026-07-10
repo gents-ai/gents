@@ -237,9 +237,11 @@ fn build_finalize_mutation_clears_tail_without_buffer() {
         None,
         RequestFinalizeMode::UpdateRequest,
         "did:defra-agent:test",
+        false,
     );
 
     assert!(mutation.contains(r#"status: "complete""#));
+    assert!(!mutation.contains("interrupted_at:"));
     assert!(mutation.contains(r#"completed_at: "2026-03-24T00:00:00Z""#));
     assert!(mutation.contains(r#"update_AgentRequest("#));
     assert!(mutation.contains(r#"request_id: { _eq: "req-1" }"#));
@@ -279,6 +281,7 @@ fn build_error_finalize_atomically_carries_response_and_request_reason() {
         Some("provider failed"),
         RequestFinalizeMode::UpdateRequest,
         "did:defra-agent:test",
+        false,
     );
 
     assert!(mutation.contains(r#"status: "error""#));
@@ -286,6 +289,10 @@ fn build_error_finalize_atomically_carries_response_and_request_reason() {
     assert!(mutation.contains(r#"lifecycle_state: "failed""#));
     assert!(mutation.contains(r#"failure_reason: "provider failed""#));
     assert!(mutation.contains(r#"agent_did: { _eq: "did:defra-agent:test" }"#));
+    assert!(
+        !mutation.contains("interrupted_at:"),
+        "a plain error finalize must never stamp the interrupt marker"
+    );
 }
 
 #[tokio::test]
@@ -794,11 +801,13 @@ async fn finalize_interrupted_response_does_not_rewrite_request_failed() {
     );
     assert_eq!(
         row.get("error_message").and_then(|value| value.as_str()),
-        Some(INTERRUPTED_RESPONSE_ERROR_SENTINEL)
+        Some("interrupted"),
+        "the durable error text is user-visible in timeline projections and must stay human-readable"
     );
     assert_eq!(
         row.get("interrupted_at").and_then(|value| value.as_str()),
-        Some(interrupted_at.as_str())
+        Some(interrupted_at.as_str()),
+        "finalize must not overwrite the earlier, more accurate interrupt stamp"
     );
     assert!(row
         .get("completed_at")
@@ -815,6 +824,47 @@ async fn finalize_interrupted_response_does_not_rewrite_request_failed() {
             .get("lifecycle_state")
             .and_then(|value| value.as_str()),
         Some("processing")
+    );
+
+    let _ = fs::remove_dir_all(&data_path);
+}
+
+/// The interrupt flow stamps `interrupted_at` before finalize, but that
+/// standalone write can be lost. The finalize mutation must then stamp
+/// `interrupted_at` itself — it is the durable marker startup/periodic repair
+/// uses to classify the owner request as interrupted rather than failed.
+#[tokio::test]
+async fn finalize_interrupted_response_stamps_missing_interrupted_at() {
+    let (node, data_path) = build_test_node("finalize-interrupted-stamp").await;
+    let writer = DefraStreamWriter::new(
+        node.clone(),
+        "did:defra-agent:test",
+        Duration::from_secs(60),
+    );
+    let request_id = uuid::Uuid::new_v4().to_string();
+    create_processing_request(&node, &request_id, "session-1").await;
+    let doc_id = writer
+        .begin("session-1", &request_id, "general")
+        .await
+        .unwrap();
+    writer
+        .write_tokens(&doc_id, "partial response")
+        .await
+        .unwrap();
+
+    let result = writer.finalize_interrupted_response(&doc_id).await.unwrap();
+    assert_eq!(result.status, StreamStatus::Error);
+
+    let row = load_response(&node, &doc_id).await;
+    assert_eq!(
+        row.get("error_message").and_then(|value| value.as_str()),
+        Some("interrupted")
+    );
+    assert!(
+        row.get("interrupted_at")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| !value.trim().is_empty()),
+        "finalize must stamp interrupted_at when the earlier standalone write was lost"
     );
 
     let _ = fs::remove_dir_all(&data_path);
