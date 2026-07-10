@@ -162,9 +162,14 @@ async fn create_subagent_request_inner(
     requester_did: Option<String>,
 ) -> Result<String> {
     // 1. Depth check (pure precondition, fires before any DB I/O).
-    if parent_subagent_depth + 1 > MAX_SUBAGENT_DEPTH {
+    if parent_subagent_depth >= MAX_SUBAGENT_DEPTH {
         return Err(anyhow!(IllegalToolCallTransition::SubagentDepthExceeded));
     }
+
+    // Normalize the immutable route key before validating and persisting it.
+    // A whitespace-padded DID must not create a request that can never match
+    // the paired peer's exact replication filter.
+    let requester_did = requester_did.map(|did| did.trim().to_owned());
 
     // 2. Coherence check (pure precondition, fires before any DB I/O).
     if request_id.is_empty() || parent_request_id.is_empty() || parent_tool_call_id.is_empty() {
@@ -180,10 +185,7 @@ async fn create_subagent_request_inner(
         if parent_agent_did.as_deref() != Some(agent_did.as_str()) {
             return Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent));
         }
-    } else if requester_did
-        .as_deref()
-        .is_none_or(|did| did.trim().is_empty())
-    {
+    } else if requester_did.as_deref().is_none_or(str::is_empty) {
         return Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent));
     }
 

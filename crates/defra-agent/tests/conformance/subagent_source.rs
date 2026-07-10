@@ -7,8 +7,9 @@ use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::interrupt::{fetch_interrupt_requested_at, interrupt_request};
 use defra_agent::tool_call_lifecycle::{
-    create_subagent_request_with_request_id, AwaitMode, CancelPolicy, IllegalToolCallTransition,
-    ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
+    create_subagent_request_with_request_id,
+    create_subagent_request_with_trusted_parent_request_id, AwaitMode, CancelPolicy,
+    IllegalToolCallTransition, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use defra_agent::{
     default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior,
@@ -262,6 +263,33 @@ async fn trusted_path_uses_targeted_bridge_without_parent_request() {
     assert_eq!(
         child.caused_by_parent_request_id.as_deref(),
         Some(parent_request_id)
+    );
+}
+
+#[tokio::test]
+async fn trusted_path_normalizes_requester_did_before_stamping_route() {
+    let db = test_db("r3-subagent-source-xdep-requester-normalization").await;
+    let child_request_id = "r3-child-normalized-requester";
+
+    create_subagent_request_with_trusted_parent_request_id(
+        db.node.as_ref(),
+        child_request_id.to_string(),
+        "r3-parent-not-replicated".to_string(),
+        "r3-tc-normalized-requester".to_string(),
+        0,
+        crate::support::AGENT_DID.to_string(),
+        "test".to_string(),
+        "prompt".to_string(),
+        None,
+        "  did:key:zNormalizedRequester  ".to_string(),
+    )
+    .await
+    .expect("trusted child request should normalize requester DID");
+
+    let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
+    assert_eq!(
+        child.requester_did.as_deref(),
+        Some("did:key:zNormalizedRequester")
     );
 }
 
@@ -831,6 +859,27 @@ async fn create_subagent_request_enforces_depth_boundary() {
             Some(IllegalToolCallTransition::SubagentDepthExceeded)
         ),
         "expected SubagentDepthExceeded, got {error:?}"
+    );
+
+    let overflow_error = create_subagent_request_with_request_id(
+        db.node.as_ref(),
+        "r3-child-depth-overflow".to_string(),
+        "r3-parent-depth".to_string(),
+        "r3-tc-depth-overflow".to_string(),
+        u32::MAX,
+        crate::support::AGENT_DID.to_string(),
+        "test".to_string(),
+        "prompt".to_string(),
+        None,
+    )
+    .await
+    .expect_err("u32::MAX parent depth must be rejected without overflow");
+    assert!(
+        matches!(
+            overflow_error.downcast_ref::<IllegalToolCallTransition>(),
+            Some(IllegalToolCallTransition::SubagentDepthExceeded)
+        ),
+        "expected overflow-safe SubagentDepthExceeded, got {overflow_error:?}"
     );
 }
 

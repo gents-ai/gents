@@ -168,6 +168,10 @@ impl CrossDeploymentCancelMirror {
                 return Ok(());
             }
         }
+        // This seam handles only cross-deployment cancellation, so the
+        // targeted bridge is authoritative. The parent row is a legacy
+        // coherence check/fallback; SubagentSource intentionally remains
+        // parent-first only for its same-node legacy materialization path.
         let Some(parent_did) = bridge_authoring_did.or(parent_authoring_did) else {
             return Ok(());
         };

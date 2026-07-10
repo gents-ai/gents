@@ -145,7 +145,6 @@ fn sixteen_peer_request_wave_is_reduced_to_one_target() {
     let host = resolve_template("subagent-host").expect("host template");
     let requester_did = "did:key:coordinator-07";
 
-    let former_parent_request_matches = 16;
     let current_parent_request_matches = (0..16)
         .filter(|index| {
             let host_did = format!("did:key:host-{index:02}");
@@ -171,10 +170,6 @@ fn sixteen_peer_request_wave_is_reduced_to_one_target() {
         })
         .count();
     assert_eq!(routed_child_request_matches, 1);
-    assert!(
-        former_parent_request_matches / routed_child_request_matches >= 5,
-        "request replication fan-out must improve by at least 5x"
-    );
 }
 
 /// Mirrors Lean `appCollections_in_catalog` / `appCollections_collections_empty`

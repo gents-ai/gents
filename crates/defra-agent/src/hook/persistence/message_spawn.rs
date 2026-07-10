@@ -641,7 +641,7 @@ impl DefraSessionHook {
             }
         }
 
-        if parent_context.subagent_depth + 1 > MAX_SUBAGENT_DEPTH {
+        if parent_context.subagent_depth >= MAX_SUBAGENT_DEPTH {
             return self
                 .fail_spawn_subagent_tool_call(
                     session_id,

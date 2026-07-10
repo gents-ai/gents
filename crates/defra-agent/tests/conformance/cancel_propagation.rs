@@ -190,9 +190,10 @@ async fn drive_declarative_cancel_propagation() {
         host.db.node.as_ref(),
         parent_session_id,
         parent_tool_call_id,
-        // A selective CAR lookup can consume one full 30s transport attempt
-        // before the persisted retry succeeds (defradb.rs#1101).
-        Duration::from_secs(60),
+        // A selective CAR lookup can consume a full 30s transport attempt.
+        // Allow multiple bounded attempts plus persisted backoff/scheduler
+        // margin under the saturated package suite (defradb.rs#1101).
+        Duration::from_secs(120),
     )
     .await;
     assert_eq!(
@@ -236,7 +237,7 @@ async fn drive_declarative_cancel_propagation() {
         host.db.node.as_ref(),
         parent_session_id,
         parent_tool_call_id,
-        Duration::from_secs(60),
+        Duration::from_secs(120),
     )
     .await;
     assert_eq!(host_bridge.lifecycle_state.as_deref(), Some("cancelled"));

@@ -572,6 +572,9 @@ async fn p2p_terminal_redrive_pushes_once_per_routed_request() {
     let enqueued_before = baseline["push_backlog"]["enqueued_total"]
         .as_u64()
         .expect("enqueued_total counter");
+    let failed_before = baseline["push_backlog"]["failed_total"]
+        .as_u64()
+        .expect("failed_total counter");
 
     let report = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
         .await
@@ -584,6 +587,13 @@ async fn p2p_terminal_redrive_pushes_once_per_routed_request() {
     let enqueued_after = after["push_backlog"]["enqueued_total"]
         .as_u64()
         .expect("enqueued_total counter");
+    let failed_after = after["push_backlog"]["failed_total"]
+        .as_u64()
+        .expect("failed_total counter");
+    assert_eq!(
+        failed_after, failed_before,
+        "wave measurement requires a retry-free transport window; failed pushes would be re-admitted and inflate enqueued_total"
+    );
     let measured_pushes = enqueued_after - enqueued_before;
     assert_eq!(
         measured_pushes, REQUESTS as u64,

@@ -73,6 +73,21 @@ excluded from the new request route; new cross-deployment children are keyed at
 creation. Existing targeted bridge rows remain the recovery/materialization
 source for in-flight work.
 
+## Rollout constraints
+
+This scope change is intentionally one-way compatible during a rolling
+upgrade. An old coordinator still sends a parent request that a new host can
+use as a legacy fallback. A new coordinator sends only the targeted bridge,
+which an old host cannot materialize without the former parent row. Operators
+must therefore upgrade host deployments before coordinator deployments.
+
+Pre-upgrade host-owned child requests have no `requester_did` and cannot be
+backfilled because the route key is immutable. After the new host-leg filter is
+installed, those rows have no request-state convergence channel and terminal
+re-drive correctly skips them. Drain in-flight cross-deployment children before
+rolling out the new scope templates; then upgrade hosts first and coordinators
+second.
+
 ## Write shape
 
 At the pinned DefraDB revision, one GraphQL document update already produces

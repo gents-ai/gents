@@ -236,7 +236,7 @@ impl DefraSessionHook {
                 ),
             ));
         }
-        if parent_context.subagent_depth + 1 > MAX_SUBAGENT_DEPTH {
+        if parent_context.subagent_depth >= MAX_SUBAGENT_DEPTH {
             return Some((
                 FailureClass::ArgumentInvalid,
                 depth_exceeded_payload(parent_context.subagent_depth),
