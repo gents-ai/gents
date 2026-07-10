@@ -1541,7 +1541,7 @@ pub async fn ensure_agent_response_reasoning_progress_migration(
         // runtime on the first request. Compare against a stable scalar-Int
         // sibling as the reference kind, so we don't hard-code defradb.rs's kind
         // encoding; if none is present we can't validate and fall back to
-        // presence-only. Fail loudly rather than run broken (#661).
+        // presence-only. The bundled sweep below performs the repair (#661).
         let reference_kind = [
             "progress_seq",
             "token_count",
@@ -1550,15 +1550,19 @@ pub async fn ensure_agent_response_reasoning_progress_migration(
         .iter()
         .find_map(|name| field_kind_value(&collection, name));
         if let Some(expected_kind) = reference_kind {
-            anyhow::ensure!(
-                existing_kind == expected_kind,
-                "AgentResponse.reasoning_progress_seq has an unexpected field kind \
-                 ({existing_kind}); it must be scalar Int like its siblings ({expected_kind}). \
-                 This is a corrupted schema — likely a manual additive patch applied the wrong \
-                 type — and every create_AgentResponse will fail with \"Expected array, got: \
-                 Number(0)\". Repair the field to scalar Int before starting (remove it and let \
-                 this migration re-add it). See sourcenetwork/defra-agent#661."
-            );
+            if existing_kind != expected_kind {
+                // The schema-driven sweep runs after all hand-written
+                // migrations and repairs scalar Kind mismatches. Do not abort
+                // before it gets that chance: this is the exact v0.6.5 fleet
+                // incident where Kind 5 created `[Int]` instead of `Int`.
+                tracing::warn!(
+                    collection = "AgentResponse",
+                    field = "reasoning_progress_seq",
+                    old_kind = %existing_kind,
+                    new_kind = %expected_kind,
+                    "field kind mismatch deferred to bundled schema sweep"
+                );
+            }
         }
         return Ok(());
     }
@@ -2221,28 +2225,166 @@ fn parse_sdl_fields(sdl: &str) -> Vec<(String, Vec<(String, String)>)> {
     collections
 }
 
+// DefraDB rejects mutating an existing field in place. A Kind repair therefore
+// replaces the field across two schema versions: first rename it to this
+// temporary name, then rename it back with the bundled Kind. Each rename is
+// treated as a remove+add and receives a proper new field CID. The deterministic
+// prefix also lets the next boot finish phase two if startup stopped between
+// the patches.
+const KIND_REPAIR_FIELD_PREFIX: &str = "defra_agent_kind_repair_";
+
+async fn finish_bundled_field_kind_repair(
+    node: &EmbeddedNode,
+    collection_name: &str,
+    field_index: usize,
+    temporary_name: &str,
+    field_name: &str,
+    old_kind: &serde_json::Value,
+    new_kind: u8,
+) -> Result<()> {
+    let patch = format!(
+        r#"[
+            {{"op":"remove","path":"/{collection_name}/Fields/{field_index}/FieldID"}},
+            {{"op":"replace","path":"/{collection_name}/Fields/{field_index}/Name","value":"{field_name}"}},
+            {{"op":"replace","path":"/{collection_name}/Fields/{field_index}/Kind","value":{new_kind}}}
+        ]"#
+    );
+    let next = node
+        .patch_collection(collection_name, &patch)
+        .await
+        .with_context(|| {
+            format!(
+                "finish bundled field kind repair {collection_name}.{field_name} from {temporary_name}"
+            )
+        })?;
+    node.set_active_collection_version(&next.version_id)
+        .await
+        .with_context(|| {
+            format!("activate bundled field kind repair {collection_name}.{field_name}")
+        })?;
+    tracing::info!(
+        collection = %collection_name,
+        field = %field_name,
+        old_kind = %old_kind,
+        new_kind,
+        version = %next.version_id,
+        "bundled schema field kind repaired"
+    );
+    Ok(())
+}
+
+async fn repair_bundled_field_kind(
+    node: &EmbeddedNode,
+    collection_name: &str,
+    field_index: usize,
+    field_name: &str,
+    old_kind: &serde_json::Value,
+    new_kind: u8,
+) -> Result<()> {
+    let temporary_name = format!("{KIND_REPAIR_FIELD_PREFIX}{field_name}");
+    let patch = format!(
+        r#"[
+            {{"op":"remove","path":"/{collection_name}/Fields/{field_index}/FieldID"}},
+            {{"op":"replace","path":"/{collection_name}/Fields/{field_index}/Name","value":"{temporary_name}"}}
+        ]"#
+    );
+    let intermediate = node
+        .patch_collection(collection_name, &patch)
+        .await
+        .with_context(|| {
+            format!("begin bundled field kind repair {collection_name}.{field_name}")
+        })?;
+    node.set_active_collection_version(&intermediate.version_id)
+        .await
+        .with_context(|| {
+            format!("activate intermediate field kind repair {collection_name}.{field_name}")
+        })?;
+
+    finish_bundled_field_kind_repair(
+        node,
+        collection_name,
+        field_index,
+        &temporary_name,
+        field_name,
+        old_kind,
+        new_kind,
+    )
+    .await
+}
+
 /// Schema-driven additive field reconciliation: for every bundled collection
 /// that exists in this store, diff the live fields against the bundled SDL and
 /// patch in whatever is missing. This is the fix for the recurring upgrade
 /// bug class where a schema gains a field, the startup queries select it, and
 /// no hand-written migration ships (`tool_policy_version`, `write_tools`,
 /// `retry_max_transport`, ...): the bundled schema itself is now the migration
-/// source of truth. Purely additive — never removes, renames, or re-types.
+/// source of truth. Missing fields are added; scalar Kind mismatches are
+/// replaced across two recoverable schema versions. Fields are never silently
+/// removed, and unmapped relation/object kinds still require a hand migration.
 pub async fn ensure_bundled_schema_fields(node: Arc<EmbeddedNode>) -> Result<()> {
     for sdl in defra_agent_protocol::schemas::ALL {
         for (collection_name, fields) in parse_sdl_fields(sdl) {
-            let Some(collection) = node
+            let Some(mut collection) = node
                 .get_collection(&collection_name)
                 .with_context(|| format!("get {collection_name} collection"))?
             else {
                 continue;
             };
 
-            let mut operations = Vec::new();
+            // Resume a repair interrupted between its two schema versions.
+            // This must run before missing-field detection, otherwise the
+            // original field would be appended and the temporary field left
+            // behind.
+            loop {
+                let interrupted =
+                    collection
+                        .fields
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, field)| {
+                            let field_name = field.name.strip_prefix(KIND_REPAIR_FIELD_PREFIX)?;
+                            let (_, field_type) = fields
+                                .iter()
+                                .find(|(expected_name, _)| expected_name == field_name)?;
+                            let new_kind = sdl_type_to_field_kind(field_type)?;
+                            let old_kind = serde_json::to_value(&field.kind).ok()?;
+                            Some((
+                                index,
+                                field.name.clone(),
+                                field_name.to_string(),
+                                old_kind,
+                                new_kind,
+                            ))
+                        });
+                let Some((index, temporary_name, field_name, old_kind, new_kind)) = interrupted
+                else {
+                    break;
+                };
+                anyhow::ensure!(
+                    !collection_has_field(&collection, &field_name),
+                    "cannot resume bundled field kind repair for {collection_name}.{field_name}: \
+                     both the original and temporary field exist"
+                );
+                finish_bundled_field_kind_repair(
+                    node.as_ref(),
+                    &collection_name,
+                    index,
+                    &temporary_name,
+                    &field_name,
+                    &old_kind,
+                    new_kind,
+                )
+                .await?;
+                collection = node
+                    .get_collection(&collection_name)
+                    .with_context(|| format!("reload {collection_name} after resumed Kind repair"))?
+                    .with_context(|| format!("{collection_name} disappeared during Kind repair"))?;
+            }
+
+            // Correct existing scalar fields whose stored Kind disagrees with
+            // the bundled SDL. Repairs run one at a time because each creates
+            // and activates two schema versions.
             for (field_name, field_type) in &fields {
-                if collection_has_field(&collection, field_name) {
-                    continue;
-                }
                 let Some(kind) = sdl_type_to_field_kind(field_type) else {
                     tracing::warn!(
                         collection = %collection_name,
@@ -2252,9 +2394,47 @@ pub async fn ensure_bundled_schema_fields(node: Arc<EmbeddedNode>) -> Result<()>
                     );
                     continue;
                 };
+                let Some((field_index, field)) = collection
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .find(|(_, field)| field.name == field_name.as_str())
+                else {
+                    continue;
+                };
+                let old_kind = serde_json::to_value(&field.kind)
+                    .context("serialize live bundled field kind")?;
+                if old_kind == serde_json::json!(kind) {
+                    continue;
+                }
+                repair_bundled_field_kind(
+                    node.as_ref(),
+                    &collection_name,
+                    field_index,
+                    field_name,
+                    &old_kind,
+                    kind,
+                )
+                .await?;
+                collection = node
+                    .get_collection(&collection_name)
+                    .with_context(|| format!("reload {collection_name} after Kind repair"))?
+                    .with_context(|| format!("{collection_name} disappeared during Kind repair"))?;
+            }
+
+            let mut operations = Vec::new();
+            let mut additions = Vec::new();
+            for (field_name, field_type) in &fields {
+                if collection_has_field(&collection, field_name) {
+                    continue;
+                }
+                let Some(kind) = sdl_type_to_field_kind(field_type) else {
+                    continue;
+                };
                 operations.push(format!(
                     r#"{{"op":"add","path":"/{collection_name}/Fields/-","value":{{"Name":"{field_name}","Kind":{kind}}}}}"#
                 ));
+                additions.push((field_name, kind));
             }
             if operations.is_empty() {
                 continue;
@@ -2270,12 +2450,16 @@ pub async fn ensure_bundled_schema_fields(node: Arc<EmbeddedNode>) -> Result<()>
                 .with_context(|| {
                     format!("set_active_collection_version {collection_name} bundled fields")
                 })?;
-            tracing::info!(
-                collection = %collection_name,
-                added = operations.len(),
-                version = %next.version_id,
-                "collection patched to match bundled schema"
-            );
+            for (field_name, new_kind) in additions {
+                tracing::info!(
+                    collection = %collection_name,
+                    field = %field_name,
+                    old_kind = "missing",
+                    new_kind,
+                    version = %next.version_id,
+                    "bundled schema field added"
+                );
+            }
         }
     }
     Ok(())
@@ -3690,12 +3874,21 @@ mod patch_kind_tests {
 
         // Idempotent: run twice; the second sweep must be a write-free no-op.
         ensure_bundled_schema_fields(node.clone()).await.unwrap();
+        let first_version = node
+            .get_collection("ToolSelection")
+            .unwrap()
+            .expect("ToolSelection collection after first sweep")
+            .version_id;
         ensure_bundled_schema_fields(node.clone()).await.unwrap();
 
         let collection = node
             .get_collection("ToolSelection")
             .unwrap()
             .expect("ToolSelection collection");
+        assert_eq!(
+            collection.version_id, first_version,
+            "the second bundled-schema sweep must not create a schema version"
+        );
         for field in &[
             "tool_policy_version",
             "write_tools",
@@ -3740,6 +3933,10 @@ mod patch_kind_tests {
             for (collection, fields) in parse_sdl_fields(sdl) {
                 for (field, sdl_type) in fields {
                     assert!(
+                        !field.starts_with(KIND_REPAIR_FIELD_PREFIX),
+                        "{collection}.{field} collides with the reserved Kind-repair prefix"
+                    );
+                    assert!(
                         sdl_type_to_field_kind(&sdl_type).is_some(),
                         "{collection}.{field}: unmapped SDL type {sdl_type:?}"
                     );
@@ -3777,10 +3974,44 @@ mod patch_kind_tests {
             .get_collection("InferenceProfile")
             .unwrap()
             .expect("InferenceProfile collection must exist after migration");
+        let hand_patched_version = collection.version_id.clone();
         for (field, _) in INFERENCE_PROFILE_RETRY_FIELDS {
             assert!(
                 collection_has_field(&collection, field),
                 "InferenceProfile must have field '{field}' after migration"
+            );
+            assert_eq!(
+                collection
+                    .fields
+                    .iter()
+                    .filter(|candidate| candidate.name == *field)
+                    .count(),
+                1,
+                "InferenceProfile.{field} must be patched exactly once"
+            );
+        }
+
+        // #680 coexistence: production still runs the hand-written retry-field
+        // migration before the generic sweep. The sweep must recognize those
+        // fields and create no second schema version or duplicate field.
+        ensure_bundled_schema_fields(node.clone()).await.unwrap();
+        let swept = node
+            .get_collection("InferenceProfile")
+            .unwrap()
+            .expect("InferenceProfile collection after bundled sweep");
+        assert_eq!(
+            swept.version_id, hand_patched_version,
+            "bundled sweep must not double-patch #680 retry fields"
+        );
+        for (field, _) in INFERENCE_PROFILE_RETRY_FIELDS {
+            assert_eq!(
+                swept
+                    .fields
+                    .iter()
+                    .filter(|candidate| candidate.name == *field)
+                    .count(),
+                1,
+                "InferenceProfile.{field} must remain unique after bundled sweep"
             );
         }
     }
@@ -3974,27 +4205,113 @@ mod patch_kind_tests {
     }
 
     #[tokio::test]
-    async fn reasoning_progress_migration_fails_loud_on_wrong_field_kind() {
+    async fn bundled_schema_sweep_repairs_wrong_reasoning_progress_kind() {
         // #661: a reasoning_progress_seq mistyped as a list (from a bad manual
         // schema patch) makes every create_AgentResponse fail with "Expected
-        // array, got: Number(0)". The migration must reject it loudly at
-        // startup rather than silently leave the runtime broken.
+        // array, got: Number(0)". The hand-written migration runs first and
+        // defers the mismatch; the schema-driven sweep must then replace the
+        // stored `[Int]` field with scalar `Int`, exactly repairing strangenas.
         let node = test_node().await;
         node.add_schema(CORRUPTED_AGENT_RESPONSE_SCHEMA)
             .await
             .unwrap();
-
-        let err = ensure_agent_response_reasoning_progress_migration(node.clone())
-            .await
-            .expect_err("migration must reject a wrong-typed reasoning_progress_seq");
-        let message = format!("{err:#}");
+        let legacy_row = node
+            .execute(
+                r#"mutation {
+                    create_AgentResponse(input: {
+                        response_key: "legacy-before-kind-repair",
+                        request_id: "legacy-before-kind-repair",
+                        agent_did: "did:defra-agent:migration-test",
+                        session_id: "legacy-before-kind-repair",
+                        content: "preserve me",
+                        progress_seq: 1,
+                        created_at: "2026-07-09T12:00:00Z"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
         assert!(
-            message.contains("reasoning_progress_seq") && message.contains("scalar Int"),
-            "error must name the field and the required type; got: {message}"
+            !legacy_row.has_errors(),
+            "pre-repair row setup failed: {:?}",
+            legacy_row.errors
+        );
+
+        ensure_agent_response_reasoning_progress_migration(node.clone())
+            .await
+            .unwrap();
+        ensure_bundled_schema_fields(node.clone()).await.unwrap();
+
+        let repaired = node.get_collection("AgentResponse").unwrap().unwrap();
+        assert_eq!(
+            field_kind_value(&repaired, "reasoning_progress_seq"),
+            field_kind_value(&repaired, "progress_seq"),
+            "bundled sweep must replace `[Int]` with scalar `Int`"
         );
         assert!(
-            message.contains("661"),
-            "error should point at the tracking issue; got: {message}"
+            !repaired
+                .fields
+                .iter()
+                .any(|field| field.name.starts_with(KIND_REPAIR_FIELD_PREFIX)),
+            "completed repair must not leave its temporary field behind"
+        );
+
+        let preserved = node
+            .execute(
+                r#"query {
+                    AgentResponse(filter: {
+                        response_key: { _eq: "legacy-before-kind-repair" }
+                    }) { response_key content progress_seq reasoning_progress_seq }
+                }"#,
+            )
+            .await;
+        assert!(
+            !preserved.has_errors(),
+            "legacy row must remain queryable after Kind repair: {:?}",
+            preserved.errors
+        );
+        assert_eq!(
+            preserved
+                .data
+                .as_ref()
+                .and_then(|data| data.get("AgentResponse"))
+                .and_then(|rows| rows.as_array())
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("content"))
+                .and_then(|content| content.as_str()),
+            Some("preserve me"),
+            "Kind repair must preserve pre-existing AgentResponse history"
+        );
+
+        let scalar_write = node
+            .execute(
+                r#"mutation {
+                    create_AgentResponse(input: {
+                        response_key: "repaired-scalar-write",
+                        request_id: "repaired-scalar-write",
+                        agent_did: "did:defra-agent:migration-test",
+                        session_id: "repaired-scalar-write",
+                        content: "",
+                        reasoning_progress_seq: 0,
+                        created_at: "2026-07-10T12:00:00Z"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !scalar_write.has_errors(),
+            "scalar write must succeed after wrong-Kind repair: {:?}",
+            scalar_write.errors
+        );
+
+        let repaired_version = repaired.version_id;
+        ensure_bundled_schema_fields(node.clone()).await.unwrap();
+        assert_eq!(
+            node.get_collection("AgentResponse")
+                .unwrap()
+                .unwrap()
+                .version_id,
+            repaired_version,
+            "second boot after wrong-Kind repair must be a schema no-op"
         );
     }
 
