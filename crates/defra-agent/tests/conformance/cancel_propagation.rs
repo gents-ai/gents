@@ -117,12 +117,6 @@ async fn drive_declarative_cancel_propagation() {
         Duration::from_secs(60),
     )
     .await;
-    // A persisted PeerPairingApplied row proves the replicator was configured,
-    // not that its transport is connected yet. Fence request creation on the
-    // actual P2P connection so this conformance case does not race the first
-    // outbound replication wave under a saturated package suite.
-    wait_for_connected_peer(coord.db.node.as_ref(), Duration::from_secs(60)).await;
-    wait_for_connected_peer(host.db.node.as_ref(), Duration::from_secs(60)).await;
     let RunningAgent {
         db: coord_db,
         booted: coord_booted,
@@ -150,7 +144,7 @@ async fn drive_declarative_cancel_propagation() {
     let parent_on_host = wait_for_request(
         host.db.node.as_ref(),
         parent_request_id,
-        Duration::from_secs(60),
+        Duration::from_secs(30),
     )
     .await;
     assert_eq!(parent_on_host.agent_did, coord_did);
@@ -450,25 +444,6 @@ async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
         }
         if Instant::now() >= deadline {
             panic!("node never exposed a P2P listen address; last_addrs={addrs:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-async fn wait_for_connected_peer(node: &EmbeddedNode, timeout: Duration) {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let peers = node
-            .p2p()
-            .expect("p2p should be enabled")
-            .connected_peers()
-            .await
-            .expect("connected peers");
-        if !peers.is_empty() {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out waiting for a connected P2P peer; last_peers={peers:?}");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

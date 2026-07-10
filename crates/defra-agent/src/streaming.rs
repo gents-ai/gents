@@ -25,12 +25,6 @@ use queries::{
 
 const MAX_LIVE_REASONING_BYTES: usize = 64 * 1024;
 
-/// Reserved durable marker for a response finalized by the runtime interrupt
-/// path. This must not overlap plausible provider error text: request repair
-/// uses it to distinguish an interrupt from a provider failure whose message
-/// happens to be the ordinary word "interrupted".
-pub(crate) const INTERRUPTED_RESPONSE_ERROR_SENTINEL: &str = "__defra_agent_runtime_interrupted__";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamStatus {
     Streaming,
@@ -142,12 +136,11 @@ impl DefraStreamWriter {
             reasoning_len = snapshot.reasoning.len(),
             "flushing streaming response snapshot"
         );
-        let escaped_doc_id = escape_graphql_string(doc_id);
         let mutation = format!(
             r#"mutation {{
                 update_AgentResponse(
                     filter: {{
-                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        _docID: {{ _eq: "{doc_id}" }},
                         status: {{ _eq: "streaming" }}
                     }},
                     input: {{
@@ -232,12 +225,11 @@ impl DefraStreamWriter {
             buf.last_flush_at = Instant::now();
         }
 
-        let escaped_doc_id = escape_graphql_string(doc_id);
         let mutation = format!(
             r#"mutation {{
                 update_AgentResponse(
                     filter: {{
-                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        _docID: {{ _eq: "{doc_id}" }},
                         status: {{ _eq: "streaming" }}
                     }},
                     input: {{
@@ -273,12 +265,11 @@ impl DefraStreamWriter {
     }
 
     pub async fn set_error_message(&self, doc_id: &str, error_message: &str) -> Result<()> {
-        let escaped_doc_id = escape_graphql_string(doc_id);
         let escaped_error_message = escape_graphql_string(error_message);
         let mutation = format!(
             r#"mutation {{
                 update_AgentResponse(
-                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
                     input: {{ error_message: "{escaped_error_message}" }}
                 ) {{ _docID }}
             }}"#
@@ -310,21 +301,10 @@ impl DefraStreamWriter {
             return Ok(true);
         }
 
-        self.finalize_error(&existing.doc_id, error_message).await?;
+        self.set_error_message(&existing.doc_id, error_message)
+            .await?;
+        self.finalize(&existing.doc_id, StreamStatus::Error).await?;
         Ok(true)
-    }
-
-    /// Persist the response error and owner request failure in one guarded
-    /// terminal mutation. This removes the old dependency on a separate
-    /// best-effort `failure_reason` write.
-    pub async fn finalize_error(&self, doc_id: &str, error_message: &str) -> Result<StreamResult> {
-        self.finalize_inner(
-            doc_id,
-            StreamStatus::Error,
-            Some(error_message),
-            RequestFinalizeMode::UpdateRequest,
-        )
-        .await
     }
 
     /// Complete the response-side interrupt edge without rewriting
@@ -333,7 +313,7 @@ impl DefraStreamWriter {
         self.finalize_inner(
             doc_id,
             StreamStatus::Error,
-            Some(INTERRUPTED_RESPONSE_ERROR_SENTINEL),
+            Some("interrupted"),
             RequestFinalizeMode::ResponseOnly,
         )
         .await
@@ -437,7 +417,6 @@ impl DefraStreamWriter {
                 snapshot.as_ref(),
                 error_message,
                 request_mode,
-                &self.agent_did,
             );
             let operation = if snapshot.is_some() {
                 "finalize_streaming_response"
@@ -445,13 +424,7 @@ impl DefraStreamWriter {
                 "finalize_streaming_response_without_buffer"
             };
 
-            let resp = match crate::retry::execute_graphql_with_terminal_persistence_retry(
-                &self.node,
-                &mutation,
-                operation,
-            )
-            .await
-            {
+            let resp = match execute_mutation_with_retry(&self.node, &mutation, operation).await {
                 Ok(resp) => resp,
                 Err(error) => {
                     tracing::Span::current().record("finalize_outcome", "mutation_error");
@@ -566,20 +539,17 @@ impl StreamWriter for DefraStreamWriter {
             );
         }
 
-        let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let response_key = escape_graphql_string(request_id);
-        let escaped_request_id = escape_graphql_string(request_id);
-        let escaped_agent_did = escape_graphql_string(&self.agent_did);
-        let escaped_session_id = escape_graphql_string(session_id);
+        let now = chrono::Utc::now().to_rfc3339();
+        let response_key = request_id.to_string();
         let escaped_behavior_id = escape_graphql_string(behavior_id);
         let mutation = format!(
             r#"mutation {{
                 create_AgentResponse(input: {{
                     response_key: "{response_key}",
-                    request_id: "{escaped_request_id}",
-                    agent_did: "{escaped_agent_did}",
+                    request_id: "{request_id}",
+                    agent_did: "{agent_did}",
                     behavior_id: "{escaped_behavior_id}",
-                    session_id: "{escaped_session_id}",
+                    session_id: "{session_id}",
                     content: "",
                     reasoning: "",
                     status: "streaming",
@@ -591,6 +561,7 @@ impl StreamWriter for DefraStreamWriter {
                     completed_at: ""
                 }}) {{ _docID }}
             }}"#,
+            agent_did = self.agent_did,
         );
 
         let resp = execute_mutation_with_retry(&self.node, &mutation, "begin_streaming_response")
@@ -723,26 +694,10 @@ fn build_finalize_mutation(
     snapshot: Option<&StreamBufferSnapshot>,
     error_message: Option<&str>,
     request_mode: RequestFinalizeMode,
-    owner_did: &str,
 ) -> String {
-    let escaped_doc_id = escape_graphql_string(doc_id);
-    let escaped_now = escape_graphql_string(now);
-    let effective_error_message = match status {
-        StreamStatus::Error => error_message
-            .or_else(|| existing.and_then(|response| response.error_message.as_deref())),
-        StreamStatus::Complete | StreamStatus::Streaming => None,
-    };
     let request_transition = match request_mode {
         RequestFinalizeMode::UpdateRequest => existing
-            .map(|existing| {
-                build_request_terminal_update(
-                    &existing.request_id,
-                    owner_did,
-                    status,
-                    now,
-                    effective_error_message,
-                )
-            })
+            .map(|existing| build_request_terminal_update(&existing.request_id, status))
             .unwrap_or_default(),
         RequestFinalizeMode::ResponseOnly => String::new(),
     };
@@ -761,7 +716,7 @@ fn build_finalize_mutation(
             r#"mutation {{
                 update_AgentResponse(
                     filter: {{
-                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        _docID: {{ _eq: "{doc_id}" }},
                         status: {{ _eq: "streaming" }}
                     }},
                     input: {{
@@ -770,7 +725,7 @@ fn build_finalize_mutation(
                         status: "{status}",
                         {error_message_input}
                         token_count: {token_count},
-                        completed_at: "{escaped_now}"
+                        completed_at: "{now}"
                     }}
                 ) {{ _docID }}
                 {request_transition}
@@ -782,7 +737,7 @@ fn build_finalize_mutation(
             r#"mutation {{
                 update_AgentResponse(
                     filter: {{
-                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        _docID: {{ _eq: "{doc_id}" }},
                         status: {{ _eq: "streaming" }}
                     }},
                     input: {{
@@ -790,7 +745,7 @@ fn build_finalize_mutation(
                         reasoning: "",
                         status: "{status}",
                         {error_message_input}
-                        completed_at: "{escaped_now}"
+                        completed_at: "{now}"
                     }}
                 ) {{ _docID }}
                 {request_transition}
@@ -800,36 +755,22 @@ fn build_finalize_mutation(
     }
 }
 
-fn build_request_terminal_update(
-    request_id: &str,
-    owner_did: &str,
-    status: &StreamStatus,
-    terminalized_at: &str,
-    failure_reason: Option<&str>,
-) -> String {
+fn build_request_terminal_update(request_id: &str, status: &StreamStatus) -> String {
     let (request_status, lifecycle_state) = match status {
         StreamStatus::Complete => ("completed", "completed"),
         StreamStatus::Error => ("error", "failed"),
         StreamStatus::Streaming => return String::new(),
     };
     let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_owner_did = escape_graphql_string(owner_did);
-    let escaped_terminalized_at = escape_graphql_string(terminalized_at);
-    let escaped_failure_reason = escape_graphql_string(failure_reason.unwrap_or_default());
     format!(
         r#"update_AgentRequest(
                     filter: {{
                         request_id: {{ _eq: "{escaped_request_id}" }},
-                        agent_did: {{ _eq: "{escaped_owner_did}" }},
-                        status: {{ _eq: "processing" }},
-                        lifecycle_state: {{ _in: ["claimed", "processing"] }}
+                        status: {{ _eq: "processing" }}
                     }},
                     input: {{
                         status: "{request_status}",
-                        lifecycle_state: "{lifecycle_state}",
-                        failure_reason: "{escaped_failure_reason}",
-                        terminalized_at: "{escaped_terminalized_at}",
-                        terminal_redrive_attempts: 0
+                        lifecycle_state: "{lifecycle_state}"
                     }}
                 ) {{ _docID }}"#
     )

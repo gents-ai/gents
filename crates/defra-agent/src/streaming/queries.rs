@@ -15,8 +15,6 @@ pub(super) struct PersistedResponseState {
     pub session_id: Option<String>,
     pub content: String,
     pub status: String,
-    #[serde(default)]
-    pub error_message: Option<String>,
     pub token_count: usize,
     #[serde(default)]
     pub interrupted_at: Option<String>,
@@ -67,7 +65,6 @@ pub(super) async fn load_response_state(
                 session_id
                 content
                 status
-                error_message
                 token_count
                 interrupted_at
             }}
@@ -111,7 +108,6 @@ pub(super) async fn load_response_state_by_key(
                 session_id
                 content
                 status
-                error_message
                 token_count
                 interrupted_at
             }}

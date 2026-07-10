@@ -256,7 +256,6 @@ pub async fn reconcile_coalesced_pending_request(
 
     let escaped_agent_did = escape_graphql_string(agent_did);
     for duplicate in matching.iter().skip(1) {
-        let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let duplicate_doc_id = escape_graphql_string(&duplicate.doc_id);
         let survivor_request_id = escape_graphql_string(&survivor.request_id);
         let mutation = format!(
@@ -272,14 +271,12 @@ pub async fn reconcile_coalesced_pending_request(
                         status: "superseded",
                         lifecycle_state: "superseded",
                         superseded_by_request: "{survivor_request_id}",
-                        failure_reason: "coalesced into earlier queued request",
-                        terminalized_at: "{terminalized_at}",
-                        terminal_redrive_attempts: 0
+                        failure_reason: "coalesced into earlier queued request"
                     }}
                 ) {{ _docID }}
             }}"#
         );
-        crate::retry::execute_graphql_with_terminal_persistence_retry(
+        session::execute_mutation_with_retry(
             node,
             &mutation,
             "reconcile_coalesced_pending_request",
@@ -539,7 +536,6 @@ async fn drain_pending_session_requests_where(
     let escaped_reason = escape_graphql_string(reason);
     let mut drained = 0;
     for row in rows.into_iter().filter(should_drain) {
-        let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let escaped_doc_id = escape_graphql_string(&row.doc_id);
         let mutation = format!(
             r#"mutation {{
@@ -553,19 +549,13 @@ async fn drain_pending_session_requests_where(
                     input: {{
                         status: "interrupted",
                         lifecycle_state: "interrupted",
-                        failure_reason: "{escaped_reason}",
-                        terminalized_at: "{terminalized_at}",
-                        terminal_redrive_attempts: 0
+                        failure_reason: "{escaped_reason}"
                     }}
                 ) {{ _docID }}
             }}"#
         );
-        let response = crate::retry::execute_graphql_with_terminal_persistence_retry(
-            node,
-            &mutation,
-            "drain_automated_wakeup",
-        )
-        .await?;
+        let response =
+            session::execute_mutation_with_retry(node, &mutation, "drain_automated_wakeup").await?;
         if response
             .data
             .as_ref()

@@ -171,51 +171,6 @@ write path has no value-equality short-circuit, and every write takes
 higher-priority CRDT delta that flows through the normal PushLog path and a
 lagging replica accepts by LWW.
 
-## Durable terminalization extension (2026-07-09)
-
-The original mechanism left two #664 gaps: request terminal writes retried only
-recognized transaction conflicts, and the re-drive cap/window lived in process
-memory and sorted by request creation time. The durable extension uses this
-contract:
-
-1. A terminal `AgentResponse` is persistent repair intent. Completion/error
-   finalization writes the response outcome and the owner request terminal edge
-   in one GraphQL mutation. Every terminal persistence seam has a bounded
-   all-storage-error retry. If retries exhaust after the response is durable,
-   startup and periodic `RequestLifecycle::repair_terminal_requests` finish the
-   matching `claimed`/`processing` request without re-executing it. The closed
-   response's reserved runtime-interrupt sentinel (or its `interrupted_at`
-   stamp) repairs to the interrupted request terminal; ordinary provider error
-   text, including the literal word `interrupted`, repairs to failed.
-2. `failure_reason` is latched before I/O and included in the terminal request
-   mutation. The durable response's `error_message` is the restart-safe source
-   for repair, so a failed standalone reason write cannot lose the terminal
-   explanation.
-3. `terminalized_at` and `terminal_redrive_attempts` are persisted on
-   `AgentRequest`. Eligibility is ordered by actual terminalization time, in
-   ascending 64-row batches; exhausted rows leave the query, so an old request
-   that terminalizes late is eventually visited. The counter never refills on
-   owner restart and caps same-value CRDT writes at three per request.
-4. A partition longer than that cap is repaired without more request writes.
-   When an existing subagent pairing reconnects, the reconciler reinstalls its
-   already-desired replicator once. DefraDB's install path performs a full replay
-   of current owner-authored heads. A failed reinstall remains retryable through
-   the ordinary topology diff on the next tick. The in-memory connection tracker
-   starts empty, so the first startup sweep with readable desired state
-   intentionally performs this one bounded delete+reinstall for each configured
-   subagent peer; rolling fleet restarts therefore normally replay each pairing
-   once per restarted daemon.
-5. Every request mutation is owner-scoped. Foreign replicas remain passive;
-   duplicate response observations and bridge projections remain absorbed by
-   source-state guards.
-
-Lean models the durable response outcome as the precondition and result selector
-for request repair. TLA+ models the persisted cap as one per-request emission
-counter (one write fans out to all online peers) and models reconnect replay as
-a bounded action that consumes neither request delta ids nor the write budget.
-The liveness assumptions are eventual local storage success, eventual reconnect
-of a configured peer, and a successful full replay after reconnect.
-
 ## Validation
 
 Model: `MCReplicatedRequestConvergence` green; `MCReplicatedRequestConvergenceStuck`
@@ -223,19 +178,17 @@ Model: `MCReplicatedRequestConvergence` green; `MCReplicatedRequestConvergenceSt
 violations. Code: `cargo test -p defra-agent` (full) + `cargo check --workspace
 --all-targets`. Every conformance fence verified red-then-green.
 
-## Remaining boundary
+## Known follow-ups (not blocking)
 
-- The ~98% CPU / HTTP wedge cause remains outside this lifecycle fix; durable
-  terminalization prevents that failure window from making ordinary request
-  execution claimable again, but does not diagnose the original CPU condition.
-- Liveness is conditional on DefraDB eventually accepting local writes and on a
-  configured peer eventually reconnecting and completing full replay. Permanent
-  storage failure, permanent partition, revoked authorization, or an invalid
-  replicator filter are observable retrying states, not claimed convergence.
-- Reconnect detection is sampled. A disconnect that lasts beyond the redrive
-  cap but drops and recovers wholly between pairing sweeps produces no observed
-  inactive-to-active edge, so replay is not guaranteed. Update-triggered sweeps
-  narrow this window; eliminating it requires a transport reconnect event or
-  DefraDB anti-entropy hook.
+- Wedge-window observability + `finalize_request_failure` terminal-write
+  robustness (the ~98% CPU incident cause is undetermined; unlogged window) —
+  tracked on #664.
+- `created_at DESC` is a proxy for terminalization time; under very high
+  request-creation rate a long-running task's recently-terminalized row could
+  fall outside the top-`N` window. Eliminable with a `terminalized_at` /
+  `convergence_seq` field (deliberately not added now to avoid schema churn).
+- Remaining raw `agent_did` interpolation in the sibling `recover_stuck_*`
+  functions this PR does not touch (pre-existing; `recover_stuck_requests` is
+  fixed here since it is modified).
 
 Refs #664, #661, #663, #630. defradb.rs#1074.

@@ -243,10 +243,6 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub failure_reason: Option<String>,
     #[serde(default)]
-    pub terminalized_at: Option<String>,
-    #[serde(default)]
-    pub terminal_redrive_attempts: Option<i64>,
-    #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
     pub claimed_at: Option<String>,

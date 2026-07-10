@@ -1033,6 +1033,9 @@ struct BackgroundCompletionObserver {
     subscription: events::Subscription,
     collection_id_to_name: HashMap<String, String>,
     processed_child_request_ids: HashSet<String>,
+    /// Per-doc re-emit budget for the owner terminal-convergence re-drive (#664),
+    /// carried across ticks so a converged request stops being re-driven.
+    terminal_redrive_budget: HashMap<String, u32>,
 }
 
 impl BackgroundCompletionObserver {
@@ -1045,6 +1048,7 @@ impl BackgroundCompletionObserver {
             subscription,
             collection_id_to_name: HashMap::new(),
             processed_child_request_ids: HashSet::new(),
+            terminal_redrive_budget: HashMap::new(),
         }
     }
 
@@ -1144,6 +1148,7 @@ impl BackgroundCompletionObserver {
         let redrive = crate::RequestLifecycle::redrive_terminal_convergence(
             self.node.as_ref(),
             &self.local_did,
+            &mut self.terminal_redrive_budget,
         )
         .await?;
         if !redrive.is_noop() {

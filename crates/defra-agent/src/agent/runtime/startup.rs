@@ -52,12 +52,6 @@ pub(in crate::agent) async fn run_agent(
     crate::migration::ensure_all_runtime_migrations(agent.node.clone())
         .await
         .context("ensure runtime schema migrations")?;
-    crate::migration::backfill_agent_request_terminal_durability(
-        agent.node.as_ref(),
-        agent.agent_did(),
-    )
-    .await
-    .context("backfill owned AgentRequest terminal durability metadata")?;
     let runtime_status =
         RuntimeStatusHandle::new(agent.node.clone(), agent.agent_did().to_string());
     runtime_status

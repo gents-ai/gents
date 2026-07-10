@@ -19,8 +19,6 @@ type AgentRequest @branchable {
     caused_by_trigger_id: String @index
     caused_by_trigger_kind: String @index
     failure_reason: String
-    terminalized_at: String @index
-    terminal_redrive_attempts: Int @index
     created_at: String @index
     claimed_at: String
     deadline: String

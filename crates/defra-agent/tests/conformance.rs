@@ -161,17 +161,6 @@ async fn terminal_convergence_redrive_reasserts_unconverged_terminal() {
 }
 
 #[tokio::test]
-async fn terminal_redrive_window_advances_past_sixty_four_rows() {
-    replicated_request_convergence::terminal_redrive_window_advances_past_sixty_four_rows().await;
-}
-
-#[tokio::test]
-async fn durable_response_repairs_request_after_terminal_write_gap() {
-    replicated_request_convergence::durable_response_repairs_request_after_terminal_write_gap()
-        .await;
-}
-
-#[tokio::test]
 async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
     replicated_request_convergence::recover_stuck_requests_recovers_claimed_lifecycle_state().await;
 }

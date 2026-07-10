@@ -1199,8 +1199,6 @@ mod tests {
             caused_by_trigger_kind: None,
             caused_by_parent_request_id: None,
             failure_reason: Some(String::new()),
-            terminalized_at: None,
-            terminal_redrive_attempts: None,
             created_at: Some(chrono::Utc::now().to_rfc3339()),
             claimed_at: None,
             deadline: Some(recovery_deadline_for_case(case)),

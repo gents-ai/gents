@@ -31,10 +31,6 @@ pub const PAIRING_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 pub struct PairingTickOutcome {
     pub peer_id: String,
     pub ops_applied: Vec<DiffOp>,
-    /// Existing subagent replicators force-reinstalled after a disconnected
-    /// peer is dialed again. Reinstall performs a bounded full replay without
-    /// authoring same-value AgentRequest mutations.
-    pub replayed_replicators: Vec<String>,
     pub desired_read_failed: bool,
 }
 
@@ -64,15 +60,6 @@ pub async fn reconcile_peer_tick(
     store: &dyn PairingStateStore,
     peer_id: &str,
 ) -> Result<PairingTickOutcome> {
-    reconcile_peer_tick_with_replay(admin, store, peer_id, false).await
-}
-
-async fn reconcile_peer_tick_with_replay(
-    admin: &dyn RemoteP2pAdmin,
-    store: &dyn PairingStateStore,
-    peer_id: &str,
-    force_replay: bool,
-) -> Result<PairingTickOutcome> {
     let desired = match store.load_desired(peer_id).await {
         Ok(desired) => desired,
         Err(error) => {
@@ -84,13 +71,11 @@ async fn reconcile_peer_tick_with_replay(
             return Ok(PairingTickOutcome {
                 peer_id: peer_id.to_string(),
                 ops_applied: Vec::new(),
-                replayed_replicators: Vec::new(),
                 desired_read_failed: true,
             });
         }
     };
     let desired_state = desired.clone().unwrap_or_default();
-    let mut reconnected = false;
     if desired_state.has_wiring() && !desired_state.replicator_addresses.is_empty() {
         // Dial only when the peer is not already connected — the Lean
         // `PairingReconcile.Transition.dial`/`dialFailed` premises both require
@@ -113,7 +98,6 @@ async fn reconcile_peer_tick_with_replay(
                 .connect(&addresses)
                 .await
                 .context("connect pairing peer")?;
-            reconnected = true;
         }
     }
     let mut applied = store.load_applied(peer_id).await?;
@@ -126,37 +110,6 @@ async fn reconcile_peer_tick_with_replay(
     // display and health (review Finding #1).
     let ops = compute_owned_pairing_diff(&desired_state, &actual.state, &applied);
     let mut ops_applied = Vec::new();
-    let mut replayed_replicators = Vec::new();
-
-    // #664 residual convergence: a subagent peer can be partitioned longer
-    // than the persisted per-request redrive cap. DefraDB's idempotent
-    // add_replicator path deliberately skips initial replay for an existing
-    // identity, so after a real reconnect force-reinstall every otherwise-
-    // converged subagent replicator. This replays current owner-authored DAG
-    // heads (including arbitrarily old terminal requests) and does not create
-    // any new same-value request history. If the desired identity itself
-    // changed, the ordinary diff already contains teardown+install and is the
-    // replay; avoid doing it twice.
-    if (reconnected || force_replay) && desired_state.uses_subagent_template() {
-        for address in desired_state
-            .replicator_addresses
-            .intersection(&actual.state.replicator_addresses)
-        {
-            let diff_reinstalls_address = ops.iter().any(|op| {
-                matches!(
-                    op,
-                    DiffOp::InstallReplicator(candidate)
-                        | DiffOp::TeardownReplicator(candidate)
-                        if candidate == address
-                )
-            });
-            if diff_reinstalls_address {
-                continue;
-            }
-            replay_replicator_after_reconnect(admin, address, &desired_state, &actual).await?;
-            replayed_replicators.push(address.clone());
-        }
-    }
 
     for op in ops {
         apply_op(admin, &op, &desired_state, &actual).await?;
@@ -172,7 +125,6 @@ async fn reconcile_peer_tick_with_replay(
     Ok(PairingTickOutcome {
         peer_id: peer_id.to_string(),
         ops_applied,
-        replayed_replicators,
         desired_read_failed: false,
     })
 }
@@ -219,15 +171,14 @@ pub async fn run_pairing_reconciler(
     let mut subscription = node.subscribe(&[EventName::Update]);
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut replay_connections = BTreeMap::new();
 
-    sweep_pairings(&admin, &store, &mut replay_connections).await?;
+    sweep_pairings(&admin, &store).await?;
 
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => {
-                sweep_pairings_logged(&admin, &store, &mut replay_connections).await;
+                sweep_pairings_logged(&admin, &store).await;
             }
             message = subscription.recv() => {
                 if message.is_none() {
@@ -238,7 +189,7 @@ pub async fn run_pairing_reconciler(
                 if dropped > 0 {
                     tracing::warn!(dropped, "pairing reconciler update subscription dropped messages");
                 }
-                sweep_pairings_logged(&admin, &store, &mut replay_connections).await;
+                sweep_pairings_logged(&admin, &store).await;
             }
         }
     }
@@ -248,87 +199,39 @@ pub async fn run_pairing_reconciler(
 /// e.g. a momentary `list_peer_ids` read error — must not tear down the whole
 /// reconciler; the next tick retries. Mirrors the discovery / heartbeat daemons,
 /// which also log-and-continue rather than aborting the runtime task.
-async fn sweep_pairings_logged(
-    admin: &dyn RemoteP2pAdmin,
-    store: &dyn PairingStateStore,
-    replay_connections: &mut BTreeMap<String, bool>,
-) {
-    if let Err(error) = sweep_pairings(admin, store, replay_connections).await {
+async fn sweep_pairings_logged(admin: &dyn RemoteP2pAdmin, store: &dyn PairingStateStore) {
+    if let Err(error) = sweep_pairings(admin, store).await {
         tracing::warn!(error = %error, "pairing reconciler sweep failed; retrying on next tick");
     }
 }
 
-async fn sweep_pairings(
-    admin: &dyn RemoteP2pAdmin,
-    store: &dyn PairingStateStore,
-    replay_connections: &mut BTreeMap<String, bool>,
-) -> Result<()> {
+async fn sweep_pairings(admin: &dyn RemoteP2pAdmin, store: &dyn PairingStateStore) -> Result<()> {
     // Amortize the membership-materializable computation across the whole sweep
     // (avoids re-verifying every signature per peer). Non-fatal on failure: the
     // per-peer gate falls back to a live read.
     store.begin_sweep().await?;
     for peer_id in store.list_peer_ids().await? {
-        let active_before = peer_already_active(admin, &peer_id).await;
-        // Replay once on daemon startup, and on an inactive -> active edge even
-        // when the remote peer established the connection first. The latter is
-        // essential for bidirectional pairing: relying only on our own dial
-        // would repair whichever direction won the reconnect race and could
-        // leave the opposite direction stale beyond its request-write cap.
-        let force_replay = replay_connections
-            .get(&peer_id)
-            .is_none_or(|was_active| !was_active && active_before);
-        let tick_succeeded =
-            match reconcile_peer_tick_with_replay(admin, store, &peer_id, force_replay).await {
-                Ok(outcome) => {
-                    if outcome.desired_read_failed {
-                        // Desired-state failure performs no topology work, but
-                        // the connectivity observation is still valid. Record
-                        // it before continuing so a first-sweep read failure
-                        // does not leave the peer absent from the tracker and
-                        // manufacture a startup/reconnect replay on the next
-                        // healthy read. Preserve an existing false -> true edge,
-                        // though: that false also means replay is pending, and
-                        // the failed desired read gave us no chance to perform it.
-                        let replay_pending = active_before
-                            && replay_connections
-                                .get(&peer_id)
-                                .is_some_and(|active| !active);
-                        if !replay_pending {
-                            replay_connections.insert(peer_id.clone(), active_before);
-                        }
-                        continue;
-                    }
-                    if !outcome.ops_applied.is_empty() {
-                        tracing::info!(
-                            peer_id = %outcome.peer_id,
-                            ops = ?outcome.ops_applied,
-                            "pairing reconcile applied operations"
-                        );
-                    }
-                    if !outcome.replayed_replicators.is_empty() {
-                        tracing::info!(
-                            peer_id = %outcome.peer_id,
-                            replicators = ?outcome.replayed_replicators,
-                            "replayed subagent replicators after peer reconnect"
-                        );
-                    }
-                    true
+        match reconcile_peer_tick(admin, store, &peer_id).await {
+            Ok(outcome) => {
+                if outcome.desired_read_failed {
+                    continue;
                 }
-                Err(error) => {
-                    tracing::warn!(
-                        peer_id = %peer_id,
-                        error = ?error,
-                        "pairing reconcile tick failed"
+                if !outcome.ops_applied.is_empty() {
+                    tracing::info!(
+                        peer_id = %outcome.peer_id,
+                        ops = ?outcome.ops_applied,
+                        "pairing reconcile applied operations"
                     );
-                    false
                 }
-            };
-        let active_after = peer_already_active(admin, &peer_id).await;
-        // Keep replay pending after any transient delete/reinstall failure,
-        // even if the transport itself is connected. The next sweep then
-        // retries the bounded replay instead of mistaking connectivity for a
-        // successfully repaired data plane.
-        replay_connections.insert(peer_id.clone(), tick_succeeded && active_after);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    peer_id = %peer_id,
+                    error = ?error,
+                    "pairing reconcile tick failed"
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -467,10 +370,12 @@ async fn apply_op(
                 .await
                 .with_context(|| format!("install P2P replicator {address}"))?;
             if desired.uses_subagent_template() {
-                tracing::debug!(
+                tracing::warn!(
                     address = %address,
                     templates = ?desired.template_ids,
-                    "subagent pairing replicator installed with initial full replay"
+                    "subagent pairing replicator installed; due to defradb.rs#1074, \
+                     pairing changes may not affect an already-running peer until the target \
+                     node restarts"
                 );
             }
             Ok(())
@@ -493,47 +398,6 @@ async fn apply_op(
                 .with_context(|| format!("teardown P2P replicator {address}"))
         }
     }
-}
-
-async fn replay_replicator_after_reconnect(
-    admin: &dyn RemoteP2pAdmin,
-    address: &str,
-    desired: &PairingDesired,
-    actual: &ActualSnapshot,
-) -> Result<()> {
-    let id = actual
-        .replicator_ids_by_addr
-        .get(address)
-        .map(String::as_str)
-        .unwrap_or(address);
-    let old_collections = actual
-        .replicator_collections_by_addr
-        .get(address)
-        .cloned()
-        .filter(|collections| !collections.is_empty())
-        .unwrap_or_else(|| {
-            desired
-                .effective_replicator_collections()
-                .iter()
-                .cloned()
-                .collect()
-        });
-    admin
-        .delete_replicator(id, &old_collections)
-        .await
-        .with_context(|| format!("remove P2P replicator {address} for reconnect replay"))?;
-
-    let addresses = vec![address.to_string()];
-    let collections = desired
-        .effective_replicator_collections()
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
-    admin
-        .add_replicator(&addresses, &collections, &desired.replicator_filter)
-        .await
-        .with_context(|| format!("reinstall P2P replicator {address} for reconnect replay"))?;
-    Ok(())
 }
 
 pub fn update_applied_after_success(
@@ -1576,10 +1440,6 @@ mod tests {
         /// When set, `connect` fails after recording the call — modeling the
         /// Linux redial-timeout that motivated the active-peer gate.
         fail_connect: bool,
-        /// Number of upcoming replicator installs to fail. This models the
-        /// torn reconnect-replay window where delete succeeds but reinstall
-        /// transiently fails; the next topology diff must heal it.
-        fail_add_replicator_attempts: Mutex<usize>,
     }
 
     #[async_trait]
@@ -1617,14 +1477,6 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((addresses.to_vec(), filters.clone()));
-            let mut remaining_failures = self.fail_add_replicator_attempts.lock().unwrap();
-            if *remaining_failures > 0 {
-                *remaining_failures -= 1;
-                return Err(RemoteP2pAdminError::RpcError(
-                    "transient add_replicator failure".into(),
-                ));
-            }
-            drop(remaining_failures);
             for address in addresses {
                 // Like the real adapter, the transport records the carried
                 // collection set in *id* space; `read_actual` reverse-resolves
@@ -1774,163 +1626,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn desired_read_failure_records_connectivity_without_spurious_replay() {
-        let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
-        let desired = PairingDesired {
-            replicator_addresses: set(&["addr1"]),
-            replicator_collections: set(&["AgentRequest"]),
-            replicator_filter: filter.clone(),
-            template_ids: set(&["subagent-host"]),
-            ..Default::default()
-        };
-        let store = MockStore {
-            desired: Mutex::new(Err("transient desired read".into())),
-            applied: Mutex::new(PairingApplied {
-                replicator_addresses: set(&["addr1"]),
-                replicator_filter: filter,
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let admin = MockAdmin {
-            active: Mutex::new(vec!["peer-a".into()]),
-            ..Default::default()
-        };
-        admin.replicators.lock().unwrap().insert(
-            "addr1".into(),
-            RemoteReplicator {
-                id: Some("id-addr1".into()),
-                collections: vec![mock_collection_id("AgentRequest")],
-                address: Some("addr1".into()),
-            },
-        );
-        let mut replay_connections = BTreeMap::new();
-
-        sweep_pairings(&admin, &store, &mut replay_connections)
-            .await
-            .expect("degraded desired-read sweep");
-        assert_eq!(replay_connections.get("peer-a"), Some(&true));
-
-        *store.desired.lock().unwrap() = Ok(Some(desired));
-        sweep_pairings(&admin, &store, &mut replay_connections)
-            .await
-            .expect("healthy follow-up sweep");
-
-        assert!(
-            admin.emitted.lock().unwrap().is_empty(),
-            "a desired-read recovery without a connection edge must not delete+reinstall"
-        );
-        assert_eq!(replay_connections.get("peer-a"), Some(&true));
-    }
-
-    #[tokio::test]
-    async fn desired_read_failure_during_reconnect_keeps_replay_pending() {
-        let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
-        let desired = PairingDesired {
-            replicator_addresses: set(&["addr1"]),
-            replicator_collections: set(&["AgentRequest"]),
-            replicator_filter: filter.clone(),
-            template_ids: set(&["subagent-host"]),
-            ..Default::default()
-        };
-        let store = MockStore {
-            desired: Mutex::new(Err("transient desired read".into())),
-            applied: Mutex::new(PairingApplied {
-                replicator_addresses: set(&["addr1"]),
-                replicator_filter: filter,
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let admin = MockAdmin {
-            active: Mutex::new(vec!["peer-a".into()]),
-            ..Default::default()
-        };
-        admin.replicators.lock().unwrap().insert(
-            "addr1".into(),
-            RemoteReplicator {
-                id: Some("id-addr1".into()),
-                collections: vec![mock_collection_id("AgentRequest")],
-                address: Some("addr1".into()),
-            },
-        );
-        let mut replay_connections = BTreeMap::from([("peer-a".to_string(), false)]);
-
-        sweep_pairings(&admin, &store, &mut replay_connections)
-            .await
-            .expect("degraded reconnect sweep");
-        assert_eq!(replay_connections.get("peer-a"), Some(&false));
-
-        *store.desired.lock().unwrap() = Ok(Some(desired));
-        sweep_pairings(&admin, &store, &mut replay_connections)
-            .await
-            .expect("healthy follow-up replays pending reconnect");
-
-        assert_eq!(replay_connections.get("peer-a"), Some(&true));
-        assert_eq!(
-            *admin.emitted.lock().unwrap(),
-            vec![
-                DiffOp::TeardownReplicator("addr1".into()),
-                DiffOp::InstallReplicator("addr1".into()),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn failed_reconnect_replay_is_healed_by_next_tick_diff() {
-        let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
-        let store = MockStore::with_desired(Some(PairingDesired {
-            replicator_addresses: set(&["addr1"]),
-            replicator_collections: set(&["AgentRequest"]),
-            replicator_filter: filter.clone(),
-            template_ids: set(&["subagent-host"]),
-            ..Default::default()
-        }));
-        *store.applied.lock().unwrap() = PairingApplied {
-            replicator_addresses: set(&["addr1"]),
-            replicator_filter: filter,
-            ..Default::default()
-        };
-        let admin = MockAdmin {
-            active: Mutex::new(vec!["peer-a".into()]),
-            fail_add_replicator_attempts: Mutex::new(1),
-            ..Default::default()
-        };
-        admin.replicators.lock().unwrap().insert(
-            "addr1".into(),
-            RemoteReplicator {
-                id: Some("id-addr1".into()),
-                collections: vec![mock_collection_id("AgentRequest")],
-                address: Some("addr1".into()),
-            },
-        );
-        let mut replay_connections = BTreeMap::new();
-
-        sweep_pairings(&admin, &store, &mut replay_connections)
-            .await
-            .expect("sweep contains per-peer replay failure");
-        assert_eq!(replay_connections.get("peer-a"), Some(&false));
-        assert!(admin.replicators.lock().unwrap().is_empty());
-        assert_eq!(
-            *admin.emitted.lock().unwrap(),
-            vec![DiffOp::TeardownReplicator("addr1".into())]
-        );
-
-        sweep_pairings(&admin, &store, &mut replay_connections)
-            .await
-            .expect("next sweep heals torn replay");
-        assert_eq!(replay_connections.get("peer-a"), Some(&true));
-        assert!(admin.replicators.lock().unwrap().contains_key("addr1"));
-        assert_eq!(
-            *admin.emitted.lock().unwrap(),
-            vec![
-                DiffOp::TeardownReplicator("addr1".into()),
-                DiffOp::InstallReplicator("addr1".into()),
-            ]
-        );
-    }
-
-    #[tokio::test]
     async fn install_updates_applied_after_success() {
         let store = MockStore::with_desired(Some(PairingDesired {
             collections: set(&["c1"]),
@@ -1962,91 +1657,6 @@ mod tests {
                 replicator_addresses: set(&["addr1"]),
                 ..Default::default()
             }
-        );
-    }
-
-    #[tokio::test]
-    async fn reconnect_force_replays_converged_subagent_replicator() {
-        let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
-        let store = MockStore::with_desired(Some(PairingDesired {
-            replicator_addresses: set(&["addr1"]),
-            replicator_collections: set(&["AgentRequest"]),
-            replicator_filter: filter.clone(),
-            template_ids: set(&["subagent-host"]),
-            ..Default::default()
-        }));
-        *store.applied.lock().unwrap() = PairingApplied {
-            replicator_addresses: set(&["addr1"]),
-            replicator_filter: filter,
-            ..Default::default()
-        };
-        let admin = MockAdmin::default();
-        admin.replicators.lock().unwrap().insert(
-            "addr1".into(),
-            RemoteReplicator {
-                id: Some("id-addr1".into()),
-                collections: vec![mock_collection_id("AgentRequest")],
-                address: Some("addr1".into()),
-            },
-        );
-
-        let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
-            .await
-            .expect("reconnect replay tick");
-
-        assert!(
-            outcome.ops_applied.is_empty(),
-            "topology was already converged"
-        );
-        assert_eq!(outcome.replayed_replicators, vec!["addr1"]);
-        assert_eq!(
-            *admin.emitted.lock().unwrap(),
-            vec![
-                DiffOp::TeardownReplicator("addr1".into()),
-                DiffOp::InstallReplicator("addr1".into()),
-            ],
-            "reconnect must force one bounded full replay"
-        );
-    }
-
-    #[tokio::test]
-    async fn inbound_reconnect_force_replays_without_owner_redial() {
-        let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
-        let store = MockStore::with_desired(Some(PairingDesired {
-            replicator_addresses: set(&["addr1"]),
-            replicator_collections: set(&["AgentRequest"]),
-            replicator_filter: filter.clone(),
-            template_ids: set(&["subagent-host"]),
-            ..Default::default()
-        }));
-        *store.applied.lock().unwrap() = PairingApplied {
-            replicator_addresses: set(&["addr1"]),
-            replicator_filter: filter,
-            ..Default::default()
-        };
-        let admin = MockAdmin::default();
-        admin.active.lock().unwrap().push("peer-a".into());
-        admin.replicators.lock().unwrap().insert(
-            "addr1".into(),
-            RemoteReplicator {
-                id: Some("id-addr1".into()),
-                collections: vec![mock_collection_id("AgentRequest")],
-                address: Some("addr1".into()),
-            },
-        );
-
-        let outcome = reconcile_peer_tick_with_replay(&admin, &store, "peer-a", true)
-            .await
-            .expect("inbound reconnect replay tick");
-
-        assert!(admin.connects.lock().unwrap().is_empty());
-        assert_eq!(outcome.replayed_replicators, vec!["addr1"]);
-        assert_eq!(
-            *admin.emitted.lock().unwrap(),
-            vec![
-                DiffOp::TeardownReplicator("addr1".into()),
-                DiffOp::InstallReplicator("addr1".into()),
-            ]
         );
     }
 
