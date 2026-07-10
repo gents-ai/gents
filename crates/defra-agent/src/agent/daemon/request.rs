@@ -7,7 +7,7 @@ use crate::compaction::{self, CompactionOptions, Compactor};
 use crate::prompt::PromptBuilder;
 use crate::runtime_trace::RequestTraceAttrs;
 use crate::session;
-use crate::streaming::{StreamStatus, StreamWriter};
+use crate::streaming::StreamWriter;
 
 /// Grace period after cancellation before force-aborting children, so in-flight
 /// cancellable work can observe the cancel and return cleanly. Codex-aligned:
@@ -367,21 +367,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             match result {
                 Ok(outcome) => Ok(outcome),
                 Err(error) => {
-                    if let Err(set_error) = self
-                        .stream_writer
-                        .set_error_message(&doc_id, &error.to_string())
-                        .await
-                    {
-                        tracing::error!(
-                            behavior_id = %self.behavior.behavior_id,
-                            doc_id = %doc_id,
-                            error = %set_error,
-                            "failed to persist response error message"
-                        );
-                    }
                     if let Err(finalize_error) = self
                         .stream_writer
-                        .finalize(&doc_id, StreamStatus::Error)
+                        .finalize_error(&doc_id, &error.to_string())
                         .await
                     {
                         tracing::error!(

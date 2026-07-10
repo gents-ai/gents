@@ -8,7 +8,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        23,
+        25,
         "Lean should emit one row per registered recovery predicate witness"
     );
 
@@ -49,7 +49,7 @@ pub(super) fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence
     );
     assert_eq!(
         equivalence_cases.len(),
-        23,
+        25,
         "Lean recovery equivalence witness count drifted"
     );
 
@@ -749,6 +749,44 @@ async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCa
     )
     .await;
     set_request_lifecycle_state(&db.node, &doc_id, case.pre_state.as_str()).await;
+    // The Lean request recovery predicate requires durable terminal intent.
+    // Seed the matching AgentResponse to model a restart after logical outcome
+    // persistence but before the request lifecycle edge became durable.
+    let response_status = if case.terminal_state == "completed" {
+        "complete"
+    } else {
+        "error"
+    };
+    let response_doc_id = create_response_with_status(
+        &db.node,
+        &request_id,
+        &request_id,
+        &session_id,
+        response_status,
+    )
+    .await;
+    if case.terminal_state == "interrupted" {
+        let escaped_response_doc_id = escape_graphql_string(&response_doc_id);
+        let response = db
+            .node
+            .execute(&format!(
+                r#"mutation {{
+                    update_AgentResponse(
+                        filter: {{ _docID: {{ _eq: "{escaped_response_doc_id}" }} }},
+                        input: {{
+                            error_message: "interrupted",
+                            interrupted_at: "2026-07-09T00:00:00Z"
+                        }}
+                    ) {{ _docID }}
+                }}"#
+            ))
+            .await;
+        assert!(
+            !response.has_errors(),
+            "seed interrupted response intent failed: {:?}",
+            response.errors
+        );
+    }
 
     let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
         .await

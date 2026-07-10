@@ -111,7 +111,9 @@ Currently:
 - `ReversePairing` — control-plane convergence of reverse-pairing subscriptions; first concrete artifact under issue #155's cross-boundary verification strategy.
 - `PairingTransport` — connection/install liveness for one directed pairing edge.
 - `P2PBackpressure` — bounded hub fan-in/fan-out admission and push-worker liveness obligations for issue #630 (obligation model; not a fleet stability proof).
-- `ReplicatedRequestConvergence` — replicated terminal-state convergence under bounded re-drive.
+- `ReplicatedRequestConvergence` — replicated terminal-state convergence under
+  persisted bounded owner re-drive plus bounded full replay when a configured
+  peer reconnects after a longer partition.
 
 ## Why This Matters
 

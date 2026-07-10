@@ -7,7 +7,7 @@ use tokio::sync::watch;
 use crate::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::runtime_status::RuntimeStatusHandle;
-use crate::streaming::{DefraStreamWriter, StreamStatus, StreamWriter};
+use crate::streaming::{DefraStreamWriter, StreamWriter};
 use crate::watcher::{AgentRequest, DefraWatcher, Watcher};
 
 use super::context::BehaviorResolution;
@@ -255,8 +255,6 @@ async fn fail_routed_request(
         }
     }
 
-    let _ = lifecycle.record_failure_reason(error_message).await;
-    let _ = lifecycle.fail().await;
     let stream_writer = DefraStreamWriter::new(node, agent_did, Duration::from_millis(0));
     if lifecycle.response_exists().await.unwrap_or(false) {
         stream_writer
@@ -268,13 +266,11 @@ async fn fail_routed_request(
     let doc_id = stream_writer
         .begin(&request.session_id, &request.request_id, behavior_id)
         .await?;
-    stream_writer
-        .set_error_message(&doc_id, error_message)
-        .await?;
     let _ = stream_writer
         .write_tokens(&doc_id, &format!("Error: {error_message}"))
         .await?;
-    stream_writer.finalize(&doc_id, StreamStatus::Error).await?;
+    stream_writer.finalize_error(&doc_id, error_message).await?;
+    lifecycle.fail_with_reason(error_message).await?;
     Ok(())
 }
 

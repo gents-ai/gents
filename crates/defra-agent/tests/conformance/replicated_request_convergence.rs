@@ -31,6 +31,9 @@ struct ConvergenceRow {
     status: String,
     lifecycle_state: String,
     agent_did: String,
+    failure_reason: Option<String>,
+    terminalized_at: Option<String>,
+    terminal_redrive_attempts: Option<i64>,
 }
 
 /// Create an `AgentRequest` owned by an arbitrary DID with explicit
@@ -45,11 +48,46 @@ async fn create_owned_request(
     status: &str,
     lifecycle_state: &str,
 ) -> String {
+    create_owned_request_with_times(
+        node,
+        request_id,
+        session_id,
+        agent_did,
+        status,
+        lifecycle_state,
+        CONVERGENCE_CREATED_AT,
+        CONVERGENCE_CREATED_AT,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_owned_request_with_times(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    status: &str,
+    lifecycle_state: &str,
+    created_at: &str,
+    terminalized_at: &str,
+) -> String {
+    let is_terminal = matches!(
+        lifecycle_state,
+        "completed" | "failed" | "superseded" | "dead" | "interrupted"
+    );
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_status = escape_graphql_string(status);
     let escaped_lifecycle_state = escape_graphql_string(lifecycle_state);
+    let escaped_created_at = escape_graphql_string(created_at);
+    let escaped_terminalized_at = escape_graphql_string(terminalized_at);
+    let terminal_fields = if is_terminal {
+        format!(", terminalized_at: \"{escaped_terminalized_at}\", terminal_redrive_attempts: 0")
+    } else {
+        String::new()
+    };
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -65,9 +103,10 @@ async fn create_owned_request(
                 lifecycle_state: "{escaped_lifecycle_state}",
                 backend_id: "",
                 execution_origin: "interactive",
-                created_at: "{CONVERGENCE_CREATED_AT}",
+                created_at: "{escaped_created_at}",
                 retry_count: 0,
                 max_retries: {max_retries}
+                {terminal_fields}
             }}) {{ _docID }}
         }}"#,
         max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
@@ -188,6 +227,9 @@ async fn fetch_convergence_row(node: &EmbeddedNode, request_id: &str) -> Converg
                 status
                 lifecycle_state
                 agent_did
+                failure_reason
+                terminalized_at
+                terminal_redrive_attempts
             }}
         }}"#
     );
@@ -293,10 +335,8 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
     )
     .await;
 
-    let mut budget = HashMap::new();
-
     // First pass re-asserts exactly the one owned, terminal, unconverged request.
-    let first = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID, &mut budget)
+    let first = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID)
         .await
         .unwrap();
     assert_eq!(
@@ -313,6 +353,8 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
     let owned = fetch_convergence_row(&db.node, "convergence-owned-failed").await;
     assert_eq!(owned.status, "error");
     assert_eq!(owned.lifecycle_state, "failed");
+    assert_eq!(owned.terminal_redrive_attempts, Some(1));
+    assert!(owned.terminalized_at.is_some());
     // The foreign replica is untouched by our re-drive.
     let foreign = fetch_convergence_row(&db.node, "convergence-foreign-failed").await;
     assert_eq!(foreign.agent_did, FOREIGN_DID);
@@ -320,15 +362,16 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
 
     // Bounded: the request self-terminates from the re-drive after CAP asserts.
     for _ in 1..TERMINAL_REDRIVE_CAP {
-        let more = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID, &mut budget)
+        let more = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID)
             .await
             .unwrap();
         assert_eq!(more.reasserted, 1, "each re-assert under the cap counts");
     }
-    let exhausted =
-        RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID, &mut budget)
-            .await
-            .unwrap();
+    // This invocation has no process-local budget to inherit. The cap survives
+    // a logical restart because eligibility is stored on AgentRequest.
+    let exhausted = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID)
+        .await
+        .unwrap();
     assert!(
         exhausted.is_noop(),
         "re-drive must self-terminate after {TERMINAL_REDRIVE_CAP} re-asserts, got {exhausted:?}"
@@ -336,11 +379,9 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
 
     // Owner-scope is did-keyed, not vacuous: driving as the FOREIGN owner picks
     // up the foreign terminal replica (and only it).
-    let mut foreign_budget = HashMap::new();
-    let foreign_run =
-        RequestLifecycle::redrive_terminal_convergence(&db.node, FOREIGN_DID, &mut foreign_budget)
-            .await
-            .unwrap();
+    let foreign_run = RequestLifecycle::redrive_terminal_convergence(&db.node, FOREIGN_DID)
+        .await
+        .unwrap();
     assert_eq!(
         foreign_run.scanned, 1,
         "the foreign owner's own terminal replica is its sole candidate"
@@ -348,11 +389,225 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
     assert_eq!(foreign_run.reasserted, 1);
 }
 
+/// A 64-row batch cannot starve an old request that terminalizes late. The
+/// first 64 rows exhaust their persisted cap and leave eligibility; the next
+/// tick reaches both the 65th newer request and the old, late-terminalized row.
+pub(super) async fn terminal_redrive_window_advances_past_sixty_four_rows() {
+    let db = test_db("convergence-terminal-window").await;
+
+    for index in 0..65 {
+        create_owned_request_with_times(
+            &db.node,
+            &format!("convergence-newer-{index:02}"),
+            &format!("convergence-newer-session-{index:02}"),
+            OWNER_DID,
+            "completed",
+            "completed",
+            "2026-03-23T00:00:00Z",
+            "2026-03-23T00:00:01Z",
+        )
+        .await;
+    }
+    create_owned_request_with_times(
+        &db.node,
+        "convergence-old-late-terminal",
+        "convergence-old-late-terminal-session",
+        OWNER_DID,
+        "completed",
+        "completed",
+        "2020-01-01T00:00:00Z",
+        "2026-03-23T00:00:02Z",
+    )
+    .await;
+
+    for _ in 0..TERMINAL_REDRIVE_CAP {
+        let report = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID)
+            .await
+            .unwrap();
+        assert_eq!(report.scanned, 64);
+        assert_eq!(report.reasserted, 64);
+        let old = fetch_convergence_row(&db.node, "convergence-old-late-terminal").await;
+        assert_eq!(old.terminal_redrive_attempts, Some(0));
+    }
+
+    let advanced = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID)
+        .await
+        .unwrap();
+    assert_eq!(advanced.scanned, 2);
+    assert_eq!(advanced.reasserted, 2);
+    let old = fetch_convergence_row(&db.node, "convergence-old-late-terminal").await;
+    assert_eq!(old.terminal_redrive_attempts, Some(1));
+}
+
+/// A terminal AgentResponse is durable repair intent. If the immediate atomic
+/// request terminal mutation exhausts its retries (or the process restarts), a
+/// periodic sweep finishes the owner request exactly once and preserves the
+/// response's failure reason.
+pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() {
+    let db = test_db("convergence-terminal-repair").await;
+    let request_id = "convergence-terminal-repair-request";
+    let session_id = "convergence-terminal-repair-session";
+    create_owned_request(
+        &db.node,
+        request_id,
+        session_id,
+        OWNER_DID,
+        "processing",
+        "processing",
+    )
+    .await;
+    let response_doc_id =
+        create_response_with_status(&db.node, request_id, request_id, session_id, "error").await;
+    let escaped_response_doc_id = escape_graphql_string(&response_doc_id);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentResponse(
+                filter: {{ _docID: {{ _eq: "{escaped_response_doc_id}" }} }},
+                input: {{ error_message: "provider failed durably" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = db.node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "seed terminal reason: {:?}",
+        response.errors
+    );
+
+    let repaired = RequestLifecycle::repair_terminal_requests(&db.node, OWNER_DID)
+        .await
+        .unwrap();
+    assert_eq!(repaired.repaired, 1);
+    assert_eq!(repaired.failed, 0);
+    let row = fetch_convergence_row(&db.node, request_id).await;
+    assert_eq!(row.status, "error");
+    assert_eq!(row.lifecycle_state, "failed");
+    assert_eq!(
+        row.failure_reason.as_deref(),
+        Some("provider failed durably")
+    );
+    assert!(row.terminalized_at.is_some());
+    assert_eq!(row.terminal_redrive_attempts, Some(0));
+
+    let duplicate = RequestLifecycle::repair_terminal_requests(&db.node, OWNER_DID)
+        .await
+        .unwrap();
+    assert_eq!(duplicate.repaired, 0, "duplicate observation is idempotent");
+
+    // A provider is allowed to return the ordinary text "interrupted". That
+    // must remain a failed outcome: only the `interrupted_at` stamp — never
+    // the human-readable error text — classifies a repair as an interrupt.
+    let provider_request_id = "convergence-provider-interrupted-message";
+    let provider_session_id = "convergence-provider-interrupted-session";
+    create_owned_request(
+        &db.node,
+        provider_request_id,
+        provider_session_id,
+        OWNER_DID,
+        "processing",
+        "processing",
+    )
+    .await;
+    let provider_response_doc_id = create_response_with_status(
+        &db.node,
+        provider_request_id,
+        provider_request_id,
+        provider_session_id,
+        "error",
+    )
+    .await;
+    let escaped_provider_response_doc_id = escape_graphql_string(&provider_response_doc_id);
+    let response = db
+        .node
+        .execute(&format!(
+            r#"mutation {{
+                update_AgentResponse(
+                    filter: {{ _docID: {{ _eq: "{escaped_provider_response_doc_id}" }} }},
+                    input: {{ error_message: "interrupted" }}
+                ) {{ _docID }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "seed provider interrupted message: {:?}",
+        response.errors
+    );
+
+    let provider_repair = RequestLifecycle::repair_terminal_requests(&db.node, OWNER_DID)
+        .await
+        .unwrap();
+    assert_eq!(provider_repair.repaired, 1);
+    let provider_row = fetch_convergence_row(&db.node, provider_request_id).await;
+    assert_eq!(provider_row.status, "error");
+    assert_eq!(provider_row.lifecycle_state, "failed");
+    assert_eq!(provider_row.failure_reason.as_deref(), Some("interrupted"));
+
+    // The interrupt finalize stamps `interrupted_at` atomically with the
+    // terminal response write, so the stamp is durable even if the earlier
+    // standalone `write_interrupted_at` exhausted its own retries. A response
+    // carrying only the stamp (with a human "interrupted" error text) must
+    // repair the owner request to interrupted.
+    let runtime_interrupt_request_id = "convergence-runtime-interrupt-stamp";
+    let runtime_interrupt_session_id = "convergence-runtime-interrupt-session";
+    create_owned_request(
+        &db.node,
+        runtime_interrupt_request_id,
+        runtime_interrupt_session_id,
+        OWNER_DID,
+        "processing",
+        "processing",
+    )
+    .await;
+    let runtime_interrupt_response_doc_id = create_response_with_status(
+        &db.node,
+        runtime_interrupt_request_id,
+        runtime_interrupt_request_id,
+        runtime_interrupt_session_id,
+        "error",
+    )
+    .await;
+    let escaped_runtime_interrupt_response_doc_id =
+        escape_graphql_string(&runtime_interrupt_response_doc_id);
+    let response = db
+        .node
+        .execute(&format!(
+            r#"mutation {{
+                update_AgentResponse(
+                    filter: {{ _docID: {{ _eq: "{escaped_runtime_interrupt_response_doc_id}" }} }},
+                    input: {{
+                        error_message: "interrupted",
+                        interrupted_at: "2026-07-10T00:00:00Z"
+                    }}
+                ) {{ _docID }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "seed runtime interrupt stamp: {:?}",
+        response.errors
+    );
+
+    let runtime_interrupt_repair = RequestLifecycle::repair_terminal_requests(&db.node, OWNER_DID)
+        .await
+        .unwrap();
+    assert_eq!(runtime_interrupt_repair.repaired, 1);
+    let runtime_interrupt_row = fetch_convergence_row(&db.node, runtime_interrupt_request_id).await;
+    assert_eq!(runtime_interrupt_row.status, "interrupted");
+    assert_eq!(runtime_interrupt_row.lifecycle_state, "interrupted");
+    assert_eq!(
+        runtime_interrupt_row.failure_reason.as_deref(),
+        Some("interrupted")
+    );
+}
+
 /// Recovery-drift fix: `recover_stuck_requests` keys the stale set on
 /// `lifecycle_state ∈ {claimed, processing}` (Lean `requestRecoveryStale`), so a
-/// stuck `claimed` own-request is recovered. This row carries `status="claimed"`
-/// (not `"processing"`), so the pre-fix `status="processing"` filter would have
-/// missed it — the concrete red-then-green witness for the drift fix.
+/// stuck `claimed` own-request with durable terminal response intent is
+/// recovered. This row carries `status="claimed"` (not `"processing"`), so the
+/// pre-fix `status="processing"` filter would have missed it — the concrete
+/// red-then-green witness for the drift fix.
 pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
     let db = test_db("convergence-recover-claimed").await;
 
@@ -363,6 +618,14 @@ pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
         OWNER_DID,
         "claimed",
         "claimed",
+    )
+    .await;
+    create_response_with_status(
+        &db.node,
+        "convergence-stuck-claimed",
+        "convergence-stuck-claimed",
+        "convergence-stuck-claimed-session",
+        "error",
     )
     .await;
 

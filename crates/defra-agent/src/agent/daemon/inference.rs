@@ -470,10 +470,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 
                             let error_reason = format!("agent stream failed: {}", error);
                             self.stream_writer
-                                .set_error_message(doc_id, &error_reason)
-                                .await?;
-                            self.stream_writer
-                                .finalize(doc_id, StreamStatus::Error)
+                                .finalize_error(doc_id, &error_reason)
                                 .await?;
 
                             return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
@@ -504,10 +501,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             let error_reason =
                                 "agent stream completed without producing any visible response content";
                             self.stream_writer
-                                .set_error_message(doc_id, error_reason)
-                                .await?;
-                            self.stream_writer
-                                .finalize(doc_id, StreamStatus::Error)
+                                .finalize_error(doc_id, error_reason)
                                 .await?;
 
                             return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
@@ -563,15 +557,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             .await?;
         let error_reason = error.to_string();
         let error_text = format!("Error: {}", error_reason);
-        self.stream_writer
-            .set_error_message(&doc_id, &error_reason)
-            .await?;
         let _ = self
             .stream_writer
             .write_tokens(&doc_id, &error_text)
             .await?;
         self.stream_writer
-            .finalize(&doc_id, StreamStatus::Error)
+            .finalize_error(&doc_id, &error_reason)
             .await?;
         Ok(())
     }

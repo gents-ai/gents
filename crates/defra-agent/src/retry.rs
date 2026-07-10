@@ -15,6 +15,8 @@ use crate::error::InferenceError;
 
 pub const DEFRA_DB_CONFLICT_MAX_RETRIES: u32 = 3;
 pub const DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS: u64 = 100;
+pub const TERMINAL_PERSISTENCE_MAX_RETRIES: u32 = 3;
+pub const TERMINAL_PERSISTENCE_INITIAL_BACKOFF_MS: u64 = 100;
 
 /// Retry policy for inference calls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +134,73 @@ pub async fn execute_graphql_with_conflict_retry(
         tokio::time::sleep(backoff).await;
         retry_count += 1;
     }
+}
+
+/// Retry a terminal persistence operation on every storage error, not only a
+/// recognized transaction-conflict string. Terminal request/response writes
+/// are idempotent and guarded by source state, so retrying an ambiguous or
+/// transient local-storage failure is safe. The bound prevents one request
+/// from monopolizing its behavior executor; durable live/startup repair takes
+/// over after exhaustion.
+pub(crate) async fn retry_terminal_persistence_operation<T, F, Fut>(
+    operation: &str,
+    max_retries: u32,
+    initial_backoff: Duration,
+    mut attempt_operation: F,
+) -> anyhow::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    let mut retry_index = 0;
+    loop {
+        match attempt_operation().await {
+            Ok(value) => return Ok(value),
+            Err(error) if retry_index < max_retries => {
+                let backoff = initial_backoff.saturating_mul(1u32 << retry_index.min(10));
+                tracing::warn!(
+                    operation,
+                    attempt = retry_index + 1,
+                    max_retries,
+                    backoff_ms = backoff.as_millis() as u64,
+                    error = %error,
+                    "retrying terminal persistence after storage failure"
+                );
+                tokio::time::sleep(backoff).await;
+                retry_index += 1;
+            }
+            Err(error) => {
+                tracing::error!(
+                    operation,
+                    attempts = retry_index + 1,
+                    max_retries,
+                    error = %error,
+                    "terminal persistence retries exhausted; durable repair remains pending"
+                );
+                return Err(error);
+            }
+        }
+    }
+}
+
+pub(crate) async fn execute_graphql_with_terminal_persistence_retry(
+    node: &EmbeddedNode,
+    graphql: &str,
+    operation: &str,
+) -> anyhow::Result<QueryResponse> {
+    retry_terminal_persistence_operation(
+        operation,
+        TERMINAL_PERSISTENCE_MAX_RETRIES,
+        Duration::from_millis(TERMINAL_PERSISTENCE_INITIAL_BACKOFF_MS),
+        || async {
+            let response = node.execute(graphql).await;
+            if response.has_errors() {
+                anyhow::bail!("{operation} failed: {:?}", response.errors);
+            }
+            Ok(response)
+        },
+    )
+    .await
 }
 
 pub fn retries_exhausted(policy: &RetryPolicy, last_error: &InferenceError) -> InferenceError {
