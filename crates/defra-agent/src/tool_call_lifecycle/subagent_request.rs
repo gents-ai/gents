@@ -69,8 +69,10 @@ pub async fn create_subagent_request(
 ///      well-formedness invariant in `watcher.rs::validate_subagent_fields`
 ///      requires that `subagent_depth > 0` documents have both fields
 ///      populated.)
-///   3. `parent_request_id` resolves to an existing `AgentRequest` owned by
-///      the same `agent_did` as the child request.
+///   3. On the same-node path, `parent_request_id` resolves to an existing
+///      `AgentRequest` owned by the same `agent_did` as the child request. The
+///      trusted cross-deployment path instead requires a non-empty requester
+///      DID and treats the targeted bridge as the durable parent edge.
 ///
 /// On success returns the child `request_id`.
 ///
@@ -107,13 +109,15 @@ pub async fn create_subagent_request_with_request_id(
         prompt,
         deadline,
         true,
+        None,
     )
     .await
 }
 
-/// Create a subagent request whose parent was authored by a trusted paired
-/// peer. R5 uses this on the claiming deployment: the child is locally owned,
-/// while the replicated parent request keeps the paired peer's DID.
+/// Create a subagent request from a targeted bridge authored by a trusted
+/// paired peer. The child is locally owned and routes lifecycle state back to
+/// `requester_did`; the coordinator parent request is intentionally not
+/// replicated to the host (#683).
 #[allow(clippy::too_many_arguments)]
 pub async fn create_subagent_request_with_trusted_parent_request_id(
     node: &EmbeddedNode,
@@ -125,6 +129,7 @@ pub async fn create_subagent_request_with_trusted_parent_request_id(
     behavior_id: String,
     prompt: String,
     deadline: Option<DateTime<Utc>>,
+    requester_did: String,
 ) -> Result<String> {
     create_subagent_request_inner(
         node,
@@ -137,6 +142,7 @@ pub async fn create_subagent_request_with_trusted_parent_request_id(
         prompt,
         deadline,
         false,
+        Some(requester_did),
     )
     .await
 }
@@ -153,6 +159,7 @@ async fn create_subagent_request_inner(
     prompt: String,
     deadline: Option<DateTime<Utc>>,
     require_parent_agent_match: bool,
+    requester_did: Option<String>,
 ) -> Result<String> {
     // 1. Depth check (pure precondition, fires before any DB I/O).
     if parent_subagent_depth + 1 > MAX_SUBAGENT_DEPTH {
@@ -164,10 +171,19 @@ async fn create_subagent_request_inner(
         return Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent));
     }
 
-    // 3. Cross-reference check (R3): the parent link must point at a real
-    // AgentRequest before the child can be materialized.
-    let parent_agent_did = parent_request_agent_did(node, &parent_request_id).await?;
-    if require_parent_agent_match && parent_agent_did.as_deref() != Some(agent_did.as_str()) {
+    // 3. Same-node children cross-reference the local parent row. A trusted
+    // cross-deployment child instead uses the targeted, owner-authored bridge
+    // as its durable parent edge; copying the entire parent request to every
+    // possible host is neither necessary nor pair-scoped (#683).
+    if require_parent_agent_match {
+        let parent_agent_did = parent_request_agent_did(node, &parent_request_id).await?;
+        if parent_agent_did.as_deref() != Some(agent_did.as_str()) {
+            return Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent));
+        }
+    } else if requester_did
+        .as_deref()
+        .is_none_or(|did| did.trim().is_empty())
+    {
         return Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent));
     }
 
@@ -178,6 +194,11 @@ async fn create_subagent_request_inner(
 
     let escaped_request_id = escape_graphql_string(&request_id);
     let escaped_agent_did = escape_graphql_string(&agent_did);
+    let requester_field = requester_did
+        .as_deref()
+        .map(escape_graphql_string)
+        .map(|did| format!("requester_did: \"{did}\","))
+        .unwrap_or_default();
     let escaped_behavior_id = escape_graphql_string(&behavior_id);
     let escaped_session_id = escape_graphql_string(&new_session_id);
     let prompt_selection = crate::skills::prompt_slash_skill_selection(&prompt);
@@ -198,7 +219,7 @@ async fn create_subagent_request_inner(
         })
         .unwrap_or_default();
 
-    // 4. Build and execute the CREATE mutation. Mirrors the field shape
+    // 5. Build and execute the CREATE mutation. Mirrors the field shape
     // of `write_pending_agent_request_with_lineage_and_conversation_title`
     // in `lifecycle/materialize.rs`, plus the three subagent fields.
     let mutation = format!(
@@ -206,6 +227,7 @@ async fn create_subagent_request_inner(
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 agent_did: "{escaped_agent_did}",
+                {requester_field}
                 behavior_id: "{escaped_behavior_id}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
@@ -315,10 +337,10 @@ mod tests {
         // Allowed parent depths: 0, 1, 2 (resulting children: 1, 2, 3).
         // Rejected parent depths: 3 and above.
         for parent_depth in 0..=2 {
-            assert!(parent_depth + 1 <= MAX_SUBAGENT_DEPTH);
+            assert!(parent_depth < MAX_SUBAGENT_DEPTH);
         }
         for parent_depth in 3..=10 {
-            assert!(parent_depth + 1 > MAX_SUBAGENT_DEPTH);
+            assert!(parent_depth >= MAX_SUBAGENT_DEPTH);
         }
     }
 

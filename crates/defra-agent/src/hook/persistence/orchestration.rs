@@ -696,6 +696,7 @@ impl DefraSessionHook {
             "behavior_id": spec.behavior_id,
             "prompt": spec.prompt,
             "deadline": serde_json::Value::Null,
+            "parent_subagent_depth": parent_context.subagent_depth,
         })
         .to_string();
 

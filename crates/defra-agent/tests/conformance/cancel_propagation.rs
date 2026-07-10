@@ -145,15 +145,9 @@ async fn drive_declarative_cancel_propagation() {
         0,
         None,
         None,
+        None,
     )
     .await;
-    let parent_on_host = wait_for_request(
-        host.db.node.as_ref(),
-        parent_request_id,
-        Duration::from_secs(60),
-    )
-    .await;
-    assert_eq!(parent_on_host.agent_did, coord_did);
 
     create_processing_request(
         host.db.node.as_ref(),
@@ -165,6 +159,7 @@ async fn drive_declarative_cancel_propagation() {
         1,
         Some(parent_request_id),
         Some(parent_tool_call_id),
+        Some(&coord_did),
     )
     .await;
 
@@ -195,7 +190,9 @@ async fn drive_declarative_cancel_propagation() {
         host.db.node.as_ref(),
         parent_session_id,
         parent_tool_call_id,
-        Duration::from_secs(30),
+        // A selective CAR lookup can consume one full 30s transport attempt
+        // before the persisted retry succeeds (defradb.rs#1101).
+        Duration::from_secs(60),
     )
     .await;
     assert_eq!(
@@ -205,6 +202,12 @@ async fn drive_declarative_cancel_propagation() {
     assert_eq!(
         replicated_bridge.child_request_id.as_deref(),
         Some(child_request_id)
+    );
+    assert!(
+        fetch_request(host.db.node.as_ref(), parent_request_id)
+            .await
+            .is_none(),
+        "coordinator parent request must not replicate to the host"
     );
     let coord_bridge_before_cancel = wait_for_bridge(
         coord_node.as_ref(),
@@ -233,7 +236,7 @@ async fn drive_declarative_cancel_propagation() {
         host.db.node.as_ref(),
         parent_session_id,
         parent_tool_call_id,
-        Duration::from_secs(30),
+        Duration::from_secs(60),
     )
     .await;
     assert_eq!(host_bridge.lifecycle_state.as_deref(), Some("cancelled"));
@@ -381,6 +384,7 @@ async fn create_processing_request(
     subagent_depth: u32,
     parent_request_id: Option<&str>,
     parent_tool_call_id: Option<&str>,
+    requester_did: Option<&str>,
 ) {
     let request_id = escape_graphql_string(request_id);
     let session_id = escape_graphql_string(session_id);
@@ -393,6 +397,7 @@ async fn create_processing_request(
     let parent_request = graphql_nullable_string(parent_request_id);
     let parent_tool = graphql_nullable_string(parent_tool_call_id);
     let trigger_id = graphql_nullable_string(parent_tool_call_id);
+    let requester_did = graphql_nullable_string(requester_did);
     let trigger_kind = if parent_tool_call_id.is_some() {
         "\"subagent\"".to_string()
     } else {
@@ -403,6 +408,7 @@ async fn create_processing_request(
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
                 agent_did: "{agent_did}",
+                requester_did: {requester_did},
                 behavior_id: "{behavior_id}",
                 session_id: "{session_id}",
                 retry_parent_request: "",
@@ -511,19 +517,6 @@ async fn wait_for_replicator_installed(node: &EmbeddedNode, peer_id: &str, timeo
             );
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-
-async fn wait_for_request(node: &EmbeddedNode, request_id: &str, timeout: Duration) -> RequestRow {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(row) = fetch_request(node, request_id).await {
-            return row;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out waiting for AgentRequest({request_id})");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 

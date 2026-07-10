@@ -1419,13 +1419,8 @@ mod tests {
         .expect("data-plane coordinator desired")
         .expect("some data-plane layer");
 
-        assert_eq!(
-            desired
-                .replicator_filter
-                .get("AgentRequest")
-                .map(|filter| (filter.field.as_str(), filter.value.as_str())),
-            Some(("agent_did", "did:key:coord"))
-        );
+        assert!(!desired.replicator_filter.contains_key("AgentRequest"));
+        assert_eq!(desired.replicator_collections, set(&["AgentToolCall"]));
         assert_eq!(
             desired
                 .replicator_filter
@@ -1436,7 +1431,7 @@ mod tests {
     }
 
     #[test]
-    fn data_plane_subagent_host_scopes_child_conversation_to_local_host() {
+    fn data_plane_subagent_host_scopes_request_to_signed_requester() {
         let signed_endpoint = NetworkEndpointEntry {
             peer_id: "peer-a".to_string(),
             agent_did: "did:key:coord".to_string(),
@@ -1457,7 +1452,16 @@ mod tests {
         .expect("some data-plane layer");
 
         assert_eq!(desired.replicator_filter.len(), 8);
-        for predicate in desired.replicator_filter.values() {
+        let request = desired
+            .replicator_filter
+            .get("AgentRequest")
+            .expect("request route filter");
+        assert_eq!(request.field, "requester_did");
+        assert_eq!(request.value, "did:key:coord");
+        for (collection, predicate) in &desired.replicator_filter {
+            if collection == "AgentRequest" {
+                continue;
+            }
             assert_eq!(predicate.field, "agent_did");
             assert_eq!(predicate.value, "did:key:host");
         }
@@ -2473,7 +2477,7 @@ mod tests {
     }
 
     #[test]
-    fn subagent_coordinator_template_filters_parent_and_bridge_directionally() {
+    fn subagent_coordinator_template_filters_only_targeted_bridge() {
         let desired = desired_from_pairing_row(
             desired_row(Some("subagent-coordinator"), Some("did:key:host")),
             "did:key:coord",
@@ -2482,17 +2486,8 @@ mod tests {
         .expect("some desired layer");
 
         assert!(desired.collections.is_empty());
-        assert_eq!(
-            desired.replicator_collections,
-            set(&["AgentRequest", "AgentToolCall"])
-        );
-        assert_eq!(
-            desired
-                .replicator_filter
-                .get("AgentRequest")
-                .map(|filter| (filter.field.as_str(), filter.value.as_str())),
-            Some(("agent_did", "did:key:coord"))
-        );
+        assert_eq!(desired.replicator_collections, set(&["AgentToolCall"]));
+        assert!(!desired.replicator_filter.contains_key("AgentRequest"));
         assert_eq!(
             desired
                 .replicator_filter
@@ -2503,7 +2498,7 @@ mod tests {
     }
 
     #[test]
-    fn subagent_host_template_filters_conversation_to_local_host() {
+    fn subagent_host_template_filters_request_to_requester() {
         let desired = desired_from_pairing_row(
             desired_row(Some("subagent-host"), Some("did:key:coord")),
             "did:key:host",
@@ -2514,7 +2509,16 @@ mod tests {
         assert!(desired.collections.is_empty());
         assert!(desired.replicator_collections.contains("AgentToolCall"));
         assert_eq!(desired.replicator_filter.len(), 8);
-        for predicate in desired.replicator_filter.values() {
+        let request = desired
+            .replicator_filter
+            .get("AgentRequest")
+            .expect("request filter");
+        assert_eq!(request.field, "requester_did");
+        assert_eq!(request.value, "did:key:coord");
+        for (collection, predicate) in &desired.replicator_filter {
+            if collection == "AgentRequest" {
+                continue;
+            }
             assert_eq!(predicate.field, "agent_did");
             assert_eq!(predicate.value, "did:key:host");
         }

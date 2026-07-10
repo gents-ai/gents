@@ -11,10 +11,12 @@ See `../README.md` for how this fits the broader formal-verification model.
 - `SubagentCancelPropagation` - cascade-cancel delivery from a parent bridge row on deployment A to the child request owner on deployment B. Spec design: `docs/superpowers/specs/2026-05-13-subagent-cancel-propagation-tla-design.md` (removed from the tree; see git history). Implementation plan: `docs/superpowers/plans/2026-05-13-subagent-cancel-propagation-tla.md` (removed from the tree; see git history).
 - `PairingTransport` — connection establishment + replication liveness for one directed pairing edge, the transport layer *below* `ReversePairing`. `ReversePairing` and the Lean `PairingReconcile` model both assume the transport carries the install RPC / that `connect` succeeds; neither models *establishing* the link, so the live #511 fleet hang was outside the modeled world. This spec closes that gap. It distinguishes the **three real failure modes** (grounded in the production code) with two independent BOOLEAN constants — `Dialable` (the connect-gate ticket form) and `ReplicatorInstallable` (whether `add_replicator` can succeed once connected) — exercised by a **three-config diagnostic**: `MCPairingTransportDialable` (both true: the shareable-address fix — all properties hold); `MCPairingTransportUndialable` (MODE A — `Dialable = FALSE`: connect-fails-first, the *literal* #511 hang, never reaches `Connected` so nothing subscribes and no applied row is written); `MCPairingTransportReplicatorStuck` (MODE B/C — `ReplicatorInstallable = FALSE`: connect OK and collections subscribe but the replicator install never succeeds — the durable "subscribed collections, `replicator_addresses` null" partial row). Companion to the Lean `PairingReconcile` `dialFailed` (MODE A) and `reconcileInstallReplicatorFailed` (MODE B/C) transitions and the `convergence_requires_successful_install` obligation.
 - `P2PBackpressure` — hub fan-in/fan-out admission **obligation** model for #630 (**operator mitigation surface**, not a multi-wave flood-safety proof). `PairingTransport` proves a single edge can connect/install; this model starts after that. One-wave *necessity* obligations: outbound timeouts must release push-worker slots; inbound success acks must be backed by process-local pending registration or merge (pending is **not** durable across restart). Out of scope / production gaps: continuous multi-wave organic writes, **queue admission before PushLog spawn** (shipping can grow waiting tasks + retained JoinHandles unbounded), Bitswap stalls, rate-limit buckets, gossip send-loop, multi-slow-peer fill with `PushWorkers > 1`, peer-vs-CID pending. See `boundary.p2p-backpressure.obligation-model`. Green/red configs (`MCP2PBackpressureGreen` / `TimeoutStall` / `BadAck`) are **modeled, not yet TLC-checked**.
-- `ReplicatedRequestConvergence` — owner-only terminal convergence for replicated
-  `AgentRequest` documents (#664/#661). A persisted per-request `Cap` bounds
-  blind same-value writes across owner restarts; each write fans out to every
-  online replicator. A peer unavailable through the entire cap converges when
+- `ReplicatedRequestConvergence` — owner-only terminal convergence for
+  party-scoped replicated `AgentRequest` documents (#664/#661/#683). Replica
+  holders are authorized request parties, never unrelated fleet pairings. A
+  persisted per-request `Cap` bounds blind same-value writes across owner
+  restarts; each write fans out only to online party replicators. A party peer
+  unavailable through the entire cap converges when
   pairing recovery reinstalls the configured replicator and performs one full
   replay of current owner-authored DAG heads. Replay authors no request field,
   so partitions do not create unbounded CRDT history. `SingleClaimer` fences
@@ -170,12 +172,12 @@ Current parameters in `MCReplicatedRequestConvergence.cfg` / `MCReplicatedReques
 | Parameter | Value | Rationale |
 |-----------|-------|-----------|
 | `Owner` | `o` | The owning node — the request's `agent_did` holder and the only node that drives the lifecycle |
-| `ReplicaHolder` | `{p1, p2}` | Two non-owning peer replicas — the minimum to make convergence non-trivial across more than one holder |
+| `ReplicaHolder` | `{p1}` | The one requesting coordinator authorized to hold the host-owned child request; unrelated fleet peers are excluded |
 | `DeltaId` | `{d1, d2, d3, d4, d5, d6}` | Bounded id pool for terminal re-emissions; `StateBound` caps consumption below the pool size |
 | `MaxDrops` | `1` | One terminal delta may drop before fair re-emission converges (green) / strands a peer (stuck) |
 | `MaxCrashes` | `1` | One total node crash (owner restart or a peer losing volatile inbound) |
 | `TerminalKind` | `{Completed, Failed}` | The peer must converge to the *specific* terminal the owner reached, not merely some terminal |
-| `Cap` | `3` (green) / `1` (stuck) | Persisted per-request budget = shipping `TERMINAL_REDRIVE_CAP`; each emission is one owner write fanned out to every online replicator. The green config also enables reconnect replay, so a peer offline beyond all three writes still converges. |
+| `Cap` | `3` (green) / `1` (stuck) | Persisted per-request budget = shipping `TERMINAL_REDRIVE_CAP`; each emission is one owner write fanned out only to online request-party replicators. The green config also enables reconnect replay, so a party peer offline beyond all three writes still converges. |
 | `ReplayOnRecovery` | `TRUE` (green/peer-claim) / `FALSE` (stuck) | Production recovery reinstalls a configured subagent replicator once per reconnect, causing a bounded full replay. The stuck diagnostic removes that action and exposes the exhausted-cap liveness gap. |
 | `StateBound` | `Cardinality(deltaIdsUsed) <= Cap` | `emitCount` is persisted per request and caps same-value owner writes at `Cap`, independent of replica count. |
 
@@ -267,7 +269,7 @@ Active lines from `MCReplicatedRequestConvergence.cfg` (`Cap = 3`, reconnect rep
 - **`INVARIANT DeltaBackedByOwnerTerminal`** — every in-flight terminal delta carries the owner's (absorbing) terminal value; no peer can converge to a value the owner never reached.
 - **`INVARIANT DeltaIdsTracked`** — every in-flight delta's id is recorded in `deltaIdsUsed`; no id reuse.
 - **`INVARIANT ReplayBound`** — a peer recovery schedules at most one full replay in the modeled reconnect cycle.
-- **`PROPERTY TerminalConverges`** (`owner-terminal ~> every peer reflects it`) — online peers converge through bounded owner writes under bounded loss; a peer offline beyond the entire cap converges through fair `RecoverPeer` and `ReplayTerminalSnapshot`. Replay consumes no delta id or request-write budget.
+- **`PROPERTY TerminalConverges`** (`owner-terminal ~> every request-party peer reflects it`) — online party peers converge through bounded owner writes under bounded loss; a party peer offline beyond the entire cap converges through fair `RecoverPeer` and `ReplayTerminalSnapshot`. Replay consumes no delta id or request-write budget. Unrelated fleet peers are outside `ReplicaHolder` by the #683 scope contract.
 - **`CONSTRAINT StateBound`** — bounds total terminal re-emissions to keep TLC from exploring re-drive churn that is not meaningful with unbounded real delta ids.
 
 Two diagnostic configs reproduce the pre-fix convergence gap (liveness) and prove the safety property is falsifiable (safety):
@@ -361,9 +363,9 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCPairingTransportDialable.cfg` | `Dialable = TRUE`, `ReplicatorInstallable = TRUE` | Passes `TypeOK`, `PartialApplyHasProgress`, `ReplicationImpliesReplicator`, `ReplicatorLiveness`, `EndToEndLiveness` | 7 distinct states; 8 generated | — | <1s (OpenJDK 25) |
 | `MCPairingTransportUndialable.cfg` | `Dialable = FALSE`, `ReplicatorInstallable = TRUE` | **MODE A diagnostic:** invariants hold (`PartialApplyHasProgress` vacuous); `ReplicatorLiveness` intentionally VIOLATED (never-`Connected` trace = connect-fails-first hang) | 3 distinct states; 4 generated | — | <1s (OpenJDK 25) |
 | `MCPairingTransportReplicatorStuck.cfg` | `Dialable = TRUE`, `ReplicatorInstallable = FALSE` | **MODE B/C diagnostic:** `TypeOK`/`ReplicationImpliesReplicator` hold; `PartialApplyHasProgress` intentionally VIOLATED at `Connected ∧ subscribed ∧ ¬installed` (the partial row); `ReplicatorLiveness`/`EndToEndLiveness` also violated | 5 distinct states; 6 generated | — | <1s (OpenJDK 25) |
-| `MCReplicatedRequestConvergence.cfg` | `Cap = 3`, `ReplayOnRecovery = TRUE`, two replicas | Passes `TypeOK`, `SingleClaimer`, delta/replay invariants, and `TerminalConverges` | 3,972 distinct states; 15,633 generated | 19 | 1s |
-| `MCReplicatedRequestConvergenceStuck.cfg` | `Cap = 1`, `ReplayOnRecovery = FALSE` | Invariants hold; `TerminalConverges` intentionally VIOLATED with both peers offline and the persisted budget exhausted | 154 distinct states; 380 generated | 10 | <1s |
-| `MCReplicatedRequestConvergencePeerClaim.cfg` | `AllowPeerClaim = TRUE` | `SingleClaimer` intentionally VIOLATED by `PeerClaimsForeign` | 40 distinct states before counterexample; 46 generated | 4 | <1s |
+| `MCReplicatedRequestConvergence.cfg` | `Cap = 3`, `ReplayOnRecovery = TRUE`, one request-party replica | Passes `TypeOK`, `SingleClaimer`, delta/replay invariants, and `TerminalConverges` | 294 distinct states; 728 generated | 13 | <1s |
+| `MCReplicatedRequestConvergenceStuck.cfg` | `Cap = 1`, `ReplayOnRecovery = FALSE` | Invariants hold; `TerminalConverges` intentionally VIOLATED with the requester offline and the persisted budget exhausted | 42 distinct states; 78 generated | 8 | <1s |
+| `MCReplicatedRequestConvergencePeerClaim.cfg` | `AllowPeerClaim = TRUE` | `SingleClaimer` intentionally VIOLATED by `PeerClaimsForeign` | 47 distinct states before counterexample; 51 generated | 6 | <1s |
 
 The multi-collection run's final temporal-property pass dominated runtime: TLC completed BFS first, then checked 16 temporal branches over 34,635,520 total distinct states in 19min 27s.
 
@@ -372,9 +374,9 @@ The SubagentCompletion run used TLC2 `2026.05.12.170007` (rev `8033878`) with Op
 The SubagentCancelPropagation run used TLC2 `2026.05.12.170007` (rev `8033878`) with OpenJDK 17.0.19 on macOS arm64, `-workers auto` using 18 workers. TLC checked 2 temporal branches; the final temporal phase took 3s.
 
 The three ReplicatedRequestConvergence runs used TLC2
-`2026.07.03.221739` (rev `227f61b`) with OpenJDK 17.0.19 in a Linux arm64
-container, `-workers auto` using 18 workers. The green run checked two temporal
-branches; the other two are deliberately failing diagnostics.
+`2026.07.03.221739` (rev `227f61b`) with Homebrew OpenJDK 26.0.1 on macOS
+arm64, `-workers auto` using 18 workers. The one-requester green run checked
+one temporal branch; the other two are deliberately failing diagnostics.
 
 Crash-enabled two-collection attempts were stopped for tractability, not property failure:
 

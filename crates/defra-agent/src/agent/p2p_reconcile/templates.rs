@@ -155,30 +155,24 @@ pub const NETWORK_CONTROL_COLLECTIONS: &[&str] = &[
     "NetworkJoinRequest",
 ];
 
-/// Coordinator → host leg for subagent delegation: carry the parent request
-/// owned by the coordinator plus bridges addressed to the host.
-const SUBAGENT_COORDINATOR_COLLECTIONS: &[&str] = &["AgentRequest", "AgentToolCall"];
+/// Coordinator → host leg for subagent delegation: carry only bridges
+/// addressed to this host. Coordinator-owned parent requests are not
+/// pair-specific and must not fan out across every host pairing (#683).
+const SUBAGENT_COORDINATOR_COLLECTIONS: &[&str] = &["AgentToolCall"];
 
-const SUBAGENT_COORDINATOR_RULES: &[CollectionRule] = &[
-    CollectionRule {
-        collection: "AgentRequest",
-        field: "agent_did",
-        source: DidSource::LocalDid,
-    },
-    CollectionRule {
-        collection: "AgentToolCall",
-        field: "spawn_target_did",
-        source: DidSource::PeerDid,
-    },
-];
+const SUBAGENT_COORDINATOR_RULES: &[CollectionRule] = &[CollectionRule {
+    collection: "AgentToolCall",
+    field: "spawn_target_did",
+    source: DidSource::PeerDid,
+}];
 
 /// Host → coordinator leg for subagent completion: carry the host-owned
 /// conversation slice, including child tool calls.
 const SUBAGENT_HOST_RULES: &[CollectionRule] = &[
     CollectionRule {
         collection: "AgentRequest",
-        field: "agent_did",
-        source: DidSource::LocalDid,
+        field: "requester_did",
+        source: DidSource::PeerDid,
     },
     CollectionRule {
         collection: "AgentResponse",
@@ -467,13 +461,7 @@ mod tests {
         assert_eq!(t.delivery, Delivery::Push);
         assert_eq!(t.collections, SUBAGENT_COORDINATOR_COLLECTIONS);
         let f = scope_filter(&t.scope, t.collections, "did:key:host", "did:key:coord");
-        assert_eq!(
-            f.get("AgentRequest"),
-            Some(&FilterPredicate {
-                field: "agent_did".to_string(),
-                value: "did:key:coord".to_string(),
-            })
-        );
+        assert!(!f.contains_key("AgentRequest"));
         assert_eq!(
             f.get("AgentToolCall"),
             Some(&FilterPredicate {
@@ -484,15 +472,26 @@ mod tests {
     }
 
     #[test]
-    fn subagent_host_filters_conversation_on_local_owner() {
+    fn subagent_host_filters_requests_on_requester_and_rest_on_local_owner() {
         let t = resolve_template(SUBAGENT_HOST_TEMPLATE).unwrap();
         assert_eq!(t.delivery, Delivery::Push);
         assert_eq!(t.collections, CONVERSATION_COLLECTIONS);
         let f = scope_filter(&t.scope, t.collections, "did:key:coord", "did:key:host");
         assert_eq!(f.len(), CONVERSATION_COLLECTIONS.len());
-        for col in CONVERSATION_COLLECTIONS {
+        assert_eq!(
+            f.get("AgentRequest"),
+            Some(&FilterPredicate {
+                field: "requester_did".to_string(),
+                value: "did:key:coord".to_string(),
+            })
+        );
+        for col in CONVERSATION_COLLECTIONS
+            .iter()
+            .copied()
+            .filter(|collection| *collection != "AgentRequest")
+        {
             assert_eq!(
-                f.get(*col),
+                f.get(col),
                 Some(&FilterPredicate {
                     field: "agent_did".to_string(),
                     value: "did:key:host".to_string(),

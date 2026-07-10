@@ -58,9 +58,10 @@ fn unscoped_scope_resolves_to_no_filter() {
     }
 }
 
-/// Mirrors Lean `subagentCoordinator_filter_eq` / `subagentHost_filter_eq` and
-/// `subagent_filter_values_local_or_peer`: the built-in subagent templates are
-/// exact directional filters and never admit a third-party DID value.
+/// Mirrors Lean `subagentCoordinator_filter_eq` / `subagentHost_filter_eq` /
+/// `subagentRequest_crossing_is_peer_scoped`: coordinator parent requests do
+/// not fan out to hosts, and host-owned child requests return only to the
+/// paired requester DID.
 #[test]
 fn subagent_templates_resolve_to_exact_directional_filters() {
     const CONVERSATION: &[&str] = &[
@@ -76,21 +77,15 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
 
     let coord = resolve_template("subagent-coordinator").expect("coordinator template");
     assert_eq!(coord.delivery, Delivery::Push);
-    assert_eq!(coord.collections, &["AgentRequest", "AgentToolCall"]);
+    assert_eq!(coord.collections, &["AgentToolCall"]);
     let coord_filter = scope_filter(
         &coord.scope,
         coord.collections,
         "did:key:host",
         "did:key:coord",
     );
-    assert_eq!(coord_filter.len(), 2);
-    assert_eq!(
-        coord_filter.get("AgentRequest"),
-        Some(&FilterPredicate {
-            field: "agent_did".to_string(),
-            value: "did:key:coord".to_string(),
-        })
-    );
+    assert_eq!(coord_filter.len(), 1);
+    assert!(!coord_filter.contains_key("AgentRequest"));
     assert_eq!(
         coord_filter.get("AgentToolCall"),
         Some(&FilterPredicate {
@@ -109,9 +104,20 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
         "did:key:host",
     );
     assert_eq!(host_filter.len(), CONVERSATION.len());
-    for collection in CONVERSATION {
+    assert_eq!(
+        host_filter.get("AgentRequest"),
+        Some(&FilterPredicate {
+            field: "requester_did".to_string(),
+            value: "did:key:coord".to_string(),
+        })
+    );
+    for collection in CONVERSATION
+        .iter()
+        .copied()
+        .filter(|collection| *collection != "AgentRequest")
+    {
         assert_eq!(
-            host_filter.get(*collection),
+            host_filter.get(collection),
             Some(&FilterPredicate {
                 field: "agent_did".to_string(),
                 value: "did:key:host".to_string(),
@@ -126,6 +132,49 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
             "subagent filters must not include third-party DIDs"
         );
     }
+}
+
+/// Regression/measurement for #683. Under the former coordinator rule, one
+/// owner request matched all 16 host pairings because every pairing filtered
+/// `AgentRequest.agent_did` by the same coordinator DID. The request-party
+/// route key makes the return leg match exactly one requesting coordinator,
+/// while the coordinator leg carries no parent request at all.
+#[test]
+fn sixteen_peer_request_wave_is_reduced_to_one_target() {
+    let coordinator = resolve_template("subagent-coordinator").expect("coordinator template");
+    let host = resolve_template("subagent-host").expect("host template");
+    let requester_did = "did:key:coordinator-07";
+
+    let former_parent_request_matches = 16;
+    let current_parent_request_matches = (0..16)
+        .filter(|index| {
+            let host_did = format!("did:key:host-{index:02}");
+            scope_filter(
+                &coordinator.scope,
+                coordinator.collections,
+                &host_did,
+                requester_did,
+            )
+            .contains_key("AgentRequest")
+        })
+        .count();
+    assert_eq!(current_parent_request_matches, 0);
+
+    let routed_child_request_matches = (0..16)
+        .filter(|index| {
+            let peer_did = format!("did:key:coordinator-{index:02}");
+            scope_filter(&host.scope, host.collections, &peer_did, "did:key:host")
+                .get("AgentRequest")
+                .is_some_and(|predicate| {
+                    predicate.field == "requester_did" && predicate.value == requester_did
+                })
+        })
+        .count();
+    assert_eq!(routed_child_request_matches, 1);
+    assert!(
+        former_parent_request_matches / routed_child_request_matches >= 5,
+        "request replication fan-out must improve by at least 5x"
+    );
 }
 
 /// Mirrors Lean `appCollections_in_catalog` / `appCollections_collections_empty`

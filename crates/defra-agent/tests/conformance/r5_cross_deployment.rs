@@ -42,6 +42,7 @@ struct ToolCallRow {
 struct AgentRequestRow {
     request_id: String,
     agent_did: String,
+    requester_did: Option<String>,
     behavior_id: String,
     caused_by_parent_request_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
@@ -86,7 +87,7 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
     install_one_way_replicator(
         parent_db.node.as_ref(),
         child_agent.db.node.as_ref(),
-        &["AgentRequest", "AgentToolCall"],
+        &["AgentToolCall"],
     )
     .await;
     // The parent deliberately has no pairing row for B. Production R5 routing
@@ -99,14 +100,6 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
         parent_db,
     )
     .await;
-
-    let replicated_parent =
-        wait_for_request(child_agent.db.node.as_ref(), &case.parent_request_id).await;
-    assert_eq!(
-        replicated_parent.agent_did, PARENT_AGENT_DID,
-        "{}: parent request should replicate to B before the bridge",
-        case.name
-    );
 
     let child_request_id = spawn_from_parent_hook(case, &hook).await;
     assert!(
@@ -132,6 +125,13 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
     )
     .await;
     assert_bridge_matches_case(case, &replicated_bridge, &child_request_id);
+    assert!(
+        fetch_child_request_optional(child_agent.db.node.as_ref(), &case.parent_request_id)
+            .await
+            .is_none(),
+        "{}: the targeted bridge must not drag the coordinator parent request to B",
+        case.name
+    );
 
     let child = wait_for_child_request(child_agent.db.node.as_ref(), &child_request_id).await;
     assert_child_matches_case(case, &child, &child_request_id);
@@ -139,6 +139,12 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
     assert_eq!(
         child.agent_did, child_agent_did,
         "{}: cross-deployment child must be locally owned by B",
+        case.name
+    );
+    assert_eq!(
+        child.requester_did.as_deref(),
+        Some(PARENT_AGENT_DID),
+        "{}: child request must route back only to its coordinator",
         case.name
     );
 
@@ -653,6 +659,7 @@ async fn fetch_child_request_optional(
             AgentRequest(filter: {{ request_id: {{ _eq: "{child_request_id}" }} }}, limit: 1) {{
                 request_id
                 agent_did
+                requester_did
                 behavior_id
                 caused_by_parent_request_id
                 caused_by_parent_tool_call_id
@@ -662,20 +669,6 @@ async fn fetch_child_request_optional(
         }}"#
     );
     first_optional_row(&node.execute(&query).await, "AgentRequest")
-}
-
-async fn wait_for_request(node: &EmbeddedNode, request_id: &str) -> AgentRequestRow {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    loop {
-        if let Some(request) = fetch_child_request_optional(node, request_id).await {
-            return request;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            let diagnostic = agent_request_diagnostic(node).await;
-            panic!("request {request_id} was not replicated; {diagnostic}");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
 }
 
 async fn wait_for_tool_call(
@@ -717,6 +710,7 @@ async fn agent_request_diagnostic(node: &EmbeddedNode) -> String {
                 AgentRequest {
                     request_id
                     agent_did
+                    requester_did
                     behavior_id
                     caused_by_parent_request_id
                     caused_by_parent_tool_call_id

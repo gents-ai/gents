@@ -105,12 +105,17 @@ def subagentHostCollections : List String :=
   conversationCollections
 
 def subagentCoordinatorRules : List CollectionRule :=
-  [ { collection := "AgentRequest",  field := "agent_did",        source := .localDid }
-  , { collection := "AgentToolCall", field := "spawn_target_did", source := .peerDid } ]
+  [ { collection := "AgentToolCall", field := "spawn_target_did", source := .peerDid } ]
 
 def subagentHostRules : List CollectionRule :=
-  subagentHostCollections.map
-    (fun c => { collection := c, field := "agent_did", source := .localDid })
+  [ { collection := "AgentRequest",      field := "requester_did", source := .peerDid }
+  , { collection := "AgentResponse",     field := "agent_did",     source := .localDid }
+  , { collection := "AgentMessage",      field := "agent_did",     source := .localDid }
+  , { collection := "AgentToolCall",     field := "agent_did",     source := .localDid }
+  , { collection := "AgentToolResult",   field := "agent_did",     source := .localDid }
+  , { collection := "AgentSession",      field := "agent_did",     source := .localDid }
+  , { collection := "AgentConversation", field := "agent_did",     source := .localDid }
+  , { collection := "CompactionEntry",   field := "agent_did",     source := .localDid } ]
 
 def conversationTemplate : Template :=
   { id := "conversation"
@@ -144,7 +149,7 @@ def networkControlTemplate : Template :=
 
 def subagentCoordinatorTemplate : Template :=
   { id := "subagent-coordinator"
-  , collections := ["AgentRequest", "AgentToolCall"].toFinset
+  , collections := ["AgentToolCall"].toFinset
   , scope := .perCollection subagentCoordinatorRules
   , delivery := .push }
 

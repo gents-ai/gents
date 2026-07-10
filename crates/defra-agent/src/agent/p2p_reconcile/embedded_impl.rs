@@ -408,9 +408,10 @@ mod tests {
         );
     }
 
-    async fn seed_agent_request(node: &EmbeddedNode, request_id: &str, agent_did: &str) {
+    async fn seed_agent_request(node: &EmbeddedNode, request_id: &str, requester_did: &str) {
         let request_id = escape_graphql_string(request_id);
-        let agent_did = escape_graphql_string(agent_did);
+        let requester_did = escape_graphql_string(requester_did);
+        let agent_did = "did:key:host";
         let session_id = escape_graphql_string(&format!("{request_id}-session"));
         let behavior_id = escape_graphql_string(&format!("{agent_did}:default"));
         let mutation = format!(
@@ -418,6 +419,7 @@ mod tests {
                 create_AgentRequest(input: {{
                     request_id: "{request_id}",
                     agent_did: "{agent_did}",
+                    requester_did: "{requester_did}",
                     behavior_id: "{behavior_id}",
                     session_id: "{session_id}",
                     retry_parent_request: "",
@@ -580,8 +582,8 @@ mod tests {
         let sender_addresses = wait_for_peer_info(&sender_admin).await;
         let receiver_addresses = wait_for_peer_info(&receiver_admin).await;
 
-        seed_agent_request(&sender, "parent-match", "did:key:coord").await;
-        seed_agent_request(&sender, "parent-other", "did:key:other").await;
+        seed_agent_request(&sender, "child-match", "did:key:coord").await;
+        seed_agent_request(&sender, "child-other", "did:key:other").await;
         seed_agent_tool_call(&sender, "bridge-match", "did:key:host").await;
         seed_agent_tool_call(&sender, "bridge-other", "did:key:other").await;
 
@@ -613,7 +615,7 @@ mod tests {
         filters.insert(
             "AgentRequest".to_string(),
             FilterPredicate {
-                field: "agent_did".to_string(),
+                field: "requester_did".to_string(),
                 value: "did:key:coord".to_string(),
             },
         );
@@ -629,14 +631,14 @@ mod tests {
             .await
             .expect("install filtered sender to receiver replicator");
 
-        wait_for_value(&receiver, "AgentRequest", "request_id", "parent-match").await;
+        wait_for_value(&receiver, "AgentRequest", "request_id", "child-match").await;
         wait_for_value(&receiver, "AgentToolCall", "tool_call_id", "bridge-match").await;
 
         let request_ids = collection_values(&receiver, "AgentRequest", "request_id").await;
         let tool_call_ids = collection_values(&receiver, "AgentToolCall", "tool_call_id").await;
         assert_eq!(
             request_ids,
-            BTreeSet::from(["parent-match".to_string()]),
+            BTreeSet::from(["child-match".to_string()]),
             "filtered request replay should not leak non-matching rows"
         );
         assert_eq!(
