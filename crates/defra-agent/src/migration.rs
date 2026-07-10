@@ -147,6 +147,18 @@ const ADD_CONSUMED_INVITE_NONCE_CLAIMANT_PATCH: &str = r#"[
     {"op":"add","path":"/ConsumedInviteNonce/Fields/-","value":{"Name":"claimant_did","Kind":11}}
 ]"#;
 
+/// The per-completion retry fields #648 added to `InferenceProfile`, with
+/// their DefraDB field kinds (4 = Int, 19 = nillable Int array, 2 = Boolean).
+/// The runtime queries these at startup, so an upgraded home MUST gain them
+/// before the first profile read or the server fails to boot.
+const INFERENCE_PROFILE_RETRY_FIELDS: &[(&str, u8)] = &[
+    ("retry_max_transport", 4),
+    ("retry_backoff_ms", 19),
+    ("retry_max_resample", 4),
+    ("retry_allow_repair", 2),
+    ("retry_interactive_max", 4),
+];
+
 const ADD_PEER_PAIRING_APPLIED_REPLICATOR_FILTER_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingApplied/Fields/-","value":{"Name":"replicator_filter","Kind":11}}
 ]"#;
@@ -1114,6 +1126,59 @@ pub async fn ensure_reciprocal_conversation_intent_migrations(
     }
 }
 
+/// Idempotent migration ensuring `InferenceProfile` carries the #648
+/// per-completion retry fields on upgraded stores. Fresh databases get them
+/// from the schema; homes initialized before #648 fail at server start with
+/// `Cannot query field "retry_max_transport" on type "InferenceProfile"`
+/// without this patch (the startup profile load selects every retry column).
+pub async fn ensure_inference_profile_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    let Some(collection) = node
+        .get_collection("InferenceProfile")
+        .context("get InferenceProfile collection")?
+    else {
+        return match node
+            .add_schema(defra_agent_protocol::schemas::INFERENCE_PROFILE)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) if error.to_string().contains("already exists") => Ok(()),
+            Err(error) => Err(error).context("add InferenceProfile schema"),
+        };
+    };
+
+    let missing: Vec<&(&str, u8)> = INFERENCE_PROFILE_RETRY_FIELDS
+        .iter()
+        .filter(|(name, _)| !collection_has_field(&collection, name))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let operations = missing
+        .iter()
+        .map(|(name, kind)| {
+            format!(
+                r#"{{"op":"add","path":"/InferenceProfile/Fields/-","value":{{"Name":"{name}","Kind":{kind}}}}}"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let patch = format!("[{operations}]");
+    let next = node
+        .patch_collection("InferenceProfile", &patch)
+        .await
+        .context("patch_collection InferenceProfile retry fields")?;
+    node.set_active_collection_version(&next.version_id)
+        .await
+        .context("set_active_collection_version InferenceProfile retry fields")?;
+    tracing::info!(
+        version = %next.version_id,
+        added = missing.len(),
+        "InferenceProfile patched with per-completion retry fields"
+    );
+    Ok(())
+}
+
 /// Idempotent migration ensuring the `PairingBearerClaim` collection exists.
 /// Claimant devices push these rows to the invite issuer; the bearer-claim
 /// reconciler validates and consumes them. The rows themselves grant nothing.
@@ -1871,6 +1936,9 @@ pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()
     ensure_pairing_bearer_claim_migrations(node.clone())
         .await
         .context("ensure PairingBearerClaim migrations")?;
+    ensure_inference_profile_migrations(node.clone())
+        .await
+        .context("ensure InferenceProfile migrations")?;
     ensure_agent_network_migrations(node.clone())
         .await
         .context("ensure AgentNetwork migrations")?;
@@ -3025,6 +3093,43 @@ mod patch_kind_tests {
             assert!(
                 collection_has_field(&collection, field),
                 "ReciprocalConversationIntent must have field '{field}'"
+            );
+        }
+    }
+
+    /// The real upgrade path: a home whose InferenceProfile predates #648's
+    /// retry fields must gain all five at migration time — the startup profile
+    /// query selects every retry column, so a missing one fails server boot.
+    #[tokio::test]
+    async fn inference_profile_migration_patches_pre_retry_collections() {
+        let node = test_node().await;
+        let pre_retry_sdl: String = defra_agent_protocol::schemas::INFERENCE_PROFILE
+            .lines()
+            .filter(|line| !line.contains("retry_"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            pre_retry_sdl.contains("type InferenceProfile"),
+            "filtered SDL must still declare the collection"
+        );
+        node.add_schema(&pre_retry_sdl).await.unwrap();
+
+        // Idempotent: run twice; second run must be a no-op.
+        ensure_inference_profile_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_inference_profile_migrations(node.clone())
+            .await
+            .unwrap();
+
+        let collection = node
+            .get_collection("InferenceProfile")
+            .unwrap()
+            .expect("InferenceProfile collection must exist after migration");
+        for (field, _) in INFERENCE_PROFILE_RETRY_FIELDS {
+            assert!(
+                collection_has_field(&collection, field),
+                "InferenceProfile must have field '{field}' after migration"
             );
         }
     }
