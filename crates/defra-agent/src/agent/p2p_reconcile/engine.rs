@@ -220,14 +220,15 @@ pub async fn run_pairing_reconciler(
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut replay_connections = BTreeMap::new();
+    let mut failing_peers = BTreeSet::<String>::new();
 
-    sweep_pairings(&admin, &store, &mut replay_connections).await?;
+    sweep_pairings(&admin, &store, &mut replay_connections, &mut failing_peers).await?;
 
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => {
-                sweep_pairings_logged(&admin, &store, &mut replay_connections).await;
+                sweep_pairings_logged(&admin, &store, &mut replay_connections, &mut failing_peers).await;
             }
             message = subscription.recv() => {
                 if message.is_none() {
@@ -238,7 +239,7 @@ pub async fn run_pairing_reconciler(
                 if dropped > 0 {
                     tracing::warn!(dropped, "pairing reconciler update subscription dropped messages");
                 }
-                sweep_pairings_logged(&admin, &store, &mut replay_connections).await;
+                sweep_pairings_logged(&admin, &store, &mut replay_connections, &mut failing_peers).await;
             }
         }
     }
@@ -252,8 +253,9 @@ async fn sweep_pairings_logged(
     admin: &dyn RemoteP2pAdmin,
     store: &dyn PairingStateStore,
     replay_connections: &mut BTreeMap<String, bool>,
+    failing_peers: &mut BTreeSet<String>,
 ) {
-    if let Err(error) = sweep_pairings(admin, store, replay_connections).await {
+    if let Err(error) = sweep_pairings(admin, store, replay_connections, failing_peers).await {
         tracing::warn!(error = %error, "pairing reconciler sweep failed; retrying on next tick");
     }
 }
@@ -262,6 +264,7 @@ async fn sweep_pairings(
     admin: &dyn RemoteP2pAdmin,
     store: &dyn PairingStateStore,
     replay_connections: &mut BTreeMap<String, bool>,
+    failing_peers: &mut BTreeSet<String>,
 ) -> Result<()> {
     // Amortize the membership-materializable computation across the whole sweep
     // (avoids re-verifying every signature per peer). Non-fatal on failure: the
@@ -277,47 +280,68 @@ async fn sweep_pairings(
         let force_replay = replay_connections
             .get(&peer_id)
             .is_none_or(|was_active| !was_active && active_before);
-        let tick_succeeded =
-            match reconcile_peer_tick_with_replay(admin, store, &peer_id, force_replay).await {
-                Ok(outcome) => {
-                    if outcome.desired_read_failed {
-                        // Desired-state failure performs no topology work, so a
-                        // replay obligation can only be kept or created here,
-                        // never discharged. An absent entry (daemon startup) and
-                        // an existing `false` (reconnect edge already observed)
-                        // both stay `false` so the pending replay fires on the
-                        // first healthy sweep; a previously-active peer only
-                        // stays `true` while it remains active, so a drop during
-                        // the degraded read still schedules its replay.
-                        let was_active = replay_connections.get(&peer_id).copied().unwrap_or(false);
-                        replay_connections.insert(peer_id.clone(), was_active && active_before);
-                        continue;
-                    }
-                    if !outcome.ops_applied.is_empty() {
-                        tracing::info!(
-                            peer_id = %outcome.peer_id,
-                            ops = ?outcome.ops_applied,
-                            "pairing reconcile applied operations"
-                        );
-                    }
-                    if !outcome.replayed_replicators.is_empty() {
-                        tracing::info!(
-                            peer_id = %outcome.peer_id,
-                            replicators = ?outcome.replayed_replicators,
-                            "replayed subagent replicators after peer reconnect"
-                        );
-                    }
-                    true
+        let tick_succeeded = match reconcile_peer_tick_with_replay(
+            admin,
+            store,
+            &peer_id,
+            force_replay,
+        )
+        .await
+        {
+            Ok(outcome) => {
+                if outcome.desired_read_failed {
+                    // Desired-state failure performs no topology work, so a
+                    // replay obligation can only be kept or created here,
+                    // never discharged. An absent entry (daemon startup) and
+                    // an existing `false` (reconnect edge already observed)
+                    // both stay `false` so the pending replay fires on the
+                    // first healthy sweep; a previously-active peer only
+                    // stays `true` while it remains active, so a drop during
+                    // the degraded read still schedules its replay.
+                    let was_active = replay_connections.get(&peer_id).copied().unwrap_or(false);
+                    replay_connections.insert(peer_id.clone(), was_active && active_before);
+                    continue;
                 }
-                Err(error) => {
+                if !outcome.ops_applied.is_empty() {
+                    tracing::info!(
+                        peer_id = %outcome.peer_id,
+                        ops = ?outcome.ops_applied,
+                        "pairing reconcile applied operations"
+                    );
+                }
+                if !outcome.replayed_replicators.is_empty() {
+                    tracing::info!(
+                        peer_id = %outcome.peer_id,
+                        replicators = ?outcome.replayed_replicators,
+                        "replayed subagent replicators after peer reconnect"
+                    );
+                }
+                true
+            }
+            Err(error) => {
+                // Transition-aware logging (#684): a backgrounded or
+                // NAT'd mobile peer fails every sweep in its steady state,
+                // so warn only on the healthy -> failing edge, drop to
+                // debug while the peer stays failing, and log recovery.
+                if failing_peers.insert(peer_id.clone()) {
                     tracing::warn!(
                         peer_id = %peer_id,
                         error = ?error,
-                        "pairing reconcile tick failed"
+                        "pairing reconcile tick failing (will retry each sweep; further failures logged at debug)"
                     );
-                    false
+                } else {
+                    tracing::debug!(
+                        peer_id = %peer_id,
+                        error = ?error,
+                        "pairing reconcile tick still failing"
+                    );
                 }
-            };
+                false
+            }
+        };
+        if tick_succeeded && failing_peers.remove(&peer_id) {
+            tracing::info!(peer_id = %peer_id, "pairing reconcile recovered for peer");
+        }
         let active_after = peer_already_active(admin, &peer_id).await;
         // Keep replay pending after any transient delete/reinstall failure,
         // even if the transport itself is connected. The next sweep then
@@ -1800,20 +1824,31 @@ mod tests {
             },
         );
         let mut replay_connections = BTreeMap::new();
+        let mut failing_peers = BTreeSet::<String>::new();
 
         // A degraded first sweep must keep the startup replay pending. The
         // startup replay compensates for reconnect edges missed while this
         // daemon was down; recording the peer as already-seen-active here would
         // silently discharge that obligation without performing it.
-        sweep_pairings(&admin, &store, &mut replay_connections)
-            .await
-            .expect("degraded desired-read sweep");
+        sweep_pairings(
+            &admin,
+            &store,
+            &mut replay_connections,
+            &mut BTreeSet::<String>::new(),
+        )
+        .await
+        .expect("degraded desired-read sweep");
         assert_eq!(replay_connections.get("peer-a"), Some(&false));
 
         *store.desired.lock().unwrap() = Ok(Some(desired));
-        sweep_pairings(&admin, &store, &mut replay_connections)
-            .await
-            .expect("healthy follow-up sweep");
+        sweep_pairings(
+            &admin,
+            &store,
+            &mut replay_connections,
+            &mut BTreeSet::<String>::new(),
+        )
+        .await
+        .expect("healthy follow-up sweep");
 
         assert_eq!(
             *admin.emitted.lock().unwrap(),
@@ -1825,9 +1860,14 @@ mod tests {
         );
         assert_eq!(replay_connections.get("peer-a"), Some(&true));
 
-        sweep_pairings(&admin, &store, &mut replay_connections)
-            .await
-            .expect("steady-state sweep");
+        sweep_pairings(
+            &admin,
+            &store,
+            &mut replay_connections,
+            &mut BTreeSet::<String>::new(),
+        )
+        .await
+        .expect("steady-state sweep");
         assert_eq!(
             admin.emitted.lock().unwrap().len(),
             2,
@@ -1868,15 +1908,25 @@ mod tests {
         );
         let mut replay_connections = BTreeMap::from([("peer-a".to_string(), false)]);
 
-        sweep_pairings(&admin, &store, &mut replay_connections)
-            .await
-            .expect("degraded reconnect sweep");
+        sweep_pairings(
+            &admin,
+            &store,
+            &mut replay_connections,
+            &mut BTreeSet::<String>::new(),
+        )
+        .await
+        .expect("degraded reconnect sweep");
         assert_eq!(replay_connections.get("peer-a"), Some(&false));
 
         *store.desired.lock().unwrap() = Ok(Some(desired));
-        sweep_pairings(&admin, &store, &mut replay_connections)
-            .await
-            .expect("healthy follow-up replays pending reconnect");
+        sweep_pairings(
+            &admin,
+            &store,
+            &mut replay_connections,
+            &mut BTreeSet::<String>::new(),
+        )
+        .await
+        .expect("healthy follow-up replays pending reconnect");
 
         assert_eq!(replay_connections.get("peer-a"), Some(&true));
         assert_eq!(
@@ -1917,10 +1967,16 @@ mod tests {
             },
         );
         let mut replay_connections = BTreeMap::new();
+        let mut failing_peers = BTreeSet::<String>::new();
 
-        sweep_pairings(&admin, &store, &mut replay_connections)
-            .await
-            .expect("sweep contains per-peer replay failure");
+        sweep_pairings(
+            &admin,
+            &store,
+            &mut replay_connections,
+            &mut BTreeSet::<String>::new(),
+        )
+        .await
+        .expect("sweep contains per-peer replay failure");
         assert_eq!(replay_connections.get("peer-a"), Some(&false));
         assert!(admin.replicators.lock().unwrap().is_empty());
         assert_eq!(
@@ -1928,9 +1984,14 @@ mod tests {
             vec![DiffOp::TeardownReplicator("addr1".into())]
         );
 
-        sweep_pairings(&admin, &store, &mut replay_connections)
-            .await
-            .expect("next sweep heals torn replay");
+        sweep_pairings(
+            &admin,
+            &store,
+            &mut replay_connections,
+            &mut BTreeSet::<String>::new(),
+        )
+        .await
+        .expect("next sweep heals torn replay");
         assert_eq!(replay_connections.get("peer-a"), Some(&true));
         assert!(admin.replicators.lock().unwrap().contains_key("addr1"));
         assert_eq!(
