@@ -16,26 +16,26 @@ EXTENDS Naturals, FiniteSets, TLC
 (* because DefraDB has no per-doc anti-entropy re-drive on a running peer   *)
 (* (defradb.rs#1074) and recovery is owner-scoped + startup-only.          *)
 (*                                                                         *)
-(* Design (owner re-drive, passive peers): the owner periodically          *)
-(* re-asserts terminal state for requests it owns, forcing the terminal    *)
-(* delta back through the normal PushLog path. This model abstracts the    *)
-(* Phase-0 Rust binding (same-value re-assert) as a re-emittable           *)
-(* EmitTerminalDelta action. Peers are strictly passive: their only        *)
-(* lifecycle action is applying a delivered owner delta.                   *)
+(* Design (owner re-drive + reconnect replay, passive peers): the owner     *)
+(* re-asserts terminal state for requests it owns through a PERSISTED,      *)
+(* bounded per-document budget. A peer that was unavailable through that   *)
+(* budget is repaired when its configured replicator reconnects: reinstall *)
+(* performs one bounded full replay of the owner's current document DAG.    *)
+(* The replay does not author a new request delta, so it does not grow the  *)
+(* request's CRDT history. Peers never author lifecycle state.              *)
 (*                                                                         *)
 (* FIDELITY TO THE SHIPPING CODE. The owner has no back-channel telling it *)
 (* whether a peer has caught up, so it CANNOT stop re-emitting "once the   *)
 (* peer converges". The code re-asserts each terminal row a fixed          *)
 (* TERMINAL_REDRIVE_CAP times and then stops, converged or not. This model *)
-(* mirrors that exactly: EmitTerminalDelta is gated ONLY by a per-peer      *)
-(* budget emitCount[peer] < Cap, NOT by whether the peer already matches    *)
-(* the owner. Consequently TerminalConverges is a CONDITIONAL theorem:      *)
-(* it holds iff the budget Cap exceeds the delivery loss a peer suffers     *)
-(* (MaxDrops + MaxCrashes). The green config takes Cap = 3 (the shipping    *)
-(* cap) with one drop + one crash and converges; the Stuck config takes     *)
-(* Cap = 1 and does not (a lost single emission strands the peer). Beyond   *)
-(* the budget the code relies on the next organic write to the row — that   *)
-(* fallback is out of this model's scope.                                   *)
+(* mirrors that exactly: EmitTerminalDelta is gated ONLY by the request's   *)
+(* persisted budget emitCount < Cap, NOT by whether peers already match     *)
+(* the owner. emitCount is durable across CrashOwner. TerminalConverges no  *)
+(* longer depends on Cap exceeding an unbounded partition: an initially     *)
+(* offline peer fairly recovers, then ReplayTerminalSnapshot applies the    *)
+(* owner's terminal DAG without consuming another same-value write. The     *)
+(* Stuck diagnostic disables reconnect replay and still reaches the old     *)
+(* exhausted-budget state, proving replay is load-bearing.                  *)
 (***************************************************************************)
 
 CONSTANTS
@@ -45,9 +45,10 @@ CONSTANTS
   MaxDrops,       \* how many terminal deltas the gossip channel may drop
   MaxCrashes,     \* total node crashes across owner + peers
   TerminalKind,   \* the terminal lifecycle states (e.g. Completed, Failed)
-  Cap,            \* per-peer re-emit budget (the shipping TERMINAL_REDRIVE_CAP):
-                  \* the owner re-asserts each peer's terminal AT MOST Cap times,
-                  \* WITHOUT observing whether the peer converged (no back-channel)
+  Cap,            \* per-request re-emit budget (shipping TERMINAL_REDRIVE_CAP):
+                  \* one owner write fans out to every online replicator;
+                  \* it occurs AT MOST Cap times without a convergence back-channel
+  ReplayOnRecovery, \* TRUE in production: reconnect forces one full replay
   AllowPeerClaim  \* FALSE normally; TRUE arms the adversarial peer-claim action
                   \* (the diagnostic that proves SingleClaimer is falsifiable)
 
@@ -65,6 +66,7 @@ ASSUME MaxCrashesIsNat == MaxCrashes \in Nat
 ASSUME TerminalKindNonEmpty == TerminalKind # {}
 ASSUME TerminalKindDisjoint == TerminalKind \cap NonTerminal = {}
 ASSUME CapIsPositiveNat == Cap \in (Nat \ {0})
+ASSUME ReplayOnRecoveryIsBoolean == ReplayOnRecovery \in BOOLEAN
 ASSUME AllowPeerClaimIsBoolean == AllowPeerClaim \in BOOLEAN
 
 Delta == [
@@ -80,7 +82,10 @@ VARIABLES
   deltaIdsUsed,    \* SUBSET DeltaId — ids consumed by re-emissions
   dropCount,       \* 0..MaxDrops — deltas dropped so far
   crashCount,      \* 0..MaxCrashes — node crashes so far
-  emitCount        \* [ReplicaHolder -> 0..Cap] — terminal deltas emitted per peer
+  emitCount,       \* 0..Cap — DURABLE per-request same-value writes
+  peerOnline,      \* [ReplicaHolder -> BOOLEAN] — an initial partition may be unbounded
+  replayPending,   \* [ReplicaHolder -> BOOLEAN] — reconnect replay obligation
+  replayCount      \* [ReplicaHolder -> 0..1] — one bounded full replay per recovery
 
 vars == <<
   reqState,
@@ -89,7 +94,10 @@ vars == <<
   deltaIdsUsed,
   dropCount,
   crashCount,
-  emitCount
+  emitCount,
+  peerOnline,
+  replayPending,
+  replayCount
 >>
 
 IsTerminal(s) == s \in TerminalKind
@@ -103,7 +111,10 @@ TypeOK ==
   /\ deltaIdsUsed    \in SUBSET DeltaId
   /\ dropCount       \in 0..MaxDrops
   /\ crashCount      \in 0..MaxCrashes
-  /\ emitCount       \in [ReplicaHolder -> 0..Cap]
+  /\ emitCount       \in 0..Cap
+  /\ peerOnline      \in [ReplicaHolder -> BOOLEAN]
+  /\ replayPending   \in [ReplicaHolder -> BOOLEAN]
+  /\ replayCount     \in [ReplicaHolder -> 0..1]
 
 Init ==
   /\ reqState        = [n \in Node |-> "Pending"]
@@ -112,7 +123,12 @@ Init ==
   /\ deltaIdsUsed    = {}
   /\ dropCount       = 0
   /\ crashCount      = 0
-  /\ emitCount       = [peer \in ReplicaHolder |-> 0]
+  /\ emitCount       = 0
+  \* A peer may begin partitioned. Weak fairness on RecoverPeer means the
+  \* partition can last arbitrarily long but not forever.
+  /\ peerOnline      \in [ReplicaHolder -> BOOLEAN]
+  /\ replayPending   = [peer \in ReplicaHolder |-> FALSE]
+  /\ replayCount     = [peer \in ReplicaHolder |-> 0]
 
 (***************************************************************************)
 (* Owner-only lifecycle. The owner advances its OWN replica through the    *)
@@ -123,25 +139,28 @@ Init ==
 Claim ==
   /\ reqState[Owner] = "Pending"
   /\ reqState' = [reqState EXCEPT ![Owner] = "Claimed"]
-  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount>>
+  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount,
+                  peerOnline, replayPending, replayCount>>
 
 Process ==
   /\ reqState[Owner] = "Claimed"
   /\ reqState' = [reqState EXCEPT ![Owner] = "Processing"]
-  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount>>
+  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount,
+                  peerOnline, replayPending, replayCount>>
 
 Terminalize(k) ==
   /\ k \in TerminalKind
   /\ reqState[Owner] = "Processing"
   /\ reqState' = [reqState EXCEPT ![Owner] = k]
-  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount>>
+  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount,
+                  peerOnline, replayPending, replayCount>>
 
 (***************************************************************************)
 (* Owner terminal re-drive. Abstracts the Rust binding (idempotent         *)
 (* same-value terminal re-assert) as a delta onto the gossip channel,      *)
-(* targeted at one peer.                                                    *)
+(* fanned out to every currently online configured peer.                    *)
 (*                                                                         *)
-(* Gated by the per-peer budget emitCount[peer] < Cap — NOT by whether the  *)
+(* Gated by the per-request budget emitCount < Cap — NOT by whether peers   *)
 (* peer has converged. This is the crux of fidelity to the shipping code:   *)
 (* the owner cannot observe convergence, so it spends a fixed budget of     *)
 (* re-emissions per peer and then stops. With Cap large enough to outlast    *)
@@ -151,8 +170,8 @@ Terminalize(k) ==
 (* MODELING ASSUMPTION (tick spacing). Also gated on "no delta for this      *)
 (* peer already in flight" (AllDeltas). The shipping re-drive re-asserts at   *)
 (* most once per 5s reconcile tick, and the ticks are spaced far enough that *)
-(* each re-assert's PushLog is delivered, dropped, or crash-lost before the  *)
-(* next — so at most one re-assert per peer is ever outstanding. Without this *)
+(* each re-assert's PushLog wave is delivered, dropped, or crash-lost before *)
+(* the next — so at most one re-assert wave is outstanding. Without this     *)
 (* guard the model would let the owner blast all Cap copies into the channel *)
 (* simultaneously and then lose every one to a SINGLE crash (CrashPeer       *)
 (* clears the whole pendingInbound at once) — an interleaving the tick-spaced *)
@@ -163,20 +182,21 @@ Terminalize(k) ==
 
 FreshDeltaIds(k) == Cardinality(DeltaId \ deltaIdsUsed) >= k
 
-PeerHasInflightDelta(peer) == \E d \in AllDeltas : d.target = peer
+OnlinePeers == {peer \in ReplicaHolder : peerOnline[peer]}
 
-EmitTerminalDelta(peer) ==
-  /\ peer \in ReplicaHolder
+EmitTerminalDelta ==
   /\ IsTerminal(reqState[Owner])
-  /\ emitCount[peer] < Cap
-  /\ ~PeerHasInflightDelta(peer)
+  /\ emitCount < Cap
+  /\ AllDeltas = {}
   /\ FreshDeltaIds(1)
   /\ LET id == CHOOSE i \in DeltaId \ deltaIdsUsed : TRUE
-         d  == [id |-> id, target |-> peer, value |-> reqState[Owner]]
-     IN /\ messages'     = messages \cup {d}
+         wave == {[id |-> id, target |-> peer, value |-> reqState[Owner]]
+                    : peer \in OnlinePeers}
+     IN /\ messages' = messages \cup wave
         /\ deltaIdsUsed' = deltaIdsUsed \cup {id}
-        /\ emitCount'    = [emitCount EXCEPT ![peer] = @ + 1]
-  /\ UNCHANGED <<reqState, pendingInbound, dropCount, crashCount>>
+        /\ emitCount'    = emitCount + 1
+  /\ UNCHANGED <<reqState, pendingInbound, dropCount, crashCount,
+                  peerOnline, replayPending, replayCount>>
 
 (***************************************************************************)
 (* Gossip channel: deliver / drop (bounded).                               *)
@@ -184,16 +204,19 @@ EmitTerminalDelta(peer) ==
 
 DeliverDelta(d) ==
   /\ d \in messages
+  /\ peerOnline[d.target]
   /\ messages'       = messages \ {d}
   /\ pendingInbound' = pendingInbound \cup {d}
-  /\ UNCHANGED <<reqState, deltaIdsUsed, dropCount, crashCount, emitCount>>
+  /\ UNCHANGED <<reqState, deltaIdsUsed, dropCount, crashCount, emitCount,
+                  peerOnline, replayPending, replayCount>>
 
 DropDelta(d) ==
   /\ d \in messages
   /\ dropCount < MaxDrops
   /\ messages'  = messages \ {d}
   /\ dropCount' = dropCount + 1
-  /\ UNCHANGED <<reqState, pendingInbound, deltaIdsUsed, crashCount, emitCount>>
+  /\ UNCHANGED <<reqState, pendingInbound, deltaIdsUsed, crashCount, emitCount,
+                  peerOnline, replayPending, replayCount>>
 
 (***************************************************************************)
 (* Peer applies a delivered owner delta. This is the ONLY action that      *)
@@ -206,7 +229,36 @@ PersistDeltaOnPeer(d) ==
   /\ d \in pendingInbound
   /\ pendingInbound' = pendingInbound \ {d}
   /\ reqState'       = [reqState EXCEPT ![d.target] = d.value]
-  /\ UNCHANGED <<messages, deltaIdsUsed, dropCount, crashCount, emitCount>>
+  /\ UNCHANGED <<messages, deltaIdsUsed, dropCount, crashCount, emitCount,
+                  peerOnline, replayPending, replayCount>>
+
+(***************************************************************************)
+(* A configured peer that was unavailable through the bounded blind budget *)
+(* eventually reconnects. Reinstalling its existing filtered replicator     *)
+(* performs one full replay of current owner-authored DAG heads. The replay  *)
+(* changes no owner request field and consumes no emitCount/delta id.        *)
+(***************************************************************************)
+
+RecoverPeer(peer) ==
+  /\ ReplayOnRecovery
+  /\ peer \in ReplicaHolder
+  /\ ~peerOnline[peer]
+  /\ peerOnline'    = [peerOnline EXCEPT ![peer] = TRUE]
+  /\ replayPending' = [replayPending EXCEPT ![peer] = TRUE]
+  /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount,
+                  crashCount, emitCount, replayCount>>
+
+ReplayTerminalSnapshot(peer) ==
+  /\ ReplayOnRecovery
+  /\ peer \in ReplicaHolder
+  /\ peerOnline[peer]
+  /\ replayPending[peer]
+  /\ IsTerminal(reqState[Owner])
+  /\ reqState'      = [reqState EXCEPT ![peer] = reqState[Owner]]
+  /\ replayPending' = [replayPending EXCEPT ![peer] = FALSE]
+  /\ replayCount'   = [replayCount EXCEPT ![peer] = 1]
+  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
+                  emitCount, peerOnline>>
 
 (***************************************************************************)
 (* Crash abstraction. A peer crash loses its volatile (not-yet-persisted)  *)
@@ -218,12 +270,15 @@ CrashPeer(peer) ==
   /\ crashCount < MaxCrashes
   /\ pendingInbound' = {d \in pendingInbound : d.target # peer}
   /\ crashCount'     = crashCount + 1
-  /\ UNCHANGED <<reqState, messages, deltaIdsUsed, dropCount, emitCount>>
+  /\ UNCHANGED <<reqState, messages, deltaIdsUsed, dropCount, emitCount,
+                  peerOnline, replayPending, replayCount>>
 
 CrashOwner ==
   /\ crashCount < MaxCrashes
   /\ crashCount' = crashCount + 1
-  /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, emitCount>>
+  \* The persisted re-drive count survives owner restart.
+  /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, emitCount,
+                  peerOnline, replayPending, replayCount>>
 
 (***************************************************************************)
 (* Adversarial peer claim (diagnostic). A peer transitions its OWN replica  *)
@@ -239,7 +294,8 @@ PeerClaimsForeign(peer) ==
   /\ peer \in ReplicaHolder
   /\ reqState[peer] = "Pending"
   /\ reqState' = [reqState EXCEPT ![peer] = "Claimed"]
-  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount>>
+  /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount,
+                  peerOnline, replayPending, replayCount>>
 
 (***************************************************************************)
 (* Safety invariants.                                                      *)
@@ -281,10 +337,13 @@ DeltaBackedByOwnerTerminal ==
 DeltaIdsTracked ==
   \A d \in AllDeltas : d.id \in deltaIdsUsed
 
-\* The total re-emissions are bounded by the per-peer budget: emitCount already
-\* caps each peer at Cap, so deltaIdsUsed can never exceed Cap * |ReplicaHolder|.
+\* The total same-value request writes are bounded by the persisted request
+\* budget. One write may fan out a delivery delta to every online peer.
 StateBound ==
-  Cardinality(deltaIdsUsed) <= Cap * Cardinality(ReplicaHolder)
+  Cardinality(deltaIdsUsed) <= Cap
+
+ReplayBound ==
+  \A peer \in ReplicaHolder : replayCount[peer] <= 1
 
 (***************************************************************************)
 (* Transitions and fairness.                                               *)
@@ -294,33 +353,38 @@ Next ==
   \/ Claim
   \/ Process
   \/ \E k \in TerminalKind : Terminalize(k)
-  \/ \E peer \in ReplicaHolder : EmitTerminalDelta(peer)
+  \/ EmitTerminalDelta
   \/ \E d \in messages : DeliverDelta(d)
   \/ \E d \in messages : DropDelta(d)
   \/ \E d \in pendingInbound : PersistDeltaOnPeer(d)
+  \/ \E peer \in ReplicaHolder : RecoverPeer(peer)
+  \/ \E peer \in ReplicaHolder : ReplayTerminalSnapshot(peer)
   \/ \E peer \in ReplicaHolder : PeerClaimsForeign(peer)
   \/ \E peer \in ReplicaHolder : CrashPeer(peer)
   \/ CrashOwner
 
 \* Weak fairness on the re-drive workers only: the owner keeps re-emitting the
-\* terminal delta until its per-peer budget is spent, and delivery/persistence
+\* terminal delta until its persisted per-request budget is spent, and delivery/persistence
 \* make progress. No fairness on the owner lifecycle (Claim/Process/Terminalize),
 \* drops, or crashes — those are voluntary. Convergence is therefore driven by
-\* the re-emit BUDGET, not by fairness alone: once emitCount[peer] = Cap the
+\* the re-emit BUDGET, not by fairness alone: once emitCount = Cap the
 \* re-emit is disabled, so if the budget is smaller than the loss a peer
 \* suffers, fairness cannot rescue it (the Stuck diagnostic).
 Fairness ==
-  /\ \A peer \in ReplicaHolder : WF_vars(EmitTerminalDelta(peer))
+  /\ WF_vars(EmitTerminalDelta)
+  /\ \A peer \in ReplicaHolder : WF_vars(RecoverPeer(peer))
+  /\ \A peer \in ReplicaHolder : WF_vars(ReplayTerminalSnapshot(peer))
   /\ WF_vars(\E d \in messages : DeliverDelta(d))
   /\ WF_vars(\E d \in pendingInbound : PersistDeltaOnPeer(d))
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
 (***************************************************************************)
-(* Liveness: owner-terminal converges to every replica holder — CONDITIONAL *)
-(* on the re-emit budget Cap exceeding the delivery loss (MaxDrops +         *)
-(* MaxCrashes). Holds in the green config (Cap = 3 > 1 drop + 1 crash);      *)
-(* reachably violated in the Stuck config (Cap = 1 <= the loss).            *)
+(* Liveness: owner-terminal converges to every replica holder. Online peers *)
+(* converge through the bounded re-drive when its budget outlasts bounded   *)
+(* delivery loss. A peer partitioned beyond the entire cap converges after  *)
+(* fair recovery through one bounded full replay. The Stuck diagnostic      *)
+(* disables ReplayOnRecovery and retains the pre-fix violation.             *)
 (***************************************************************************)
 
 TerminalConverges ==

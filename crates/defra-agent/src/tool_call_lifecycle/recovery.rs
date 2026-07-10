@@ -810,7 +810,8 @@ async fn interrupt_queued_descendants_of_terminal_parents(
             continue;
         }
 
-        if interrupt_pending_descendant_row(node, &row.doc_id, parent_request_id).await? {
+        if interrupt_pending_descendant_row(node, &row.doc_id, agent_did, parent_request_id).await?
+        {
             interrupted += 1;
             tracing::info!(
                 doc_id = %row.doc_id,
@@ -869,30 +870,40 @@ async fn load_bridged_child_ids(
 async fn interrupt_pending_descendant_row(
     node: &EmbeddedNode,
     doc_id: &str,
+    agent_did: &str,
     parent_request_id: &str,
 ) -> Result<bool> {
     let reason = format!(
         "parent request {parent_request_id} reached a terminal state before this queued child was claimed"
     );
     let escaped_doc_id = escape_graphql_string(doc_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_reason = escape_graphql_string(&reason);
+    let terminalized_at = escape_graphql_string(&Utc::now().to_rfc3339());
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
                 filter: {{
                     _docID: {{ _eq: "{escaped_doc_id}" }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
                     lifecycle_state: {{ _eq: "pending" }}
                 }},
                 input: {{
                     status: "interrupted",
                     lifecycle_state: "interrupted",
-                    failure_reason: "{escaped_reason}"
+                    failure_reason: "{escaped_reason}",
+                    terminalized_at: "{terminalized_at}",
+                    terminal_redrive_attempts: 0
                 }}
             ) {{ _docID }}
         }}"#
     );
-    let response =
-        execute_mutation_with_retry(node, &mutation, "interrupt_queued_descendant").await?;
+    let response = crate::retry::execute_graphql_with_terminal_persistence_retry(
+        node,
+        &mutation,
+        "interrupt_queued_descendant",
+    )
+    .await?;
     Ok(response
         .data
         .as_ref()
@@ -1136,6 +1147,7 @@ async fn mark_child_request_dead(
     let escaped_doc_id = escape_graphql_string(&child.doc_id);
     let escaped_agent_did = escape_graphql_string(&child.agent_did);
     let escaped_reason = escape_graphql_string(reason);
+    let terminalized_at = escape_graphql_string(&Utc::now().to_rfc3339());
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
@@ -1148,13 +1160,19 @@ async fn mark_child_request_dead(
                 input: {{
                     status: "dead",
                     lifecycle_state: "dead",
-                    failure_reason: "{escaped_reason}"
+                    failure_reason: "{escaped_reason}",
+                    terminalized_at: "{terminalized_at}",
+                    terminal_redrive_attempts: 0
                 }}
             ) {{ _docID }}
         }}"#
     );
-    let response =
-        execute_mutation_with_retry(node, &mutation, "terminalize_expired_child_request").await?;
+    let response = crate::retry::execute_graphql_with_terminal_persistence_retry(
+        node,
+        &mutation,
+        "terminalize_expired_child_request",
+    )
+    .await?;
     Ok(response
         .data
         .as_ref()

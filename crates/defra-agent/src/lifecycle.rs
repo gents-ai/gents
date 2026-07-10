@@ -245,11 +245,26 @@ pub struct RecoveryReport {
     pub conversations_recovered: usize,
 }
 
-/// Max number of times the owner re-asserts a single terminalized request's
-/// terminal state before it self-terminates from the re-drive. Bounds per-field
-/// CRDT history growth on the re-asserted `status`/`lifecycle_state` columns —
-/// each re-assert is a genuine higher-priority delta, so this cap keeps the
-/// document DAG finite (#664; defradb.rs#1074).
+/// Outcome of one durable request-terminal repair pass. A terminal response
+/// paired with a still-active request is the persisted repair obligation.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TerminalRepairReport {
+    pub scanned: usize,
+    pub repaired: usize,
+    pub awaiting_outcome: usize,
+    pub failed: usize,
+}
+
+impl TerminalRepairReport {
+    pub fn is_noop(&self) -> bool {
+        self.repaired == 0
+    }
+}
+
+/// Max number of owner-authored terminal re-asserts per request. The consumed
+/// count is persisted in `AgentRequest.terminal_redrive_attempts`, so restart
+/// cannot refill it. A peer offline beyond this budget converges through the
+/// reconnect-triggered full replicator replay instead of more request writes.
 pub const TERMINAL_REDRIVE_CAP: u32 = 3;
 
 /// Per-tick batch cap on how many terminalized requests the owner re-drives, so
@@ -263,6 +278,8 @@ pub struct TerminalRedriveReport {
     pub reasserted: usize,
     /// Terminal own-requests scanned this pass (the bounded candidate window).
     pub scanned: usize,
+    /// Candidate mutations that failed and remain durably eligible.
+    pub failed: usize,
 }
 
 impl TerminalRedriveReport {
