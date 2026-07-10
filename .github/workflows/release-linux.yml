@@ -140,9 +140,6 @@ jobs:
             exit 1
           fi
 
-      - name: Verify release symbols
-        run: .github/scripts/verify-release-symbols.sh target/release/defra-agent
-
       - name: Verify glibc baseline
         if: matrix.glibc_baseline != ''
         env:

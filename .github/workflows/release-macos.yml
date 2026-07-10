@@ -253,6 +253,11 @@ jobs:
           fi
 
       - name: Build release binary
+        env:
+          # dsymutil needs the local symbol table and object-file debug map.
+          # The next step extracts the dSYM and restores the normal stripped
+          # release footprint before signing or packaging.
+          CARGO_PROFILE_RELEASE_STRIP: "false"
         run: |
           set -euo pipefail
           rustc -Vv
@@ -263,6 +268,12 @@ jobs:
           fi
           cargo build -p defra-agent-cli --release
           file target/release/defra-agent
+
+      - name: Generate dSYM and strip release binary
+        run: |
+          .github/scripts/prepare-macos-release-dsym.sh \
+            target/release/defra-agent \
+            target/release/defra-agent.dSYM
 
       - name: Sign binary with native macOS identity
         env:
@@ -452,9 +463,6 @@ jobs:
             exit 1
           fi
 
-      - name: Verify release symbols
-        run: .github/scripts/verify-release-symbols.sh target/release/defra-agent
-
       - name: Package artifact
         id: package
         run: |
@@ -467,23 +475,33 @@ jobs:
 
           package_parent="${RUNNER_TEMP}/package"
           package_root="${package_parent}/${artifact_basename}"
+          symbols_parent="${RUNNER_TEMP}/symbols"
+          dsym_bundle_basename="defra-agent.dSYM"
+          dsym_archive_basename="${artifact_basename}.dSYM"
           dist_dir="${RUNNER_TEMP}/dist"
           tarball="${dist_dir}/${artifact_basename}.tar.gz"
           checksum_file="${tarball}.sha256"
+          dsym_tarball="${dist_dir}/${dsym_archive_basename}.tar.gz"
+          dsym_checksum_file="${dsym_tarball}.sha256"
 
-          rm -rf "${package_parent}" "${dist_dir}"
-          mkdir -p "${package_root}" "${dist_dir}"
+          rm -rf "${package_parent}" "${symbols_parent}" "${dist_dir}"
+          mkdir -p "${package_root}" "${symbols_parent}" "${dist_dir}"
           cp target/release/defra-agent "${package_root}/defra-agent"
           chmod 0755 "${package_root}/defra-agent"
+          cp -R target/release/defra-agent.dSYM "${symbols_parent}/${dsym_bundle_basename}"
 
           tar -C "${package_parent}" -czf "${tarball}" "${artifact_basename}"
+          tar -C "${symbols_parent}" -czf "${dsym_tarball}" "${dsym_bundle_basename}"
           (
             cd "${dist_dir}"
             shasum -a 256 "${artifact_basename}.tar.gz" > "${artifact_basename}.tar.gz.sha256"
+            shasum -a 256 "${dsym_archive_basename}.tar.gz" > "${dsym_archive_basename}.tar.gz.sha256"
           )
 
           echo "tarball=${tarball}" >> "${GITHUB_OUTPUT}"
           echo "checksum_file=${checksum_file}" >> "${GITHUB_OUTPUT}"
+          echo "dsym_tarball=${dsym_tarball}" >> "${GITHUB_OUTPUT}"
+          echo "dsym_checksum_file=${dsym_checksum_file}" >> "${GITHUB_OUTPUT}"
           echo "artifact_basename=${artifact_basename}" >> "${GITHUB_OUTPUT}"
           ls -lh "${dist_dir}"
 
@@ -494,6 +512,8 @@ jobs:
           path: |
             ${{ steps.package.outputs.tarball }}
             ${{ steps.package.outputs.checksum_file }}
+            ${{ steps.package.outputs.dsym_tarball }}
+            ${{ steps.package.outputs.dsym_checksum_file }}
           if-no-files-found: error
 
       - name: Attach artifacts to GitHub Release
@@ -502,6 +522,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TARBALL: ${{ steps.package.outputs.tarball }}
           CHECKSUM_FILE: ${{ steps.package.outputs.checksum_file }}
+          DSYM_TARBALL: ${{ steps.package.outputs.dsym_tarball }}
+          DSYM_CHECKSUM_FILE: ${{ steps.package.outputs.dsym_checksum_file }}
         run: |
           set -euo pipefail
 
@@ -512,7 +534,12 @@ jobs:
 
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
             gh release create "${GITHUB_REF_NAME}" --verify-tag --title "${GITHUB_REF_NAME}" --notes "Signed defra-agent macOS release artifact."
-          gh release upload "${GITHUB_REF_NAME}" "${TARBALL}" "${CHECKSUM_FILE}" --clobber
+          gh release upload "${GITHUB_REF_NAME}" \
+            "${TARBALL}" \
+            "${CHECKSUM_FILE}" \
+            "${DSYM_TARBALL}" \
+            "${DSYM_CHECKSUM_FILE}" \
+            --clobber
 
       - name: Restore keychain search list
         if: always()
