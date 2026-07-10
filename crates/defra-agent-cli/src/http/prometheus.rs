@@ -164,10 +164,12 @@ pub(crate) struct P2pMetricsSnapshot {
     pub(crate) connected_peers: usize,
     pub(crate) replicators: usize,
     pub(crate) admission: Option<crate::shared::P2pAdmissionState>,
-    /// True when peer/replicator counts are held from a prior successful
-    /// refresh (or admission-only bootstrap) because the live self-fetch
-    /// timed out or failed. Prevents "all peers gone" false alerts during
-    /// hub saturation when `/metrics` must not block on multi-hop HTTP.
+    /// Typed live state from DefraDB's `/p2p/sync/status` contract.
+    pub(crate) sync_status: Option<defra_agent::P2pSyncStatusSnapshot>,
+    /// True when live P2P data is held from a prior successful refresh (or an
+    /// admission-only bootstrap) because the self-fetch timed out or failed.
+    /// Prevents false zeroes during hub saturation when `/metrics` must not
+    /// block on multi-hop HTTP.
     pub(crate) stale: bool,
 }
 
@@ -444,7 +446,7 @@ fn render_p2p_metrics(lines: &mut Vec<String>, p2p: Option<&P2pMetricsSnapshot>)
     push_metric_prelude(
         lines,
         "defra_agent_p2p_status_stale",
-        "1 when connected-peer / replicator counts are last-known or admission-only because the live self-fetch timed out or failed.",
+        "1 when live P2P state is last-known or admission-only because the self-fetch timed out or failed.",
     );
     push_metric_sample(
         lines,
@@ -477,10 +479,10 @@ fn render_p2p_metrics(lines: &mut Vec<String>, p2p: Option<&P2pMetricsSnapshot>)
         snapshot.replicators as i64,
     );
 
+    render_p2p_sync_metrics(lines, snapshot.sync_status.as_ref());
+
     // Requested admission bounds from serve-start args — not necessarily the
     // effective upstream floors (e.g. rate may be clamped to MIN_REQUEST_REFILL_RATE).
-    // Live semaphore occupancy / pending-DAG depth still live in pinned
-    // defradb.rs SyncDiagnostics and are not yet exported through P2POperations.
     push_metric_prelude(
         lines,
         "defra_agent_p2p_admission_max_pending_dags",
@@ -547,6 +549,206 @@ fn render_p2p_metrics(lines: &mut Vec<String>, p2p: Option<&P2pMetricsSnapshot>)
             "defra_agent_p2p_admission_rate_limit_rate",
         ] {
             push_metric_sample(lines, name, &[], 0);
+        }
+    }
+}
+
+fn render_p2p_sync_metrics(
+    lines: &mut Vec<String>,
+    status: Option<&defra_agent::P2pSyncStatusSnapshot>,
+) {
+    push_metric_prelude(
+        lines,
+        "defra_agent_p2p_sync_status_available",
+        "1 when the pinned DefraDB live sync diagnostics snapshot was fetched and decoded.",
+    );
+    push_metric_sample(
+        lines,
+        "defra_agent_p2p_sync_status_available",
+        &[],
+        i64::from(status.is_some()),
+    );
+
+    let status = status.cloned().unwrap_or_default();
+    let backlog = &status.push_backlog;
+    for (name, help, value) in [
+        (
+            "defra_agent_p2p_push_queue_items",
+            "Live outbound push jobs waiting in the bounded DefraDB queue.",
+            backlog.queued_items,
+        ),
+        (
+            "defra_agent_p2p_push_queue_item_capacity",
+            "Effective outbound push queue item capacity in DefraDB.",
+            backlog.queue_item_capacity,
+        ),
+        (
+            "defra_agent_p2p_push_queue_bytes",
+            "Accounted bytes held by live outbound push jobs waiting in DefraDB.",
+            backlog.queued_bytes,
+        ),
+        (
+            "defra_agent_p2p_push_queue_byte_capacity",
+            "Effective outbound push queue byte capacity in DefraDB.",
+            backlog.queue_byte_capacity,
+        ),
+        (
+            "defra_agent_p2p_push_active_jobs",
+            "Outbound push jobs currently owned by DefraDB workers.",
+            backlog.active_jobs,
+        ),
+        (
+            "defra_agent_p2p_push_worker_count",
+            "Fixed outbound push worker count in DefraDB.",
+            backlog.worker_count,
+        ),
+        (
+            "defra_agent_p2p_push_per_peer_active_cap",
+            "Effective maximum active outbound push jobs for one peer.",
+            backlog.per_peer_active_cap,
+        ),
+        (
+            "defra_agent_p2p_pending_dags",
+            "Live in-memory pending DAG registrations.",
+            status.pending_dags,
+        ),
+        (
+            "defra_agent_p2p_pending_dag_capacity",
+            "Effective in-memory pending DAG capacity.",
+            status.pending_dag_capacity,
+        ),
+        (
+            "defra_agent_p2p_persisted_pending_dags",
+            "Durable pending DAG registrations awaiting merge or retirement.",
+            status.persisted_pending_dags,
+        ),
+        (
+            "defra_agent_p2p_persisted_pending_dag_capacity",
+            "Effective durable pending DAG registration capacity.",
+            status.persisted_pending_dag_capacity,
+        ),
+        (
+            "defra_agent_p2p_retained_background_tasks",
+            "DefraDB P2P background task handles retained for shutdown.",
+            status.retained_background_tasks,
+        ),
+    ] {
+        push_metric_prelude(lines, name, help);
+        push_metric_sample(lines, name, &[], value as i64);
+    }
+
+    push_metric_prelude(
+        lines,
+        "defra_agent_p2p_pending_resync_in_flight",
+        "1 when DefraDB is reconciling durable pending DAG registrations.",
+    );
+    push_metric_sample(
+        lines,
+        "defra_agent_p2p_pending_resync_in_flight",
+        &[],
+        i64::from(status.pending_resync_in_flight),
+    );
+
+    for (name, help, value) in [
+        (
+            "defra_agent_p2p_push_enqueued_total",
+            "Outbound push jobs admitted by the bounded DefraDB queue.",
+            backlog.enqueued_total,
+        ),
+        (
+            "defra_agent_p2p_push_coalesced_total",
+            "Duplicate outbound push jobs coalesced by DefraDB.",
+            backlog.coalesced_total,
+        ),
+        (
+            "defra_agent_p2p_push_rejected_items_total",
+            "Outbound push admissions rejected at the item cap.",
+            backlog.rejected_items_total,
+        ),
+        (
+            "defra_agent_p2p_push_rejected_bytes_total",
+            "Outbound push admissions rejected at the byte cap.",
+            backlog.rejected_bytes_total,
+        ),
+        (
+            "defra_agent_p2p_push_completed_total",
+            "Outbound push jobs completed by DefraDB workers.",
+            backlog.completed_total,
+        ),
+        (
+            "defra_agent_p2p_push_failed_total",
+            "Outbound push jobs failed by DefraDB workers.",
+            backlog.failed_total,
+        ),
+        (
+            "defra_agent_p2p_missing_link_retries_total",
+            "Missing-link retry attempts recorded by DefraDB sync.",
+            status.missing_link_retries,
+        ),
+        (
+            "defra_agent_p2p_pending_dag_resolved_total",
+            "Pending DAG registrations resolved by DefraDB sync.",
+            status.pending_dag_resolved,
+        ),
+        (
+            "defra_agent_p2p_pending_dag_expired_total",
+            "Pending DAG registrations expired by DefraDB sync.",
+            status.pending_dag_expired,
+        ),
+    ] {
+        push_metric_prelude_with_type(lines, name, help, "counter");
+        push_metric_sample(lines, name, &[], value);
+    }
+
+    for (name, help) in [
+        (
+            "defra_agent_p2p_peer_push_queue_items",
+            "Live outbound push jobs waiting for one peer.",
+        ),
+        (
+            "defra_agent_p2p_peer_push_queue_bytes",
+            "Accounted outbound push queue bytes held for one peer.",
+        ),
+        (
+            "defra_agent_p2p_peer_push_active_jobs",
+            "Outbound push jobs currently active for one peer.",
+        ),
+        (
+            "defra_agent_p2p_peer_consecutive_failures",
+            "Consecutive outbound push failures recorded for one peer.",
+        ),
+        (
+            "defra_agent_p2p_peer_cooldown_remaining_milliseconds",
+            "Remaining outbound push cooldown for one peer, in milliseconds.",
+        ),
+    ] {
+        push_metric_prelude(lines, name, help);
+    }
+    for peer in &backlog.per_peer {
+        let labels = &[("peer_id", peer.peer_id.clone())];
+        for (name, value) in [
+            (
+                "defra_agent_p2p_peer_push_queue_items",
+                peer.queued_items as u64,
+            ),
+            (
+                "defra_agent_p2p_peer_push_queue_bytes",
+                peer.queued_bytes as u64,
+            ),
+            (
+                "defra_agent_p2p_peer_push_active_jobs",
+                peer.active_jobs as u64,
+            ),
+            (
+                "defra_agent_p2p_peer_consecutive_failures",
+                peer.consecutive_failures as u64,
+            ),
+            (
+                "defra_agent_p2p_peer_cooldown_remaining_milliseconds",
+                peer.cooldown_remaining_ms,
+            ),
+        ] {
+            push_metric_sample(lines, name, labels, value);
         }
     }
 }
@@ -1156,6 +1358,40 @@ mod tests {
                     rate_limit_burst: 500,
                     rate_limit_rate: 50.0,
                 }),
+                sync_status: Some(defra_agent::P2pSyncStatusSnapshot {
+                    push_backlog: defra_agent::P2pPushBacklogSnapshot {
+                        queue_item_capacity: 128,
+                        queue_byte_capacity: 1_048_576,
+                        per_peer_active_cap: 2,
+                        worker_count: 8,
+                        queued_items: 7,
+                        queued_bytes: 4_096,
+                        active_jobs: 3,
+                        enqueued_total: 101,
+                        coalesced_total: 11,
+                        rejected_items_total: 5,
+                        rejected_bytes_total: 2,
+                        completed_total: 79,
+                        failed_total: 4,
+                        per_peer: vec![defra_agent::P2pPeerBacklogSnapshot {
+                            peer_id: "peer-a".to_string(),
+                            queued_items: 4,
+                            queued_bytes: 2_048,
+                            active_jobs: 1,
+                            consecutive_failures: 3,
+                            cooldown_remaining_ms: 750,
+                        }],
+                    },
+                    pending_dags: 13,
+                    pending_dag_capacity: 1_000,
+                    persisted_pending_dags: 17,
+                    persisted_pending_dag_capacity: 4_000,
+                    pending_resync_in_flight: true,
+                    retained_background_tasks: 6,
+                    missing_link_retries: 23,
+                    pending_dag_resolved: 29,
+                    pending_dag_expired: 31,
+                }),
                 stale: false,
             }),
         );
@@ -1169,6 +1405,20 @@ mod tests {
         assert!(rendered.contains("defra_agent_p2p_admission_max_concurrent_dag_fetches 4"));
         assert!(rendered.contains("defra_agent_p2p_admission_rate_limit_burst 500"));
         assert!(rendered.contains("defra_agent_p2p_admission_rate_limit_rate 50"));
+        assert!(rendered.contains("defra_agent_p2p_sync_status_available 1"));
+        assert!(rendered.contains("defra_agent_p2p_push_queue_items 7"));
+        assert!(rendered.contains("defra_agent_p2p_push_queue_bytes 4096"));
+        assert!(rendered.contains("defra_agent_p2p_push_active_jobs 3"));
+        assert!(rendered.contains("defra_agent_p2p_pending_dags 13"));
+        assert!(rendered.contains("defra_agent_p2p_persisted_pending_dags 17"));
+        assert!(rendered.contains("defra_agent_p2p_push_rejected_items_total 5"));
+        assert!(rendered.contains("defra_agent_p2p_missing_link_retries_total 23"));
+        assert!(
+            rendered.contains(r#"defra_agent_p2p_peer_consecutive_failures{peer_id="peer-a"} 3"#)
+        );
+        assert!(rendered.contains(
+            r#"defra_agent_p2p_peer_cooldown_remaining_milliseconds{peer_id="peer-a"} 750"#
+        ));
     }
 
     #[test]
@@ -1181,6 +1431,7 @@ mod tests {
                 connected_peers: 7,
                 replicators: 4,
                 admission: None,
+                sync_status: None,
                 stale: true,
             }),
         );
@@ -1188,6 +1439,7 @@ mod tests {
         assert!(rendered.contains("defra_agent_p2p_status_stale 1"));
         assert!(rendered.contains("defra_agent_p2p_connected_peers 7"));
         assert!(rendered.contains("defra_agent_p2p_replicators 4"));
+        assert!(rendered.contains("defra_agent_p2p_sync_status_available 0"));
     }
 
     #[test]

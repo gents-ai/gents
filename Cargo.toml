@@ -102,6 +102,8 @@ uuid = { version = "1", features = ["v4"] }
 lto = true
 codegen-units = 1
 panic = "abort"
+# Shipped binaries stay compact. The macOS release workflow overrides this
+# while linking, extracts a matching dSYM, then strips before signing.
 strip = true
 overflow-checks = true
 debug = "line-tables-only"
