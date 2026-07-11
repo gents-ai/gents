@@ -10,13 +10,16 @@ use serde_json::Value;
 
 /// Typed view of the pinned DefraDB `p2p::sync::SyncStatus` JSON contract.
 ///
-/// Fields added by defradb.rs#1101/#1102 belong here only after their upstream
-/// names land. The pinned-struct conformance test then forces this adapter to
-/// be reviewed on the same change as the dependency revision.
+/// The pinned-struct conformance test forces this adapter to be reviewed on the
+/// same change as each DefraDB diagnostics contract revision.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct P2pSyncStatusSnapshot {
     pub push_backlog: P2pPushBacklogSnapshot,
+    pub encode_cache_hits_total: u64,
+    pub encode_cache_entries: usize,
+    pub broadcast_coalesced_total: u64,
+    pub push_updates_coalesced_total: u64,
     pub pending_dags: usize,
     pub pending_dag_capacity: usize,
     pub persisted_pending_dags: usize,
@@ -45,7 +48,17 @@ pub struct P2pPushBacklogSnapshot {
     pub rejected_bytes_total: u64,
     pub completed_total: u64,
     pub failed_total: u64,
+    pub stale_head_retirements_total: u64,
+    pub per_cid_retry_counts: Vec<P2pCidRetrySnapshot>,
     pub per_peer: Vec<P2pPeerBacklogSnapshot>,
+}
+
+/// Current retry count retained for one outbound CID.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct P2pCidRetrySnapshot {
+    pub cid: String,
+    pub retry_count: u64,
 }
 
 /// Per-peer occupancy and cooldown state from the outbound push backlog.
@@ -62,8 +75,8 @@ pub struct P2pPeerBacklogSnapshot {
 
 /// Converts the upstream diagnostics representation into the agent contract.
 ///
-/// The trait keeps the eventual #1101/#1102 pin update to one thin mapping and
-/// lets conformance tests drive the same boundary as production metrics.
+/// The trait keeps DefraDB diagnostics revisions at one thin mapping and lets
+/// conformance tests drive the same boundary as production metrics.
 pub trait P2pSyncStatusAdapter {
     type Error;
 

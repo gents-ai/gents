@@ -30,7 +30,17 @@ if ! grep -Eq 'defra_agent(_cli)?' "${symbols_file}"; then
   echo "::error::${binary_path} has no defra-agent Rust symbols; build with CARGO_PROFILE_RELEASE_STRIP=false before running dsymutil" >&2
   exit 1
 fi
-probe_address="$(awk '/defra_agent(_cli)?/ { print $1; exit }' "${symbols_file}")"
+probe_addresses="$(awk '
+  /defra_agent(_cli)?/ && $2 ~ /^[tT]$/ {
+    print $1
+    count++
+    if (count == 64) exit
+  }
+' "${symbols_file}")"
+if [[ -z "${probe_addresses}" ]]; then
+  echo "::error::${binary_path} has no defra-agent text symbols suitable for a symbolication probe" >&2
+  exit 1
+fi
 
 rm -rf "${dsym_path}"
 if ! xcrun dsymutil --verify-dwarf=output "${binary_path}" -o "${dsym_path}" 2> "${dsymutil_log}"; then
@@ -69,9 +79,23 @@ if [[ -z "${binary_uuid}" || "${binary_uuid}" != "${dsym_uuid}" ]]; then
   exit 1
 fi
 binary_arch="$(awk '{ value=$2; gsub(/[()]/, "", value); print value }' <<< "${binary_uuid}")"
-resolved_symbol="$(xcrun atos -o "${dwarf_path}" -arch "${binary_arch}" "${probe_address}")"
-if [[ "${resolved_symbol}" != *defra_agent* ]]; then
-  echo "::error::dSYM failed to resolve ${probe_address}: ${resolved_symbol}" >&2
+probe_address=""
+resolved_symbol=""
+# Linker deduplication can make a valid Rust text symbol resolve only as
+# `<deduplicated_symbol>`. Probe a bounded candidate set for a real frame.
+while IFS= read -r candidate_address; do
+  [[ -n "${candidate_address}" ]] || continue
+  candidate_symbol="$(
+    xcrun atos -o "${dwarf_path}" -arch "${binary_arch}" "${candidate_address}" 2>&1 || true
+  )"
+  if [[ "${candidate_symbol}" == *defra_agent* && "${candidate_symbol}" != *"<deduplicated_symbol>"* ]]; then
+    probe_address="${candidate_address}"
+    resolved_symbol="${candidate_symbol}"
+    break
+  fi
+done <<< "${probe_addresses}"
+if [[ -z "${probe_address}" ]]; then
+  echo "::error::dSYM failed to resolve a defra-agent frame from the first 64 text-symbol candidates" >&2
   exit 1
 fi
 
