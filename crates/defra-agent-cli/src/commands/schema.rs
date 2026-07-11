@@ -553,7 +553,7 @@ mod tests {
     #[test]
     fn collection_name_from_patch_uses_first_path_segment() {
         let patch = json!([
-            {"op": "add", "path": "/ActionRequest/Fields/-", "value": {"Name": "status", "Kind": 11}}
+            {"op": "add", "path": "/ActionRequest/Fields/-", "value": {"Name": "status", "Kind": "String"}}
         ]);
 
         assert_eq!(collection_name_from_patch(&patch).unwrap(), "ActionRequest");
@@ -563,7 +563,7 @@ mod tests {
     fn normalize_patch_value_accepts_wrapped_patch() {
         let wrapped = json!({
             "Patch": [
-                {"op": "add", "path": "/ActionRequest/Fields/-", "value": {"Name": "status", "Kind": 11}}
+                {"op": "add", "path": "/ActionRequest/Fields/-", "value": {"Name": "status", "Kind": "String"}}
             ]
         });
 
@@ -573,8 +573,8 @@ mod tests {
     #[test]
     fn filters_already_existing_additive_field_ops() {
         let patch = json!([
-            {"op": "add", "path": "/ActionRequest/Fields/-", "value": {"Name": "status", "Kind": 11}},
-            {"op": "add", "path": "/ActionRequest/Fields/-", "value": {"Name": "reviewed_at", "Kind": 10}}
+            {"op": "add", "path": "/ActionRequest/Fields/-", "value": {"Name": "status", "Kind": "String"}},
+            {"op": "add", "path": "/ActionRequest/Fields/-", "value": {"Name": "reviewed_at", "Kind": "DateTime"}}
         ]);
         let field_adds = additive_field_ops("ActionRequest", &patch).unwrap();
         let existing_fields = BTreeSet::from(["status".to_string()]);
