@@ -1,5 +1,5 @@
 use defra_agent::{JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter};
-use p2p::sync::{PeerBacklogSnapshot, PushBacklogSnapshot, SyncStatus};
+use p2p::sync::{CidRetrySnapshot, PeerBacklogSnapshot, PushBacklogSnapshot, SyncStatus};
 
 /// Compile-time + wire-shape fence for the pinned DefraDB diagnostics API.
 ///
@@ -23,6 +23,11 @@ fn pinned_defradb_sync_status_satisfies_agent_observability_contract() {
             rejected_bytes_total: 2,
             completed_total: 79,
             failed_total: 4,
+            stale_head_retirements_total: 17,
+            per_cid_retry_counts: vec![CidRetrySnapshot {
+                cid: "bafy-retry".to_string(),
+                retry_count: 19,
+            }],
             per_peer: vec![PeerBacklogSnapshot {
                 peer_id: "peer-a".to_string(),
                 queued_items: 4,
@@ -32,6 +37,10 @@ fn pinned_defradb_sync_status_satisfies_agent_observability_contract() {
                 cooldown_remaining_ms: 750,
             }],
         },
+        encode_cache_hits_total: 37,
+        encode_cache_entries: 5,
+        broadcast_coalesced_total: 41,
+        push_updates_coalesced_total: 43,
         pending_dags: 13,
         pending_dag_capacity: 1_000,
         persisted_pending_dags: 17,
@@ -54,8 +63,18 @@ fn pinned_defradb_sync_status_satisfies_agent_observability_contract() {
     assert_eq!(adapted.push_backlog.active_jobs, 3);
     assert_eq!(adapted.push_backlog.rejected_items_total, 5);
     assert_eq!(adapted.push_backlog.rejected_bytes_total, 2);
+    assert_eq!(adapted.push_backlog.stale_head_retirements_total, 17);
+    assert_eq!(
+        adapted.push_backlog.per_cid_retry_counts[0].cid,
+        "bafy-retry"
+    );
+    assert_eq!(adapted.push_backlog.per_cid_retry_counts[0].retry_count, 19);
     assert_eq!(adapted.push_backlog.per_peer[0].peer_id, "peer-a");
     assert_eq!(adapted.push_backlog.per_peer[0].consecutive_failures, 3);
+    assert_eq!(adapted.encode_cache_hits_total, 37);
+    assert_eq!(adapted.encode_cache_entries, 5);
+    assert_eq!(adapted.broadcast_coalesced_total, 41);
+    assert_eq!(adapted.push_updates_coalesced_total, 43);
     assert_eq!(adapted.pending_dags, 13);
     assert_eq!(adapted.persisted_pending_dags, 17);
     assert!(adapted.pending_resync_in_flight);

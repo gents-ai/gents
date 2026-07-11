@@ -608,6 +608,11 @@ fn render_p2p_sync_metrics(
             backlog.per_peer_active_cap,
         ),
         (
+            "defra_agent_p2p_push_encode_cache_entries",
+            "Encoded DAG payloads currently retained by DefraDB push coalescing.",
+            status.encode_cache_entries,
+        ),
+        (
             "defra_agent_p2p_pending_dags",
             "Live in-memory pending DAG registrations.",
             status.pending_dags,
@@ -681,6 +686,26 @@ fn render_p2p_sync_metrics(
             backlog.failed_total,
         ),
         (
+            "defra_agent_p2p_push_stale_head_retirements_total",
+            "Stale outbound CID heads retired by DefraDB push coalescing.",
+            backlog.stale_head_retirements_total,
+        ),
+        (
+            "defra_agent_p2p_push_encode_cache_hits_total",
+            "Outbound pushes that reused a cached encoded DAG payload.",
+            status.encode_cache_hits_total,
+        ),
+        (
+            "defra_agent_p2p_broadcast_coalesced_total",
+            "Redundant DefraDB broadcast updates coalesced before outbound push.",
+            status.broadcast_coalesced_total,
+        ),
+        (
+            "defra_agent_p2p_push_updates_coalesced_total",
+            "Outbound push updates retired in favor of a newer CID head.",
+            status.push_updates_coalesced_total,
+        ),
+        (
             "defra_agent_p2p_missing_link_retries_total",
             "Missing-link retry attempts recorded by DefraDB sync.",
             status.missing_link_retries,
@@ -698,6 +723,20 @@ fn render_p2p_sync_metrics(
     ] {
         push_metric_prelude_with_type(lines, name, help, "counter");
         push_metric_sample(lines, name, &[], value);
+    }
+
+    push_metric_prelude(
+        lines,
+        "defra_agent_p2p_push_cid_retry_count",
+        "Current outbound retry count retained for one CID.",
+    );
+    for retry in &backlog.per_cid_retry_counts {
+        push_metric_sample(
+            lines,
+            "defra_agent_p2p_push_cid_retry_count",
+            &[("cid", retry.cid.clone())],
+            retry.retry_count,
+        );
     }
 
     for (name, help) in [
@@ -1373,6 +1412,11 @@ mod tests {
                         rejected_bytes_total: 2,
                         completed_total: 79,
                         failed_total: 4,
+                        stale_head_retirements_total: 17,
+                        per_cid_retry_counts: vec![defra_agent::P2pCidRetrySnapshot {
+                            cid: "bafy-retry".to_string(),
+                            retry_count: 19,
+                        }],
                         per_peer: vec![defra_agent::P2pPeerBacklogSnapshot {
                             peer_id: "peer-a".to_string(),
                             queued_items: 4,
@@ -1382,6 +1426,10 @@ mod tests {
                             cooldown_remaining_ms: 750,
                         }],
                     },
+                    encode_cache_hits_total: 37,
+                    encode_cache_entries: 5,
+                    broadcast_coalesced_total: 41,
+                    push_updates_coalesced_total: 43,
                     pending_dags: 13,
                     pending_dag_capacity: 1_000,
                     persisted_pending_dags: 17,
@@ -1409,10 +1457,16 @@ mod tests {
         assert!(rendered.contains("defra_agent_p2p_push_queue_items 7"));
         assert!(rendered.contains("defra_agent_p2p_push_queue_bytes 4096"));
         assert!(rendered.contains("defra_agent_p2p_push_active_jobs 3"));
+        assert!(rendered.contains("defra_agent_p2p_push_encode_cache_entries 5"));
         assert!(rendered.contains("defra_agent_p2p_pending_dags 13"));
         assert!(rendered.contains("defra_agent_p2p_persisted_pending_dags 17"));
         assert!(rendered.contains("defra_agent_p2p_push_rejected_items_total 5"));
+        assert!(rendered.contains("defra_agent_p2p_push_stale_head_retirements_total 17"));
+        assert!(rendered.contains("defra_agent_p2p_push_encode_cache_hits_total 37"));
+        assert!(rendered.contains("defra_agent_p2p_broadcast_coalesced_total 41"));
+        assert!(rendered.contains("defra_agent_p2p_push_updates_coalesced_total 43"));
         assert!(rendered.contains("defra_agent_p2p_missing_link_retries_total 23"));
+        assert!(rendered.contains(r#"defra_agent_p2p_push_cid_retry_count{cid="bafy-retry"} 19"#));
         assert!(
             rendered.contains(r#"defra_agent_p2p_peer_consecutive_failures{peer_id="peer-a"} 3"#)
         );
