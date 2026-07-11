@@ -24,7 +24,7 @@ type ActionRequest {
     fs::write(
         schema_dir.join("action_request.patch.json"),
         r#"[
-  {"op":"add","path":"/ActionRequest/Fields/-","value":{"Name":"status","Kind":11}}
+  {"op":"add","path":"/ActionRequest/Fields/-","value":{"Name":"status","Kind":"String"}}
 ]"#,
     )?;
 
