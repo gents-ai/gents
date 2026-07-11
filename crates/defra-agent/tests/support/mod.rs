@@ -52,6 +52,47 @@ pub async fn test_db(name: &str) -> TestDb {
     }
 }
 
+/// A store that can carry duplicate `AgentConversation` session_ids (#693).
+///
+/// Production stores minted duplicates during the schema-broken era (the
+/// merge path enforces no unique index, and era stores predate it). The
+/// mutation path in a fresh test store DOES enforce `@index(unique: true)`,
+/// so to seed the wound we create the collection first from an era-faithful
+/// SDL whose `session_id` index is non-unique; `ensure_runtime_schemas`
+/// then treats the collection as already existing (indexes are immutable —
+/// they cannot be patched in later, exactly like the live stores).
+pub async fn test_db_with_duplicate_capable_conversations(name: &str) -> TestDb {
+    let tempdir = tempfile::Builder::new()
+        .prefix(&format!("defra-agent-{name}-"))
+        .tempdir()
+        .expect("tempdir");
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(tempdir.path())
+            .build()
+            .await
+            .expect("embedded node"),
+    );
+    let canonical = defra_agent_protocol::schemas::AGENT_CONVERSATION;
+    let unique_marker = "session_id: String @index(unique: true)";
+    assert!(
+        canonical.contains(unique_marker),
+        "AgentConversation SDL no longer declares the unique session_id index; \
+         update this helper alongside the schema"
+    );
+    let era_sdl = canonical.replace(unique_marker, "session_id: String @index");
+    node.add_schema(&era_sdl)
+        .await
+        .expect("era AgentConversation schema");
+    ensure_runtime_schemas(&node)
+        .await
+        .expect("runtime schemas");
+    TestDb {
+        node,
+        _tempdir: tempdir,
+    }
+}
+
 /// P2P admission overrides for multi-node tests that exercise hub backpressure
 /// bounds (#630). Defaults match `p2p::sync::DEFAULT_*`.
 #[derive(Debug, Clone)]
@@ -358,6 +399,63 @@ pub async fn upsert_conversation(
         "upsert conversation failed: {:?}",
         resp.errors
     );
+}
+
+/// Raw `create_AgentConversation` (no upsert): lets a test seed the #693
+/// wound — two conversation documents sharing one `session_id`, as minted on
+/// production stores during the schema-broken era.
+pub async fn create_conversation_document(
+    node: &EmbeddedNode,
+    session_id: &str,
+    behavior_id: &str,
+    title: &str,
+    status: &str,
+    latest_request_id: &str,
+    updated_at: &str,
+) -> String {
+    let session_id = escape_graphql_string(session_id);
+    let behavior_id = escape_graphql_string(behavior_id);
+    let title = escape_graphql_string(title);
+    let status = escape_graphql_string(status);
+    let latest_request_id = escape_graphql_string(latest_request_id);
+    let updated_at = escape_graphql_string(updated_at);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentConversation(input: {{
+                session_id: "{session_id}",
+                agent_name: "{AGENT_NAME}",
+                agent_did: "{AGENT_DID}",
+                behavior_id: "{behavior_id}",
+                title: "{title}",
+                preview_text: "seeded",
+                status: "{status}",
+                created_at: "{updated_at}",
+                updated_at: "{updated_at}",
+                latest_request_id: "{latest_request_id}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create conversation document failed: {:?}",
+        resp.errors
+    );
+
+    // Duplicated session_ids are the point of this helper, so requery by the
+    // (session_id, title) pair — callers give each seeded twin a unique title.
+    let query = format!(
+        r#"{{
+            AgentConversation(filter: {{
+                session_id: {{ _eq: "{session_id}" }},
+                title: {{ _eq: "{title}" }}
+            }}) {{
+                _docID
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    first_row::<DocIdRow>(&resp, "AgentConversation").doc_id
 }
 
 pub async fn set_interrupt_requested_at(node: &EmbeddedNode, doc_id: &str, at: &str) {

@@ -601,6 +601,17 @@ async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_
                     "recovered stuck conversations"
                 );
             }
+            if report.conversations_failed > 0 {
+                // Failed attempts found stuck documents, so the pass was not
+                // a no-op — but they are the opposite of a recovery and must
+                // never inflate the recovered count (#693).
+                recovered_any = true;
+                tracing::warn!(
+                    agent_did = %agent_did,
+                    count = report.conversations_failed,
+                    "startup conversation recovery attempts failed"
+                );
+            }
         }
         Err(error) => {
             tracing::warn!(agent_did = %agent_did, error = %error, "startup recovery failed");
