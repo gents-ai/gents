@@ -22,191 +22,179 @@ use anyhow::{Context, Result};
 use defra_node::{EmbeddedNode, LensConfig, LensModule};
 use tempfile::{Builder, NamedTempFile};
 
-const ADD_LIFECYCLE_STATE_PATCH: &str = r#"[{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"lifecycle_state","Kind":11}}]"#;
+const ADD_LIFECYCLE_STATE_PATCH: &str = r#"[{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"lifecycle_state","Kind":"String"}}]"#;
 
 #[allow(dead_code)]
 const ADD_AGENT_TOOL_CALL_SUBAGENT_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"await_mode","Kind":11}},
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"cancel_policy","Kind":11}},
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"child_request_id","Kind":11}}
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"await_mode","Kind":"String"}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"cancel_policy","Kind":"String"}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"child_request_id","Kind":"String"}}
 ]"#;
 
 #[allow(dead_code)]
 const ADD_AGENT_REQUEST_SUBAGENT_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"subagent_depth","Kind":4}},
-    {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"caused_by_parent_request_id","Kind":11}},
-    {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"caused_by_parent_tool_call_id","Kind":11}}
+    {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"subagent_depth","Kind":"Int"}},
+    {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"caused_by_parent_request_id","Kind":"String"}},
+    {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"caused_by_parent_tool_call_id","Kind":"String"}}
 ]"#;
 
 // #664 durable terminalization: `terminalized_at` schedules by the time the
 // terminal edge actually persisted (not request creation time), while the
 // persisted attempt counter survives daemon restarts and bounds same-value
-// request-field history. Kind 11 = nullable String; Kind 4 = scalar Int.
-const ADD_AGENT_REQUEST_TERMINALIZED_AT_FIELD: &str =
-    r#"{"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"terminalized_at","Kind":11}}"#;
-const ADD_AGENT_REQUEST_TERMINAL_REDRIVE_ATTEMPTS_FIELD: &str = r#"{"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"terminal_redrive_attempts","Kind":4}}"#;
+// request-field history.
+const ADD_AGENT_REQUEST_TERMINALIZED_AT_FIELD: &str = r#"{"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"terminalized_at","Kind":"String"}}"#;
+const ADD_AGENT_REQUEST_TERMINAL_REDRIVE_ATTEMPTS_FIELD: &str = r#"{"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"terminal_redrive_attempts","Kind":"Int"}}"#;
 
 // #683 request-party routing. `requester_did` is written only when a remote
 // paired coordinator causes a host-owned child request. It is an immutable
 // filter key so a request cannot drift between peer scopes after creation.
-const ADD_AGENT_REQUEST_REQUESTER_DID_FIELD: &str = r#"{"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"requester_did","Kind":11,"Immutable":true}}"#;
+const ADD_AGENT_REQUEST_REQUESTER_DID_FIELD: &str = r#"{"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"requester_did","Kind":"String","Immutable":true}}"#;
 
-// Kind 21 == ScalarArrayKind::NillableStringArray in defradb.rs. The SDL
-// `[String]` (nullable elements) for these fields compiles to that kind, so the
-// migration patch must use it. The previous value of 17 was a stale Go-DefraDB
-// field-kind number that is unassigned in defradb.rs's enum, so the SDL builder
-// treated the patch as a named-type reference and failed with
-// "no type found for given name. Kind: 17" — crash-looping every store upgrade.
-//
-// NUMERIC KIND TRAP (#661): the numeric encoding is NOT sequential and scalars
-// vs arrays are easy to swap. A scalar `Int` is Kind 4; `[Int]` (IntArray) is
-// Kind 5. Patching an intended-scalar field as Kind 5 creates an array column,
-// and every scalar write then fails with "Expected array, got: Number(0)" —
-// silently, until the first request. Cross-check every numeric Kind here
-// against the field's SDL type (or use the string form, e.g. "Int").
+// DefraDB #1106 rejects numeric Kind values in schema patches. Canonical SDL
+// strings keep scalar and array intent explicit and avoid the #661 class where
+// a numeric IntArray code was used for an intended scalar Int field.
 #[allow(dead_code)]
 const ADD_TOOL_SELECTION_SUBAGENT_PATCH: &str = r#"[
-    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_targets","Kind":21}},
-    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_spawn_enabled","Kind":2}},
-    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_steering_enabled","Kind":2}},
-    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_background_enabled","Kind":2}}
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_targets","Kind":"[String]"}},
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_spawn_enabled","Kind":"Boolean"}},
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_steering_enabled","Kind":"Boolean"}},
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_background_enabled","Kind":"Boolean"}}
 ]"#;
 
 #[allow(dead_code)]
 const ADD_TOOL_SELECTION_BACKGROUND_TOOLS_PATCH: &str = r#"[
-    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"backgroundable_tool_names","Kind":21}}
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"backgroundable_tool_names","Kind":"[String]"}}
 ]"#;
 
 #[allow(dead_code)]
 const ADD_AGENT_TOOL_CALL_R5_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"unclaimed_deadline_at","Kind":10}},
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"cancel_cascade_intent_at","Kind":10}},
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"cancel_pending_remote_ack","Kind":2}},
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"stuck_since","Kind":10}}
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"unclaimed_deadline_at","Kind":"DateTime"}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"cancel_cascade_intent_at","Kind":"DateTime"}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"cancel_pending_remote_ack","Kind":"Boolean"}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"stuck_since","Kind":"DateTime"}}
 ]"#;
 
 const ADD_AGENT_TOOL_CALL_WORKFLOW_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"workflow_group_id","Kind":11}},
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"workflow_role","Kind":11}}
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"workflow_group_id","Kind":"String"}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"workflow_role","Kind":"String"}}
 ]"#;
 
 const ADD_AGENT_TOOL_CALL_SPAWN_TARGET_DID_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"spawn_target_did","Kind":11,"Immutable":true}}
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"spawn_target_did","Kind":"String","Immutable":true}}
 ]"#;
 
 #[allow(dead_code)]
 const ADD_AGENT_TOOL_CALL_COMMAND_DENIAL_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denial_reason","Kind":11}},
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_argv","Kind":21}},
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_command","Kind":11}},
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_argument","Kind":11}},
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_subcommand","Kind":11}},
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_prefix","Kind":21}},
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"policy_mode","Kind":11}},
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"policy_network","Kind":11}}
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denial_reason","Kind":"String"}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_argv","Kind":"[String]"}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_command","Kind":"String"}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_argument","Kind":"String"}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_subcommand","Kind":"String"}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_prefix","Kind":"[String]"}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"policy_mode","Kind":"String"}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"policy_network","Kind":"String"}}
 ]"#;
 
 #[allow(dead_code)]
 const ADD_TOOL_SELECTION_R5_PATCH: &str = r#"[
-    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"cross_deployment_spawn_timeout_seconds","Kind":4}}
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"cross_deployment_spawn_timeout_seconds","Kind":"Int"}}
 ]"#;
 
 #[allow(dead_code)]
 const ADD_TOOL_SELECTION_SESSION_HISTORY_PATCH: &str = r#"[
-    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_session_history_tool","Kind":2}}
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_session_history_tool","Kind":"Boolean"}}
 ]"#;
 
 const ADD_TOOL_SELECTION_CONTEXT_BUDGET_PATCH: &str = r#"[
-    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_context_budget","Kind":2}}
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_context_budget","Kind":"Boolean"}}
 ]"#;
 
 const ADD_TOOL_SELECTION_DEFAULT_AWAIT_MODE_PATCH: &str = r#"[
-    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_default_await_mode","Kind":11}}
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_default_await_mode","Kind":"String"}}
 ]"#;
 
 const ADD_TOOL_SELECTION_ORCHESTRATION_PATCH: &str = r#"[
-    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"orchestration_enabled","Kind":2}}
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"orchestration_enabled","Kind":"Boolean"}}
 ]"#;
 
 const ADD_TOOL_SELECTION_POLICY_VERSION_PATCH: &str = r#"[
-    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"tool_policy_version","Kind":11}}
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"tool_policy_version","Kind":"String"}}
 ]"#;
 
 const ADD_AGENT_RESPONSE_REASONING_PROGRESS_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentResponse/Fields/-","value":{"Name":"reasoning_progress_seq","Kind":4}}
+    {"op":"add","path":"/AgentResponse/Fields/-","value":{"Name":"reasoning_progress_seq","Kind":"Int"}}
 ]"#;
 
 const ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH: &str = r#"[
-    {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"agent_did","Kind":11}}
+    {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"agent_did","Kind":"String"}}
 ]"#;
 
 const ADD_PEER_PAIRING_DESIRED_PROFILES_PATCH: &str = r#"[
-    {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"profiles","Kind":21}}
+    {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"profiles","Kind":"[String]"}}
 ]"#;
 
 const ADD_PEER_PAIRING_DESIRED_SOURCE_PATCH: &str = r#"[
-    {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"source","Kind":11}}
+    {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"source","Kind":"String"}}
 ]"#;
 
 const ADD_PEER_PAIRING_DESIRED_TEMPLATE_PATCH: &str = r#"[
-    {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"template","Kind":11}}
+    {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"template","Kind":"String"}}
 ]"#;
 
 const ADD_DATA_PLANE_PAIRING_DESIRED_SOURCE_PATCH: &str = r#"[
-    {"op":"add","path":"/DataPlanePairingDesired/Fields/-","value":{"Name":"source","Kind":11}}
+    {"op":"add","path":"/DataPlanePairingDesired/Fields/-","value":{"Name":"source","Kind":"String"}}
 ]"#;
 
 const ADD_CONSUMED_INVITE_NONCE_CLAIMANT_PATCH: &str = r#"[
-    {"op":"add","path":"/ConsumedInviteNonce/Fields/-","value":{"Name":"claimant_did","Kind":11}}
+    {"op":"add","path":"/ConsumedInviteNonce/Fields/-","value":{"Name":"claimant_did","Kind":"String"}}
 ]"#;
 
 /// The per-completion retry fields #648 added to `InferenceProfile`, with
-/// their DefraDB field kinds (4 = Int, 19 = nillable Int array, 2 = Boolean).
+/// canonical DefraDB patch kinds.
 /// The runtime queries these at startup, so an upgraded home MUST gain them
 /// before the first profile read or the server fails to boot.
-const INFERENCE_PROFILE_RETRY_FIELDS: &[(&str, u8)] = &[
-    ("retry_max_transport", 4),
-    ("retry_backoff_ms", 19),
-    ("retry_max_resample", 4),
-    ("retry_allow_repair", 2),
-    ("retry_interactive_max", 4),
+const INFERENCE_PROFILE_RETRY_FIELDS: &[(&str, &str)] = &[
+    ("retry_max_transport", "Int"),
+    ("retry_backoff_ms", "[Int]"),
+    ("retry_max_resample", "Int"),
+    ("retry_allow_repair", "Boolean"),
+    ("retry_interactive_max", "Int"),
 ];
 
 const ADD_PEER_PAIRING_APPLIED_REPLICATOR_FILTER_PATCH: &str = r#"[
-    {"op":"add","path":"/PeerPairingApplied/Fields/-","value":{"Name":"replicator_filter","Kind":11}}
+    {"op":"add","path":"/PeerPairingApplied/Fields/-","value":{"Name":"replicator_filter","Kind":"String"}}
 ]"#;
 
 const ADD_PEER_REGISTRY_TEMPLATES_PATCH: &str = r#"[
-    {"op":"add","path":"/PeerRegistry/Fields/-","value":{"Name":"templates","Kind":21}}
+    {"op":"add","path":"/PeerRegistry/Fields/-","value":{"Name":"templates","Kind":"[String]"}}
 ]"#;
 
-// Kind 11 == NillableString in defradb.rs. SDL `String` (nullable) for these
-// fields compiles to that kind. AgentBehavior gained nullable string fields over
+// AgentBehavior gained nullable string fields over
 // time; existing DBs upgraded from a prior schema version must have these fields
 // patched in so that reads/writes referencing them do not fail with "unknown
 // field" errors.
 #[allow(dead_code)]
 const ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"description","Kind":11}},
-    {"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"summary","Kind":11}},
-    {"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"request_context_template","Kind":11}}
+    {"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"description","Kind":"String"}},
+    {"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"summary","Kind":"String"}},
+    {"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"request_context_template","Kind":"String"}}
 ]"#;
 
 const ADD_TOOL_SERVICE_REGISTRY_SEND_AGENT_DID_PATCH: &str = r#"[
-    {"op":"add","path":"/ToolServiceRegistry/Fields/-","value":{"Name":"send_agent_did","Kind":2}}
+    {"op":"add","path":"/ToolServiceRegistry/Fields/-","value":{"Name":"send_agent_did","Kind":"Boolean"}}
 ]"#;
 
 const ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH: &str = r#"[
-    {"op":"add","path":"/ToolServiceHealthState/Fields/-","value":{"Name":"tool_count","Kind":4}}
+    {"op":"add","path":"/ToolServiceHealthState/Fields/-","value":{"Name":"tool_count","Kind":"Int"}}
 ]"#;
 
 const ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_capacity","Kind":4}},
-    {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_queue_depth","Kind":4}},
-    {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_status_json","Kind":11}}
+    {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_capacity","Kind":"Int"}},
+    {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_queue_depth","Kind":"Int"}},
+    {"op":"add","path":"/AgentRuntime/Fields/-","value":{"Name":"behavior_executor_status_json","Kind":"String"}}
 ]"#;
 
-// Kind 11 == NillableString. The `agent_did` scope key denormalizes the owning
+// The `agent_did` scope key denormalizes the owning
 // agent onto the four conversation collections that key on `session_id` and
 // historically lacked it (AgentMessage, AgentToolCall, AgentSession,
 // CompactionEntry). The field is `@immutable` in the SDL: it is logically
@@ -217,16 +205,16 @@ const ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH: &str = r#"[
 // from that key, and adding a brand-new field has no prior values to violate
 // immutability, so this stays an ordinary additive patch.
 const ADD_AGENT_MESSAGE_AGENT_DID_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentMessage/Fields/-","value":{"Name":"agent_did","Kind":11,"Immutable":true}}
+    {"op":"add","path":"/AgentMessage/Fields/-","value":{"Name":"agent_did","Kind":"String","Immutable":true}}
 ]"#;
 const ADD_AGENT_TOOL_CALL_AGENT_DID_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"agent_did","Kind":11,"Immutable":true}}
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"agent_did","Kind":"String","Immutable":true}}
 ]"#;
 const ADD_AGENT_SESSION_AGENT_DID_PATCH: &str = r#"[
-    {"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"agent_did","Kind":11,"Immutable":true}}
+    {"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"agent_did","Kind":"String","Immutable":true}}
 ]"#;
 const ADD_COMPACTION_ENTRY_AGENT_DID_PATCH: &str = r#"[
-    {"op":"add","path":"/CompactionEntry/Fields/-","value":{"Name":"agent_did","Kind":11,"Immutable":true}}
+    {"op":"add","path":"/CompactionEntry/Fields/-","value":{"Name":"agent_did","Kind":"String","Immutable":true}}
 ]"#;
 
 // The other four conversation collections (AgentRequest, AgentResponse,
@@ -347,17 +335,17 @@ pub async fn ensure_tool_call_migrations(node: Arc<EmbeddedNode>) -> Result<()> 
     let mut field_patches = Vec::new();
     if !collection_has_field(collection, "request_id") {
         field_patches.push(
-            r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"request_id","Kind":11}}"#,
+            r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"request_id","Kind":"String"}}"#,
         );
     }
     if !collection_has_field(collection, "deadline_at") {
         field_patches.push(
-            r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"deadline_at","Kind":10}}"#,
+            r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"deadline_at","Kind":"DateTime"}}"#,
         );
     }
     if !collection_has_field(collection, "cancel_cause") {
         field_patches.push(
-            r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"cancel_cause","Kind":11}}"#,
+            r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"cancel_cause","Kind":"String"}}"#,
         );
     }
     for (field, kind) in [
@@ -374,31 +362,31 @@ pub async fn ensure_tool_call_migrations(node: Arc<EmbeddedNode>) -> Result<()> 
             field_patches.push(match kind {
                 21 => match field {
                     "denied_argv" => {
-                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_argv","Kind":21}}"#
+                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_argv","Kind":"[String]"}}"#
                     }
                     "denied_prefix" => {
-                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_prefix","Kind":21}}"#
+                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_prefix","Kind":"[String]"}}"#
                     }
                     _ => unreachable!("unexpected AgentToolCall array field {field}"),
                 },
                 11 => match field {
                     "denial_reason" => {
-                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denial_reason","Kind":11}}"#
+                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denial_reason","Kind":"String"}}"#
                     }
                     "denied_command" => {
-                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_command","Kind":11}}"#
+                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_command","Kind":"String"}}"#
                     }
                     "denied_argument" => {
-                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_argument","Kind":11}}"#
+                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_argument","Kind":"String"}}"#
                     }
                     "denied_subcommand" => {
-                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_subcommand","Kind":11}}"#
+                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"denied_subcommand","Kind":"String"}}"#
                     }
                     "policy_mode" => {
-                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"policy_mode","Kind":11}}"#
+                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"policy_mode","Kind":"String"}}"#
                     }
                     "policy_network" => {
-                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"policy_network","Kind":11}}"#
+                        r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"policy_network","Kind":"String"}}"#
                     }
                     _ => unreachable!("unexpected AgentToolCall string field {field}"),
                 },
@@ -1186,7 +1174,7 @@ pub async fn ensure_inference_profile_migrations(node: Arc<EmbeddedNode>) -> Res
         };
     };
 
-    let missing: Vec<&(&str, u8)> = INFERENCE_PROFILE_RETRY_FIELDS
+    let missing: Vec<&(&str, &str)> = INFERENCE_PROFILE_RETRY_FIELDS
         .iter()
         .filter(|(name, _)| !collection_has_field(&collection, name))
         .collect();
@@ -1198,7 +1186,7 @@ pub async fn ensure_inference_profile_migrations(node: Arc<EmbeddedNode>) -> Res
         .iter()
         .map(|(name, kind)| {
             format!(
-                r#"{{"op":"add","path":"/InferenceProfile/Fields/-","value":{{"Name":"{name}","Kind":{kind}}}}}"#
+                r#"{{"op":"add","path":"/InferenceProfile/Fields/-","value":{{"Name":"{name}","Kind":"{kind}"}}}}"#
             )
         })
         .collect::<Vec<_>>()
@@ -1419,17 +1407,17 @@ pub async fn ensure_agent_behavior_migrations(node: Arc<EmbeddedNode>) -> Result
     let mut field_patches: Vec<&str> = Vec::new();
     if !collection_has_field(&collection, "description") {
         field_patches.push(
-            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"description","Kind":11}}"#,
+            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"description","Kind":"String"}}"#,
         );
     }
     if !collection_has_field(&collection, "summary") {
         field_patches.push(
-            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"summary","Kind":11}}"#,
+            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"summary","Kind":"String"}}"#,
         );
     }
     if !collection_has_field(&collection, "request_context_template") {
         field_patches.push(
-            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"request_context_template","Kind":11}}"#,
+            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"request_context_template","Kind":"String"}}"#,
         );
     }
     // `skill_refs` and `skill_excludes` are selected by the AgentBehavior load
@@ -1438,12 +1426,12 @@ pub async fn ensure_agent_behavior_migrations(node: Arc<EmbeddedNode>) -> Result
     // `subagent_targets`.
     if !collection_has_field(&collection, "skill_refs") {
         field_patches.push(
-            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"skill_refs","Kind":21}}"#,
+            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"skill_refs","Kind":"[String]"}}"#,
         );
     }
     if !collection_has_field(&collection, "skill_excludes") {
         field_patches.push(
-            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"skill_excludes","Kind":21}}"#,
+            r#"{"op":"add","path":"/AgentBehavior/Fields/-","value":{"Name":"skill_excludes","Kind":"[String]"}}"#,
         );
     }
 
@@ -2222,6 +2210,27 @@ fn sdl_type_to_field_kind(sdl_type: &str) -> Option<u8> {
     }
 }
 
+fn field_kind_to_patch_name(kind: u8) -> Option<&'static str> {
+    match kind {
+        2 => Some("Boolean"),
+        3 => Some("[Boolean!]"),
+        4 => Some("Int"),
+        5 => Some("[Int!]"),
+        6 => Some("Float"),
+        7 => Some("[Float!]"),
+        10 => Some("DateTime"),
+        11 => Some("String"),
+        12 => Some("[String!]"),
+        13 => Some("Blob"),
+        14 => Some("JSON"),
+        18 => Some("[Boolean]"),
+        19 => Some("[Int]"),
+        20 => Some("[Float]"),
+        21 => Some("[String]"),
+        _ => None,
+    }
+}
+
 /// Parse the collections and scalar fields out of a bundled SDL document.
 /// Deliberately line-based and conservative: the bundled agent/inference
 /// schemas are flat `type Name { field: Type @directives }` declarations with
@@ -2308,11 +2317,13 @@ async fn finish_bundled_field_kind_repair(
     old_kind: &serde_json::Value,
     new_kind: u8,
 ) -> Result<()> {
+    let new_kind_name = field_kind_to_patch_name(new_kind)
+        .with_context(|| format!("unsupported bundled field kind {new_kind}"))?;
     let patch = format!(
         r#"[
             {{"op":"remove","path":"/{collection_name}/Fields/{field_index}/FieldID"}},
             {{"op":"replace","path":"/{collection_name}/Fields/{field_index}/Name","value":"{field_name}"}},
-            {{"op":"replace","path":"/{collection_name}/Fields/{field_index}/Kind","value":{new_kind}}}
+            {{"op":"replace","path":"/{collection_name}/Fields/{field_index}/Kind","value":"{new_kind_name}"}}
         ]"#
     );
     let next = node
@@ -2521,8 +2532,10 @@ pub async fn ensure_bundled_schema_fields(node: Arc<EmbeddedNode>) -> Result<()>
                 let Some(kind) = sdl_type_to_field_kind(field_type) else {
                     continue;
                 };
+                let patch_kind = field_kind_to_patch_name(kind)
+                    .expect("mapped bundled field kind has a canonical patch name");
                 operations.push(format!(
-                    r#"{{"op":"add","path":"/{collection_name}/Fields/-","value":{{"Name":"{field_name}","Kind":{kind}}}}}"#
+                    r#"{{"op":"add","path":"/{collection_name}/Fields/-","value":{{"Name":"{field_name}","Kind":"{patch_kind}"}}}}"#
                 ));
                 additions.push((field_name, kind));
             }
@@ -2635,9 +2648,7 @@ mod patch_kind_tests {
     use super::*;
     use serde::Deserialize;
 
-    // defradb.rs ScalarArrayKind::NillableStringArray. SDL `[String]` (nullable
-    // elements) compiles to this; migration patches adding such fields must match.
-    const NILLABLE_STRING_ARRAY_KIND: i64 = 21;
+    const NILLABLE_STRING_ARRAY_KIND: &str = "[String]";
     const OLD_PEER_PAIRING_DESIRED_SCHEMA: &str = r#"
         type PeerPairingDesired {
             peer_id: String @index(unique: true)
@@ -2653,7 +2664,7 @@ mod patch_kind_tests {
         Arc::new(EmbeddedNode::builder().build().await.unwrap())
     }
 
-    fn field_kinds(patch_json: &str) -> Vec<(String, i64)> {
+    fn field_kinds(patch_json: &str) -> Vec<(String, String)> {
         let ops: serde_json::Value = serde_json::from_str(patch_json).expect("patch is valid JSON");
         ops.as_array()
             .expect("patch is an array")
@@ -2661,7 +2672,11 @@ mod patch_kind_tests {
             .filter_map(|op| {
                 let value = op.get("value")?;
                 let name = value.get("Name")?.as_str()?.to_string();
-                let kind = value.get("Kind")?.as_i64()?;
+                let kind = value
+                    .get("Kind")?
+                    .as_str()
+                    .expect("migration patch Kind must use a canonical string")
+                    .to_string();
                 Some((name, kind))
             })
             .collect()
@@ -2673,7 +2688,7 @@ mod patch_kind_tests {
             if name == "subagent_targets" {
                 assert_eq!(
                     kind, NILLABLE_STRING_ARRAY_KIND,
-                    "subagent_targets must be NillableStringArray (21), got {kind}"
+                    "subagent_targets must use [String], got {kind}"
                 );
             }
         }
@@ -2684,14 +2699,14 @@ mod patch_kind_tests {
             );
             assert_eq!(
                 kind, NILLABLE_STRING_ARRAY_KIND,
-                "backgroundable_tool_names must be NillableStringArray (21), got {kind}"
+                "backgroundable_tool_names must use [String], got {kind}"
             );
         }
         for (name, kind) in field_kinds(ADD_PEER_PAIRING_DESIRED_PROFILES_PATCH) {
             assert_eq!(name, "profiles", "unexpected field in profiles patch");
             assert_eq!(
                 kind, NILLABLE_STRING_ARRAY_KIND,
-                "profiles must be NillableStringArray (21), got {kind}"
+                "profiles must use [String], got {kind}"
             );
         }
     }
@@ -2702,16 +2717,14 @@ mod patch_kind_tests {
             if name == "denied_argv" || name == "denied_prefix" {
                 assert_eq!(
                     kind, NILLABLE_STRING_ARRAY_KIND,
-                    "{name} must be NillableStringArray (21), got {kind}"
+                    "{name} must use [String], got {kind}"
                 );
             }
         }
     }
 
     #[test]
-    fn no_patch_uses_the_unassigned_kind_17() {
-        // 17 is unassigned in defradb.rs's FieldKind enum; the SDL builder treats
-        // it as a named-type reference and fails with "no type found. Kind: 17".
+    fn all_static_patches_use_canonical_kind_strings() {
         for patch in [
             ADD_LIFECYCLE_STATE_PATCH,
             ADD_AGENT_TOOL_CALL_SUBAGENT_PATCH,
@@ -2741,14 +2754,14 @@ mod patch_kind_tests {
             ADD_COMPACTION_ENTRY_AGENT_DID_PATCH,
         ] {
             for (name, kind) in field_kinds(patch) {
-                assert_ne!(kind, 17, "field {name} uses unassigned Kind 17");
+                assert_ne!(kind, "17", "field {name} uses unassigned Kind 17");
             }
         }
     }
 
     #[test]
     fn conversation_scope_key_patches_use_nillable_string_kind() {
-        const NILLABLE_STRING_KIND: i64 = 11;
+        const NILLABLE_STRING_KIND: &str = "String";
         for patch in [
             ADD_AGENT_MESSAGE_AGENT_DID_PATCH,
             ADD_AGENT_TOOL_CALL_AGENT_DID_PATCH,
@@ -2759,7 +2772,7 @@ mod patch_kind_tests {
                 assert_eq!(name, "agent_did", "unexpected field in scope-key patch");
                 assert_eq!(
                     kind, NILLABLE_STRING_KIND,
-                    "agent_did scope key must be NillableString (11), got {kind}"
+                    "agent_did scope key must use String, got {kind}"
                 );
             }
         }
@@ -2767,13 +2780,11 @@ mod patch_kind_tests {
 
     #[test]
     fn agent_behavior_description_summary_use_nillable_string_kind() {
-        // Kind 11 == NillableString. Both `description` and `summary` are
-        // nullable String fields in the AgentBehavior SDL; patches must match.
-        const NILLABLE_STRING_KIND: i64 = 11;
+        const NILLABLE_STRING_KIND: &str = "String";
         for (name, kind) in field_kinds(ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH) {
             assert_eq!(
                 kind, NILLABLE_STRING_KIND,
-                "AgentBehavior field '{name}' must be NillableString (11), got {kind}"
+                "AgentBehavior field '{name}' must use String, got {kind}"
             );
         }
     }
@@ -2784,9 +2795,15 @@ mod patch_kind_tests {
         assert_eq!(
             fields,
             vec![
-                ("behavior_executor_capacity".to_string(), 4),
-                ("behavior_executor_queue_depth".to_string(), 4),
-                ("behavior_executor_status_json".to_string(), 11),
+                ("behavior_executor_capacity".to_string(), "Int".to_string()),
+                (
+                    "behavior_executor_queue_depth".to_string(),
+                    "Int".to_string()
+                ),
+                (
+                    "behavior_executor_status_json".to_string(),
+                    "String".to_string()
+                ),
             ]
         );
     }
