@@ -42,6 +42,7 @@ inductive PersistedRecoveryCollection where
   | agentResponse
   | agentToolCall
   | inferenceCall
+  | agentConversation
   deriving DecidableEq, Repr
 
 namespace PersistedRecoveryCollection
@@ -51,12 +52,14 @@ def toContract : PersistedRecoveryCollection → String
   | .agentResponse => "AgentResponse"
   | .agentToolCall => "AgentToolCall"
   | .inferenceCall => "InferenceCall"
+  | .agentConversation => "AgentConversation"
 
 def all : List PersistedRecoveryCollection :=
   [ .agentRequest
   , .agentResponse
   , .agentToolCall
   , .inferenceCall
+  , .agentConversation
   ]
 
 theorem all_complete (collection : PersistedRecoveryCollection) :
