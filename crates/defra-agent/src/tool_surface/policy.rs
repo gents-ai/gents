@@ -200,6 +200,7 @@ pub struct ToolPolicySurface {
     pub bash: ToolPolicyBash,
     pub meta: bool,
     pub defra_query: bool,
+    pub self_config: bool,
     pub memory: bool,
     pub session_history: bool,
     pub context_budget: bool,
@@ -212,6 +213,7 @@ pub struct ToolPolicySurface {
     pub cli_tools: EndpointScope<String, BTreeSet<String>>,
     pub mcp_services: EndpointScope<String, ()>,
     pub defra_collections: EndpointScope<String, ()>,
+    pub self_config_categories: EndpointScope<String, ()>,
     pub subagent_targets: EndpointScope<(String, String), ()>,
     pub background_tools: EndpointScope<String, ()>,
     pub write_tools: EndpointScope<(String, String), BTreeSet<String>>,
@@ -224,6 +226,7 @@ impl ToolPolicySurface {
             bash: ToolPolicyBash::off(),
             meta: false,
             defra_query: false,
+            self_config: false,
             memory: false,
             session_history: false,
             context_budget: false,
@@ -236,6 +239,7 @@ impl ToolPolicySurface {
             cli_tools: EndpointScope::none(),
             mcp_services: EndpointScope::none(),
             defra_collections: EndpointScope::none(),
+            self_config_categories: EndpointScope::none(),
             subagent_targets: EndpointScope::none(),
             background_tools: EndpointScope::none(),
             write_tools: EndpointScope::none(),
@@ -259,6 +263,7 @@ impl ToolPolicySurface {
             },
             meta: true,
             defra_query: true,
+            self_config: true,
             memory: true,
             session_history: true,
             context_budget: true,
@@ -271,6 +276,7 @@ impl ToolPolicySurface {
             cli_tools: EndpointScope::Only(BTreeMap::new()),
             mcp_services: EndpointScope::all(),
             defra_collections: EndpointScope::all(),
+            self_config_categories: EndpointScope::all(),
             subagent_targets: EndpointScope::all(),
             background_tools: EndpointScope::all(),
             write_tools: EndpointScope::all(),
@@ -283,6 +289,7 @@ impl ToolPolicySurface {
             bash: ToolPolicyBash::unrestricted(),
             meta: true,
             defra_query: true,
+            self_config: true,
             memory: true,
             session_history: true,
             context_budget: true,
@@ -295,6 +302,7 @@ impl ToolPolicySurface {
             cli_tools: EndpointScope::all(),
             mcp_services: EndpointScope::all(),
             defra_collections: EndpointScope::all(),
+            self_config_categories: EndpointScope::all(),
             subagent_targets: EndpointScope::all(),
             background_tools: EndpointScope::all(),
             write_tools: EndpointScope::all(),
@@ -349,6 +357,27 @@ impl ToolPolicySurface {
             )
         };
 
+        // Self-config categories: gate off => deny-all; unset => the core
+        // spine (behavior/tools/profile); an explicit list narrows or extends
+        // per category. An explicit empty list is `Only(∅)` = deny-all, like
+        // every other allowlist scope.
+        let self_config_categories = if !selection.enable_self_config {
+            EndpointScope::none()
+        } else {
+            match &selection.self_config_categories {
+                None => EndpointScope::<String, ()>::only_units(
+                    crate::config_client::patch::DEFAULT_SELF_CONFIG_CATEGORIES
+                        .iter()
+                        .map(|category| category.to_string()),
+                ),
+                Some(categories) => EndpointScope::<String, ()>::only_units(
+                    categories
+                        .iter()
+                        .map(|category| category.trim().to_string()),
+                ),
+            }
+        };
+
         Self {
             file: selection.file_tools,
             bash: ToolPolicyBash {
@@ -385,6 +414,7 @@ impl ToolPolicySurface {
             },
             meta: selection.enable_meta_tools,
             defra_query: selection.enable_defra_query,
+            self_config: selection.enable_self_config,
             memory: selection.enable_memory,
             session_history: selection.enable_session_history_tool,
             context_budget: selection.enable_context_budget,
@@ -397,6 +427,7 @@ impl ToolPolicySurface {
             cli_tools: EndpointScope::only_map(cli_tools),
             mcp_services,
             defra_collections,
+            self_config_categories,
             subagent_targets: EndpointScope::<(String, String), ()>::only_units(
                 subagent_tools.targets.iter().map(subagent_target_key),
             ),
@@ -416,6 +447,7 @@ impl ToolPolicySurface {
             bash: self.bash.meet(&other.bash),
             meta: self.meta && other.meta,
             defra_query: self.defra_query && other.defra_query,
+            self_config: self.self_config && other.self_config,
             memory: self.memory && other.memory,
             session_history: self.session_history && other.session_history,
             context_budget: self.context_budget && other.context_budget,
@@ -434,6 +466,9 @@ impl ToolPolicySurface {
             defra_collections: self
                 .defra_collections
                 .meet_with(&other.defra_collections, |(), ()| ()),
+            self_config_categories: self
+                .self_config_categories
+                .meet_with(&other.self_config_categories, |(), ()| ()),
             subagent_targets: self
                 .subagent_targets
                 .meet_with(&other.subagent_targets, |(), ()| ()),
@@ -479,6 +514,27 @@ impl ToolPolicySurface {
             EndpointScope::None => CollectionScope::none(),
             EndpointScope::Only(keys) if keys.is_empty() => CollectionScope::none(),
             EndpointScope::Only(_) => CollectionScope::restricted(self.defra_collections.keys()),
+        }
+    }
+
+    /// Whether the self-config tool family should be surfaced: the
+    /// capability bit AND a non-deny-all category scope (`Only(∅) ≠ All`
+    /// trap, mirroring [`include_defra_query`]).
+    pub fn include_self_config(&self) -> bool {
+        self.self_config && !self.self_config_categories.is_deny_all()
+    }
+
+    /// Effective self-config categories as a sorted set. `All` appears only
+    /// from programmatic ceilings/runtime surfaces; the selection path always
+    /// narrows to an explicit `Only`, so `All` projects to every category.
+    pub fn self_config_category_set(&self) -> std::collections::BTreeSet<String> {
+        match &self.self_config_categories {
+            EndpointScope::All => crate::config_client::patch::SELF_CONFIG_CATEGORIES
+                .iter()
+                .map(|category| category.to_string())
+                .collect(),
+            EndpointScope::None => std::collections::BTreeSet::new(),
+            EndpointScope::Only(_) => self.self_config_categories.keys().into_iter().collect(),
         }
     }
 

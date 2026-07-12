@@ -33,6 +33,7 @@ pub struct BehaviorToolConfig {
     enable_defra_query: bool,
     defra_query_collections: Vec<String>,
     write_tools: Vec<WriteToolDecl>,
+    self_config: super::SelfConfigToolConfig,
     behavior_policy: ToolPolicySurface,
     ceiling_policy: ToolPolicySurface,
     static_policy: ToolPolicySurface,
@@ -47,6 +48,8 @@ impl BehaviorToolConfig {
             ToolPolicySurface::legacy_non_host_wide(super::FileToolMode::Off, super::BashMode::Off);
         behavior_policy.defra_query = false;
         behavior_policy.defra_collections = EndpointScope::none();
+        behavior_policy.self_config = false;
+        behavior_policy.self_config_categories = EndpointScope::none();
         Self {
             host_tools: ToolSet::meta_only(),
             enable_meta_tools: true,
@@ -61,6 +64,7 @@ impl BehaviorToolConfig {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            self_config: super::SelfConfigToolConfig::default(),
             behavior_policy: behavior_policy.clone(),
             ceiling_policy: ToolPolicySurface::legacy_non_host_wide(
                 super::FileToolMode::Off,
@@ -130,6 +134,10 @@ impl BehaviorToolConfig {
             enable_defra_query: _,
             defra_query_collections: _,
             write_tools,
+            enable_self_config: _,
+            self_config_categories: _,
+            self_config_no_lockout,
+            self_config_dry_run,
         } = selection;
         let file_tools =
             downgrade_file_tools(behavior_name, requested_file_tools, static_policy.file);
@@ -192,6 +200,18 @@ impl BehaviorToolConfig {
             enable_defra_query: static_policy.include_defra_query(),
             defra_query_collections: static_policy.defra_query_collections_for_runtime(),
             write_tools: static_policy.write_decls_for_runtime(&write_tools),
+            // `behavior_name` is the behavior_id on the document path
+            // (agent.rs `behavior_config_from_documents`): the identity anchor
+            // for "my config". Programmatic builder surfaces that enable
+            // self-config with a non-document name simply fail doc resolution
+            // at call time.
+            self_config: super::SelfConfigToolConfig {
+                enabled: static_policy.include_self_config(),
+                behavior_id: behavior_name.to_string(),
+                categories: static_policy.self_config_category_set(),
+                no_lockout: self_config_no_lockout,
+                dry_run: self_config_dry_run,
+            },
             behavior_policy,
             ceiling_policy,
             static_policy,
@@ -299,6 +319,11 @@ impl BehaviorToolConfig {
             defra_query_scope: effective_policy.defra_query_collection_scope(),
             write_tools: effective_policy.write_decls_for_runtime(&self.write_tools),
             enable_skills: effective_policy.skills,
+            self_config: super::SelfConfigToolConfig {
+                enabled: effective_policy.include_self_config(),
+                categories: effective_policy.self_config_category_set(),
+                ..self.self_config.clone()
+            },
         }
     }
 

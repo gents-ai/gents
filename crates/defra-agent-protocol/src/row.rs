@@ -671,6 +671,16 @@ pub struct ToolSelectionRow {
     /// fails the whole `ToolSelection` load, so writers must emit valid JSON.
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub write_tools: Vec<String>,
+    /// Self-configuration gate (#654): opt-in, never backfilled true.
+    #[serde(default)]
+    pub enable_self_config: Option<bool>,
+    /// Self-config category allowlist; empty = unset (core spine).
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    pub self_config_categories: Vec<String>,
+    #[serde(default)]
+    pub self_config_no_lockout: Option<bool>,
+    #[serde(default)]
+    pub self_config_dry_run: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

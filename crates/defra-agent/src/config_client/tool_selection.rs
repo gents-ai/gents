@@ -442,6 +442,13 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
             selection
                 .cross_deployment_spawn_timeout_seconds
                 .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
+            optional_bool_field("enable_self_config", selection.enable_self_config),
+            selection
+                .self_config_categories
+                .as_ref()
+                .and_then(|values| string_list_field("self_config_categories", values)),
+            optional_bool_field("self_config_no_lockout", selection.self_config_no_lockout),
+            optional_bool_field("self_config_dry_run", selection.self_config_dry_run),
             // NOTE: `write_tools` is deliberately NOT encoded here. The
             // imperative path always sets `write_tools: None` (it is
             // apply-managed only), so there is nothing to render.

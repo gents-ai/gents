@@ -500,6 +500,10 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         subagent_allow_cross_deployment: false,
         cross_deployment_spawn_timeout_seconds: None,
         write_tools: Vec::new(),
+        enable_self_config: false,
+        self_config_categories: Vec::new(),
+        self_config_no_lockout: false,
+        self_config_dry_run: false,
     }
 }
 

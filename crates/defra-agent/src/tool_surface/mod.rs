@@ -54,6 +54,23 @@ pub struct ToolSurface {
     pub(super) defra_query_scope: CollectionScope,
     pub(super) write_tools: Vec<WriteToolDecl>,
     pub(super) enable_skills: bool,
+    pub(super) self_config: SelfConfigToolConfig,
+}
+
+/// Resolved self-configuration surface for one behavior (#654): whether the
+/// tool family is on, which categories are advertised, the behavior identity
+/// anchor, and the opt-in guardrails.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SelfConfigToolConfig {
+    pub enabled: bool,
+    /// The behavior this surface was resolved for — "my config" root.
+    pub behavior_id: String,
+    /// Effective categories (sorted), from the policy meet.
+    pub categories: std::collections::BTreeSet<String>,
+    /// Refuse patches that would strip the agent's own reconfigure ability.
+    pub no_lockout: bool,
+    /// `get_my_config` accepts a patch preview.
+    pub dry_run: bool,
 }
 
 impl ToolSurface {
@@ -267,6 +284,9 @@ impl std::fmt::Debug for ToolSurface {
             .field("defra_query_scope", &self.defra_query_scope)
             .field("write_tools", &self.write_tools)
             .field("enable_skills", &self.enable_skills)
+            // Part of the slot fingerprint: a self-config gate/category change
+            // must retire and respawn the behavior slot at reconcile.
+            .field("self_config", &self.self_config)
             .finish()
     }
 }

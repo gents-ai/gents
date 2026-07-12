@@ -204,6 +204,16 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) subagent_allow_cross_deployment: bool,
     #[serde(default)]
     pub(crate) cross_deployment_spawn_timeout_seconds: Option<i64>,
+    /// Self-configuration gate (#654): opt-in, defaults off (unlike
+    /// `enable_defra_query`, no legacy `default_true`).
+    #[serde(default)]
+    pub(crate) enable_self_config: bool,
+    #[serde(default)]
+    pub(crate) self_config_categories: Vec<String>,
+    #[serde(default)]
+    pub(crate) self_config_no_lockout: bool,
+    #[serde(default)]
+    pub(crate) self_config_dry_run: bool,
 }
 
 /// Normalize the `write_tools` field to the `[String]` storage form regardless
