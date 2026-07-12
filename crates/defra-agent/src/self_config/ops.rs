@@ -53,7 +53,6 @@ pub struct PatchOutcome {
 /// re-pointing `tool_selection_id`/`inference_profile_id`/`backend_id` is
 /// honored by the next call.
 pub(crate) struct BehaviorAnchor {
-    pub(crate) doc_id: String,
     pub(crate) doc: Map<String, Value>,
 }
 
@@ -102,10 +101,6 @@ impl SelfConfigCore {
             .map_err(|error| anyhow!("agent DID is not ACP-addressable: {error}"))
     }
 
-    pub(crate) fn node(&self) -> &Arc<EmbeddedNode> {
-        &self.node
-    }
-
     /// Begin an identity-scoped transaction.
     pub(crate) async fn begin_txn(&self) -> Result<ConfigApplyTxn<'_>> {
         ConfigApplyTxn::begin_local(&self.node, Some(self.identity()?)).await
@@ -116,7 +111,7 @@ impl SelfConfigCore {
         &self,
         txn: &ConfigApplyTxn<'_>,
     ) -> Result<BehaviorAnchor> {
-        let Some((doc_id, doc)) =
+        let Some((_doc_id, doc)) =
             read_doc_in_txn(txn, SelfConfigTarget::AgentBehavior, &self.behavior_id).await?
         else {
             bail!(
@@ -131,7 +126,7 @@ impl SelfConfigCore {
                 self.behavior_id
             );
         }
-        Ok(BehaviorAnchor { doc_id, doc })
+        Ok(BehaviorAnchor { doc })
     }
 
     /// The write operation: load owned doc → merge patch → validate → write

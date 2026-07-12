@@ -1,17 +1,14 @@
 use anyhow::Result;
 use defra_agent_protocol::graphql::{
     execute_graphql_async, extract_mutation_doc_id as shared_extract_mutation_doc_id,
-    graphql_bool_literal as shared_graphql_bool_literal,
     graphql_endpoint_available as shared_graphql_endpoint_available,
     graphql_input_literal as shared_graphql_input_literal, graphql_rows_from_response,
     graphql_string_list_literal as shared_graphql_string_list_literal,
-    nullable_string_field as shared_nullable_string_field,
     optional_bool_field as shared_optional_bool_field,
     optional_f64_field as shared_optional_f64_field,
     optional_i64_field as shared_optional_i64_field,
     optional_i64_list_field as shared_optional_i64_list_field,
-    optional_string_field as shared_optional_string_field,
-    string_list_field as shared_string_list_field, GraphqlRequestOptions,
+    optional_string_field as shared_optional_string_field, GraphqlRequestOptions,
 };
 use serde_json::Value;
 
@@ -98,14 +95,6 @@ pub(crate) fn extract_mutation_doc_id(response: &Value, collection_name: &str) -
     shared_extract_mutation_doc_id(response, collection_name)
 }
 
-pub(crate) fn nullable_string_field(name: &str, value: Option<&str>) -> String {
-    shared_nullable_string_field(name, value)
-}
-
-pub(crate) fn graphql_bool_literal(value: bool) -> &'static str {
-    shared_graphql_bool_literal(value)
-}
-
 pub(crate) fn optional_i64_field(name: &str, value: Option<i64>) -> Option<String> {
     shared_optional_i64_field(name, value)
 }
@@ -124,10 +113,6 @@ pub(crate) fn optional_i64_list_field(name: &str, value: Option<&[i64]>) -> Opti
 
 pub(crate) fn optional_string_field(name: &str, value: Option<&str>) -> Option<String> {
     shared_optional_string_field(name, value)
-}
-
-pub(crate) fn string_list_field(name: &str, values: &[String]) -> Option<String> {
-    shared_string_list_field(name, values)
 }
 
 fn is_probably_local_graphql_endpoint(graphql: &str) -> bool {
