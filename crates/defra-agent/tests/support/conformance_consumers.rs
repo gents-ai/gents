@@ -126,6 +126,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_tool_policy_cases_match_lean_composition",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::self_config_field_tables_match_lean_contract",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/conformance.rs",
+            module_path: "conformance",
+            function: "self_config_field_tables_match_lean_contract",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::generated_self_config_cases_fence_patch_merge",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_self_config_cases_fence_patch_merge",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::completion_retry_lean_witness_cases_hold",
             package: "defra-agent",
             source_path: "crates/defra-agent/tests/conformance.rs",

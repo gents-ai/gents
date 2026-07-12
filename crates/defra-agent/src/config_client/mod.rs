@@ -28,6 +28,8 @@ mod schedule;
 mod task;
 mod txn;
 
+pub mod patch;
+
 pub use agent_behavior::write_agent_behavior_document;
 pub use event_trigger::write_event_trigger_document;
 pub use inference_backend::{write_inference_backend_document, InferenceBackendUpsertDocument};

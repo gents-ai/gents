@@ -277,6 +277,16 @@ fn generated_tool_policy_cases_match_lean_composition() {
 }
 
 #[test]
+fn self_config_field_tables_match_lean_contract() {
+    self_config::self_config_field_tables_match_lean_contract();
+}
+
+#[test]
+fn generated_self_config_cases_fence_patch_merge() {
+    self_config::generated_self_config_cases_fence_patch_merge();
+}
+
+#[test]
 fn completion_retry_lean_witness_cases_hold() {
     completion_retry::completion_retry_lean_witness_cases_hold();
 }
@@ -382,6 +392,8 @@ mod r5_scenarios;
 mod scheduling;
 #[path = "conformance/scope_templates.rs"]
 mod scope_templates;
+#[path = "conformance/self_config.rs"]
+mod self_config;
 #[path = "conformance/structure.rs"]
 mod structure;
 #[path = "conformance/subagent_source.rs"]
