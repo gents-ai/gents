@@ -61,7 +61,7 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 
 ## What Is Proven
 
-The current proof suite covers fourteen practical areas:
+The current proof suite covers fifteen practical areas:
 
 1. Request/process/persistence state transitions
 2. Daemon storage-observation assumptions that refine persistence
@@ -103,6 +103,9 @@ The proof boundary matters:
 - External assumptions such as "DefraDB eventually makes an acked mutation
   visible" or "provider streamed bytes" are not proven here.
 
+15. Agent self-configuration writes: per-collection writable/protected field
+    partitions, patch-merge identity immutability and containment,
+    transactional accept/reject totality, and no-lockout recoverability
 ## Cross-node TLA+ specs
 
 The `tla/` sibling directory contains TLA+ specifications for cross-node properties beyond per-node Lean coverage. See `tla/README.md`.
@@ -150,6 +153,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/CompletionRetry.lean` | Barrel for per-completion retry state, transitions, executable semantics, and budget/deadline/effects properties |
 | `Proofs/RuntimeReconcile.lean` | Barrel for runtime reconcile state, relational transitions, and executable semantics |
 | `Proofs/ApplyReconcile.lean` | Barrel for desired-state apply, prefix safety, runtime bridge, and convergence |
+| `Proofs/SelfConfig.lean` | Barrel for agent self-configuration patch semantics: field partitions, merge, write step, and guardrails (#654) |
 | `Proofs/Triggers.lean` | Barrel for trigger types, dispatch, reachability, serial, latest-only, and lineage proofs |
 | `Proofs/Client.lean` | Barrel for client turn-state derivation and client theorems |
 | `Proofs/ClientShell.lean` | Barrel for multi-session shell workflow modules |
