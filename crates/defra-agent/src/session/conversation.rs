@@ -8,6 +8,112 @@ pub(crate) const CONVERSATION_TITLE_SOURCE_FALLBACK: &str = "placeholder";
 pub(crate) const CONVERSATION_TITLE_SOURCE_GENERATED: &str = "generated";
 pub(crate) const CONVERSATION_TITLE_SOURCE_TASK: &str = "task";
 
+/// The mutable payload of an `AgentConversation` doc.
+///
+/// `session_id`, `agent_did`, and `requester_did` are create-only:
+/// `agent_did` is the immutable replication scope key, `requester_did` is the
+/// immutable return route, and `session_id` is the doc's identity. None appears
+/// in an update.
+struct ConversationFields<'a> {
+    session_id: &'a str,
+    agent_name: &'a str,
+    agent_did: &'a str,
+    requester_did: Option<&'a str>,
+    behavior_id: &'a str,
+    title: &'a str,
+    title_source: &'a str,
+    preview_text: &'a str,
+    status: &'a str,
+    created_at: &'a str,
+    updated_at: &'a str,
+    latest_request_id: &'a str,
+}
+
+impl ConversationFields<'_> {
+    fn mutable_input(&self) -> String {
+        format!(
+            r#"agent_name: "{agent_name}",
+                    behavior_id: "{behavior_id}",
+                    title: "{title}",
+                    title_source: "{title_source}",
+                    preview_text: "{preview_text}",
+                    status: "{status}",
+                    created_at: "{created_at}",
+                    updated_at: "{updated_at}",
+                    latest_request_id: "{latest_request_id}""#,
+            agent_name = escape_graphql_string(self.agent_name),
+            behavior_id = escape_graphql_string(self.behavior_id),
+            title = escape_graphql_string(self.title),
+            title_source = escape_graphql_string(self.title_source),
+            preview_text = escape_graphql_string(self.preview_text),
+            status = escape_graphql_string(self.status),
+            created_at = escape_graphql_string(self.created_at),
+            updated_at = escape_graphql_string(self.updated_at),
+            latest_request_id = escape_graphql_string(self.latest_request_id),
+        )
+    }
+
+    fn create_input(&self) -> String {
+        format!(
+            r#"session_id: "{session_id}",
+                    agent_did: "{agent_did}",
+                    {requester_did_field}
+                    {mutable}"#,
+            session_id = escape_graphql_string(self.session_id),
+            agent_did = escape_graphql_string(self.agent_did),
+            requester_did_field = super::requester_did_create_field(self.requester_did),
+            mutable = self.mutable_input(),
+        )
+    }
+}
+
+/// Write a conversation: update the doc addressed by `doc_id`, or create one
+/// when the session has no doc yet.
+///
+/// **Never upsert by a `session_id` filter (#693).** `session_id` is unique in
+/// the current schema, but DefraDB cannot add an index to an already-created
+/// collection, so stores whose `AgentConversation` predates the unique index
+/// carry duplicate rows permanently (replication can mint them too). A
+/// `filter: { session_id }` upsert matches every duplicate and DefraDB refuses
+/// it with `cannot upsert multiple matching documents` — which bricked both
+/// startup recovery *and* ordinary request handling on the affected hosts.
+/// Addressing one `_docID` is what makes the write total on those stores; the
+/// Lean sweep contract pins the selector (`targetSelector = "_docID"`).
+async fn write_conversation_doc(
+    node: &EmbeddedNode,
+    doc_id: Option<&str>,
+    fields: &ConversationFields<'_>,
+    operation: &str,
+) -> Result<()> {
+    let mutation = match doc_id {
+        Some(doc_id) => format!(
+            r#"mutation {{
+            update_AgentConversation(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                input: {{
+                    {input}
+                }}
+            ) {{ _docID }}
+        }}"#,
+            doc_id = escape_graphql_string(doc_id),
+            input = fields.mutable_input(),
+        ),
+        None => format!(
+            r#"mutation {{
+            create_AgentConversation(
+                input: {{
+                    {input}
+                }}
+            ) {{ _docID }}
+        }}"#,
+            input = fields.create_input(),
+        ),
+    };
+
+    execute_mutation_with_retry(node, &mutation, operation).await?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn upsert_conversation_from_request_with_identity(
     node: &EmbeddedNode,
@@ -74,13 +180,7 @@ pub(crate) async fn upsert_conversation_from_request_with_identity_and_title(
     title_override: Option<(&str, &str)>,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_agent_name = escape_graphql_string(agent_name);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let requester_did_field = super::requester_did_create_field(requester_did);
-    let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_preview = escape_graphql_string(&derive_conversation_preview(content));
-    let escaped_status = escape_graphql_string(status);
+    let preview = derive_conversation_preview(content);
     let existing = load_conversation_document(node, session_id).await?;
     let resolved_behavior_id =
         resolve_behavior_id(existing.as_ref(), behavior_id, "AgentConversation")?;
@@ -89,146 +189,31 @@ pub(crate) async fn upsert_conversation_from_request_with_identity_and_title(
         .as_ref()
         .map(|conversation| conversation.created_at.clone())
         .unwrap_or_else(|| now.clone());
-    let escaped_behavior_id = escape_graphql_string(&resolved_behavior_id);
-    let escaped_title = escape_graphql_string(&title);
-    let escaped_title_source = escape_graphql_string(&title_source);
-    let escaped_created_at = escape_graphql_string(&created_at);
 
-    let assignments = format!(
-        r#"agent_name: "{escaped_agent_name}",
-                    behavior_id: "{escaped_behavior_id}",
-                    title: "{escaped_title}",
-                    title_source: "{escaped_title_source}",
-                    preview_text: "{escaped_preview}",
-                    status: "{escaped_status}",
-                    created_at: "{escaped_created_at}",
-                    updated_at: "{now}",
-                    latest_request_id: "{escaped_request_id}""#
-    );
-    // Query-first (#693): a store can carry duplicate documents for one
-    // session_id, and an upsert whose filter matches more than one document
-    // is refused by DefraDB. Once the canonical document is known, address it
-    // by _docID; upsert remains only for the not-yet-created case, where its
-    // atomicity still closes the concurrent-create race.
-    let mutation = match existing.as_ref() {
-        Some(existing) => {
-            let escaped_doc_id = escape_graphql_string(&existing.doc_id);
-            format!(
-                r#"mutation {{
-                    update_AgentConversation(
-                        filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                        input: {{ {assignments} }}
-                    ) {{ _docID }}
-                }}"#
-            )
-        }
-        None => format!(
-            r#"mutation {{
-                upsert_AgentConversation(
-                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                    add: {{
-                        session_id: "{escaped_session_id}",
-                        agent_did: "{escaped_agent_did}",
-                        {requester_did_field}
-                        {assignments}
-                    }},
-                    update: {{ {assignments} }}
-                ) {{ _docID }}
-            }}"#
-        ),
+    let fields = ConversationFields {
+        session_id,
+        agent_name,
+        agent_did,
+        requester_did,
+        behavior_id: &resolved_behavior_id,
+        title: &title,
+        title_source: &title_source,
+        preview_text: &preview,
+        status,
+        created_at: &created_at,
+        updated_at: &now,
+        latest_request_id: request_id,
     };
 
-    execute_mutation_with_retry(node, &mutation, "upsert_conversation_from_request").await?;
-    Ok(())
-}
-
-pub(crate) async fn update_conversation_status_with_identity(
-    node: &EmbeddedNode,
-    session_id: &str,
-    agent_name: &str,
-    agent_did: &str,
-    behavior_id: &str,
-    status: &str,
-) -> Result<()> {
-    let now = chrono::Utc::now().to_rfc3339();
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_agent_name = escape_graphql_string(agent_name);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_status = escape_graphql_string(status);
-    let existing = load_conversation_document(node, session_id).await?;
-    let resolved_behavior_id =
-        resolve_behavior_id(existing.as_ref(), behavior_id, "AgentConversation")?;
-    let title = existing
-        .as_ref()
-        .map(|conversation| conversation.title.clone())
-        .unwrap_or_default();
-    let title_source = existing
-        .as_ref()
-        .and_then(|conversation| normalize_optional_string(conversation.title_source.as_deref()))
-        .unwrap_or(CONVERSATION_TITLE_SOURCE_FALLBACK);
-    let preview_text = existing
-        .as_ref()
-        .map(|conversation| conversation.preview_text.clone())
-        .unwrap_or_default();
-    let latest_request_id = existing
-        .as_ref()
-        .map(|conversation| conversation.latest_request_id.clone())
-        .unwrap_or_default();
-    let created_at = existing
-        .as_ref()
-        .map(|conversation| conversation.created_at.clone())
-        .unwrap_or_else(|| now.clone());
-    let escaped_behavior_id = escape_graphql_string(&resolved_behavior_id);
-    let escaped_title = escape_graphql_string(&title);
-    let escaped_title_source = escape_graphql_string(title_source);
-    let escaped_preview_text = escape_graphql_string(&preview_text);
-    let escaped_latest_request_id = escape_graphql_string(&latest_request_id);
-    let escaped_created_at = escape_graphql_string(&created_at);
-
-    let assignments = format!(
-        r#"agent_name: "{escaped_agent_name}",
-                    behavior_id: "{escaped_behavior_id}",
-                    title: "{escaped_title}",
-                    title_source: "{escaped_title_source}",
-                    preview_text: "{escaped_preview_text}",
-                    status: "{escaped_status}",
-                    created_at: "{escaped_created_at}",
-                    updated_at: "{now}",
-                    latest_request_id: "{escaped_latest_request_id}""#
-    );
-    // Query-first (#693): address the canonical document by _docID so a
-    // duplicated session_id (which makes an upsert filter multi-match, and
-    // DefraDB refuse it) cannot fail the write — startup recovery routes
-    // through here and must survive duplicate-carrying stores.
-    let mutation = match existing.as_ref() {
-        Some(existing) => {
-            let escaped_doc_id = escape_graphql_string(&existing.doc_id);
-            format!(
-                r#"mutation {{
-                    update_AgentConversation(
-                        filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                        input: {{ {assignments} }}
-                    ) {{ _docID }}
-                }}"#
-            )
-        }
-        None => format!(
-            r#"mutation {{
-                upsert_AgentConversation(
-                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                    add: {{
-                        session_id: "{escaped_session_id}",
-                        agent_did: "{escaped_agent_did}",
-                        {assignments}
-                    }},
-                    update: {{ {assignments} }}
-                ) {{ _docID }}
-            }}"#
-        ),
-    };
-
-    execute_mutation_with_retry(node, &mutation, "update_conversation_status").await?;
-    Ok(())
+    write_conversation_doc(
+        node,
+        existing
+            .as_ref()
+            .map(|conversation| conversation.doc_id.as_str()),
+        &fields,
+        "upsert_conversation_from_request",
+    )
+    .await
 }
 
 pub(crate) async fn update_conversation_status_if_latest_with_identity(
@@ -241,7 +226,6 @@ pub(crate) async fn update_conversation_status_if_latest_with_identity(
     status: &str,
 ) -> Result<ConversationUpdateOutcome> {
     let now = chrono::Utc::now().to_rfc3339();
-    let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_name = escape_graphql_string(agent_name);
     // `agent_did` is intentionally not interpolated: it is the immutable scope
     // key and must never appear in an update mutation. The parameter is retained
@@ -275,13 +259,13 @@ pub(crate) async fn update_conversation_status_if_latest_with_identity(
     let escaped_preview_text = escape_graphql_string(&existing.preview_text);
     let escaped_created_at = escape_graphql_string(&existing.created_at);
     let escaped_behavior_id = escape_graphql_string(&resolved_behavior_id);
+    // Addressed by the canonical doc's `_docID`, not by a `session_id` filter:
+    // a filtered update writes EVERY duplicate on an affected store (#693).
+    let escaped_doc_id = escape_graphql_string(&existing.doc_id);
     let mutation = format!(
         r#"mutation {{
             update_AgentConversation(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
-                    latest_request_id: {{ _eq: "{escaped_latest_request_id}" }}
-                }},
+                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
                 input: {{
                     agent_name: "{escaped_agent_name}",
                     behavior_id: "{escaped_behavior_id}",
@@ -341,7 +325,6 @@ pub(crate) async fn update_conversation_title_with_source(
     };
 
     let now = chrono::Utc::now().to_rfc3339();
-    let escaped_session_id = escape_graphql_string(session_id);
     let escaped_title = escape_graphql_string(title);
     let escaped_title_source = escape_graphql_string(title_source);
     let escaped_preview_text = escape_graphql_string(&existing.preview_text);
@@ -350,11 +333,13 @@ pub(crate) async fn update_conversation_title_with_source(
     let escaped_created_at = escape_graphql_string(&existing.created_at);
     let escaped_behavior_id =
         escape_graphql_string(existing.behavior_id.as_deref().unwrap_or_default());
+    // Canonical doc only: a `session_id` filter titles every duplicate (#693).
+    let escaped_doc_id = escape_graphql_string(&existing.doc_id);
 
     let mutation = format!(
         r#"mutation {{
             update_AgentConversation(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
                 input: {{
                     behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",

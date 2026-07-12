@@ -66,19 +66,26 @@ pub(crate) async fn load_session_behavior_id(
         }))
 }
 
-/// Load the canonical conversation document for a session.
+/// Load every `AgentConversation` doc for a session, canonical doc first.
 ///
-/// A store can carry more than one `AgentConversation` document per
-/// `session_id` (#693): P2P merge enforces no unique index, and stores from
-/// the schema-broken era minted such twins. This loader reads every match
-/// and deterministically picks the canonical document — latest `updated_at`,
-/// `_docID` as tie-break — warning per duplicated session. Duplicates are
-/// flagged, never deleted; writers key their mutations on the returned
-/// document's `_docID` so a duplicate can never fail a write.
-pub(super) async fn load_conversation_document(
+/// Duplicates exist in the wild (#693): `session_id` is unique-indexed in the
+/// current schema, but DefraDB cannot add an index to an already-created
+/// collection, so stores whose collection predates the unique index carry
+/// duplicate rows permanently — and replication can mint them. A write
+/// addressed by `filter: { session_id }` matches every duplicate, and DefraDB
+/// refuses it (`cannot upsert multiple matching documents`), which is why every
+/// conversation write must address a single `_docID`.
+///
+/// The canonical doc is the one live surfaces read and recovery repairs. It is
+/// chosen by an explicit total order (newest `updated_at`, then richest, then
+/// greatest `_docID`) rather than by scan order: DefraDB returns duplicates in
+/// docID order, not recency order. `Recovery.canonical_perm_invariant`
+/// (proofs/Proofs/Recovery/Sweeps/Conversation.lean) proves this choice does not
+/// depend on the order rows come back in.
+pub(super) async fn load_conversation_documents_ranked(
     node: &EmbeddedNode,
     session_id: &str,
-) -> Result<Option<ConversationDocument>> {
+) -> Result<Vec<ConversationDocument>> {
     let escaped_session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -88,7 +95,6 @@ pub(super) async fn load_conversation_document(
                 }}
             ) {{
                 _docID
-                updated_at
                 title
                 title_source
                 preview_text
@@ -96,6 +102,7 @@ pub(super) async fn load_conversation_document(
                 latest_request_id
                 behavior_id
                 created_at
+                updated_at
                 agent_did
                 agent_name
                 forked_from_session_id
@@ -108,7 +115,7 @@ pub(super) async fn load_conversation_document(
     let resp = node.execute(&query).await;
     if resp.has_errors() {
         anyhow::bail!(
-            "loading conversation document for session_id={}: {:?}",
+            "loading conversation documents for session_id={}: {:?}",
             session_id,
             resp.errors
         );
@@ -123,28 +130,35 @@ pub(super) async fn load_conversation_document(
         None => Vec::new(),
     };
 
-    rows.sort_by(|left, right| conversation_recency(left).cmp(&conversation_recency(right)));
-    if rows.len() > 1 {
-        tracing::warn!(
-            session_id = %session_id,
-            duplicate_count = rows.len(),
-            canonical_doc_id = %rows.last().map(|row| row.doc_id.as_str()).unwrap_or(""),
-            "duplicate AgentConversation documents share one session_id; \
-             using the canonical document (latest updated_at, docID tie-break) — \
-             duplicates are flagged, not deleted"
-        );
-    }
-    Ok(rows.pop())
+    // Descending by rank: the canonical doc is first.
+    rows.sort_by(|left, right| conversation_rank(right).cmp(&conversation_rank(left)));
+    Ok(rows)
 }
 
-/// Canonical ordering key for duplicated conversation documents: latest
-/// `updated_at` wins, `_docID` breaks ties. An unparseable timestamp sorts
-/// oldest, so a malformed twin never outranks a well-formed one.
-fn conversation_recency(document: &ConversationDocument) -> (chrono::DateTime<chrono::Utc>, &str) {
-    let updated_at = chrono::DateTime::parse_from_rfc3339(&document.updated_at)
-        .map(|value| value.with_timezone(&chrono::Utc))
-        .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC);
-    (updated_at, document.doc_id.as_str())
+/// Ranking key mirroring Lean `Recovery.docRank`: `(updated_at, richness,
+/// doc_id)`, compared lexicographically. `doc_id` is the store's primary key, so
+/// distinct docs never tie and the greatest element is unique.
+fn conversation_rank(doc: &ConversationDocument) -> (String, usize, String) {
+    let richness = [
+        doc.title.trim(),
+        doc.preview_text.trim(),
+        doc.latest_request_id.trim(),
+    ]
+    .iter()
+    .filter(|field| !field.is_empty())
+    .count();
+    (doc.updated_at.clone(), richness, doc.doc_id.clone())
+}
+
+/// The canonical conversation doc for a session, if any.
+pub(super) async fn load_conversation_document(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Result<Option<ConversationDocument>> {
+    Ok(load_conversation_documents_ranked(node, session_id)
+        .await?
+        .into_iter()
+        .next())
 }
 
 pub(super) async fn load_recent_conversation_titles(

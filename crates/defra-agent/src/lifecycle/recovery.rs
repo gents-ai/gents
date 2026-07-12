@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::lookup::{
     lookup_request_status_by_request_id, lookup_response_status_by_request_id,
     lookup_terminal_response_by_request_id,
@@ -16,14 +18,14 @@ impl RequestLifecycle {
         let requests_recovered = Self::repair_terminal_requests(node, agent_did)
             .await?
             .repaired;
-        let (conversations_recovered, conversations_failed) =
-            recover_stuck_conversations(node, agent_did).await?;
+        let conversations = recover_stuck_conversations(node, agent_did).await?;
 
         Ok(RecoveryReport {
             responses_recovered,
             requests_recovered,
-            conversations_recovered,
-            conversations_failed,
+            conversations_recovered: conversations.recovered,
+            conversations_failed: conversations.failed,
+            duplicate_conversation_sessions: conversations.duplicate_sessions,
         })
     }
 
@@ -552,13 +554,45 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
     Ok(recovered)
 }
 
-/// Returns `(recovered, failed)`. The recovered count reflects only writes
-/// that actually succeeded — a failed attempt is the opposite of a recovery
-/// and gets its own WARN instead (#693).
+/// Outcome of one conversation-recovery pass.
+#[derive(Debug, Default)]
+struct ConversationRecoveryOutcome {
+    /// Sessions whose canonical doc (and any duplicates) were terminalized.
+    recovered: usize,
+    /// Sessions whose write failed — still stuck, retried on the next pass.
+    failed: usize,
+    /// Sessions carrying more than one doc.
+    duplicate_sessions: usize,
+}
+
+/// Terminalize conversations left mid-flight by a daemon restart.
+///
+/// Mirrors the Lean sweep `Recovery.conversationRecoverySweep`
+/// (proofs/Proofs/Recovery/Sweeps/Conversation.lean), whose row is the
+/// *duplicate group* — every doc sharing a `session_id` — not a single doc.
+/// Two properties are load-bearing (#693):
+///
+/// 1. **Duplicate-tolerant.** Stores whose `AgentConversation` collection was
+///    created before `session_id` was unique-indexed carry duplicate rows
+///    permanently (DefraDB cannot add an index to an existing collection), and
+///    replication can mint them. Every doc is therefore written by its own
+///    `_docID`: a `session_id`-filtered upsert matches them all and is refused
+///    (`cannot upsert multiple matching documents`), which failed the sweep.
+///    The canonical doc is picked by an explicit total order — DefraDB returns
+///    duplicates in docID order, not recency order — and Lean's
+///    `canonical_perm_invariant` proves that pick is independent of scan order.
+///    Duplicates are converged to the same terminal status rather than deleted:
+///    the collection is replicated, so a delete can be resurrected by a peer or
+///    fork the CRDT.
+///
+/// 2. **Counts successes, never attempts.** `recovered` is the number of
+///    sessions whose write actually landed. Counting attempts made a fully
+///    failed pass log as healthy; `Recovery.Step.all_failed_reports_zero` pins
+///    the honest behavior.
 async fn recover_stuck_conversations(
     node: &EmbeddedNode,
     agent_did: &str,
-) -> Result<(usize, usize)> {
+) -> Result<ConversationRecoveryOutcome> {
     let escaped_agent_did = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
@@ -569,12 +603,14 @@ async fn recover_stuck_conversations(
                 }}
             ) {{
                 _docID
-                updated_at
                 agent_name
                 behavior_id
                 session_id
                 latest_request_id
                 status
+                title
+                preview_text
+                updated_at
             }}
         }}"#
     );
@@ -584,7 +620,7 @@ async fn recover_stuck_conversations(
         anyhow::bail!("querying stuck conversations: {:?}", resp.errors);
     }
 
-    let mut rows: Vec<serde_json::Value> = resp
+    let rows: Vec<serde_json::Value> = resp
         .data
         .as_ref()
         .and_then(|d| d.get("AgentConversation"))
@@ -592,93 +628,180 @@ async fn recover_stuck_conversations(
         .cloned()
         .unwrap_or_default();
 
-    // A duplicate-carrying store (#693) yields one stuck row per twin.
-    // Recover each session once, driving the canonical stuck row (latest
-    // updated_at, docID tie-break — ascending sort, later insert wins), so a
-    // duplicated session can neither double-count nor double-write.
-    rows.sort_by(|left, right| {
-        stuck_conversation_recency(left).cmp(&stuck_conversation_recency(right))
-    });
-    let mut canonical_rows: std::collections::BTreeMap<String, &serde_json::Value> =
-        std::collections::BTreeMap::new();
+    // Group by session: a session holding more than one doc is the #693
+    // duplicate condition.
+    let mut sessions: BTreeMap<String, Vec<StuckConversationRow>> = BTreeMap::new();
     for row in &rows {
-        let session_id = row.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
-        canonical_rows.insert(session_id.to_string(), row);
+        let parsed = StuckConversationRow::from_row(row);
+        sessions
+            .entry(parsed.session_id.clone())
+            .or_default()
+            .push(parsed);
     }
 
-    let mut recovered = 0usize;
-    let mut failed = 0usize;
-    for row in canonical_rows.into_values() {
-        let doc_id = row.get("_docID").and_then(|v| v.as_str()).unwrap_or("");
-        let agent_name = row.get("agent_name").and_then(|v| v.as_str()).unwrap_or("");
-        let behavior_id = row
-            .get("behavior_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let session_id = row.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
-        let latest_request_id = row
-            .get("latest_request_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let old_status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    let mut outcome = ConversationRecoveryOutcome::default();
+    for (session_id, mut docs) in sessions {
+        // Canonical first: newest `updated_at`, then richest, then greatest
+        // `_docID` (mirrors Lean `docRank`).
+        docs.sort_by(|left, right| right.rank().cmp(&left.rank()));
+        let Some(canonical) = docs.first().cloned() else {
+            continue;
+        };
+
+        if docs.len() > 1 {
+            outcome.duplicate_sessions += 1;
+            let duplicate_doc_ids = docs
+                .iter()
+                .skip(1)
+                .map(|doc| doc.doc_id.as_str())
+                .collect::<Vec<_>>();
+            tracing::warn!(
+                session_id = %session_id,
+                doc_count = docs.len(),
+                canonical_doc_id = %canonical.doc_id,
+                duplicate_doc_ids = ?duplicate_doc_ids,
+                "duplicate AgentConversation documents share a session_id; recovering the \
+                 canonical document and converging the duplicates onto it"
+            );
+        }
+
         let latest_request_status =
-            lookup_request_status_by_request_id(node, agent_did, latest_request_id).await?;
+            lookup_request_status_by_request_id(node, agent_did, &canonical.latest_request_id)
+                .await?;
         let next_status = match latest_request_status.as_deref() {
             Some("completed") => "completed",
             Some("error") => "active",
             _ => "active",
         };
 
-        if let Err(error) = session::update_conversation_status_with_identity(
-            node,
-            session_id,
-            agent_name,
-            agent_did,
-            behavior_id,
-            next_status,
-        )
-        .await
-        {
-            failed += 1;
-            tracing::warn!(
-                doc_id = %doc_id,
-                agent_name = %agent_name,
-                session_id = %session_id,
-                latest_request_id = %latest_request_id,
-                latest_request_status = latest_request_status.as_deref().unwrap_or("missing"),
-                error = %error,
-                "failed to recover stuck conversation"
-            );
-        } else {
-            recovered += 1;
-            tracing::info!(
-                doc_id = %doc_id,
-                agent_name = %agent_name,
-                session_id = %session_id,
-                old_status = %old_status,
-                latest_request_id = %latest_request_id,
-                latest_request_status = latest_request_status.as_deref().unwrap_or("missing"),
-                "recovered stuck conversation: {old_status} → {next_status}"
-            );
+        // Every doc in the group is terminalized, so the group stops being stale
+        // and the next pass converges (Lean: `conversation_recover_zero`).
+        let mut session_failed = false;
+        for doc in &docs {
+            if let Err(error) =
+                update_conversation_status_by_doc_id(node, &doc.doc_id, &canonical, next_status)
+                    .await
+            {
+                session_failed = true;
+                tracing::warn!(
+                    doc_id = %doc.doc_id,
+                    session_id = %session_id,
+                    agent_name = %canonical.agent_name,
+                    latest_request_id = %canonical.latest_request_id,
+                    latest_request_status = latest_request_status.as_deref().unwrap_or("missing"),
+                    error = %error,
+                    "failed to recover stuck conversation"
+                );
+            }
+        }
+
+        if session_failed {
+            outcome.failed += 1;
+            continue;
+        }
+
+        outcome.recovered += 1;
+        tracing::info!(
+            doc_id = %canonical.doc_id,
+            session_id = %session_id,
+            agent_name = %canonical.agent_name,
+            old_status = %canonical.status,
+            doc_count = docs.len(),
+            latest_request_id = %canonical.latest_request_id,
+            latest_request_status = latest_request_status.as_deref().unwrap_or("missing"),
+            "recovered stuck conversation: {} → {next_status}",
+            canonical.status
+        );
+    }
+
+    Ok(outcome)
+}
+
+/// One stuck `AgentConversation` row.
+#[derive(Debug, Clone, Default)]
+struct StuckConversationRow {
+    doc_id: String,
+    session_id: String,
+    agent_name: String,
+    behavior_id: String,
+    latest_request_id: String,
+    status: String,
+    title: String,
+    preview_text: String,
+    updated_at: String,
+}
+
+impl StuckConversationRow {
+    fn from_row(row: &serde_json::Value) -> Self {
+        let field = |key: &str| {
+            row.get(key)
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        Self {
+            doc_id: field("_docID"),
+            session_id: field("session_id"),
+            agent_name: field("agent_name"),
+            behavior_id: field("behavior_id"),
+            latest_request_id: field("latest_request_id"),
+            status: field("status"),
+            title: field("title"),
+            preview_text: field("preview_text"),
+            updated_at: field("updated_at"),
         }
     }
 
-    Ok((recovered, failed))
+    /// Ranking key mirroring Lean `Recovery.docRank`: newest, then richest, then
+    /// greatest docID (the primary key, so distinct docs never tie).
+    fn rank(&self) -> (String, usize, String) {
+        let richness = [
+            self.title.trim(),
+            self.preview_text.trim(),
+            self.latest_request_id.trim(),
+        ]
+        .iter()
+        .filter(|field| !field.is_empty())
+        .count();
+        (self.updated_at.clone(), richness, self.doc_id.clone())
+    }
 }
 
-/// Canonical ordering key for stuck conversation rows sharing a session_id:
-/// latest `updated_at` wins, `_docID` breaks ties. An unparseable timestamp
-/// sorts oldest, so a malformed twin never outranks a well-formed one.
-fn stuck_conversation_recency(row: &serde_json::Value) -> (chrono::DateTime<chrono::Utc>, &str) {
-    let updated_at = row
-        .get("updated_at")
-        .and_then(|value| value.as_str())
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&chrono::Utc))
-        .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC);
-    let doc_id = row
-        .get("_docID")
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-    (updated_at, doc_id)
+/// Write one conversation doc by `_docID`, carrying the canonical document's
+/// content so duplicates converge onto it. Never addresses `session_id`: that
+/// filter matches every duplicate and DefraDB refuses the write (#693).
+async fn update_conversation_status_by_doc_id(
+    node: &EmbeddedNode,
+    doc_id: &str,
+    canonical: &StuckConversationRow,
+    status: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentConversation(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                input: {{
+                    agent_name: "{agent_name}",
+                    behavior_id: "{behavior_id}",
+                    status: "{status}",
+                    updated_at: "{now}",
+                    latest_request_id: "{latest_request_id}"
+                }}
+            ) {{ _docID }}
+        }}"#,
+        doc_id = escape_graphql_string(doc_id),
+        agent_name = escape_graphql_string(&canonical.agent_name),
+        behavior_id = escape_graphql_string(&canonical.behavior_id),
+        status = escape_graphql_string(status),
+        latest_request_id = escape_graphql_string(&canonical.latest_request_id),
+    );
+
+    let resp =
+        crate::retry::execute_graphql_with_conflict_retry(node, &mutation, "recover_conversation")
+            .await;
+    if resp.has_errors() {
+        anyhow::bail!("recovering conversation doc_id={doc_id}: {:?}", resp.errors);
+    }
+    Ok(())
 }

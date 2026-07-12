@@ -242,10 +242,19 @@ impl RequestLifecycle {
 pub struct RecoveryReport {
     pub requests_recovered: usize,
     pub responses_recovered: usize,
+    /// Conversation SESSIONS successfully recovered — never attempts (#693).
+    /// A session whose write the store refuses is counted in
+    /// `conversations_failed`, not here: reporting attempts made a fully failed
+    /// pass look healthy.
     pub conversations_recovered: usize,
-    /// Conversations whose recovery attempt failed. Failures are the opposite
-    /// of a recovery and must never fold into the recovered count (#693).
+    /// Sessions whose recovery write failed. They stay stuck and are retried on
+    /// the next pass; they are the opposite of a recovery, and are logged as
+    /// such.
     pub conversations_failed: usize,
+    /// Sessions carrying more than one `AgentConversation` doc. Legacy stores
+    /// (whose collection predates the unique `session_id` index, which DefraDB
+    /// cannot add retroactively) and P2P replication can both produce these.
+    pub duplicate_conversation_sessions: usize,
 }
 
 /// Outcome of one durable request-terminal repair pass. A terminal response
