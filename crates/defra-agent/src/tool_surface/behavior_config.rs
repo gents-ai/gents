@@ -234,6 +234,10 @@ impl BehaviorToolConfig {
         self.enable_defra_query
     }
 
+    pub(crate) fn self_config_requested(&self) -> bool {
+        self.self_config.enabled
+    }
+
     pub(crate) fn context_budget_requested(&self) -> bool {
         self.enable_context_budget_tool
     }

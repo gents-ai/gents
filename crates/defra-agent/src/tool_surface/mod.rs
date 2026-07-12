@@ -166,6 +166,9 @@ impl ToolSurface {
         if self.enable_defra_query {
             names.push(DEFRA_QUERY_TOOL_NAME.to_string());
         }
+        names.extend(crate::self_config::self_config_tool_names(
+            &self.self_config,
+        ));
         for decl in &self.write_tools {
             // Use the single source-of-truth gate on the declaration itself;
             // see `WriteToolDecl::is_well_formed`.
@@ -223,6 +226,11 @@ impl ToolSurface {
                 self.defra_query_scope.clone(),
             ));
         }
+        tools.extend(crate::self_config::build_self_config_tools(
+            runtime.node.clone(),
+            runtime.agent_did.clone(),
+            &self.self_config,
+        ));
         // Apply-time validation rejects write_tools names that collide with the
         // built-in surface or sibling cli_tool_names, but runtime-discovered
         // tools (e.g. MCP) and code-injected custom tools are not visible to

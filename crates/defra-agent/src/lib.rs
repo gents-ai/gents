@@ -79,6 +79,7 @@ pub(crate) mod runtime_status;
 pub(crate) mod runtime_trace;
 pub mod schedule_cron;
 pub mod schema;
+pub mod self_config;
 pub mod session;
 pub mod skills;
 pub mod streaming;
