@@ -133,10 +133,12 @@ fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
 
 fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
     let behavior_id = core.behavior_id().to_string();
+    let agent_did = core.agent_did().to_string();
     let mut request = ApplyRequest::new(SelfConfigTarget::AgentBehavior, patch);
     request.resolve_unique = Box::new(move |_| Ok(behavior_id.clone()));
-    request.validate = Box::new(|txn, _anchor, _stored, merged| {
+    request.validate = Box::new(move |txn, _anchor, _stored, merged| {
         let merged = merged.clone();
+        let agent_did = agent_did.clone();
         Box::pin(async move {
             let behavior: crate::AgentBehaviorDocument = decode_merged("AgentBehavior", &merged)?;
             for (field, target) in [
@@ -150,15 +152,32 @@ fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyReque
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                 {
-                    if crate::config_client::patch::read_doc_in_txn(txn, target, reference)
-                        .await?
-                        .is_none()
-                    {
+                    let Some((_, referenced)) =
+                        crate::config_client::patch::read_doc_in_txn(txn, target, reference)
+                            .await?
+                    else {
                         bail!(
                             "behavior.{field} references {reference:?}, which does not exist \
                              in {}",
                             target.collection_name()
                         );
+                    };
+                    // ToolSelection is per-agent: binding another agent's
+                    // selection is invalid config (the document view rejects
+                    // cross-agent rows) and would let configure_tools patch a
+                    // foreign selection. Profiles/backends are global by
+                    // design.
+                    if target == SelfConfigTarget::ToolSelection {
+                        let owner = referenced
+                            .get("agent_did")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        if owner != agent_did {
+                            bail!(
+                                "behavior.tool_selection_id references {reference:?}, which is \
+                                 owned by {owner:?}, not this agent — self-config is self only"
+                            );
+                        }
                     }
                 }
             }
@@ -178,7 +197,9 @@ fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyReque
     request
 }
 
-fn tools_request(anchor_hint: String, patch: SelfConfigPatch) -> ApplyRequest<'static> {
+fn tools_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
+    let anchor_hint = core.behavior_id().to_string();
+    let agent_did = core.agent_did().to_string();
     let mut request = ApplyRequest::new(SelfConfigTarget::ToolSelection, patch);
     request.resolve_unique = Box::new(move |anchor| {
         anchor.ref_id("tool_selection_id").ok_or_else(|| {
@@ -188,9 +209,25 @@ fn tools_request(anchor_hint: String, patch: SelfConfigPatch) -> ApplyRequest<'s
             )
         })
     });
-    request.validate = Box::new(|_txn, _anchor, _stored, merged| {
+    request.validate = Box::new(move |_txn, _anchor, stored, merged| {
+        let stored = stored.clone();
         let merged = merged.clone();
-        Box::pin(async move { validate_merged_selection(&merged) })
+        let agent_did = agent_did.clone();
+        Box::pin(async move {
+            // Self only: the selection being patched must belong to this
+            // agent, even if a stale behavior binding points elsewhere.
+            let owner = stored
+                .get("agent_did")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if owner != agent_did {
+                bail!(
+                    "the bound ToolSelection is owned by {owner:?}, not this agent — \
+                     self-config is self only"
+                );
+            }
+            validate_merged_selection(&merged)
+        })
     });
     request.guard = Box::new(|_anchor, merged| guard_selection_keeps_gate(merged));
     request
@@ -348,6 +385,11 @@ fn automation_request(
                 }
                 SelfConfigTarget::Schedule => {
                     let schedule: Schedule = decode_merged("Schedule", &merged)?;
+                    // An EXISTING schedule may only be patched if it already
+                    // belongs to this behavior — otherwise a patch could seize
+                    // another behavior's schedule by re-pointing its task_id
+                    // at an owned task.
+                    ensure_stored_automation_owned(&core, txn, anchor, "schedule", &stored).await?;
                     let Some(task_id) = schedule
                         .task_id
                         .as_deref()
@@ -367,6 +409,8 @@ fn automation_request(
                     }
                 }
                 SelfConfigTarget::EventTrigger => {
+                    ensure_stored_automation_owned(&core, txn, anchor, "event_trigger", &stored)
+                        .await?;
                     let task_id = merged
                         .get("task_id")
                         .and_then(Value::as_str)
@@ -400,6 +444,36 @@ fn automation_request(
         })
     });
     request
+}
+
+/// A stored schedule/trigger may only be patched when its CURRENT task link
+/// already belongs to this behavior; creation (empty stored doc) is exempt.
+async fn ensure_stored_automation_owned(
+    core: &SelfConfigCore,
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    anchor: &ops::BehaviorAnchor,
+    kind: &str,
+    stored: &Map<String, Value>,
+) -> Result<()> {
+    if stored.is_empty() {
+        return Ok(());
+    }
+    let stored_task = stored
+        .get("task_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    let owned = match stored_task {
+        Some(task_id) => core.task_owned(txn, anchor, task_id).await?,
+        None => false,
+    };
+    if !owned {
+        bail!(
+            "{kind} exists but is not owned by this behavior (its task_id {stored_task:?} \
+             does not resolve to an owned task) — self-config automation is self only"
+        );
+    }
+    Ok(())
 }
 
 fn automation_target(kind: &str) -> Result<SelfConfigTarget> {
@@ -534,7 +608,7 @@ impl Tool for GetMyConfigTool {
                 let patch = preview.patch.into_patch();
                 let request = match preview.category.as_str() {
                     "behavior" => behavior_request(&self.core, patch),
-                    "tools" => tools_request(self.core.behavior_id().to_string(), patch),
+                    "tools" => tools_request(&self.core, patch),
                     "profile" => profile_request(patch),
                     "backend" => backend_request(patch),
                     "mcp_service" => {
@@ -628,7 +702,7 @@ impl Tool for ConfigureToolsTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let request = tools_request(self.core.behavior_id().to_string(), args.patch.into_patch());
+        let request = tools_request(&self.core, args.patch.into_patch());
         let outcome = self.core.apply(request).await?;
         Ok(outcome_text(&outcome)?)
     }

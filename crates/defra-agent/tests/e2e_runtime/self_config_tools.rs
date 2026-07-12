@@ -406,3 +406,83 @@ async fn writes_carry_the_agent_identity() {
         .expect("behavior exists");
     assert_eq!(behavior.system_prompt.as_deref(), Some("original prompt"));
 }
+
+#[tokio::test]
+async fn self_only_boundaries_hold_across_behaviors_and_agents() {
+    let db = test_db("self-config-boundaries").await;
+    seed_config(&db.node).await;
+
+    // A foreign behavior owns a task, a schedule pointing at it, and its own
+    // (other-agent) tool selection.
+    for mutation in [
+        r#"mutation { create_Task(input: {
+            task_id: "victim-task", behavior_id: "victim-behavior", enabled: true
+        }) { _docID } }"#,
+        r#"mutation { create_Schedule(input: {
+            schedule_id: "victim-schedule", task_id: "victim-task",
+            interval_secs: 300, enabled: true
+        }) { _docID } }"#,
+        r#"mutation { create_ToolSelection(input: {
+            selection_id: "victim-selection", agent_did: "did:key:zVictim",
+            enable_bash: false
+        }) { _docID } }"#,
+    ] {
+        let response = db.node.execute(mutation).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+    }
+
+    let tools = build_self_config_tools(
+        db.node.clone(),
+        AGENT_DID.to_string(),
+        &tool_config(&["behavior", "tools", "automation"], false, false),
+    );
+
+    // Seizure guard: patching a foreign schedule is rejected even when the
+    // patch re-points task_id at a task this behavior owns.
+    call_tool(
+        &tools,
+        "configure_automation",
+        json!({ "kind": "task", "id": "my-task", "patch": { "enabled": true } }),
+    )
+    .await
+    .expect("own task create commits");
+    let error = call_tool(
+        &tools,
+        "configure_automation",
+        json!({ "kind": "schedule", "id": "victim-schedule", "patch": {
+            "task_id": "my-task", "enabled": false,
+        }}),
+    )
+    .await
+    .expect_err("re-pointing a foreign schedule must be rejected");
+    assert!(error.contains("not owned by this behavior"), "{error}");
+
+    // Cross-agent selection: binding another agent's ToolSelection is invalid.
+    let error = call_tool(
+        &tools,
+        "configure_behavior",
+        json!({ "patch": { "tool_selection_id": "victim-selection" } }),
+    )
+    .await
+    .expect_err("binding a foreign selection must be rejected");
+    assert!(error.contains("self only"), "{error}");
+
+    // Even with a stale foreign binding already present, configure_tools
+    // refuses to patch the foreign selection.
+    let rebind = format!(
+        r#"mutation {{
+            update_AgentBehavior(filter: {{ behavior_id: {{ _eq: "{BEHAVIOR_ID}" }} }},
+                input: {{ tool_selection_id: "victim-selection" }}) {{ _docID }}
+        }}"#
+    );
+    let response = db.node.execute(&rebind).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let error = call_tool(
+        &tools,
+        "configure_tools",
+        json!({ "patch": { "enable_bash": true } }),
+    )
+    .await
+    .expect_err("patching a foreign selection must be rejected");
+    assert!(error.contains("self only"), "{error}");
+}
