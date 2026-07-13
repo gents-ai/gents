@@ -178,6 +178,36 @@ pub(in crate::agent) async fn run_agent(
     // that writes `AgentRequest` documents with `caused_by_trigger_{id,kind}`
     // lineage via the lifecycle module. The materializer enqueues Pending
     // requests; the normal watcher/router path claims and executes them.
+    // Host-owned subsystems (the Codex shim) re-derive their enablement from the
+    // published generation, exactly as the runtime's own subscribers do. Without
+    // this, a host subsystem can only sample the control documents once at boot,
+    // which is precisely how the shim stayed dark after a later `config apply`
+    // made its bound behavior runnable (#699).
+    if let Some(observer) = agent.runtime_snapshot_observer.clone() {
+        let mut snapshot_rx = active_snapshot_rx.clone();
+        let mut observer_shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            loop {
+                let (generation, runnable) = {
+                    let snapshot = snapshot_rx.borrow_and_update();
+                    let mut ids: Vec<String> = snapshot.behaviors.keys().cloned().collect();
+                    ids.sort();
+                    (snapshot.generation, ids)
+                };
+                observer.on_generation_published(generation, &runnable);
+
+                tokio::select! {
+                    changed = snapshot_rx.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                    }
+                    _ = observer_shutdown.changed() => break,
+                }
+            }
+        });
+    }
+
     let trigger_engine_node = agent.node.clone();
     let trigger_engine_schedule_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_event_snapshot_rx = active_snapshot_rx.clone();

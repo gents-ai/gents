@@ -23,6 +23,7 @@ use crate::{
     print_json, read_init_config, resolve_home_dir, server_start_failure_hint, write_runtime_state,
     DEFAULT_AGENT_NAME,
 };
+use defra_agent::codex_shim_binding::{ShimBinding, ShimUnboundReason};
 
 pub(crate) struct CliReadyObserver {
     pub(crate) tx: watch::Sender<ProcessLifecycleState>,
@@ -32,6 +33,159 @@ impl ProcessLifecycleObserver for CliReadyObserver {
     fn on_process_state_change(&self, state: ProcessLifecycleState) {
         let _ = self.tx.send(state);
     }
+}
+
+/// Forwards each published runtime generation's runnable behaviors to the host,
+/// so host-owned subsystems can reconcile against the control plane instead of a
+/// boot-time sample (#699).
+struct CliRunnableBehaviorObserver {
+    tx: watch::Sender<Vec<String>>,
+}
+
+impl defra_agent::RuntimeSnapshotObserver for CliRunnableBehaviorObserver {
+    fn on_generation_published(&self, _generation: u64, runnable_behavior_ids: &[String]) {
+        let _ = self.tx.send(runnable_behavior_ids.to_vec());
+    }
+}
+
+/// Announce a freshly bound shim and build its readiness JSON.
+///
+/// Shared by the boot-time bind and the supervisor's later bind so the operator
+/// sees the same thing either way (#699).
+fn announce_codex_shim(
+    bound: &crate::commands::codex_shim::BoundCodexShim,
+    args: &ServeArgs,
+) -> Value {
+    let codex_shim_url = format!(
+        "ws://{}:{}/",
+        display_shim_host(bound.addr().ip()),
+        bound.addr().port()
+    );
+    eprintln!(
+        "Codex shim is running on {codex_shim_url} with state dir {}",
+        bound.codex_home().display(),
+    );
+    eprintln!("Codex shim event log: {}", bound.trace_path().display());
+    eprintln!("Chat from another terminal with: defra-agent codex");
+    if codex_shim_url != crate::DEFAULT_CODEX_REMOTE {
+        eprintln!("  (this shim is not on the default address; pass --remote {codex_shim_url})");
+    }
+    if args.codex_shim_bind_addr.is_loopback() {
+        eprintln!(
+            "For another device, restart with --codex-shim-bind-addr <trusted-private-or-tailscale-ip> and use that host in --remote."
+        );
+    } else {
+        eprintln!(
+            "Codex shim has no transport authentication; only expose this address on a trusted private network."
+        );
+    }
+    json!({
+        "websocket": codex_shim_url,
+        "launch_command": if codex_shim_url == crate::DEFAULT_CODEX_REMOTE {
+            "defra-agent codex".to_string()
+        } else {
+            format!("defra-agent codex --remote {codex_shim_url}")
+        },
+        "shim_home": bound.codex_home().to_path_buf(),
+        "codex_home": bound.codex_home().to_path_buf(),
+        "event_log": bound.trace_path().to_path_buf(),
+    })
+}
+
+/// Watch published generations and bind the shim on the one that makes its bound
+/// behavior runnable (#699).
+///
+/// The decision is `ShimBinding`, which is the Rust mirror of
+/// `CodexShim.Binding.Shim.observePublish` — so what binds the shim here is the
+/// same state machine the Lean model proves converges, and the same one the
+/// conformance fence drives. The supervisor exits as soon as the shim is no
+/// longer waiting on something the control plane can supply: either it is
+/// serving, or it hit a host resource, which no generation can retract.
+fn set_codex_shim_health(handle: &CodexShimHealthHandle, health: CodexShimHealth) {
+    if let Ok(mut guard) = handle.write() {
+        *guard = health;
+    }
+}
+
+fn spawn_codex_shim_supervisor(
+    bind_args: CodexShimBindArgs,
+    bound_behavior_id: String,
+    mut runnable_rx: watch::Receiver<Vec<String>>,
+    bind_addr: IpAddr,
+    health: CodexShimHealthHandle,
+) {
+    tokio::spawn(async move {
+        let mut binding = ShimBinding::unbound(
+            bound_behavior_id.clone(),
+            ShimUnboundReason::DependencyMissing,
+        );
+
+        loop {
+            let runnable = runnable_rx.borrow_and_update().clone();
+
+            if binding.grants_listen(runnable.iter().map(String::as_str)) {
+                match bind_codex_shim(bind_args.clone()).await {
+                    Ok(bound) => {
+                        binding.settle_listen(true);
+                        let url = format!(
+                            "ws://{}:{}/",
+                            display_shim_host(bound.addr().ip()),
+                            bound.addr().port()
+                        );
+                        set_codex_shim_health(
+                            &health,
+                            CodexShimHealth::Listening {
+                                websocket: url.clone(),
+                            },
+                        );
+                        eprintln!(
+                            "Codex endpoint bound: behavior {bound_behavior_id:?} became runnable; \
+                             the shim is now running on {url} (no restart was needed)."
+                        );
+                        if bind_addr.is_loopback() {
+                            eprintln!("Chat from another terminal with: defra-agent codex");
+                        }
+                        bound.spawn();
+                        return;
+                    }
+                    Err(error) if error.is_dependency_missing() => {
+                        // The behavior is runnable but its documents are not
+                        // resolvable yet (the profile has not landed). Stay in the
+                        // suppliable class and wait for the next generation.
+                        tracing::debug!(
+                            behavior_id = %bound_behavior_id,
+                            error = %error.error(),
+                            "Codex shim still waiting on its bound behavior's documents"
+                        );
+                    }
+                    Err(error) => {
+                        // Not a document. No generation retracts it, so stop.
+                        binding.settle_listen(false);
+                        set_codex_shim_health(
+                            &health,
+                            CodexShimHealth::Disabled {
+                                reason: format!("{:#}", error.error()),
+                            },
+                        );
+                        eprintln!(
+                            "Codex endpoint disabled: behavior {bound_behavior_id:?} became runnable, \
+                             but the shim could not bind: {:#}",
+                            error.error()
+                        );
+                        eprintln!(
+                            "This is not something configuration can fix. Restart with --codex-shim-port <free-port>, or silence this with --no-codex-shim."
+                        );
+                        return;
+                    }
+                }
+            }
+
+            if runnable_rx.changed().await.is_err() {
+                // The runtime is gone; nothing left to reconcile against.
+                return;
+            }
+        }
+    });
 }
 
 pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
@@ -129,6 +283,21 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     // and the /metrics endpoint (reader), so the probe-status metric reports
     // measurement instead of the stored document constant (#640).
     let backend_health = defra_agent::BackendHealthMap::new();
+    // Created before the HTTP surface because the shim may bind long after
+    // /healthz starts serving: the supervisor flips this when a published
+    // generation makes the bound behavior runnable (#699).
+    let codex_shim_health: CodexShimHealthHandle =
+        Arc::new(std::sync::RwLock::new(if args.no_codex_shim {
+            CodexShimHealth::Off
+        } else {
+            CodexShimHealth::Pending {
+                bound_behavior_id: args
+                    .codex_shim_behavior_id
+                    .clone()
+                    .unwrap_or_else(|| "<default>".to_string()),
+                reason: "the Codex shim has not bound yet".to_string(),
+            }
+        }));
     let mut node_builder = crate::persistent_node_builder(&data_dir).with_http(
         defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(runtime_contract_router(
             graphql_url.clone(),
@@ -137,6 +306,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             mcp_query_scope,
             Some(backend_health.clone()),
             p2p_admission_state.clone(),
+            Some(codex_shim_health.clone()),
         )),
     );
     if let Some(node_identity_did) = server_identity.node_identity_did.as_ref() {
@@ -157,6 +327,10 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     // migrations have run.
     defra_agent::migration::ensure_all_runtime_migrations(node.clone()).await?;
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
+    // The host's window onto reconciliation: every published generation's
+    // runnable behaviors. The Codex shim reconciles against this instead of the
+    // boot-time document read that stranded it in #699.
+    let (runnable_tx, runnable_rx) = watch::channel::<Vec<String>>(Vec::new());
 
     let agent = DefraAgent::from_default_behavior_documents(
         node.clone(),
@@ -167,6 +341,9 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             tool_ceiling,
             backend_health: Some(backend_health),
             process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
+            runtime_snapshot_observer: Some(Arc::new(CliRunnableBehaviorObserver {
+                tx: runnable_tx,
+            })),
             ..Default::default()
         },
     )
@@ -258,12 +435,16 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     )?;
 
     let mut codex_shim_output = None;
-    // The shim runs by default, so its preconditions (free port, behavior with
-    // an inference profile) must not take the whole runtime down: degrade to
-    // a disabled endpoint and keep serving.
-    let mut codex_shim_handle = if args.no_codex_shim {
-        None
-    } else if let Some(bound) = match bind_codex_shim(CodexShimBindArgs {
+    // The shim runs by default, so its preconditions must not take the whole
+    // runtime down: degrade and keep serving. But *how* it degrades matters. A
+    // missing bound behavior is something the control plane can still supply —
+    // on a fresh store the behavior often arrives moments later via `config
+    // apply` — so the shim waits for it and binds on the generation that carries
+    // it. Only a host resource we cannot get (a taken port, a refused address)
+    // is terminal. Conflating the two is #699: every fleet agent booted on an
+    // empty store, disabled the shim forever, and served a green /healthz behind
+    // a closed port.
+    let codex_shim_bind_args = CodexShimBindArgs {
         home: home_dir.clone(),
         fs_root: effective_tool_root.clone(),
         node: node.clone(),
@@ -275,61 +456,78 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         port: args.codex_shim_port,
         timeout_secs: args.codex_shim_timeout_secs,
         poll_ms: args.codex_shim_poll_ms,
-    })
-    .await
-    {
-        Ok(bound) => Some(bound),
-        Err(error) => {
-            eprintln!("Codex endpoint disabled: {error:#}");
-            eprintln!(
-                "The server keeps running without it. Fix the cause and restart, pick another port with --codex-shim-port, or silence this with --no-codex-shim."
-            );
-            codex_shim_output = Some(json!({
-                "disabled": true,
-                "reason": format!("{error:#}"),
-            }));
-            None
-        }
-    } {
-        let codex_shim_url = format!(
-            "ws://{}:{}/",
-            display_shim_host(bound.addr().ip()),
-            bound.addr().port()
-        );
-        eprintln!(
-            "Codex shim is running on {codex_shim_url} with state dir {}",
-            bound.codex_home().display(),
-        );
-        eprintln!("Codex shim event log: {}", bound.trace_path().display());
-        eprintln!("Chat from another terminal with: defra-agent codex");
-        if codex_shim_url != crate::DEFAULT_CODEX_REMOTE {
-            eprintln!(
-                "  (this shim is not on the default address; pass --remote {codex_shim_url})"
-            );
-        }
-        if args.codex_shim_bind_addr.is_loopback() {
-            eprintln!(
-                "For another device, restart with --codex-shim-bind-addr <trusted-private-or-tailscale-ip> and use that host in --remote."
-            );
-        } else {
-            eprintln!(
-                "Codex shim has no transport authentication; only expose this address on a trusted private network."
-            );
-        }
-        codex_shim_output = Some(json!({
-            "websocket": codex_shim_url,
-            "launch_command": if codex_shim_url == crate::DEFAULT_CODEX_REMOTE {
-                "defra-agent codex".to_string()
-            } else {
-                format!("defra-agent codex --remote {codex_shim_url}")
-            },
-            "shim_home": bound.codex_home().to_path_buf(),
-            "codex_home": bound.codex_home().to_path_buf(),
-            "event_log": bound.trace_path().to_path_buf(),
-        }));
-        Some(bound.spawn())
-    } else {
+    };
+    let mut codex_shim_handle = if args.no_codex_shim {
         None
+    } else {
+        match bind_codex_shim(codex_shim_bind_args.clone()).await {
+            Ok(bound) => {
+                let announced = announce_codex_shim(&bound, &args);
+                set_codex_shim_health(
+                    &codex_shim_health,
+                    CodexShimHealth::Listening {
+                        websocket: announced
+                            .get("websocket")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    },
+                );
+                codex_shim_output = Some(announced);
+                Some(bound.spawn())
+            }
+            Err(error) if error.is_dependency_missing() => {
+                let bound_behavior_id =
+                    crate::commands::codex_shim::resolve_codex_shim_behavior_id(
+                        node.as_ref(),
+                        args.codex_shim_behavior_id.as_deref(),
+                        identity.did(),
+                    )
+                    .await;
+                eprintln!("Codex endpoint pending: {:#}", error.error());
+                eprintln!(
+                    "The server keeps running. The shim binds by itself once behavior {bound_behavior_id:?} \
+                     becomes runnable (for example after `defra-agent config apply`) — no restart needed."
+                );
+                codex_shim_output = Some(json!({
+                    "pending": true,
+                    "bound_behavior_id": bound_behavior_id,
+                    "reason": format!("{:#}", error.error()),
+                }));
+                set_codex_shim_health(
+                    &codex_shim_health,
+                    CodexShimHealth::Pending {
+                        bound_behavior_id: bound_behavior_id.clone(),
+                        reason: format!("{:#}", error.error()),
+                    },
+                );
+                spawn_codex_shim_supervisor(
+                    codex_shim_bind_args.clone(),
+                    bound_behavior_id,
+                    runnable_rx,
+                    args.codex_shim_bind_addr,
+                    codex_shim_health.clone(),
+                );
+                None
+            }
+            Err(error) => {
+                eprintln!("Codex endpoint disabled: {:#}", error.error());
+                eprintln!(
+                    "The server keeps running without it. Fix the cause and restart, pick another port with --codex-shim-port, or silence this with --no-codex-shim."
+                );
+                codex_shim_output = Some(json!({
+                    "disabled": true,
+                    "reason": format!("{:#}", error.error()),
+                }));
+                set_codex_shim_health(
+                    &codex_shim_health,
+                    CodexShimHealth::Disabled {
+                        reason: format!("{:#}", error.error()),
+                    },
+                );
+                None
+            }
+        }
     };
 
     let output = json!({

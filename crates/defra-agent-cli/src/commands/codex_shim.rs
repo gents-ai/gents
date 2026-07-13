@@ -102,6 +102,7 @@ struct TurnStreamControl {
     cancel_tx: watch::Sender<bool>,
 }
 
+#[derive(Clone)]
 pub(crate) struct CodexShimBindArgs {
     pub(crate) home: PathBuf,
     pub(crate) fs_root: Option<PathBuf>,
@@ -148,18 +149,62 @@ impl BoundCodexShim {
     }
 }
 
-pub(crate) async fn bind_codex_shim(args: CodexShimBindArgs) -> Result<BoundCodexShim> {
+/// Which behavior the shim binds to, resolved from the override or the
+/// principal's default. The supervisor needs this to know which behavior it is
+/// waiting for while the shim is unbound (#699).
+pub(crate) async fn resolve_codex_shim_behavior_id(
+    node: &EmbeddedNode,
+    override_behavior_id: Option<&str>,
+    agent_did: &str,
+) -> String {
+    bound_behavior::resolve_bound_behavior_id(node, override_behavior_id, agent_did).await
+}
+
+/// Why a bind attempt failed.
+///
+/// The class decides whether a later published generation may revive the shim,
+/// so it must be typed rather than sniffed out of an error string (#699):
+/// a missing behavior is something the control plane can still supply, while a
+/// taken port is not.
+pub(crate) enum CodexShimBindError {
+    /// The bound behavior (or its inference profile) does not exist yet. Writing
+    /// the document fixes it, and the next generation will carry it.
+    DependencyMissing(anyhow::Error),
+    /// A host resource the control plane cannot supply: the port is taken, the
+    /// bind address was refused, or the state dir is unusable. No document
+    /// retracts this, so retrying it forever would be noise.
+    HostResource(anyhow::Error),
+}
+
+impl CodexShimBindError {
+    pub(crate) fn error(&self) -> &anyhow::Error {
+        match self {
+            Self::DependencyMissing(error) | Self::HostResource(error) => error,
+        }
+    }
+
+    /// True when the control plane can still supply what is missing, so a later
+    /// generation is allowed to bind the shim.
+    pub(crate) fn is_dependency_missing(&self) -> bool {
+        matches!(self, Self::DependencyMissing(_))
+    }
+}
+
+pub(crate) async fn bind_codex_shim(
+    args: CodexShimBindArgs,
+) -> std::result::Result<BoundCodexShim, CodexShimBindError> {
     if args.bind_addr.is_unspecified() {
-        anyhow::bail!(
+        return Err(CodexShimBindError::HostResource(anyhow::anyhow!(
             "refusing to bind unauthenticated Codex shim on {}; bind loopback or a specific trusted private/Tailscale IP instead",
             args.bind_addr
-        );
+        )));
     }
 
     let codex_home = args.home.join("codex-ui");
     let codex_log_dir = codex_home.join("log");
     fs::create_dir_all(&codex_log_dir)
-        .with_context(|| format!("creating Codex UI log dir {}", codex_log_dir.display()))?;
+        .with_context(|| format!("creating Codex UI log dir {}", codex_log_dir.display()))
+        .map_err(CodexShimBindError::HostResource)?;
     let trace_path = codex_log_dir.join("codex-shim-events.jsonl");
 
     let bound_behavior_id = bound_behavior::resolve_bound_behavior_id(
@@ -170,12 +215,15 @@ pub(crate) async fn bind_codex_shim(args: CodexShimBindArgs) -> Result<BoundCode
     .await;
     bound_behavior::load_bound_inference_profile_id(args.node.as_ref(), &bound_behavior_id)
         .await
-        .with_context(|| format!("validating Codex shim bound behavior {bound_behavior_id:?}"))?;
+        .with_context(|| format!("validating Codex shim bound behavior {bound_behavior_id:?}"))
+        .map_err(CodexShimBindError::DependencyMissing)?;
 
     let state = ShimState {
         codex_home: codex_home.clone(),
         trace_path: trace_path.clone(),
-        cwd: std::env::current_dir().context("resolving current working directory")?,
+        cwd: std::env::current_dir()
+            .context("resolving current working directory")
+            .map_err(CodexShimBindError::HostResource)?,
         fs_root: args.fs_root,
         node: args.node,
         background_execution_registry: args.background_execution_registry,
@@ -194,7 +242,8 @@ pub(crate) async fn bind_codex_shim(args: CodexShimBindArgs) -> Result<BoundCode
     let addr = SocketAddr::new(args.bind_addr, args.port);
     let listener = TcpListener::bind(addr)
         .await
-        .with_context(|| format!("binding Codex shim on {addr}"))?;
+        .with_context(|| format!("binding Codex shim on {addr}"))
+        .map_err(CodexShimBindError::HostResource)?;
 
     Ok(BoundCodexShim {
         addr,

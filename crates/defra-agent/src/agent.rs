@@ -69,6 +69,21 @@ pub trait ProcessLifecycleObserver: Send + Sync {
     fn on_process_state_change(&self, state: ProcessLifecycleState);
 }
 
+/// Host-facing view of each published runtime generation.
+///
+/// Every runtime subsystem that depends on which behaviors are runnable is a
+/// subscriber of the reconciler's published snapshot, so it re-derives its own
+/// enablement whenever the control plane changes. Subsystems the *host* owns —
+/// the Codex shim being the one that bit us in #699 — had no such signal: they
+/// could only sample the control documents once at boot, and a behavior applied
+/// later left them stranded until the process restarted.
+///
+/// This is that signal. It fires once for the boot generation and again for
+/// every generation the reconciler publishes.
+pub trait RuntimeSnapshotObserver: Send + Sync {
+    fn on_generation_published(&self, generation: u64, runnable_behavior_ids: &[String]);
+}
+
 #[derive(Default)]
 pub struct DocumentRuntimeOptions {
     pub tool_ceiling: ToolCeiling,
@@ -84,6 +99,10 @@ pub struct DocumentRuntimeOptions {
     /// the runtime create its own.
     pub backend_health: Option<BackendHealthMap>,
     pub process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
+    /// Observes every published runtime generation, so host-owned subsystems can
+    /// re-derive their enablement from `runnable` instead of a boot-time sample
+    /// (#699).
+    pub runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
 }
 
 #[derive(Clone)]
@@ -112,6 +131,7 @@ pub struct DefraAgent {
     backend_prober_options: BackendProberOptions,
     backend_health: BackendHealthMap,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
+    runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     /// Populated once the runtime's `TriggerEngine` has constructed the
@@ -195,6 +215,7 @@ impl DefraAgent {
             backend_prober_options: options.backend_prober_options,
             backend_health,
             process_state_observer: options.process_state_observer,
+            runtime_snapshot_observer: options.runtime_snapshot_observer,
             rendered_request_capture_factory: None,
             manual_trigger_handle: Arc::new(OnceCell::new()),
         })
