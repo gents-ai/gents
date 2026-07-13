@@ -24,6 +24,7 @@ fn pinned_defradb_sync_status_satisfies_agent_observability_contract() {
             completed_total: 79,
             failed_total: 4,
             stale_head_retirements_total: 17,
+            peer_capacity_parks_total: 13,
             per_cid_retry_counts: vec![CidRetrySnapshot {
                 cid: "bafy-retry".to_string(),
                 retry_count: 19,
@@ -41,6 +42,7 @@ fn pinned_defradb_sync_status_satisfies_agent_observability_contract() {
         encode_cache_entries: 5,
         broadcast_coalesced_total: 41,
         push_updates_coalesced_total: 43,
+        gossip_direction_filtered_total: 47,
         pending_dags: 13,
         pending_dag_capacity: 1_000,
         persisted_pending_dags: 17,
@@ -50,6 +52,12 @@ fn pinned_defradb_sync_status_satisfies_agent_observability_contract() {
         missing_link_retries: 23,
         pending_dag_resolved: 29,
         pending_dag_expired: 31,
+        single_flight_suppressed: 37,
+        already_merged_fast_path: 53,
+        pending_dag_capacity_shed: 59,
+        pending_dag_retry_dispatched: 61,
+        pending_dag_retry_suppressed: 67,
+        next_pending_retry_in_ms: Some(71),
     };
 
     let wire = serde_json::to_value(upstream).expect("serialize pinned DefraDB SyncStatus");
@@ -80,4 +88,12 @@ fn pinned_defradb_sync_status_satisfies_agent_observability_contract() {
     assert!(adapted.pending_resync_in_flight);
     assert_eq!(adapted.retained_background_tasks, 6);
     assert_eq!(adapted.missing_link_retries, 23);
+    assert_eq!(adapted.push_backlog.peer_capacity_parks_total, 13);
+    assert_eq!(adapted.gossip_direction_filtered_total, 47);
+    assert_eq!(adapted.single_flight_suppressed, 37);
+    assert_eq!(adapted.already_merged_fast_path, 53);
+    assert_eq!(adapted.pending_dag_capacity_shed, 59);
+    assert_eq!(adapted.pending_dag_retry_dispatched, 61);
+    assert_eq!(adapted.pending_dag_retry_suppressed, 67);
+    assert_eq!(adapted.next_pending_retry_in_ms, Some(71));
 }
