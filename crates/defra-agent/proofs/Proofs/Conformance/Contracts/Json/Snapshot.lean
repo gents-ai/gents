@@ -53,6 +53,8 @@ def snapshotJson : String :=
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
     ++ "\"request_lifecycle_operator_ui_cases\":"
       ++ Conformance.ClientShellContracts.requestLifecycleOperatorUiCasesJson ++ ","
+    ++ "\"startup_readiness_cases\":"
+      ++ startupReadinessCasesJson ++ ","
     ++ "\"runtime_reconcile_cases\":"
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
     ++ "\"apply_reconcile_cases\":"

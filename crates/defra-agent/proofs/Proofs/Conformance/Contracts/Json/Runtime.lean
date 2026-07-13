@@ -123,4 +123,120 @@ def queueDeadlineConformanceCaseJson
       ++ boolString witness.explicitDeadlinePreserved
     ++ "}"
 
+
+/-- Startup-readiness vectors for the bounded build-failure barrier
+(defra-agent#559).
+
+`outcomes` is the build-attempt sequence the slot observes; `post_standing` is
+the behavior's standing with the barrier afterwards. `blocks_ready` pins the
+liveness claim: a released standing never holds `Ready` hostage, and the only
+standing that may is `pending`. `requires_restart` is pinned `false` everywhere
+— release follows from the budget, never from restarting the process. -/
+structure StartupReadinessCase where
+  witness : String
+  leanTheorems : List String
+  budget : Nat
+  outcomes : List String
+  /-- Reconcile retires the slot after the outcomes are observed. -/
+  retiredAfter : Bool
+  postStanding : String
+  blocksReady : Bool
+  requiresRestart : Bool
+
+def startupReadinessCaseJson (witness : StartupReadinessCase) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString witness.witness ++ ","
+    ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
+    ++ "\"budget\":" ++ toString witness.budget ++ ","
+    ++ "\"outcomes\":" ++ jsonStringArray witness.outcomes ++ ","
+    ++ "\"retired_after\":" ++ boolString witness.retiredAfter ++ ","
+    ++ "\"post_standing\":" ++ jsonString witness.postStanding ++ ","
+    ++ "\"blocks_ready\":" ++ boolString witness.blocksReady ++ ","
+    ++ "\"requires_restart\":" ++ boolString witness.requiresRestart
+    ++ "}"
+
+def startupReadinessCases : List StartupReadinessCase :=
+  [ -- #559 itself: every build fails; the budget demotes instead of wedging.
+    { witness := "startup_readiness.persistent_build_failure_demotes"
+    , leanTheorems :=
+        [ "RuntimeReconcile.StartupReadiness.budgeted_attempts_release"
+        , "RuntimeReconcile.StartupReadiness.seeded_release"
+        , "RuntimeReconcile.StartupReadiness.demoted_consumed_the_budget"
+        ]
+    , budget := 3
+    , outcomes := ["failed", "failed", "failed"]
+    , retiredAfter := false
+    , postStanding := "demoted"
+    , blocksReady := false
+    , requiresRestart := false
+    }
+    -- A transient failure within the budget still reaches ready.
+  , { witness := "startup_readiness.transient_failure_then_start_is_ready"
+    , leanTheorems :=
+        [ "RuntimeReconcile.StartupReadiness.start_within_budget_is_ready"
+        , "RuntimeReconcile.StartupReadiness.ready_requires_a_start"
+        ]
+    , budget := 3
+    , outcomes := ["failed", "started"]
+    , retiredAfter := false
+    , postStanding := "ready"
+    , blocksReady := false
+    , requiresRestart := false
+    }
+    -- Demotion never claims health: a spent budget is not a start.
+  , { witness := "startup_readiness.demotion_is_not_readiness"
+    , leanTheorems :=
+        [ "RuntimeReconcile.StartupReadiness.ready_requires_a_start"
+        ]
+    , budget := 1
+    , outcomes := ["failed"]
+    , retiredAfter := false
+    , postStanding := "demoted"
+    , blocksReady := false
+    , requiresRestart := false
+    }
+    -- Under budget with no success yet: still pending, still blocking Ready.
+  , { witness := "startup_readiness.within_budget_still_pending"
+    , leanTheorems :=
+        [ "RuntimeReconcile.StartupReadiness.budgeted_attempts_release"
+        ]
+    , budget := 3
+    , outcomes := ["failed"]
+    , retiredAfter := false
+    , postStanding := "pending"
+    , blocksReady := true
+    , requiresRestart := false
+    }
+    -- Ready is absorbing: post-start outcomes never re-enter the barrier.
+  , { witness := "startup_readiness.ready_is_absorbing"
+    , leanTheorems :=
+        [ "RuntimeReconcile.StartupReadiness.released_absorbing"
+        ]
+    , budget := 3
+    , outcomes := ["started", "failed", "failed", "failed", "failed"]
+    , retiredAfter := false
+    , postStanding := "ready"
+    , blocksReady := false
+    , requiresRestart := false
+    }
+    -- Reconcile retires a never-started slot mid-startup: released without a
+    -- health claim, instead of orphaning the pending entry (the second #559
+    -- hang path).
+  , { witness := "startup_readiness.retirement_releases_a_pending_behavior"
+    , leanTheorems :=
+        [ "RuntimeReconcile.StartupReadiness.retire_releases"
+        , "RuntimeReconcile.StartupReadiness.retire_never_claims_ready"
+        ]
+    , budget := 3
+    , outcomes := ["failed"]
+    , retiredAfter := true
+    , postStanding := "superseded"
+    , blocksReady := false
+    , requiresRestart := false
+    }
+  ]
+
+def startupReadinessCasesJson : String :=
+  jsonArray (startupReadinessCases.map startupReadinessCaseJson)
+
 end Conformance.Contracts

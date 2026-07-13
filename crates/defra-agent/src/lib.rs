@@ -35,6 +35,7 @@ pub mod interrupt;
 pub(crate) mod lean_vocab_test;
 pub mod openai_wire;
 pub mod p2p_observability;
+pub mod startup_readiness;
 
 /// Shared in-crate test utilities.
 #[cfg(test)]

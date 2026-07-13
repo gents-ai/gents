@@ -452,6 +452,11 @@ def caseCoverage : List CoverageEntry :=
       "runtime_status::tests::runtime_status_generation_updates_match_lean_runtime_reconcile_cases")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "startup_readiness_cases"
+      "StartupReadinessCases"
+      "conformance::generated_startup_readiness_cases_pin_bounded_barrier_release")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "apply_reconcile_cases"
       "ApplyReconcileCases"
       "config_import::lean_apply_write_boundary_tests::generated_apply_reconcile_cases_fence_production_apply_write_boundary")

@@ -38,6 +38,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) desktop_client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) request_lifecycle_operator_ui_cases: Vec<LeanClientShellCase>,
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
+    #[serde(default)]
+    pub(crate) startup_readiness_cases: Vec<LeanStartupReadinessCase>,
     pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
     #[serde(default)]
     pub(crate) tool_policy_cases: Vec<LeanToolPolicyCase>,
@@ -321,6 +323,10 @@ pub(crate) fn lean_request_transition_cases() -> &'static [LeanLifecycleTransiti
 
 pub(crate) fn lean_process_transition_cases() -> &'static [LeanLifecycleTransitionCase] {
     &lean_contract_snapshot().process_transition_cases
+}
+
+pub(crate) fn lean_startup_readiness_cases() -> &'static [LeanStartupReadinessCase] {
+    &lean_contract_snapshot().startup_readiness_cases
 }
 
 pub(crate) fn lean_runtime_reconcile_cases() -> &'static [LeanRuntimeReconcileCase] {
