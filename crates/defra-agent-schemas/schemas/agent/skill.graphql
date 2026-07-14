@@ -10,4 +10,5 @@ type Skill {
     interface_json: String
     enabled: Boolean @index
     created_at: String
+    updated_at: DateTime @index(direction: DESC)
 }
