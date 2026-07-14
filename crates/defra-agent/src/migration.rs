@@ -802,6 +802,7 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
                 v10 = %v10.version_id,
                 "ToolSelection patched with context budget flag"
             );
+            active_version = v10;
         }
     } else {
         tracing::debug!("ToolSelection collection absent; subagent patch no-op");
