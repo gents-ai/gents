@@ -167,6 +167,37 @@ def cases : List CompletionRetryCase :=
         (resampleUsed := 1)
         (lastParseError := some "json-parse"))
       (.preStreamFail .parseBadRequest "json-parse" 12)
+  , -- #653: the resample budget is INDEPENDENT of the transport ladder. The
+    -- model has always said so — `resampleBackoff`'s only budget guard is
+    -- `resampleUsed < budget.resampleRetries`, with no reference to
+    -- `transportRetries` (which State.lean documents as the ladder length).
+    -- Every witness until now happened to set `resampleRetries <=
+    -- transportRetries`, so the fence could not see that Rust drew the resample
+    -- delay from `ladder[resampleUsed]` and hard-failed the moment that index
+    -- ran off the end — abandoning both the unspent budget AND the repair
+    -- recourse. These two rows pin the independence.
+    caseFromStep
+      "resample_budget_outlives_transport_ladder"
+      "pre_stream_fail"
+      "pre_stream_parse_resample"
+      (some .parseBadRequest)
+      (some 15)
+      (baseState
+        (budget := { transportRetries := 1, resampleRetries := 3, allowRepair := true })
+        (resampleUsed := 1)
+        (lastParseError := some "prior-parse"))
+      (.preStreamFail .parseBadRequest "json-parse" 15)
+  , caseFromStep
+      "resample_exhausts_on_its_own_budget_then_repairs"
+      "pre_stream_fail"
+      "pre_stream_parse_repair"
+      (some .parseBadRequest)
+      (some 15)
+      (baseState
+        (budget := { transportRetries := 1, resampleRetries := 2, allowRepair := true })
+        (resampleUsed := 2)
+        (lastParseError := some "prior-parse"))
+      (.preStreamFail .parseBadRequest "json-parse" 15)
   , caseFromStep
       "repair_second_time_illegal"
       "repair_issue"
