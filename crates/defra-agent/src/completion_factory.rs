@@ -111,6 +111,12 @@ fn sampling_for_request(defaults: SamplingConfig, request: &AgentRequest) -> Sam
         temperature: request.temperature.or(defaults.temperature),
         top_p: request.top_p.or(defaults.top_p),
         top_k: request.top_k.or(defaults.top_k),
+        // No per-request override exists for these today; the profile's value
+        // (or the served model's default, when unset) stands.
+        min_p: defaults.min_p,
+        frequency_penalty: defaults.frequency_penalty,
+        presence_penalty: defaults.presence_penalty,
+        repetition_penalty: defaults.repetition_penalty,
         max_tokens: request
             .max_tokens
             .and_then(|value| u64::try_from(value).ok())

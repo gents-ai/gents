@@ -744,6 +744,20 @@ pub struct InferenceProfileRow {
     pub max_turns: Option<i64>,
     #[serde(default)]
     pub temperature: Option<f64>,
+    /// Sampling knobs beyond temperature (#649). `None` inherits the served
+    /// model's `generation_config.json`; `Some` pins the value explicitly.
+    #[serde(default)]
+    pub top_p: Option<f64>,
+    #[serde(default)]
+    pub top_k: Option<i64>,
+    #[serde(default)]
+    pub min_p: Option<f64>,
+    #[serde(default)]
+    pub frequency_penalty: Option<f64>,
+    #[serde(default)]
+    pub presence_penalty: Option<f64>,
+    #[serde(default)]
+    pub repetition_penalty: Option<f64>,
     #[serde(default)]
     pub stream_batch_ms: Option<i64>,
     #[serde(default)]

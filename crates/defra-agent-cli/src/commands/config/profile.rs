@@ -19,6 +19,35 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
     {
         anyhow::bail!("stream_liveness_timeout_secs must be positive");
     }
+    // Reject out-of-domain sampling values here rather than letting the
+    // provider reject the completion at request time — a profile is desired
+    // state, and a bad value would fail every request the behavior makes.
+    if args
+        .top_p
+        .is_some_and(|value| !(0.0..=1.0).contains(&value))
+    {
+        anyhow::bail!("top_p must be within [0, 1]");
+    }
+    if args
+        .min_p
+        .is_some_and(|value| !(0.0..=1.0).contains(&value))
+    {
+        anyhow::bail!("min_p must be within [0, 1]");
+    }
+    if args.top_k.is_some_and(|value| value <= 0) {
+        anyhow::bail!("top_k must be positive");
+    }
+    if args.repetition_penalty.is_some_and(|value| value <= 0.0) {
+        anyhow::bail!("repetition_penalty must be positive");
+    }
+    for (name, value) in [
+        ("frequency_penalty", args.frequency_penalty),
+        ("presence_penalty", args.presence_penalty),
+    ] {
+        if value.is_some_and(|value| !(-2.0..=2.0).contains(&value)) {
+            anyhow::bail!("{name} must be within [-2, 2]");
+        }
+    }
 
     let add_fields = vec![
         Some(format!(
@@ -30,6 +59,12 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
         optional_i64_field("max_output_tokens", args.max_output_tokens),
         optional_i64_field("max_turns", args.max_turns),
         optional_f64_field("temperature", args.temperature),
+        optional_f64_field("top_p", args.top_p),
+        optional_i64_field("top_k", args.top_k),
+        optional_f64_field("min_p", args.min_p),
+        optional_f64_field("frequency_penalty", args.frequency_penalty),
+        optional_f64_field("presence_penalty", args.presence_penalty),
+        optional_f64_field("repetition_penalty", args.repetition_penalty),
         optional_i64_field("stream_batch_ms", args.stream_batch_ms),
         optional_i64_field(
             "stream_liveness_timeout_secs",
@@ -52,6 +87,12 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
         optional_i64_field("max_output_tokens", args.max_output_tokens),
         optional_i64_field("max_turns", args.max_turns),
         optional_f64_field("temperature", args.temperature),
+        optional_f64_field("top_p", args.top_p),
+        optional_i64_field("top_k", args.top_k),
+        optional_f64_field("min_p", args.min_p),
+        optional_f64_field("frequency_penalty", args.frequency_penalty),
+        optional_f64_field("presence_penalty", args.presence_penalty),
+        optional_f64_field("repetition_penalty", args.repetition_penalty),
         optional_i64_field("stream_batch_ms", args.stream_batch_ms),
         optional_i64_field(
             "stream_liveness_timeout_secs",
@@ -94,6 +135,12 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
         "max_output_tokens": args.max_output_tokens,
         "max_turns": args.max_turns,
         "temperature": args.temperature,
+        "top_p": args.top_p,
+        "top_k": args.top_k,
+        "min_p": args.min_p,
+        "frequency_penalty": args.frequency_penalty,
+        "presence_penalty": args.presence_penalty,
+        "repetition_penalty": args.repetition_penalty,
         "stream_batch_ms": args.stream_batch_ms,
         "stream_liveness_timeout_secs": args.stream_liveness_timeout_secs,
         "deadline_duration_secs": args.deadline_duration_secs,

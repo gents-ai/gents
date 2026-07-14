@@ -63,6 +63,13 @@ pub struct SamplingConfig {
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
     pub top_k: Option<i64>,
+    /// Sampling knobs the provider takes as extra body params (#649). rig's
+    /// `CompletionRequest` models only `temperature`, so everything else rides
+    /// `additional_params` — see [`SamplingConfig::additional_params`].
+    pub min_p: Option<f64>,
+    pub frequency_penalty: Option<f64>,
+    pub presence_penalty: Option<f64>,
+    pub repetition_penalty: Option<f64>,
     pub max_tokens: Option<u64>,
 }
 
@@ -71,9 +78,20 @@ impl SamplingConfig {
         self.temperature.is_none()
             && self.top_p.is_none()
             && self.top_k.is_none()
+            && self.min_p.is_none()
+            && self.frequency_penalty.is_none()
+            && self.presence_penalty.is_none()
+            && self.repetition_penalty.is_none()
             && self.max_tokens.is_none()
     }
 
+    /// The sampling knobs that must travel as provider body params.
+    ///
+    /// `temperature` and `max_tokens` are modeled fields on rig's request;
+    /// everything else has no rig field, so it is emitted here and deep-merged
+    /// into `additional_params` at the request boundary. A `None` knob emits
+    /// nothing at all — the served model's own default stands, which is the
+    /// pre-#649 behavior for every profile that does not pin a value.
     pub fn additional_params(self) -> Option<serde_json::Value> {
         let mut params = serde_json::Map::new();
         if let Some(top_p) = self.top_p {
@@ -81,6 +99,27 @@ impl SamplingConfig {
         }
         if let Some(top_k) = self.top_k {
             params.insert("top_k".to_string(), serde_json::json!(top_k));
+        }
+        if let Some(min_p) = self.min_p {
+            params.insert("min_p".to_string(), serde_json::json!(min_p));
+        }
+        if let Some(frequency_penalty) = self.frequency_penalty {
+            params.insert(
+                "frequency_penalty".to_string(),
+                serde_json::json!(frequency_penalty),
+            );
+        }
+        if let Some(presence_penalty) = self.presence_penalty {
+            params.insert(
+                "presence_penalty".to_string(),
+                serde_json::json!(presence_penalty),
+            );
+        }
+        if let Some(repetition_penalty) = self.repetition_penalty {
+            params.insert(
+                "repetition_penalty".to_string(),
+                serde_json::json!(repetition_penalty),
+            );
         }
 
         (!params.is_empty()).then_some(serde_json::Value::Object(params))

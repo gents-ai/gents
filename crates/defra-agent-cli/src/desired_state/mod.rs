@@ -339,7 +339,7 @@ impl<'de> Deserialize<'de> for DesiredInferenceBackend {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DesiredInferenceProfile {
     pub(crate) profile_id: String,
@@ -348,6 +348,14 @@ pub(crate) struct DesiredInferenceProfile {
     pub(crate) max_output_tokens: Option<i64>,
     pub(crate) max_turns: Option<i64>,
     pub(crate) temperature: Option<f64>,
+    /// Sampling knobs beyond temperature (#649). Absent = inherit the served
+    /// model's `generation_config.json` default.
+    pub(crate) top_p: Option<f64>,
+    pub(crate) top_k: Option<i64>,
+    pub(crate) min_p: Option<f64>,
+    pub(crate) frequency_penalty: Option<f64>,
+    pub(crate) presence_penalty: Option<f64>,
+    pub(crate) repetition_penalty: Option<f64>,
     pub(crate) stream_batch_ms: Option<i64>,
     pub(crate) stream_liveness_timeout_secs: Option<i64>,
     pub(crate) deadline_duration_secs: Option<i64>,

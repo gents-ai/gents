@@ -5,6 +5,15 @@ type InferenceProfile {
     max_output_tokens: Int
     max_turns: Int
     temperature: Float
+    # Sampling knobs beyond temperature (#649). Unset = inherit the served
+    # model's generation_config.json default; a set value pins it explicitly so
+    # a wrong/missing checkpoint default can be corrected from desired state.
+    top_p: Float
+    top_k: Int
+    min_p: Float
+    frequency_penalty: Float
+    presence_penalty: Float
+    repetition_penalty: Float
     stream_batch_ms: Int
     stream_liveness_timeout_secs: Int
     deadline_duration_secs: Int
