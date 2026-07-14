@@ -264,7 +264,12 @@ async fn fail_routed_request(
     }
 
     let doc_id = stream_writer
-        .begin(&request.session_id, &request.request_id, behavior_id)
+        .begin_with_requester_did(
+            &request.session_id,
+            &request.request_id,
+            behavior_id,
+            request.requester_did.as_deref(),
+        )
         .await?;
     let _ = stream_writer
         .write_tokens(&doc_id, &format!("Error: {error_message}"))

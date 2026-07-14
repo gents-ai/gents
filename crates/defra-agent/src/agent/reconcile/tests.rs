@@ -123,6 +123,7 @@ fn background_child_request(index: usize, behavior_id: &str) -> AgentRequest {
         doc_id: format!("child-doc-{index}"),
         request_id: format!("child-request-{index}"),
         agent_did: "did:defra-agent:background-fanout-test".to_string(),
+        requester_did: None,
         behavior_id: Some(behavior_id.to_string()),
         session_id: format!("child-session-{index}"),
         content: format!("background child {index}"),

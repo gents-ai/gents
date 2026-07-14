@@ -1180,6 +1180,7 @@ mod tests {
         AgentRequestRow {
             request_id: request_id.to_string(),
             agent_did: Some(RECOVERY_AGENT_DID.to_string()),
+            requester_did: None,
             behavior_id: Some(RECOVERY_BEHAVIOR_ID.to_string()),
             session_id: Some(session_id.to_string()),
             retry_parent_request: Some(String::new()),

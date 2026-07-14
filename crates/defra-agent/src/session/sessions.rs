@@ -28,9 +28,30 @@ pub(crate) async fn create_session_with_behavior_id(
     agent_did: &str,
     behavior_id: &str,
 ) -> Result<()> {
+    create_session_with_behavior_id_and_requester_did(
+        node,
+        session_id,
+        agent_name,
+        agent_did,
+        behavior_id,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_session_with_behavior_id_and_requester_did(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_name: &str,
+    agent_did: &str,
+    behavior_id: &str,
+    requester_did: Option<&str>,
+) -> Result<()> {
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_name = escape_graphql_string(agent_name);
     let escaped_agent_did = escape_graphql_string(agent_did);
+    let requester_did_field = super::requester_did_create_field(requester_did);
 
     let created = retry_operation("create_session", || async {
         let now = chrono::Utc::now().to_rfc3339();
@@ -55,6 +76,7 @@ pub(crate) async fn create_session_with_behavior_id(
                         session_id: "{escaped_session_id}",
                         agent_name: "{escaped_agent_name}",
                         agent_did: "{escaped_agent_did}",
+                        {requester_did_field}
                         behavior_id: "{escaped_behavior_id}",
                         started: "{escaped_started}",
                         status: "active"
@@ -113,6 +135,26 @@ pub(crate) async fn ensure_session_with_behavior_id(
     behavior_id: &str,
 ) -> Result<()> {
     create_session_with_behavior_id(node, session_id, agent_name, agent_did, behavior_id).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn ensure_session_with_behavior_id_and_requester_did(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_name: &str,
+    agent_did: &str,
+    behavior_id: &str,
+    requester_did: Option<&str>,
+) -> Result<()> {
+    create_session_with_behavior_id_and_requester_did(
+        node,
+        session_id,
+        agent_name,
+        agent_did,
+        behavior_id,
+        requester_did,
+    )
+    .await
 }
 
 pub(crate) async fn max_sequence(node: &EmbeddedNode, session_id: &str) -> Result<u32> {

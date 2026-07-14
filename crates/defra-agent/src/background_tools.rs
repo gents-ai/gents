@@ -346,6 +346,7 @@ struct AgentRequestQueueRow {
     doc_id: String,
     request_id: String,
     agent_did: String,
+    requester_did: Option<String>,
     behavior_id: Option<String>,
     session_id: String,
     content: String,
@@ -1196,10 +1197,11 @@ pub(crate) async fn append_steering_request(
     let mut child_request = load_agent_request_for_queue(node, &edge.child_request_id)
         .await?
         .ok_or_else(|| anyhow!("child AgentRequest {} not found", edge.child_request_id))?;
-    session::append_message(
+    session::append_message_with_requester_did(
         node,
         &edge.child_session_id,
         &child_request.agent_did,
+        child_request.requester_did.as_deref(),
         "user",
         message,
         None,
@@ -1335,6 +1337,7 @@ async fn load_agent_request_for_queue(
                 _docID
                 request_id
                 agent_did
+                requester_did
                 behavior_id
                 session_id
                 content
@@ -1367,6 +1370,7 @@ async fn load_agent_request_for_queue(
         doc_id: row.doc_id,
         request_id: row.request_id,
         agent_did: row.agent_did,
+        requester_did: normalize_optional_string(row.requester_did),
         behavior_id: normalize_optional_string(row.behavior_id),
         session_id: row.session_id,
         content: row.content,

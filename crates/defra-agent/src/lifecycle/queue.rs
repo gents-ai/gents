@@ -150,6 +150,7 @@ pub(crate) async fn enqueue_session_request(
 
     let escaped_request_id = escape_graphql_string(&request_id);
     let escaped_agent_did = escape_graphql_string(&parent.agent_did);
+    let requester_did_field = session::requester_did_create_field(parent.requester_did.as_deref());
     let escaped_behavior_id = escape_graphql_string(&behavior_id);
     let escaped_session_id = escape_graphql_string(&parent.session_id);
     let escaped_content = escape_graphql_string(content);
@@ -161,6 +162,7 @@ pub(crate) async fn enqueue_session_request(
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 agent_did: "{escaped_agent_did}",
+                {requester_did_field}
                 behavior_id: "{escaped_behavior_id}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
@@ -212,7 +214,7 @@ pub(crate) async fn enqueue_session_request(
         }
     }
 
-    if let Err(error) = session::upsert_conversation_from_request_with_identity(
+    if let Err(error) = session::upsert_conversation_from_request_with_identity_and_requester_did(
         node,
         &parent.session_id,
         &behavior_id,
@@ -221,6 +223,7 @@ pub(crate) async fn enqueue_session_request(
         &enqueued.request_id,
         content,
         "pending",
+        parent.requester_did.as_deref(),
     )
     .await
     {
@@ -625,6 +628,7 @@ mod tests {
             doc_id: "parent-doc".to_string(),
             request_id: "parent-request".to_string(),
             agent_did: TEST_AGENT_DID.to_string(),
+            requester_did: None,
             behavior_id: Some(TEST_BEHAVIOR_ID.to_string()),
             session_id: session_id.to_string(),
             content: "parent".to_string(),

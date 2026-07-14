@@ -50,6 +50,11 @@ impl StartupBarrier {
         }
     }
 
+    #[cfg(test)]
+    pub(in crate::agent) fn ready_for_test() -> Self {
+        Self::new(&[])
+    }
+
     pub async fn mark_behavior_ready(&self, behavior_id: &str) {
         let mut pending = self.pending_behaviors.lock().await;
         let removed = pending.remove(behavior_id);

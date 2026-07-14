@@ -392,6 +392,7 @@ mod tests {
             doc_id,
             request_id: request_id.to_string(),
             agent_did: TEST_AGENT_DID.to_string(),
+            requester_did: None,
             behavior_id: Some(TEST_BEHAVIOR_ID.to_string()),
             session_id: session_id.to_string(),
             content: "same-session request".to_string(),

@@ -112,6 +112,7 @@ mod tests {
             doc_id: "doc-1".to_string(),
             request_id: "req-1".to_string(),
             agent_did: "did:key:agent".to_string(),
+            requester_did: None,
             behavior_id: Some("behavior-a".to_string()),
             session_id: "session-1".to_string(),
             content: "do not put this in telemetry".to_string(),

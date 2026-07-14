@@ -72,6 +72,8 @@ struct ToolCallRow {
     request_id: Option<String>,
     #[serde(default)]
     agent_did: Option<String>,
+    #[serde(default)]
+    requester_did: Option<String>,
     message_sequence: u32,
     tool_name: String,
     args: String,
@@ -113,6 +115,7 @@ impl ToolCallLifecycle {
                     _docID
                     request_id
                     agent_did
+                    requester_did
                     message_sequence
                     tool_name
                     args
@@ -208,6 +211,10 @@ impl ToolCallLifecycle {
             request_id: row.request_id.unwrap_or_default(),
             session_id: session_id.to_string(),
             agent_did: row.agent_did.unwrap_or_default(),
+            // Current recovery paths only update the existing immutable row,
+            // but preserve its route key so a future create transition cannot
+            // silently rehydrate the lifecycle as unrouted.
+            requester_did: row.requester_did.filter(|value| !value.trim().is_empty()),
             tool_call_id: tool_call_id.to_string(),
             message_sequence: row.message_sequence,
             tool_name: row.tool_name,
@@ -226,5 +233,47 @@ impl ToolCallLifecycle {
             workflow_group_id: row.workflow_group_id.filter(|value| !value.is_empty()),
             workflow_role: row.workflow_role.filter(|value| !value.is_empty()),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn load_preserves_immutable_requester_route() {
+        let node = Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .build()
+                .await
+                .expect("embedded node"),
+        );
+        crate::ensure_schemas(node.as_ref())
+            .await
+            .expect("runtime schemas");
+        let mut lifecycle = ToolCallLifecycle::new(
+            node.clone(),
+            "request-routed".to_string(),
+            "session-routed".to_string(),
+            "did:defra-agent:host".to_string(),
+            "tool-call-routed".to_string(),
+            1,
+            "test_tool".to_string(),
+            "{}".to_string(),
+            chrono::Utc::now() + chrono::Duration::minutes(5),
+        )
+        .with_requester_did(Some("did:defra-agent:coordinator".to_string()));
+        lifecycle.start_running().await.expect("persist tool call");
+
+        let loaded = ToolCallLifecycle::load(node.clone(), "session-routed", "tool-call-routed")
+            .await
+            .expect("load tool call")
+            .expect("persisted tool call");
+
+        assert_eq!(
+            loaded.requester_did.as_deref(),
+            Some("did:defra-agent:coordinator")
+        );
+        node.shutdown().await;
     }
 }

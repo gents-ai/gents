@@ -166,8 +166,9 @@ const SUBAGENT_COORDINATOR_RULES: &[CollectionRule] = &[CollectionRule {
     source: DidSource::PeerDid,
 }];
 
-/// Host → coordinator leg for subagent completion: carry the host-owned
-/// conversation slice, including child tool calls.
+/// Host → coordinator leg for subagent completion: carry only artifacts whose
+/// immutable requester route names this coordinator. This preserves child
+/// returns without replaying unrelated host-owned conversation history.
 const SUBAGENT_HOST_RULES: &[CollectionRule] = &[
     CollectionRule {
         collection: "AgentRequest",
@@ -176,38 +177,38 @@ const SUBAGENT_HOST_RULES: &[CollectionRule] = &[
     },
     CollectionRule {
         collection: "AgentResponse",
-        field: "agent_did",
-        source: DidSource::LocalDid,
+        field: "requester_did",
+        source: DidSource::PeerDid,
     },
     CollectionRule {
         collection: "AgentMessage",
-        field: "agent_did",
-        source: DidSource::LocalDid,
+        field: "requester_did",
+        source: DidSource::PeerDid,
     },
     CollectionRule {
         collection: "AgentToolCall",
-        field: "agent_did",
-        source: DidSource::LocalDid,
+        field: "requester_did",
+        source: DidSource::PeerDid,
     },
     CollectionRule {
         collection: "AgentToolResult",
-        field: "agent_did",
-        source: DidSource::LocalDid,
+        field: "requester_did",
+        source: DidSource::PeerDid,
     },
     CollectionRule {
         collection: "AgentSession",
-        field: "agent_did",
-        source: DidSource::LocalDid,
+        field: "requester_did",
+        source: DidSource::PeerDid,
     },
     CollectionRule {
         collection: "AgentConversation",
-        field: "agent_did",
-        source: DidSource::LocalDid,
+        field: "requester_did",
+        source: DidSource::PeerDid,
     },
     CollectionRule {
         collection: "CompactionEntry",
-        field: "agent_did",
-        source: DidSource::LocalDid,
+        field: "requester_did",
+        source: DidSource::PeerDid,
     },
 ];
 
@@ -472,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn subagent_host_filters_requests_on_requester_and_rest_on_local_owner() {
+    fn subagent_host_filters_every_artifact_on_requester() {
         let t = resolve_template(SUBAGENT_HOST_TEMPLATE).unwrap();
         assert_eq!(t.delivery, Delivery::Push);
         assert_eq!(t.collections, CONVERSATION_COLLECTIONS);
@@ -485,16 +486,12 @@ mod tests {
                 value: "did:key:coord".to_string(),
             })
         );
-        for col in CONVERSATION_COLLECTIONS
-            .iter()
-            .copied()
-            .filter(|collection| *collection != "AgentRequest")
-        {
+        for col in CONVERSATION_COLLECTIONS {
             assert_eq!(
-                f.get(col),
+                f.get(*col),
                 Some(&FilterPredicate {
-                    field: "agent_did".to_string(),
-                    value: "did:key:host".to_string(),
+                    field: "requester_did".to_string(),
+                    value: "did:key:coord".to_string(),
                 }),
                 "unexpected subagent-host filter for {col}"
             );

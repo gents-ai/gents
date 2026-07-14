@@ -302,7 +302,8 @@ mod tests {
     use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
 
     use super::*;
-    use crate::agent::p2p_reconcile::FilterPredicate;
+    use crate::agent::p2p_reconcile::templates::SUBAGENT_HOST_TEMPLATE;
+    use crate::agent::p2p_reconcile::{resolve_template, scope_filter, FilterPredicate};
     use crate::defra_node::P2PConfig;
     use crate::ensure_runtime_schemas;
     use crate::graphql::escape_graphql_string;
@@ -469,6 +470,61 @@ mod tests {
             }}"#
         );
         exec(node, &mutation, "seed AgentToolCall").await;
+    }
+
+    async fn seed_subagent_return_artifacts(
+        node: &Arc<EmbeddedNode>,
+        suffix: &str,
+        requester_did: Option<&str>,
+    ) {
+        let request_id = format!("return-{suffix}-response");
+        let session_id = format!("return-{suffix}-session");
+        let agent_did = "did:key:host";
+        let behavior_id = "did:key:host:default";
+
+        crate::session::ensure_session_with_behavior_id_and_requester_did(
+            node,
+            &session_id,
+            "default",
+            agent_did,
+            behavior_id,
+            requester_did,
+        )
+        .await
+        .expect("create routed AgentSession");
+        crate::session::upsert_conversation_from_request_with_identity_and_requester_did(
+            node,
+            &session_id,
+            "default",
+            agent_did,
+            behavior_id,
+            &request_id,
+            "child prompt",
+            "completed",
+            requester_did,
+        )
+        .await
+        .expect("create routed AgentConversation");
+        crate::session::save_message_with_requester_did(
+            node,
+            &session_id,
+            agent_did,
+            requester_did,
+            1,
+            "assistant",
+            "child result",
+            None,
+        )
+        .await
+        .expect("create routed AgentMessage");
+        crate::streaming::DefraStreamWriter::new(
+            Arc::clone(node),
+            agent_did,
+            Duration::from_secs(60),
+        )
+        .begin_with_requester_did(&session_id, &request_id, behavior_id, requester_did)
+        .await
+        .expect("create routed AgentResponse");
     }
 
     async fn collection_values(
@@ -645,6 +701,110 @@ mod tests {
             tool_call_ids,
             BTreeSet::from(["bridge-match".to_string()]),
             "filtered tool-call replay should not leak non-matching rows"
+        );
+
+        sender.shutdown().await;
+        receiver.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn embedded_subagent_host_replays_only_requester_lineage() {
+        let sender_test = runtime_test_node().await;
+        let receiver_test = runtime_test_node().await;
+        let sender = Arc::clone(&sender_test.node);
+        let receiver = Arc::clone(&receiver_test.node);
+        let sender_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&sender));
+        let receiver_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&receiver));
+        let sender_addresses = wait_for_peer_info(&sender_admin).await;
+        let receiver_addresses = wait_for_peer_info(&receiver_admin).await;
+
+        seed_subagent_return_artifacts(&sender, "match", Some("did:key:coord")).await;
+        seed_subagent_return_artifacts(&sender, "unrelated", None).await;
+
+        let collections = vec![
+            "AgentResponse".to_string(),
+            "AgentMessage".to_string(),
+            "AgentSession".to_string(),
+            "AgentConversation".to_string(),
+        ];
+        sender_admin
+            .add_p2p_collections(&collections)
+            .await
+            .expect("add sender p2p collections");
+        receiver_admin
+            .add_p2p_collections(&collections)
+            .await
+            .expect("add receiver p2p collections");
+
+        sender_admin
+            .connect(&receiver_addresses)
+            .await
+            .expect("connect sender to receiver");
+        wait_for_active_peer(&sender_admin).await;
+        wait_for_active_peer(&receiver_admin).await;
+        receiver_admin
+            .add_replicator(&sender_addresses, &collections, &PairingFilters::default())
+            .await
+            .expect("authorize sender as receiver-side replicator");
+
+        let template = resolve_template(SUBAGENT_HOST_TEMPLATE).expect("subagent-host template");
+        let mut filters = scope_filter(
+            &template.scope,
+            template.collections,
+            "did:key:coord",
+            "did:key:host",
+        );
+        filters.retain(|collection, _| collections.contains(collection));
+        sender_admin
+            .add_replicator(&receiver_addresses, &collections, &filters)
+            .await
+            .expect("install requester-scoped return replicator");
+
+        wait_for_value(
+            &receiver,
+            "AgentResponse",
+            "response_key",
+            "return-match-response",
+        )
+        .await;
+        wait_for_value(
+            &receiver,
+            "AgentMessage",
+            "message_key",
+            "return-match-session:1",
+        )
+        .await;
+        wait_for_value(
+            &receiver,
+            "AgentSession",
+            "session_id",
+            "return-match-session",
+        )
+        .await;
+        wait_for_value(
+            &receiver,
+            "AgentConversation",
+            "session_id",
+            "return-match-session",
+        )
+        .await;
+
+        assert_eq!(
+            collection_values(&receiver, "AgentResponse", "response_key").await,
+            BTreeSet::from(["return-match-response".to_string()])
+        );
+        assert_eq!(
+            collection_values(&receiver, "AgentMessage", "message_key").await,
+            BTreeSet::from(["return-match-session:1".to_string()])
+        );
+        assert_eq!(
+            collection_values(&receiver, "AgentSession", "session_id").await,
+            BTreeSet::from(["return-match-session".to_string()])
+        );
+        assert_eq!(
+            collection_values(&receiver, "AgentConversation", "session_id").await,
+            BTreeSet::from(["return-match-session".to_string()]),
+            "unrelated host conversation history must not cross the return leg"
         );
 
         sender.shutdown().await;
