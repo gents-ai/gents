@@ -518,6 +518,7 @@ fn subagent_lens_wasm_path() -> Result<String> {
 /// Applies the three subagent-extension patches and registers the unified
 /// lens. Re-running after a partial failure picks up at the un-migrated
 /// collection without manual intervention.
+#[allow(unused_assignments)]
 pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
     // 1. AgentToolCall — patch only if v3 fields not already present.
     let atc_collection = node
@@ -816,6 +817,10 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
                 v10 = %v10.version_id,
                 "ToolSelection patched with context budget flag"
             );
+            // Intentionally advance the cursor even though v10 is currently the
+            // final hand-written patch. The next patch must inspect v10 rather
+            // than the stale v9 schema (see abc30235).
+            active_version = v10;
         }
     } else {
         tracing::debug!("ToolSelection collection absent; subagent patch no-op");

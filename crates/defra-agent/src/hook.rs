@@ -475,7 +475,10 @@ impl DefraSessionHook {
     }
 
     pub async fn set_active_request_id(&self, request_id: Option<String>) {
-        self.state.lock().await.current_request_id = request_id;
+        // This compatibility setter intentionally clears requester lineage:
+        // carrying a prior coordinator DID across requests would misroute the
+        // new request's immutable return artifacts.
+        self.set_active_request_lineage(request_id, None).await;
     }
 
     pub async fn set_active_request_lineage(

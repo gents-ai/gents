@@ -46,6 +46,36 @@ fn hook_counters_for_test() -> HookCounters {
     }
 }
 
+#[tokio::test]
+async fn legacy_request_id_setter_clears_requester_lineage() {
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .build()
+            .await
+            .expect("embedded node"),
+    );
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:host",
+        FailurePolicy::default(),
+    );
+
+    hook.set_active_request_lineage(
+        Some("request-a".to_string()),
+        Some("did:defra-agent:coordinator".to_string()),
+    )
+    .await;
+    hook.set_active_request_id(Some("request-b".to_string()))
+        .await;
+
+    let state = hook.state.lock().await;
+    assert_eq!(state.current_request_id.as_deref(), Some("request-b"));
+    assert_eq!(state.current_requester_did, None);
+    drop(state);
+    node.shutdown().await;
+}
+
 fn failure_policy_from_contract(policy: &str) -> FailurePolicy {
     match policy {
         "failOpen" => FailurePolicy::FailOpen,
