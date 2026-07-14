@@ -178,7 +178,9 @@ where
         // presenting stale context as current. Strip them from the provider-bound
         // history; the CURRENT request's context rides in `new_messages` below.
         // Persistence is untouched (it already happened upstream).
-        let history: Vec<Message> = history
+        // `mut` because the completion-retry Repair directive rewrites the
+        // assembled input in place — loaded history included (#652).
+        let mut history: Vec<Message> = history
             .into_iter()
             .filter(|message| !is_request_context_message(message))
             .collect();
@@ -307,7 +309,7 @@ where
                                         will_retry: true,
                                         backoff: std::time::Duration::ZERO,
                                     };
-                                    repair_provider_input(&mut new_messages);
+                                    repair_provider_input(&mut history, &mut new_messages);
                                     let repaired_prompt = new_messages
                                         .last()
                                         .cloned()
@@ -402,7 +404,7 @@ where
                                         will_retry: true,
                                         backoff: std::time::Duration::ZERO,
                                     };
-                                    repair_provider_input(&mut new_messages);
+                                    repair_provider_input(&mut history, &mut new_messages);
                                     let repaired_prompt = new_messages.last().cloned().expect(
                                         "new_messages remains non-empty after repair",
                                     );
@@ -747,8 +749,36 @@ fn terminal_pre_stream_retry_reason(
     }
 }
 
-pub(crate) fn repair_provider_input(new_messages: &mut Vec<Message>) {
-    for message in new_messages.iter_mut() {
+/// Repair the ASSEMBLED provider input — loaded history and run-threaded
+/// messages alike (#652).
+///
+/// This runs only after the provider has already REJECTED the request (the
+/// completion-retry `Repair` directive). It is deliberately more aggressive
+/// than the egress normalizer: on top of the shape coercion it runs a LOSSY
+/// leaf sanitizer over every JSON string in a tool call's arguments. That
+/// lossiness is exactly why it cannot live at egress — it would corrupt
+/// legitimate multi-line tool arguments on every request.
+///
+/// It used to rewrite only `new_messages`. But the motivating failure (the vLLM
+/// parse-signature 400) originates from tool-call arguments in the INPUT
+/// TRANSCRIPT — i.e. the loaded history it skipped — so repair re-issued the
+/// same poisoned input and failed identically. The fence described a transform
+/// that did not exist.
+///
+/// Widening it to history is licensed by `PromptAssembly.repair_is_payload_only`
+/// (repair rewrites argument payloads only — never rows, roles, call ids, or
+/// ordering, so the row-granular assembly theorems T1–T5 hold verbatim) and by
+/// `PromptAssembly.repair_idempotent` (a second pass is a no-op, so re-entering
+/// the path cannot keep re-escaping its own escapes).
+pub(crate) fn repair_provider_input(history: &mut Vec<Message>, new_messages: &mut Vec<Message>) {
+    repair_messages(history);
+    repair_messages(new_messages);
+    *history = crate::compaction::sanitize_history_for_provider(std::mem::take(history));
+    *new_messages = crate::compaction::sanitize_history_for_provider(std::mem::take(new_messages));
+}
+
+fn repair_messages(messages: &mut [Message]) {
+    for message in messages.iter_mut() {
         let Message::Assistant { content, .. } = message else {
             continue;
         };
@@ -765,8 +795,6 @@ pub(crate) fn repair_provider_input(new_messages: &mut Vec<Message>) {
             tool_call.function.arguments = repaired;
         }
     }
-
-    *new_messages = crate::compaction::sanitize_history_for_provider(std::mem::take(new_messages));
 }
 
 fn sanitize_json_string_leaves(value: &mut serde_json::Value) {

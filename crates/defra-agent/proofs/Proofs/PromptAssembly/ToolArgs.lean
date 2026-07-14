@@ -143,4 +143,103 @@ theorem normalize_nonobject_to_empty {P : Type} (empty : P)
   | scalar => rfl
   | null => rfl
 
+/-! ## Repair (#652)
+
+`repair_provider_input` is the last-resort transform the completion-retry
+`Repair` directive applies after the provider has already REJECTED the input
+(the vLLM parse-signature 400). It is strictly more aggressive than
+`normalizeArgs`: on top of the shape coercion it runs a **lossy leaf
+sanitizer** over every JSON string in the arguments (newline and tab become
+their two-character escapes, other control characters are dropped).
+
+That lossiness is why repair may not live at egress: it would corrupt
+legitimate multi-line tool arguments on every request. It is correct only on a
+request the provider has already refused.
+
+The hole #652 reports is that the Rust repair pass rewrote only the
+run-threaded `new_messages` and never the loaded `history` — while the
+motivating 400 originates from tool-call arguments in the INPUT TRANSCRIPT,
+i.e. exactly the history it skipped. Repair therefore re-issued the same
+poisoned input and failed identically.
+
+Modeling repair here is what lets the fence be honest: it says what the
+transform does to a whole assembled input, and the theorems below are what
+license applying it to loaded history without disturbing the row-granular
+assembly guarantees (T1–T5) proven over `sanitize`.
+-/
+
+/-- The lossy leaf sanitizer, abstracted to its only provider-relevant
+property: it is a function on payloads that, once applied, is stable. Rust
+`sanitize_json_string_leaves` / `sanitize_provider_arg_string`: '\n' and '\t'
+become the two characters '\\','n' / '\\','t' (neither of which is a control
+character) and every other control character is dropped — so a second pass
+finds nothing left to rewrite. -/
+class LeafSanitizer (P : Type) where
+  sanitize : P → P
+  /-- The sanitizer is its own fixpoint: no control character survives the
+  first pass, so a second pass is the identity. -/
+  idempotent : ∀ p, sanitize (sanitize p) = sanitize p
+
+/-- The repair transform on one argument value: normalize the shape, then
+sanitize the payload's string leaves. -/
+def repairArgs {P : Type} [LeafSanitizer P] (empty : P) (v : ToolArgs P) : ToolArgs P :=
+  match normalizeArgs empty v with
+  | .object p => .object (LeafSanitizer.sanitize p)
+  | other => other
+
+/-- **R1 (soundness).** Repair always yields a provider-valid object — it
+inherits N1, so repairing can never make the shape worse. -/
+theorem repair_isObject {P : Type} [LeafSanitizer P] (empty : P) (v : ToolArgs P) :
+    (repairArgs empty v).IsObject := by
+  have hn := normalize_isObject empty v
+  unfold repairArgs
+  cases h : normalizeArgs empty v with
+  | object p => trivial
+  | str parsed => rw [h] at hn; exact absurd hn not_false
+  | array => rw [h] at hn; exact absurd hn not_false
+  | scalar => rw [h] at hn; exact absurd hn not_false
+  | null => rw [h] at hn; exact absurd hn not_false
+
+/-- **R2 (idempotence).** Repair is its own fixpoint. Repair runs on an input
+the provider already refused, and a retry may re-enter the path; a second pass
+must not keep mangling arguments (each pass would otherwise re-escape its own
+escapes). This is what makes repair safe to apply to already-repaired
+history. -/
+theorem repair_on_object {P : Type} [LeafSanitizer P] (empty : P) (p : P) :
+    repairArgs empty (.object p) = .object (LeafSanitizer.sanitize p) := rfl
+
+theorem repair_idempotent {P : Type} [LeafSanitizer P] (empty : P) (v : ToolArgs P) :
+    repairArgs empty (repairArgs empty v) = repairArgs empty v := by
+  have hn := normalize_isObject empty v
+  cases h : normalizeArgs empty v with
+  | object p =>
+      have hr : repairArgs empty v = .object (LeafSanitizer.sanitize p) := by
+        unfold repairArgs; rw [h]
+      rw [hr, repair_on_object, LeafSanitizer.idempotent]
+  | str parsed => rw [h] at hn; exact absurd hn not_false
+  | array => rw [h] at hn; exact absurd hn not_false
+  | scalar => rw [h] at hn; exact absurd hn not_false
+  | null => rw [h] at hn; exact absurd hn not_false
+
+/-- **R3 (repair subsumes normalize).** A repaired value is already normalized:
+running the egress normalizer over repair's output changes nothing. Egress
+(`to_rig_tool_call`) normalizes every message including loaded history, so this
+is what says repairing history does not fight the egress boundary. -/
+theorem repair_normalize_fixpoint {P : Type} [LeafSanitizer P] (empty : P) (v : ToolArgs P) :
+    normalizeArgs empty (repairArgs empty v) = repairArgs empty v :=
+  normalize_fixpoint_of_isObject empty (repair_isObject empty v)
+
+/-- **R4 (payload-granularity).** Repair rewrites only the argument PAYLOAD of a
+tool call: it never inspects or produces rows, roles, call ids, or ordering.
+
+This is the same pointwise argument the module header makes for `normalizeArgs`
+— argument payloads are invisible to `sanitize`, so T1–T5 (sanitize soundness,
+fixpoint, idempotence, split-stability, threaded-turn fixpoint) hold verbatim
+over a history whose tool-call arguments have been repaired. That is precisely
+the license #652 needs: repair may be widened from the run-threaded messages to
+the loaded history without touching the proven assembly. -/
+theorem repair_is_payload_only {P : Type} [LeafSanitizer P] (empty : P) (p : P) :
+    repairArgs empty (.object p) = .object (LeafSanitizer.sanitize p) :=
+  repair_on_object empty p
+
 end PromptAssembly

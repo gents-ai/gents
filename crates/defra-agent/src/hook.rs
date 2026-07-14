@@ -130,6 +130,7 @@ struct ToolResultIdentity {
 struct SessionState {
     session_id: Option<String>,
     current_request_id: Option<String>,
+    current_requester_did: Option<String>,
     request_deadline_at: Option<DateTime<Utc>>,
     agent_name: String,
     sequence: u32,
@@ -356,6 +357,7 @@ impl DefraSessionHook {
             state: Arc::new(Mutex::new(SessionState {
                 session_id: None,
                 current_request_id: None,
+                current_requester_did: None,
                 request_deadline_at: None,
                 agent_name: agent_name.to_string(),
                 sequence: 0,
@@ -394,6 +396,7 @@ impl DefraSessionHook {
             state: Arc::new(Mutex::new(SessionState {
                 session_id: Some(session_id.to_string()),
                 current_request_id: None,
+                current_requester_did: None,
                 request_deadline_at: None,
                 agent_name: agent_name.to_string(),
                 sequence: max_seq,
@@ -472,7 +475,24 @@ impl DefraSessionHook {
     }
 
     pub async fn set_active_request_id(&self, request_id: Option<String>) {
-        self.state.lock().await.current_request_id = request_id;
+        // This compatibility setter intentionally clears requester lineage:
+        // carrying a prior coordinator DID across requests would misroute the
+        // new request's immutable return artifacts.
+        self.set_active_request_lineage(request_id, None).await;
+    }
+
+    pub async fn set_active_request_lineage(
+        &self,
+        request_id: Option<String>,
+        requester_did: Option<String>,
+    ) {
+        let mut state = self.state.lock().await;
+        state.current_request_id = request_id;
+        state.current_requester_did = requester_did;
+    }
+
+    async fn active_requester_did(&self) -> Option<String> {
+        self.state.lock().await.current_requester_did.clone()
     }
 
     pub(crate) async fn register_stream_tool_call_identity(

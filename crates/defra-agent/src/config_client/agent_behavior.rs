@@ -1,11 +1,13 @@
+use crate::graphql::escape_graphql_string;
+use crate::AgentBehaviorDocument as AgentBehavior;
 use anyhow::Result;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::AgentBehaviorDocument as AgentBehavior;
 
-use crate::config_writes::ConfigAccess;
-use crate::{graphql_bool_literal, optional_f64_field, optional_string_field};
+use super::ConfigAccess;
+use defra_agent_protocol::graphql::{
+    graphql_bool_literal, optional_f64_field, optional_string_field,
+};
 
-pub(crate) async fn write_agent_behavior_document(
+pub async fn write_agent_behavior_document(
     access: &ConfigAccess,
     behavior: &AgentBehavior,
 ) -> Result<String> {
@@ -106,5 +108,5 @@ pub(crate) async fn write_agent_behavior_document(
         update_fields = update_fields,
     );
     let response = access.execute(&mutation).await?;
-    crate::extract_mutation_doc_id(&response, "AgentBehavior")
+    defra_agent_protocol::graphql::extract_mutation_doc_id(&response, "AgentBehavior")
 }

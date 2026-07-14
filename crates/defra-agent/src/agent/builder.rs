@@ -230,6 +230,7 @@ impl DefraAgentBuilder {
             backend_health: crate::backend_health::BackendHealthMap::new(),
             process_state_observer: self.process_state_observer,
             runtime_snapshot_observer: None,
+            startup_readiness: Default::default(),
             rendered_request_capture_factory: self.rendered_request_capture_factory,
             manual_trigger_handle: Arc::new(tokio::sync::OnceCell::new()),
         })
@@ -299,6 +300,31 @@ impl BehaviorBuilder {
 
     pub fn enable_defra_query(mut self, enable_defra_query: bool) -> Self {
         self.behavior.tool_selection.enable_defra_query = enable_defra_query;
+        self
+    }
+
+    pub fn enable_self_config(mut self, enable_self_config: bool) -> Self {
+        self.behavior.tool_selection.enable_self_config = enable_self_config;
+        self
+    }
+
+    pub fn self_config_categories<I, S>(mut self, categories: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.behavior.tool_selection.self_config_categories =
+            Some(categories.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn self_config_no_lockout(mut self, no_lockout: bool) -> Self {
+        self.behavior.tool_selection.self_config_no_lockout = no_lockout;
+        self
+    }
+
+    pub fn self_config_dry_run(mut self, dry_run: bool) -> Self {
+        self.behavior.tool_selection.self_config_dry_run = dry_run;
         self
     }
 

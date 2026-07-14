@@ -20,6 +20,9 @@ pub struct P2pSyncStatusSnapshot {
     pub encode_cache_entries: usize,
     pub broadcast_coalesced_total: u64,
     pub push_updates_coalesced_total: u64,
+    /// Gossip messages rejected because an unsubscribed sender was configured
+    /// only as an outbound replicator target (defradb #1118).
+    pub gossip_direction_filtered_total: u64,
     pub pending_dags: usize,
     pub pending_dag_capacity: usize,
     pub persisted_pending_dags: usize,
@@ -29,6 +32,21 @@ pub struct P2pSyncStatusSnapshot {
     pub missing_link_retries: u64,
     pub pending_dag_resolved: u64,
     pub pending_dag_expired: u64,
+    /// Same-CID announcements collapsed to a single in-flight sync (#1117).
+    pub single_flight_suppressed: u64,
+    /// Announcements for an already-merged head that exited on the fast path
+    /// before any allocation-heavy decode (#1117).
+    pub already_merged_fast_path: u64,
+    /// Announcements shed because the pending-DAG registry was at capacity,
+    /// rejected before block decode (#1117).
+    pub pending_dag_capacity_shed: u64,
+    /// Retry-clock ticks that dispatched a due pending-DAG fetch (#1116 stage 2).
+    pub pending_dag_retry_dispatched: u64,
+    /// Retry-clock/claim attempts that found no due entry (#1116 stage 2).
+    pub pending_dag_retry_suppressed: u64,
+    /// Milliseconds until the earliest due incomplete pending-DAG retry;
+    /// `None` when no incomplete entry is registered.
+    pub next_pending_retry_in_ms: Option<u64>,
 }
 
 /// Typed view of DefraDB's bounded outbound push backlog.
@@ -49,6 +67,9 @@ pub struct P2pPushBacklogSnapshot {
     pub completed_total: u64,
     pub failed_total: u64,
     pub stale_head_retirements_total: u64,
+    /// Times a peer was parked because its receiver reported saturation, proving
+    /// sender-side backpressure is engaging instead of storming (defradb #1112).
+    pub peer_capacity_parks_total: u64,
     pub per_cid_retry_counts: Vec<P2pCidRetrySnapshot>,
     pub per_peer: Vec<P2pPeerBacklogSnapshot>,
 }

@@ -7,13 +7,69 @@ use serde::Deserialize;
 
 use crate::support::snapshots::fetch_tool_call_snapshots_for_session;
 use crate::support::{
-    create_request, create_response_with_content_and_status, create_response_with_status,
-    first_row, test_db, upsert_conversation, AGENT_DID,
+    create_conversation_document, create_request, create_response_with_content_and_status,
+    create_response_with_status, first_row, test_db, test_db_with_duplicate_capable_conversations,
+    upsert_conversation, AGENT_DID, AGENT_NAME,
 };
 
 #[derive(Debug, Clone, Deserialize)]
 struct StatusRow {
     status: String,
+}
+
+/// Thread-scoped tracing capture so a test can assert on the WARN a recovery
+/// pass emits, without touching the process-global subscriber.
+#[derive(Clone, Default)]
+struct LogCapture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl LogCapture {
+    fn contents(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().expect("capture lock")).into_owned()
+    }
+}
+
+impl std::io::Write for LogCapture {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("capture lock").extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogCapture {
+    type Writer = LogCapture;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+fn capture_subscriber(capture: &LogCapture) -> impl tracing::Subscriber {
+    use tracing_subscriber::layer::SubscriberExt;
+    tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(capture.clone()),
+    )
+}
+
+async fn conversation_status_by_doc_id(
+    node: &defra_agent::defra_node::EmbeddedNode,
+    doc_id: &str,
+) -> String {
+    let query = format!(
+        r#"{{
+            AgentConversation(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                limit: 1
+            ) {{ status }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    first_row::<ConversationRow>(&resp, "AgentConversation").status
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -256,6 +312,113 @@ async fn recover_all_creates_error_response_when_response_doc_is_missing() {
     assert!(response
         .content
         .contains("daemon restarted before response could be generated"));
+}
+
+/// #693 defect 1: a store carrying two `AgentConversation` docs with one
+/// `session_id` must still recover — the canonical doc (latest `updated_at`,
+/// `_docID` tie-break) is repaired, the duplicate is flagged by a WARN naming
+/// the session_id and duplicate count, and is otherwise left untouched.
+#[tokio::test]
+async fn recover_all_recovers_canonical_conversation_when_session_id_is_duplicated() {
+    let db = test_db_with_duplicate_capable_conversations("lifecycle-recover-dupe").await;
+    let stale_doc = create_conversation_document(
+        &db.node,
+        "session-dupe",
+        AGENT_NAME,
+        "Stale title",
+        "processing",
+        "req-dupe",
+        "2026-01-01T00:00:00Z",
+    )
+    .await;
+    let canonical_doc = create_conversation_document(
+        &db.node,
+        "session-dupe",
+        AGENT_NAME,
+        "Rich title",
+        "processing",
+        "req-dupe",
+        "2026-06-01T00:00:00Z",
+    )
+    .await;
+    assert_ne!(stale_doc, canonical_doc, "seeding must mint two documents");
+
+    let capture = LogCapture::default();
+    let report = {
+        let _guard = tracing::subscriber::set_default(capture_subscriber(&capture));
+        RequestLifecycle::recover_all(&db.node, AGENT_DID)
+            .await
+            .unwrap()
+    };
+
+    // One duplicated session = one recovery, and the count reflects only
+    // recoveries that actually happened (#693 defect 2).
+    assert_eq!(report.conversations_recovered, 1);
+    assert_eq!(report.conversations_failed, 0);
+
+    // The canonical (newest) doc is recovered; latest_request_id has no
+    // matching request, so it re-activates.
+    assert_eq!(
+        conversation_status_by_doc_id(&db.node, &canonical_doc).await,
+        "active"
+    );
+    // The duplicate is flagged, not reaped or mutated (v1: operators sweep).
+    assert_eq!(
+        conversation_status_by_doc_id(&db.node, &stale_doc).await,
+        "processing"
+    );
+
+    let logs = capture.contents();
+    assert!(
+        logs.contains("duplicate AgentConversation"),
+        "expected duplicate WARN, got logs:\n{logs}"
+    );
+    assert!(
+        logs.contains("session-dupe"),
+        "duplicate WARN must name the session_id, got logs:\n{logs}"
+    );
+    assert!(
+        logs.contains("duplicate_count=2"),
+        "duplicate WARN must carry the duplicate count, got logs:\n{logs}"
+    );
+}
+
+/// #693 defect 2: a conversation recovery attempt that fails must be counted
+/// as a failure, never as a recovery. Failure injected via a behavior_id
+/// conflict between the stuck doc and its newer duplicate twin.
+#[tokio::test]
+async fn recover_all_counts_only_successful_conversation_recoveries() {
+    let db = test_db_with_duplicate_capable_conversations("lifecycle-recover-dupe-fail").await;
+    create_conversation_document(
+        &db.node,
+        "session-mismatch",
+        "behavior-alpha",
+        "Stale title",
+        "processing",
+        "req-mismatch",
+        "2026-01-01T00:00:00Z",
+    )
+    .await;
+    create_conversation_document(
+        &db.node,
+        "session-mismatch",
+        "behavior-beta",
+        "Rich title",
+        "active",
+        "req-mismatch",
+        "2026-06-01T00:00:00Z",
+    )
+    .await;
+
+    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        report.conversations_recovered, 0,
+        "a failed recovery attempt must not be counted as recovered"
+    );
+    assert_eq!(report.conversations_failed, 1);
 }
 
 #[tokio::test]

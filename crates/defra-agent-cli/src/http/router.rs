@@ -581,6 +581,7 @@ mod tests {
                         "completed_total": 79,
                         "failed_total": 4,
                         "stale_head_retirements_total": 17,
+                        "peer_capacity_parks_total": 13,
                         "per_cid_retry_counts": [{
                             "cid": "bafy-retry",
                             "retry_count": 19
@@ -598,6 +599,7 @@ mod tests {
                     "encode_cache_entries": 5,
                     "broadcast_coalesced_total": 41,
                     "push_updates_coalesced_total": 43,
+                    "gossip_direction_filtered_total": 47,
                     "pending_dags": 13,
                     "pending_dag_capacity": 1000,
                     "persisted_pending_dags": 17,
@@ -606,7 +608,13 @@ mod tests {
                     "retained_background_tasks": 6,
                     "missing_link_retries": 23,
                     "pending_dag_resolved": 29,
-                    "pending_dag_expired": 31
+                    "pending_dag_expired": 31,
+                    "single_flight_suppressed": 37,
+                    "already_merged_fast_path": 53,
+                    "pending_dag_capacity_shed": 59,
+                    "pending_dag_retry_dispatched": 61,
+                    "pending_dag_retry_suppressed": 67,
+                    "next_pending_retry_in_ms": 71
                 }
             }),
             None,
@@ -617,12 +625,16 @@ mod tests {
         let sync = snapshot.sync_status.expect("valid pinned sync status");
         assert_eq!(sync.push_backlog.queued_items, 7);
         assert_eq!(sync.push_backlog.stale_head_retirements_total, 17);
+        assert_eq!(sync.push_backlog.peer_capacity_parks_total, 13);
         assert_eq!(sync.push_backlog.per_cid_retry_counts[0].retry_count, 19);
         assert_eq!(sync.push_backlog.per_peer[0].consecutive_failures, 3);
         assert_eq!(sync.encode_cache_hits_total, 37);
         assert_eq!(sync.push_updates_coalesced_total, 43);
         assert_eq!(sync.persisted_pending_dags, 17);
         assert_eq!(sync.missing_link_retries, 23);
+        assert_eq!(sync.gossip_direction_filtered_total, 47);
+        assert_eq!(sync.pending_dag_capacity_shed, 59);
+        assert_eq!(sync.next_pending_retry_in_ms, Some(71));
     }
 
     #[test]

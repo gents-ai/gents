@@ -17,9 +17,18 @@ pub(super) async fn run_router(
     agent_did: String,
     active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     shutdown: watch::Receiver<bool>,
+    startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
 ) -> Result<()> {
     let watcher = DefraWatcher::new(node.clone(), &agent_did);
-    run_router_with_watcher(node, agent_did, watcher, active_snapshot_rx, shutdown).await
+    run_router_with_watcher(
+        node,
+        agent_did,
+        watcher,
+        active_snapshot_rx,
+        shutdown,
+        startup_demotions,
+    )
+    .await
 }
 
 async fn run_router_with_watcher<W>(
@@ -28,6 +37,7 @@ async fn run_router_with_watcher<W>(
     mut watcher: W,
     mut active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     mut shutdown: watch::Receiver<bool>,
+    startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
 ) -> Result<()>
 where
     W: Watcher,
@@ -67,6 +77,29 @@ where
                 request,
                 resolution.behavior_id.as_str(),
                 reason,
+            )
+            .await?;
+            continue;
+        }
+
+        // A behavior demoted for startup build failures still has a dispatcher
+        // (its slot is parked); dispatching would queue the request into a
+        // channel nobody drains. Fail it loudly with the build error instead
+        // (#559), mirroring the snapshot-unavailable rejection below.
+        if let Some(reason) = startup_demotions.reason(&resolution.behavior_id) {
+            tracing::warn!(
+                request_id = %request.request_id,
+                session_id = %request.session_id,
+                behavior_id = %resolution.behavior_id,
+                reason = %reason,
+                "behavior demoted at startup; rejecting request"
+            );
+            fail_routed_request(
+                node.clone(),
+                agent_did.as_str(),
+                request,
+                resolution.behavior_id.as_str(),
+                reason.as_str(),
             )
             .await?;
             continue;
@@ -264,7 +297,12 @@ async fn fail_routed_request(
     }
 
     let doc_id = stream_writer
-        .begin(&request.session_id, &request.request_id, behavior_id)
+        .begin_with_requester_did(
+            &request.session_id,
+            &request.request_id,
+            behavior_id,
+            request.requester_did.as_deref(),
+        )
         .await?;
     let _ = stream_writer
         .write_tokens(&doc_id, &format!("Error: {error_message}"))

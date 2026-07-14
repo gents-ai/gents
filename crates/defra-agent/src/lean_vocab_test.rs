@@ -38,9 +38,15 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) desktop_client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) request_lifecycle_operator_ui_cases: Vec<LeanClientShellCase>,
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
+    #[serde(default)]
+    pub(crate) startup_readiness_cases: Vec<LeanStartupReadinessCase>,
     pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
     #[serde(default)]
     pub(crate) tool_policy_cases: Vec<LeanToolPolicyCase>,
+    #[serde(default)]
+    pub(crate) self_config_field_tables: Vec<LeanSelfConfigFieldTable>,
+    #[serde(default)]
+    pub(crate) self_config_cases: Vec<LeanSelfConfigCase>,
     pub(crate) session_recovery_cases: Vec<LeanSessionRecoveryCase>,
     pub(crate) inference_slot_accounting_cases: Vec<LeanInferenceSlotAccountingCase>,
     pub(crate) fleet_slot_accounting_cases: Vec<LeanFleetSlotAccountingCase>,
@@ -254,6 +260,8 @@ mod command_identity_queue;
 mod composed_invariants;
 #[path = "lean_vocab_test/event_delivery.rs"]
 mod event_delivery;
+#[path = "lean_vocab_test/self_config.rs"]
+mod self_config;
 #[path = "lean_vocab_test/slot_persistence_health.rs"]
 mod slot_persistence_health;
 #[path = "lean_vocab_test/tool_policy.rs"]
@@ -267,6 +275,7 @@ pub(crate) use codex_shim::*;
 pub(crate) use command_identity_queue::*;
 pub(crate) use composed_invariants::*;
 pub(crate) use event_delivery::*;
+pub(crate) use self_config::*;
 pub(crate) use slot_persistence_health::*;
 pub(crate) use tool_policy::*;
 pub(crate) use triggers_runtime_apply::*;
@@ -325,6 +334,10 @@ pub(crate) fn lean_process_transition_cases() -> &'static [LeanLifecycleTransiti
     &lean_contract_snapshot().process_transition_cases
 }
 
+pub(crate) fn lean_startup_readiness_cases() -> &'static [LeanStartupReadinessCase] {
+    &lean_contract_snapshot().startup_readiness_cases
+}
+
 pub(crate) fn lean_runtime_reconcile_cases() -> &'static [LeanRuntimeReconcileCase] {
     &lean_contract_snapshot().runtime_reconcile_cases
 }
@@ -351,6 +364,14 @@ pub(crate) fn lean_apply_reconcile_case(name: &str) -> &'static LeanApplyReconci
 
 pub(crate) fn lean_tool_policy_cases() -> &'static [LeanToolPolicyCase] {
     &lean_contract_snapshot().tool_policy_cases
+}
+
+pub(crate) fn lean_self_config_field_tables() -> &'static [LeanSelfConfigFieldTable] {
+    &lean_contract_snapshot().self_config_field_tables
+}
+
+pub(crate) fn lean_self_config_cases() -> &'static [LeanSelfConfigCase] {
+    &lean_contract_snapshot().self_config_cases
 }
 
 pub(crate) fn lean_tool_policy_case(name: &str) -> &'static LeanToolPolicyCase {

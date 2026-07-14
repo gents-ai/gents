@@ -22,10 +22,13 @@ impl DefraSpillTruncator {
         let escaped_metadata = escape_graphql_string(metadata);
         let escaped_conversation_doc_id =
             escape_graphql_string(conversation_doc_id.unwrap_or_default());
+        let requester_did_field =
+            crate::session::requester_did_create_field(self.requester_did.as_deref());
         let mutation = format!(
             r#"mutation {{
                 create_AgentToolResult(input: {{
                     agent_did: "{agent_did}",
+                    {requester_did_field}
                     session_id: "{session_id}",
                     tool_name: "{tool_name}",
                     tool_input: "{escaped_input}",

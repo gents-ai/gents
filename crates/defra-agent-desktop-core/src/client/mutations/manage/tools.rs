@@ -147,6 +147,22 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
         // Each entry is JSON-serialized WriteToolDecl; graphql_string_list_field
         // escapes every element and emits null (not []) when empty.
         Some(graphql_string_list_field("write_tools", &row.write_tools)),
+        Some(graphql_optional_bool_field(
+            "enable_self_config",
+            row.enable_self_config,
+        )),
+        Some(graphql_string_list_field(
+            "self_config_categories",
+            &row.self_config_categories,
+        )),
+        Some(graphql_optional_bool_field(
+            "self_config_no_lockout",
+            row.self_config_no_lockout,
+        )),
+        Some(graphql_optional_bool_field(
+            "self_config_dry_run",
+            row.self_config_dry_run,
+        )),
         Some(graphql_string_field(
             "subagent_default_await_mode",
             row.subagent_default_await_mode.as_deref(),
@@ -260,6 +276,22 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
             &row.defra_query_collections,
         )),
         Some(graphql_string_list_field("write_tools", &row.write_tools)),
+        Some(graphql_optional_bool_field(
+            "enable_self_config",
+            row.enable_self_config,
+        )),
+        Some(graphql_string_list_field(
+            "self_config_categories",
+            &row.self_config_categories,
+        )),
+        Some(graphql_optional_bool_field(
+            "self_config_no_lockout",
+            row.self_config_no_lockout,
+        )),
+        Some(graphql_optional_bool_field(
+            "self_config_dry_run",
+            row.self_config_dry_run,
+        )),
         Some(graphql_string_field(
             "subagent_default_await_mode",
             row.subagent_default_await_mode.as_deref(),

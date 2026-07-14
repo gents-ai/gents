@@ -109,6 +109,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         // filter-aware replicator identity is additionally exercised by
         // pairing_reconcile.rs and the p2p_reconcile engine/diff unit tests.
         ("ScopeTemplates", Module("conformance/scope_templates.rs")),
+        ("SelfConfig", Module("conformance/self_config.rs")),
         ("SessionRecovery", Module("conformance/session_recovery.rs")),
         (
             "Skills",

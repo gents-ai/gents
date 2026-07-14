@@ -218,6 +218,12 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.operatorUi]
     , deferred := []
     }
+  , { feature := "self-config"
+    , required := [Surface.agentFacing]
+    , deferred :=
+        [ (Surface.api, "MCP self-config surface deferred until MCP calls carry a DID (#654)")
+        ]
+    }
   , { feature := "recovery"
     , required := [Surface.runtimeInternal]
     , deferred := []
@@ -452,6 +458,11 @@ def caseCoverage : List CoverageEntry :=
       "runtime_status::tests::runtime_status_generation_updates_match_lean_runtime_reconcile_cases")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "startup_readiness_cases"
+      "StartupReadinessCases"
+      "conformance::generated_startup_readiness_cases_pin_bounded_barrier_release")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "apply_reconcile_cases"
       "ApplyReconcileCases"
       "config_import::lean_apply_write_boundary_tests::generated_apply_reconcile_cases_fence_production_apply_write_boundary")
@@ -461,6 +472,16 @@ def caseCoverage : List CoverageEntry :=
       "ToolPolicyCases"
       "conformance::generated_tool_policy_cases_match_lean_composition")
       "tool-policy" [Surface.operatorUi, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "self_config_field_tables"
+      "SelfConfigFieldTables"
+      "conformance::self_config_field_tables_match_lean_contract")
+      "self-config" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "self_config_cases"
+      "SelfConfigCases"
+      "conformance::generated_self_config_cases_fence_patch_merge")
+      "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
       "session_recovery_cases"
       "SessionRecoveryCases"

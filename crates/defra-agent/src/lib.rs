@@ -19,6 +19,7 @@ pub mod collection;
 pub mod compaction;
 pub(crate) mod completion_factory;
 pub mod config;
+pub mod config_client;
 pub mod defra_query;
 pub mod defra_write;
 pub mod desired_fields;
@@ -36,6 +37,7 @@ pub mod interrupt;
 pub(crate) mod lean_vocab_test;
 pub mod openai_wire;
 pub mod p2p_observability;
+pub mod startup_readiness;
 
 /// Shared in-crate test utilities.
 #[cfg(test)]
@@ -79,6 +81,7 @@ pub(crate) mod runtime_status;
 pub(crate) mod runtime_trace;
 pub mod schedule_cron;
 pub mod schema;
+pub mod self_config;
 pub mod session;
 pub mod skills;
 pub mod streaming;

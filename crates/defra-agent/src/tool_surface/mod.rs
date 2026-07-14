@@ -54,6 +54,23 @@ pub struct ToolSurface {
     pub(super) defra_query_scope: CollectionScope,
     pub(super) write_tools: Vec<WriteToolDecl>,
     pub(super) enable_skills: bool,
+    pub(super) self_config: SelfConfigToolConfig,
+}
+
+/// Resolved self-configuration surface for one behavior (#654): whether the
+/// tool family is on, which categories are advertised, the behavior identity
+/// anchor, and the opt-in guardrails.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SelfConfigToolConfig {
+    pub enabled: bool,
+    /// The behavior this surface was resolved for — "my config" root.
+    pub behavior_id: String,
+    /// Effective categories (sorted), from the policy meet.
+    pub categories: std::collections::BTreeSet<String>,
+    /// Refuse patches that would strip the agent's own reconfigure ability.
+    pub no_lockout: bool,
+    /// `get_my_config` accepts a patch preview.
+    pub dry_run: bool,
 }
 
 impl ToolSurface {
@@ -149,6 +166,9 @@ impl ToolSurface {
         if self.enable_defra_query {
             names.push(DEFRA_QUERY_TOOL_NAME.to_string());
         }
+        names.extend(crate::self_config::self_config_tool_names(
+            &self.self_config,
+        ));
         for decl in &self.write_tools {
             // Use the single source-of-truth gate on the declaration itself;
             // see `WriteToolDecl::is_well_formed`.
@@ -206,6 +226,11 @@ impl ToolSurface {
                 self.defra_query_scope.clone(),
             ));
         }
+        tools.extend(crate::self_config::build_self_config_tools(
+            runtime.node.clone(),
+            runtime.agent_did.clone(),
+            &self.self_config,
+        ));
         // Apply-time validation rejects write_tools names that collide with the
         // built-in surface or sibling cli_tool_names, but runtime-discovered
         // tools (e.g. MCP) and code-injected custom tools are not visible to
@@ -267,6 +292,9 @@ impl std::fmt::Debug for ToolSurface {
             .field("defra_query_scope", &self.defra_query_scope)
             .field("write_tools", &self.write_tools)
             .field("enable_skills", &self.enable_skills)
+            // Part of the slot fingerprint: a self-config gate/category change
+            // must retire and respawn the behavior slot at reconcile.
+            .field("self_config", &self.self_config)
             .finish()
     }
 }

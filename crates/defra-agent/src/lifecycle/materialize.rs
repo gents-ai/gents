@@ -178,6 +178,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
                 &request_id,
                 content,
                 "pending",
+                None,
                 Some((&title, session::CONVERSATION_TITLE_SOURCE_TASK)),
             )
             .await
@@ -389,6 +390,7 @@ impl RequestLifecycle {
             doc_id,
             request_id: request_id.clone(),
             agent_did: agent_did.to_string(),
+            requester_did: None,
             behavior_id: Some(behavior_id.clone()),
             session_id: session_id.clone(),
             content: content.to_string(),
@@ -453,15 +455,16 @@ impl RequestLifecycle {
 
     pub async fn prepare_session_with_identity(&self) -> Result<()> {
         self.ensure_state(&[LocalLifecycleState::Claimed], "prepare_session")?;
-        session::ensure_session_with_behavior_id(
+        session::ensure_session_with_behavior_id_and_requester_did(
             &self.node,
             &self.request.session_id,
             &self.agent_name,
             &self.agent_did,
             &self.behavior_id,
+            self.request.requester_did.as_deref(),
         )
         .await?;
-        session::upsert_conversation_from_request_with_identity(
+        session::upsert_conversation_from_request_with_identity_and_requester_did(
             &self.node,
             &self.request.session_id,
             &self.agent_name,
@@ -470,6 +473,7 @@ impl RequestLifecycle {
             &self.request.request_id,
             &self.request.content,
             "processing",
+            self.request.requester_did.as_deref(),
         )
         .await
     }

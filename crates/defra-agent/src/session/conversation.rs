@@ -19,6 +19,32 @@ pub(crate) async fn upsert_conversation_from_request_with_identity(
     content: &str,
     status: &str,
 ) -> Result<()> {
+    upsert_conversation_from_request_with_identity_and_requester_did(
+        node,
+        session_id,
+        agent_name,
+        agent_did,
+        behavior_id,
+        request_id,
+        content,
+        status,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn upsert_conversation_from_request_with_identity_and_requester_did(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_name: &str,
+    agent_did: &str,
+    behavior_id: &str,
+    request_id: &str,
+    content: &str,
+    status: &str,
+    requester_did: Option<&str>,
+) -> Result<()> {
     upsert_conversation_from_request_with_identity_and_title(
         node,
         session_id,
@@ -28,6 +54,7 @@ pub(crate) async fn upsert_conversation_from_request_with_identity(
         request_id,
         content,
         status,
+        requester_did,
         None,
     )
     .await
@@ -43,12 +70,14 @@ pub(crate) async fn upsert_conversation_from_request_with_identity_and_title(
     request_id: &str,
     content: &str,
     status: &str,
+    requester_did: Option<&str>,
     title_override: Option<(&str, &str)>,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_name = escape_graphql_string(agent_name);
     let escaped_agent_did = escape_graphql_string(agent_did);
+    let requester_did_field = super::requester_did_create_field(requester_did);
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_preview = escape_graphql_string(&derive_conversation_preview(content));
     let escaped_status = escape_graphql_string(status);
@@ -65,14 +94,8 @@ pub(crate) async fn upsert_conversation_from_request_with_identity_and_title(
     let escaped_title_source = escape_graphql_string(&title_source);
     let escaped_created_at = escape_graphql_string(&created_at);
 
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentConversation(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                add: {{
-                    session_id: "{escaped_session_id}",
-                    agent_name: "{escaped_agent_name}",
-                    agent_did: "{escaped_agent_did}",
+    let assignments = format!(
+        r#"agent_name: "{escaped_agent_name}",
                     behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
                     title_source: "{escaped_title_source}",
@@ -80,22 +103,40 @@ pub(crate) async fn upsert_conversation_from_request_with_identity_and_title(
                     status: "{escaped_status}",
                     created_at: "{escaped_created_at}",
                     updated_at: "{now}",
-                    latest_request_id: "{escaped_request_id}"
-                }},
-                update: {{
-                    agent_name: "{escaped_agent_name}",
-                    behavior_id: "{escaped_behavior_id}",
-                    title: "{escaped_title}",
-                    title_source: "{escaped_title_source}",
-                    preview_text: "{escaped_preview}",
-                    status: "{escaped_status}",
-                    created_at: "{escaped_created_at}",
-                    updated_at: "{now}",
-                    latest_request_id: "{escaped_request_id}"
-                }}
-            ) {{ _docID }}
-        }}"#
+                    latest_request_id: "{escaped_request_id}""#
     );
+    // Query-first (#693): a store can carry duplicate documents for one
+    // session_id, and an upsert whose filter matches more than one document
+    // is refused by DefraDB. Once the canonical document is known, address it
+    // by _docID; upsert remains only for the not-yet-created case, where its
+    // atomicity still closes the concurrent-create race.
+    let mutation = match existing.as_ref() {
+        Some(existing) => {
+            let escaped_doc_id = escape_graphql_string(&existing.doc_id);
+            format!(
+                r#"mutation {{
+                    update_AgentConversation(
+                        filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                        input: {{ {assignments} }}
+                    ) {{ _docID }}
+                }}"#
+            )
+        }
+        None => format!(
+            r#"mutation {{
+                upsert_AgentConversation(
+                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                    add: {{
+                        session_id: "{escaped_session_id}",
+                        agent_did: "{escaped_agent_did}",
+                        {requester_did_field}
+                        {assignments}
+                    }},
+                    update: {{ {assignments} }}
+                ) {{ _docID }}
+            }}"#
+        ),
+    };
 
     execute_mutation_with_retry(node, &mutation, "upsert_conversation_from_request").await?;
     Ok(())
@@ -144,14 +185,8 @@ pub(crate) async fn update_conversation_status_with_identity(
     let escaped_latest_request_id = escape_graphql_string(&latest_request_id);
     let escaped_created_at = escape_graphql_string(&created_at);
 
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentConversation(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                add: {{
-                    session_id: "{escaped_session_id}",
-                    agent_name: "{escaped_agent_name}",
-                    agent_did: "{escaped_agent_did}",
+    let assignments = format!(
+        r#"agent_name: "{escaped_agent_name}",
                     behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
                     title_source: "{escaped_title_source}",
@@ -159,22 +194,38 @@ pub(crate) async fn update_conversation_status_with_identity(
                     status: "{escaped_status}",
                     created_at: "{escaped_created_at}",
                     updated_at: "{now}",
-                    latest_request_id: "{escaped_latest_request_id}"
-                }},
-                update: {{
-                    agent_name: "{escaped_agent_name}",
-                    behavior_id: "{escaped_behavior_id}",
-                    title: "{escaped_title}",
-                    title_source: "{escaped_title_source}",
-                    preview_text: "{escaped_preview_text}",
-                    status: "{escaped_status}",
-                    created_at: "{escaped_created_at}",
-                    updated_at: "{now}",
-                    latest_request_id: "{escaped_latest_request_id}"
-                }}
-            ) {{ _docID }}
-        }}"#
+                    latest_request_id: "{escaped_latest_request_id}""#
     );
+    // Query-first (#693): address the canonical document by _docID so a
+    // duplicated session_id (which makes an upsert filter multi-match, and
+    // DefraDB refuse it) cannot fail the write — startup recovery routes
+    // through here and must survive duplicate-carrying stores.
+    let mutation = match existing.as_ref() {
+        Some(existing) => {
+            let escaped_doc_id = escape_graphql_string(&existing.doc_id);
+            format!(
+                r#"mutation {{
+                    update_AgentConversation(
+                        filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                        input: {{ {assignments} }}
+                    ) {{ _docID }}
+                }}"#
+            )
+        }
+        None => format!(
+            r#"mutation {{
+                upsert_AgentConversation(
+                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                    add: {{
+                        session_id: "{escaped_session_id}",
+                        agent_did: "{escaped_agent_did}",
+                        {assignments}
+                    }},
+                    update: {{ {assignments} }}
+                ) {{ _docID }}
+            }}"#
+        ),
+    };
 
     execute_mutation_with_retry(node, &mutation, "update_conversation_status").await?;
     Ok(())

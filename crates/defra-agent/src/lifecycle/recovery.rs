@@ -16,12 +16,14 @@ impl RequestLifecycle {
         let requests_recovered = Self::repair_terminal_requests(node, agent_did)
             .await?
             .repaired;
-        let conversations_recovered = recover_stuck_conversations(node, agent_did).await?;
+        let (conversations_recovered, conversations_failed) =
+            recover_stuck_conversations(node, agent_did).await?;
 
         Ok(RecoveryReport {
             responses_recovered,
             requests_recovered,
             conversations_recovered,
+            conversations_failed,
         })
     }
 
@@ -451,6 +453,7 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
                 }}
             ) {{
                 request_id
+                requester_did
                 behavior_id
                 session_id
             }}
@@ -476,6 +479,7 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
     let mut recovered = 0;
     for row in rows {
         let request_id = row.get("request_id").and_then(|v| v.as_str()).unwrap_or("");
+        let requester_did = row.get("requester_did").and_then(|v| v.as_str());
         let behavior_id = row
             .get("behavior_id")
             .and_then(|v| v.as_str())
@@ -500,12 +504,14 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
         let escaped_agent_did = escape_graphql_string(agent_did);
         let escaped_behavior_id = escape_graphql_string(behavior_id);
         let escaped_session_id = escape_graphql_string(session_id);
+        let requester_did_field = crate::session::requester_did_create_field(requester_did);
         let mutation = format!(
             r#"mutation {{
                 create_AgentResponse(input: {{
                     response_key: "{escaped_request_id}",
                     request_id: "{escaped_request_id}",
                     agent_did: "{escaped_agent_did}",
+                    {requester_did_field}
                     behavior_id: "{escaped_behavior_id}",
                     session_id: "{escaped_session_id}",
                     content: "{error_text}",
@@ -546,7 +552,13 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
     Ok(recovered)
 }
 
-async fn recover_stuck_conversations(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
+/// Returns `(recovered, failed)`. The recovered count reflects only writes
+/// that actually succeeded — a failed attempt is the opposite of a recovery
+/// and gets its own WARN instead (#693).
+async fn recover_stuck_conversations(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Result<(usize, usize)> {
     let escaped_agent_did = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
@@ -557,6 +569,7 @@ async fn recover_stuck_conversations(node: &EmbeddedNode, agent_did: &str) -> Re
                 }}
             ) {{
                 _docID
+                updated_at
                 agent_name
                 behavior_id
                 session_id
@@ -571,7 +584,7 @@ async fn recover_stuck_conversations(node: &EmbeddedNode, agent_did: &str) -> Re
         anyhow::bail!("querying stuck conversations: {:?}", resp.errors);
     }
 
-    let rows: Vec<serde_json::Value> = resp
+    let mut rows: Vec<serde_json::Value> = resp
         .data
         .as_ref()
         .and_then(|d| d.get("AgentConversation"))
@@ -579,8 +592,23 @@ async fn recover_stuck_conversations(node: &EmbeddedNode, agent_did: &str) -> Re
         .cloned()
         .unwrap_or_default();
 
-    let count = rows.len();
+    // A duplicate-carrying store (#693) yields one stuck row per twin.
+    // Recover each session once, driving the canonical stuck row (latest
+    // updated_at, docID tie-break — ascending sort, later insert wins), so a
+    // duplicated session can neither double-count nor double-write.
+    rows.sort_by(|left, right| {
+        stuck_conversation_recency(left).cmp(&stuck_conversation_recency(right))
+    });
+    let mut canonical_rows: std::collections::BTreeMap<String, &serde_json::Value> =
+        std::collections::BTreeMap::new();
     for row in &rows {
+        let session_id = row.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+        canonical_rows.insert(session_id.to_string(), row);
+    }
+
+    let mut recovered = 0usize;
+    let mut failed = 0usize;
+    for row in canonical_rows.into_values() {
         let doc_id = row.get("_docID").and_then(|v| v.as_str()).unwrap_or("");
         let agent_name = row.get("agent_name").and_then(|v| v.as_str()).unwrap_or("");
         let behavior_id = row
@@ -611,6 +639,7 @@ async fn recover_stuck_conversations(node: &EmbeddedNode, agent_did: &str) -> Re
         )
         .await
         {
+            failed += 1;
             tracing::warn!(
                 doc_id = %doc_id,
                 agent_name = %agent_name,
@@ -621,6 +650,7 @@ async fn recover_stuck_conversations(node: &EmbeddedNode, agent_did: &str) -> Re
                 "failed to recover stuck conversation"
             );
         } else {
+            recovered += 1;
             tracing::info!(
                 doc_id = %doc_id,
                 agent_name = %agent_name,
@@ -633,5 +663,22 @@ async fn recover_stuck_conversations(node: &EmbeddedNode, agent_did: &str) -> Re
         }
     }
 
-    Ok(count)
+    Ok((recovered, failed))
+}
+
+/// Canonical ordering key for stuck conversation rows sharing a session_id:
+/// latest `updated_at` wins, `_docID` breaks ties. An unparseable timestamp
+/// sorts oldest, so a malformed twin never outranks a well-formed one.
+fn stuck_conversation_recency(row: &serde_json::Value) -> (chrono::DateTime<chrono::Utc>, &str) {
+    let updated_at = row
+        .get("updated_at")
+        .and_then(|value| value.as_str())
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC);
+    let doc_id = row
+        .get("_docID")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    (updated_at, doc_id)
 }

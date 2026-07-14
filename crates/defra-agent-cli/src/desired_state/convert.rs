@@ -164,6 +164,10 @@ pub(crate) fn manifest_from_export_bundle(
                         "subagent_allow_cross_deployment",
                         "cross_deployment_spawn_timeout_seconds",
                         "write_tools",
+                        "enable_self_config",
+                        "self_config_categories",
+                        "self_config_no_lockout",
+                        "self_config_dry_run",
                     ],
                 )
             })
@@ -203,6 +207,12 @@ pub(crate) fn manifest_from_export_bundle(
                         "max_output_tokens",
                         "max_turns",
                         "temperature",
+                        "top_p",
+                        "top_k",
+                        "min_p",
+                        "frequency_penalty",
+                        "presence_penalty",
+                        "repetition_penalty",
                         "stream_batch_ms",
                         "stream_liveness_timeout_secs",
                         "deadline_duration_secs",

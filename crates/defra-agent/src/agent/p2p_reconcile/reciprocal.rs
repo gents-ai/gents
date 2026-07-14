@@ -27,11 +27,13 @@ pub const SOURCE_RECIPROCAL: &str = "reciprocal";
 /// without a dialable peer id/address.
 pub fn derive_reciprocal_desired<'a>(
     intent_dids: &BTreeSet<String>,
+    revoked_member_dids: &BTreeSet<String>,
     endpoints: &'a [NetworkEndpointEntry],
 ) -> Vec<&'a NetworkEndpointEntry> {
     endpoints
         .iter()
         .filter(|entry| intent_dids.contains(&entry.agent_did))
+        .filter(|entry| !revoked_member_dids.contains(&entry.agent_did))
         .filter(|entry| !entry.peer_id.trim().is_empty())
         .filter(|entry| !entry.address.trim().is_empty())
         .collect()
@@ -57,6 +59,7 @@ pub struct ReciprocalTickOutcome {
 #[async_trait]
 pub trait ReciprocalStore: Send + Sync {
     async fn load_intent_dids(&self) -> Result<BTreeSet<String>>;
+    async fn load_revoked_member_dids(&self) -> Result<BTreeSet<String>>;
     async fn load_endpoint_for_did(&self, did: &str) -> Result<Option<NetworkEndpointEntry>>;
     async fn upsert_reciprocal_data_plane(
         &self,
@@ -83,8 +86,15 @@ pub async fn reconcile_reciprocal_tick(
         .load_intent_dids()
         .await
         .context("load reciprocal conversation intents")?;
+    let revoked_member_dids = store
+        .load_revoked_member_dids()
+        .await
+        .context("load verified revoked network memberships")?;
     let mut endpoints = Vec::new();
     for did in &intent_dids {
+        if revoked_member_dids.contains(did) {
+            continue;
+        }
         if let Some(endpoint) = store
             .load_endpoint_for_did(did)
             .await
@@ -98,7 +108,7 @@ pub async fn reconcile_reciprocal_tick(
         .list_non_reciprocal_data_plane_peers()
         .await
         .context("list non-reciprocal data-plane desired peers")?;
-    let desired = derive_reciprocal_desired(&intent_dids, &endpoints)
+    let desired = derive_reciprocal_desired(&intent_dids, &revoked_member_dids, &endpoints)
         .into_iter()
         .filter(|entry| !blocked.contains(&entry.peer_id))
         .map(|entry| (entry.peer_id.clone(), entry))
@@ -213,8 +223,12 @@ impl GraphqlReciprocalStore {
 
     pub async fn load_materializable_entries(&self) -> Result<Vec<NetworkEndpointEntry>> {
         let intent_dids = <Self as ReciprocalStore>::load_intent_dids(self).await?;
+        let revoked_member_dids = <Self as ReciprocalStore>::load_revoked_member_dids(self).await?;
         let mut endpoints = Vec::new();
         for did in intent_dids {
+            if revoked_member_dids.contains(&did) {
+                continue;
+            }
             if let Some(endpoint) =
                 <Self as ReciprocalStore>::load_endpoint_for_did(self, &did).await?
             {
@@ -264,6 +278,12 @@ impl ReciprocalStore for GraphqlReciprocalStore {
                 .filter(|did| !did.is_empty())
                 .collect(),
         )
+    }
+
+    async fn load_revoked_member_dids(&self) -> Result<BTreeSet<String>> {
+        super::network::GraphqlNetworkStore::new(self.node.clone(), self.identity.clone())
+            .load_revoked_member_dids()
+            .await
     }
 
     async fn load_endpoint_for_did(&self, did: &str) -> Result<Option<NetworkEndpointEntry>> {
@@ -586,7 +606,10 @@ struct DataPlaneSourceRow {
 mod tests {
     use std::sync::Mutex;
 
+    use defra_agent_protocol::network_token::{MembershipRecord, NetworkRecord};
+
     use super::*;
+    use crate::identity::KeyIdentity;
 
     fn endpoint(did: &str, peer_id: &str, address: &str) -> NetworkEndpointEntry {
         NetworkEndpointEntry {
@@ -601,7 +624,7 @@ mod tests {
         let intents = BTreeSet::from(["did:key:phone".to_string()]);
         let endpoints = vec![endpoint("did:key:phone", "peer-phone", "/ticket/phone")];
 
-        let desired = derive_reciprocal_desired(&intents, &endpoints);
+        let desired = derive_reciprocal_desired(&intents, &BTreeSet::new(), &endpoints);
 
         assert_eq!(desired.len(), 1);
         assert_eq!(desired[0].peer_id, "peer-phone");
@@ -614,7 +637,7 @@ mod tests {
         let intents = BTreeSet::from(["did:key:phone".to_string()]);
         let endpoints = vec![endpoint("did:key:other", "peer-other", "/ticket/other")];
 
-        let desired = derive_reciprocal_desired(&intents, &endpoints);
+        let desired = derive_reciprocal_desired(&intents, &BTreeSet::new(), &endpoints);
 
         assert!(desired.is_empty());
     }
@@ -629,7 +652,7 @@ mod tests {
             endpoint("did:key:phone", "peer-phone", "   "),
         ];
 
-        let desired = derive_reciprocal_desired(&intents, &endpoints);
+        let desired = derive_reciprocal_desired(&intents, &BTreeSet::new(), &endpoints);
 
         assert!(desired.is_empty());
     }
@@ -637,6 +660,7 @@ mod tests {
     #[derive(Default)]
     struct MockReciprocalStore {
         intents: BTreeSet<String>,
+        revoked_members: BTreeSet<String>,
         endpoints: BTreeMap<String, NetworkEndpointEntry>,
         existing: BTreeMap<String, ReciprocalRowState>,
         blocked: BTreeSet<String>,
@@ -657,6 +681,10 @@ mod tests {
     impl ReciprocalStore for MockReciprocalStore {
         async fn load_intent_dids(&self) -> Result<BTreeSet<String>> {
             Ok(self.intents.clone())
+        }
+
+        async fn load_revoked_member_dids(&self) -> Result<BTreeSet<String>> {
+            Ok(self.revoked_members.clone())
         }
 
         async fn load_endpoint_for_did(&self, did: &str) -> Result<Option<NetworkEndpointEntry>> {
@@ -898,5 +926,107 @@ mod tests {
         assert!(mutation.contains("AgentRequest"));
         assert!(mutation.contains("AgentResponse"));
         assert!(!mutation.contains("[]"));
+    }
+
+    #[tokio::test]
+    async fn graphql_tick_retracts_for_signed_revoked_membership() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(tempdir.path().join("data"))
+                .build()
+                .await?,
+        );
+        crate::ensure_runtime_schemas(&node).await?;
+        let identity = Arc::new(KeyIdentity::load_or_create(
+            tempdir.path().join("admin.key"),
+            None,
+        )?);
+        let now = "2026-07-14T00:00:00Z";
+        let member_did = "did:key:revoked-member";
+
+        let mut network = NetworkRecord {
+            network_id: "network-a".to_string(),
+            admin_did: identity.did().to_string(),
+            display_name: "Network A".to_string(),
+            default_template: "network-control".to_string(),
+            created_at: now.to_string(),
+            sig: Vec::new(),
+        };
+        network.sig = identity.sign(&network.signing_payload()).await?;
+        let mut membership = MembershipRecord {
+            network_id: network.network_id.clone(),
+            member_did: member_did.to_string(),
+            status: "revoked".to_string(),
+            granted_at: now.to_string(),
+            revoked_at: now.to_string(),
+            sig: Vec::new(),
+        };
+        membership.sig = identity.sign(&membership.signing_payload()).await?;
+        let network_sig = bs58::encode(&network.sig).into_string();
+        let membership_sig = bs58::encode(&membership.sig).into_string();
+
+        let seed = format!(
+            r#"mutation {{
+                create_AgentNetwork(input: {{
+                    network_id: "network-a",
+                    admin_did: "{admin_did}",
+                    display_name: "Network A",
+                    default_template: "network-control",
+                    created_at: "{now}",
+                    admin_sig: "{network_sig}"
+                }}) {{ _docID }}
+                create_NetworkMembership(input: {{
+                    membership_key: "network-a:{member_did}",
+                    network_id: "network-a",
+                    member_did: "{member_did}",
+                    status: "revoked",
+                    granted_at: "{now}",
+                    revoked_at: "{now}",
+                    admin_sig: "{membership_sig}"
+                }}) {{ _docID }}
+                create_ReciprocalConversationIntent(input: {{
+                    member_did: "{member_did}",
+                    template: "conversation",
+                    created_at: "{now}",
+                    updated_at: "{now}"
+                }}) {{ _docID }}
+                create_DataPlanePairingDesired(input: {{
+                    peer_id: "peer-revoked",
+                    agent_did: "{admin_did}",
+                    collections: ["AgentRequest"],
+                    replicator_addresses: ["/ticket/revoked"],
+                    template: "conversation",
+                    source: "reciprocal",
+                    created_at: "{now}",
+                    updated_at: "{now}"
+                }}) {{ _docID }}
+            }}"#,
+            admin_did = escape_graphql_string(identity.did()),
+            network_sig = escape_graphql_string(&network_sig),
+            membership_sig = escape_graphql_string(&membership_sig),
+        );
+        let response = node.execute(&seed).await;
+        ensure_no_errors(&response, "seed reciprocal revocation regression")?;
+
+        let store = GraphqlReciprocalStore::new(node.clone(), identity);
+        let outcome = reconcile_reciprocal_tick(&store, "did:key:server").await?;
+
+        assert_eq!(
+            outcome.retracted,
+            BTreeSet::from(["peer-revoked".to_string()])
+        );
+        let response = node
+            .execute(
+                r#"{
+                    DataPlanePairingDesired(filter: { peer_id: { _eq: "peer-revoked" } }) {
+                        peer_id
+                    }
+                }"#,
+            )
+            .await;
+        ensure_no_errors(&response, "query reciprocal row after revocation")?;
+        assert!(rows::<DataPlaneRow>(&response, "DataPlanePairingDesired")?.is_empty());
+        Ok(())
     }
 }

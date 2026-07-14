@@ -69,6 +69,34 @@ pub async fn save_compaction_entry(
     original_tokens: usize,
     compacted_tokens: usize,
 ) -> Result<CompactionEntry> {
+    save_compaction_entry_with_requester_did(
+        node,
+        session_id,
+        agent_did,
+        None,
+        summary,
+        files_read,
+        files_modified,
+        messages_compacted,
+        original_tokens,
+        compacted_tokens,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn save_compaction_entry_with_requester_did(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+    summary: &str,
+    files_read: &[String],
+    files_modified: &[String],
+    messages_compacted: u32,
+    original_tokens: usize,
+    compacted_tokens: usize,
+) -> Result<CompactionEntry> {
     let previous_entries = retry_operation("load_compaction_entries", || {
         load_compaction_entries(node, session_id)
     })
@@ -96,6 +124,7 @@ pub async fn save_compaction_entry(
     let escaped_summary = escape_graphql_string(&summary);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
+    let requester_did_field = super::requester_did_create_field(requester_did);
 
     // `agent_did` is the immutable scope key: written only in the `add` branch
     // (create), never rewritten on update.
@@ -108,6 +137,7 @@ pub async fn save_compaction_entry(
                     compaction_key: "{compaction_key}",
                     session_id: "{escaped_session_id}",
                     agent_did: "{escaped_agent_did}",
+                    {requester_did_field}
                     sequence: {sequence},
                     summary: "{escaped_summary}",
                     files_read: "{files_read_json}",

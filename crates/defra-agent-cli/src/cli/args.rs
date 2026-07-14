@@ -1720,6 +1720,20 @@ pub(crate) struct InferenceProfileUpsertArgs {
     pub(crate) max_turns: Option<i64>,
     #[arg(long)]
     pub(crate) temperature: Option<f64>,
+    /// Sampling knobs beyond temperature (#649). Unset leaves the served
+    /// model's `generation_config.json` default in force.
+    #[arg(long)]
+    pub(crate) top_p: Option<f64>,
+    #[arg(long)]
+    pub(crate) top_k: Option<i64>,
+    #[arg(long)]
+    pub(crate) min_p: Option<f64>,
+    #[arg(long)]
+    pub(crate) frequency_penalty: Option<f64>,
+    #[arg(long)]
+    pub(crate) presence_penalty: Option<f64>,
+    #[arg(long)]
+    pub(crate) repetition_penalty: Option<f64>,
     #[arg(long)]
     pub(crate) stream_batch_ms: Option<i64>,
     #[arg(long)]

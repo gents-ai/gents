@@ -27,6 +27,7 @@ structure SurfaceView where
   fileRank : Nat
   meta : Bool
   defraQuery : Bool
+  selfConfig : Bool
   memory : Bool
   sessionHistory : Bool
   contextBudget : Bool
@@ -52,6 +53,8 @@ structure SurfaceView where
   mcpPermits : Bool
   defraCollectionsScopeKind : String
   defraCollectionsKeys : List String
+  selfConfigCategoriesScopeKind : String
+  selfConfigCategoriesKeys : List String
   subagentTargetsScopeKind : String
   subagentTargetsKeys : List String
   backgroundToolsScopeKind : String
@@ -95,6 +98,11 @@ def knownReadOnlyCmds : List String :=
 def knownWriteKeys : List (String × String) :=
   [("wt", "coll"), ("wt", "coll1"), ("wt", "coll2")]
 
+-- Kept sorted to match the production `BTreeSet<String>` iteration order on
+-- the Rust side (the round-trip compares the lists verbatim).
+def knownSelfConfigCategories : List String :=
+  ["automation", "backend", "behavior", "mcp_service", "profile", "tools"]
+
 -- Kept sorted so the filtered projection matches the production `BTreeMap`
 -- key order on the Rust side (the round-trip compares the lists verbatim).
 def knownSubagentTargets : List (String × String) :=
@@ -108,6 +116,12 @@ def fieldList (fields : Finset String) : List String :=
 
 def toolScopeKeys {V : Type} : EndpointScope ToolId V → List String
   | .only keys _ => knownToolIds.filter (fun key => decide (key ∈ keys))
+  | .all => []
+  | .none => []
+
+def selfConfigScopeKeys {V : Type} : EndpointScope ToolId V → List String
+  | .only keys _ =>
+      knownSelfConfigCategories.filter (fun key => decide (key ∈ keys))
   | .all => []
   | .none => []
 
@@ -206,6 +220,7 @@ def surface (file : FileCap) (bash : BashPolicy)
   , bash := bash
   , meta := meta
   , defraQuery := defraQuery
+  , selfConfig := defraQuery
   , memory := meta
   , sessionHistory := meta
   , contextBudget := meta
@@ -218,6 +233,7 @@ def surface (file : FileCap) (bash : BashPolicy)
   , cliTools := .all
   , mcpServices := mcp
   , defraCollections := .all
+  , selfConfigCategories := .all
   , subagentTargets := .all
   , backgroundTools := .all
   , writeTools := write }
@@ -226,6 +242,7 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : Sur
   { fileRank := s.file.rank
   , meta := s.meta
   , defraQuery := s.defraQuery
+  , selfConfig := s.selfConfig
   , memory := s.memory
   , sessionHistory := s.sessionHistory
   , contextBudget := s.contextBudget
@@ -251,6 +268,8 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : Sur
   , mcpPermits := decide (s.mcpServices.permits mcpProbe)
   , defraCollectionsScopeKind := scopeKind s.defraCollections
   , defraCollectionsKeys := toolScopeKeys s.defraCollections
+  , selfConfigCategoriesScopeKind := scopeKind s.selfConfigCategories
+  , selfConfigCategoriesKeys := selfConfigScopeKeys s.selfConfigCategories
   , subagentTargetsScopeKind := scopeKind s.subagentTargets
   , subagentTargetsKeys := subagentScopeKeys s.subagentTargets
   , backgroundToolsScopeKind := scopeKind s.backgroundTools
@@ -353,6 +372,7 @@ def behaviorEachCategory : Surface :=
   { wideOpen with
     cliTools := cliOnly [("svc-a", ["field_a", "field_b"]), ("svc-x", ["field_a"])]
   , defraCollections := toolsOnly ["svc-a", "svc-x"]
+  , selfConfigCategories := toolsOnly ["behavior", "profile", "tools"]
   , subagentTargets := subagentOnly [("did-a", "beh-a"), ("did-b", "beh-b")]
   , backgroundTools := toolsOnly ["svc-a", "svc-x"] }
 
@@ -366,8 +386,10 @@ def ceilingClampsEachCategory : Surface :=
   , orchestration := false
   , crossDeployment := false
   , skills := false
+  , selfConfig := false
   , cliTools := cliOnly [("svc-a", ["field_a"])]
   , defraCollections := toolOnly "svc-a"
+  , selfConfigCategories := toolsOnly ["tools"]
   , subagentTargets := subagentOnly [("did-a", "beh-a")]
   , backgroundTools := toolOnly "svc-a" }
 
@@ -379,6 +401,7 @@ def ceilingScopesOnly : Surface :=
   { wideOpen with
     cliTools := cliOnly [("svc-a", ["field_a"])]
   , defraCollections := toolOnly "svc-a"
+  , selfConfigCategories := toolsOnly ["behavior"]
   , subagentTargets := subagentOnly [("did-a", "beh-a")]
   , backgroundTools := toolOnly "svc-a" }
 

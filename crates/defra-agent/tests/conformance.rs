@@ -53,9 +53,10 @@ use lean_vocab_test::{
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_equivalence_cases,
     lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_interrupt_flow_cases,
     lean_response_transition_cases, lean_runtime_reconcile_case, lean_runtime_reconcile_cases,
-    lean_session_recovery_case, lean_state_machine_contract, lean_subagent_delegation_graph_cases,
-    lean_transcript_case, lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
-    LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
+    lean_session_recovery_case, lean_startup_readiness_cases, lean_state_machine_contract,
+    lean_subagent_delegation_graph_cases, lean_transcript_case, lean_transcript_cases,
+    lean_vocabulary_values, LeanEventDeliveryAction, LeanLifecycleTransitionCase,
+    LeanR4cBackgroundWorkCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -123,6 +124,8 @@ mod replicated_request_convergence;
 mod request_lifecycle;
 #[path = "conformance/session_recovery.rs"]
 mod session_recovery;
+#[path = "conformance/startup_readiness.rs"]
+mod startup_readiness;
 #[path = "conformance/streaming_compaction.rs"]
 mod streaming_compaction;
 #[path = "conformance/tool_call.rs"]
@@ -240,6 +243,11 @@ fn generated_codex_shim_binding_cases_pin_runnable_gated_binding() {
     codex_shim::generated_codex_shim_binding_cases_pin_runnable_gated_binding();
 }
 
+#[test]
+fn generated_startup_readiness_cases_pin_bounded_barrier_release() {
+    startup_readiness::generated_startup_readiness_cases_pin_bounded_barrier_release();
+}
+
 #[tokio::test]
 async fn generated_transcript_cases_drive_agent_message_ordering_contract() {
     transcript::generated_transcript_cases_drive_agent_message_ordering_contract().await;
@@ -280,6 +288,16 @@ fn generated_tool_execution_cases_cover_preflight_and_retry_contracts() {
 #[test]
 fn generated_tool_policy_cases_match_lean_composition() {
     tool_policy::generated_tool_policy_cases_match_lean_composition();
+}
+
+#[test]
+fn self_config_field_tables_match_lean_contract() {
+    self_config::self_config_field_tables_match_lean_contract();
+}
+
+#[test]
+fn generated_self_config_cases_fence_patch_merge() {
+    self_config::generated_self_config_cases_fence_patch_merge();
 }
 
 #[test]
@@ -388,6 +406,8 @@ mod r5_scenarios;
 mod scheduling;
 #[path = "conformance/scope_templates.rs"]
 mod scope_templates;
+#[path = "conformance/self_config.rs"]
+mod self_config;
 #[path = "conformance/structure.rs"]
 mod structure;
 #[path = "conformance/subagent_source.rs"]

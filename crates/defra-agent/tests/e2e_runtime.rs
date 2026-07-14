@@ -31,6 +31,8 @@ mod provider_fixture_replay;
 mod runtime_observability;
 #[path = "e2e_runtime/schedule_snapshot_reconcile.rs"]
 mod schedule_snapshot_reconcile;
+#[path = "e2e_runtime/self_config_tools.rs"]
+mod self_config_tools;
 #[path = "e2e_runtime/tool_call_migration.rs"]
 mod tool_call_migration;
 

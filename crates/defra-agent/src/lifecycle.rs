@@ -243,6 +243,9 @@ pub struct RecoveryReport {
     pub requests_recovered: usize,
     pub responses_recovered: usize,
     pub conversations_recovered: usize,
+    /// Conversations whose recovery attempt failed. Failures are the opposite
+    /// of a recovery and must never fold into the recovered count (#693).
+    pub conversations_failed: usize,
 }
 
 /// Outcome of one durable request-terminal repair pass. A terminal response

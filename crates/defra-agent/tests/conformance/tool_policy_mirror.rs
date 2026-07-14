@@ -187,6 +187,7 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
         },
         meta: view.meta,
         defra_query: view.defra_query,
+        self_config: view.self_config,
         memory: view.memory,
         session_history: view.session_history,
         context_budget: view.context_budget,
@@ -201,6 +202,10 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
         defra_collections: unit_scope_from_strings(
             &view.defra_collections_scope_kind,
             &view.defra_collections_keys,
+        ),
+        self_config_categories: unit_scope_from_strings(
+            &view.self_config_categories_scope_kind,
+            &view.self_config_categories_keys,
         ),
         subagent_targets: pair_scope_from_keys(
             &view.subagent_targets_scope_kind,
@@ -231,6 +236,7 @@ fn view_from_surface(
         file_rank: file_rank(surface.file),
         meta: surface.meta,
         defra_query: surface.defra_query,
+        self_config: surface.self_config,
         memory: surface.memory,
         session_history: surface.session_history,
         context_budget: surface.context_budget,
@@ -261,6 +267,8 @@ fn view_from_surface(
         mcp_services: surface.mcp_services.keys(),
         defra_collections_scope_kind: surface.defra_collections.kind().to_string(),
         defra_collections_keys: surface.defra_collections.keys(),
+        self_config_categories_scope_kind: surface.self_config_categories.kind().to_string(),
+        self_config_categories_keys: surface.self_config_categories.keys(),
         subagent_targets_scope_kind: surface.subagent_targets.kind().to_string(),
         subagent_targets_keys: encode_pair_keys(&surface.subagent_targets),
         background_tools_scope_kind: surface.background_tools.kind().to_string(),

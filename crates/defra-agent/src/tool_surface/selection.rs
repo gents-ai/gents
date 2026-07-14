@@ -123,6 +123,15 @@ pub struct ToolSelection {
     pub defra_query_collections: Vec<String>,
     /// Declarative write-tool bindings from the ToolSelection document.
     pub write_tools: Vec<crate::document_config::WriteToolDecl>,
+    /// Enable the agent self-configuration tools (#654).
+    pub enable_self_config: bool,
+    /// Self-config category allowlist. `None` = the core spine
+    /// (behavior, tools, profile); extensions are opt-in per category.
+    pub self_config_categories: Option<Vec<String>>,
+    /// Opt-in no-lockout guardrail for self-config patches.
+    pub self_config_no_lockout: bool,
+    /// Opt-in dry-run preview support on `get_my_config`.
+    pub self_config_dry_run: bool,
 }
 
 impl Default for ToolSelection {
@@ -145,6 +154,12 @@ impl Default for ToolSelection {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            // Self-config is opt-in like defra_query: an unset gate stays off
+            // for every policy version, with no legacy backfill.
+            enable_self_config: false,
+            self_config_categories: None,
+            self_config_no_lockout: false,
+            self_config_dry_run: false,
         }
     }
 }
@@ -200,6 +215,13 @@ impl ToolSelection {
                 .clone()
                 .unwrap_or_default(),
             write_tools: selection.write_tools.clone().unwrap_or_default(),
+            // Opt-in for every policy version, mirroring enable_defra_query:
+            // legacy docs are NOT grandfathered and the wide-open preset does
+            // NOT materialize it.
+            enable_self_config: selection.enable_self_config.unwrap_or(false),
+            self_config_categories: selection.self_config_categories.clone(),
+            self_config_no_lockout: selection.self_config_no_lockout.unwrap_or(false),
+            self_config_dry_run: selection.self_config_dry_run.unwrap_or(false),
         })
     }
 }

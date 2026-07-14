@@ -10,7 +10,7 @@ pub(super) async fn query_documents_by_unique_value(
     unique_value: &str,
     show_deleted: bool,
 ) -> Result<Vec<ExistingDocumentRef>> {
-    use defra_agent::graphql::escape_graphql_string;
+    use crate::graphql::escape_graphql_string;
 
     let show_deleted_arg = if show_deleted {
         "showDeleted: true, "

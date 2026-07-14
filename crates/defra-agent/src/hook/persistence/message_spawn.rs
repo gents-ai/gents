@@ -12,7 +12,14 @@ impl DefraSessionHook {
         // assistant messages carry reasoning; users/tool-results yield `None`.
         let reasoning = defra_agent_protocol::transcript::extract_message_reasoning(message);
         let reasoning = reasoning.as_deref();
-        let (session_id, turn_state, message_key, existing_sequence, current_request_id) = {
+        let (
+            session_id,
+            turn_state,
+            message_key,
+            existing_sequence,
+            current_request_id,
+            current_requester_did,
+        ) = {
             let state = self.state.lock().await;
             let session_id = state
                 .session_id
@@ -29,6 +36,7 @@ impl DefraSessionHook {
                 message_key,
                 existing_sequence,
                 state.current_request_id.clone(),
+                state.current_requester_did.clone(),
             )
         };
 
@@ -65,10 +73,11 @@ impl DefraSessionHook {
                     anyhow::bail!("system messages are not persisted in session history");
                 }
             };
-            let sequence = session::append_message(
+            let sequence = session::append_message_with_requester_did(
                 &self.node,
                 &session_id,
                 &self.agent_did,
+                current_requester_did.as_deref(),
                 role,
                 &content,
                 reasoning,
@@ -138,10 +147,11 @@ impl DefraSessionHook {
 
         match message_key {
             Some(message_key) => {
-                session::save_message_with_key(
+                session::save_message_with_key_and_requester_did(
                     &self.node,
                     &session_id,
                     &self.agent_did,
+                    current_requester_did.as_deref(),
                     sequence,
                     role,
                     &content,
@@ -151,10 +161,11 @@ impl DefraSessionHook {
                 .await?;
             }
             None => {
-                session::save_message(
+                session::save_message_with_requester_did(
                     &self.node,
                     &session_id,
                     &self.agent_did,
+                    current_requester_did.as_deref(),
                     sequence,
                     role,
                     &content,
@@ -690,7 +701,8 @@ impl DefraSessionHook {
             CancelPolicy::Cascade,
             child_request_id.clone(),
             target_agent_did,
-        );
+        )
+        .with_requester_did(self.active_requester_did().await);
         if await_mode == AwaitMode::Background {
             let timeout_secs =
                 effective_context_cross_deployment_spawn_timeout_seconds(&parent_context);

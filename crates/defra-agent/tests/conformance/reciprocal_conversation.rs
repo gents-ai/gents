@@ -36,7 +36,7 @@ fn reciprocal_derivation_matches_intent_endpoint_join() {
         endpoint("did:key:phone", "peer-blank-address", ""),
     ];
 
-    let derived = derive_reciprocal_desired(&intents, &endpoints);
+    let derived = derive_reciprocal_desired(&intents, &BTreeSet::new(), &endpoints);
 
     assert_eq!(derived.len(), 1);
     assert_eq!(derived[0].peer_id, "peer-phone");
@@ -51,11 +51,11 @@ fn reciprocal_derivation_is_idempotent_and_convergent() {
     let intents = BTreeSet::from(["did:key:phone".to_string()]);
     let endpoints = vec![endpoint("did:key:phone", "peer-phone", "/ticket/phone")];
 
-    let first = derive_reciprocal_desired(&intents, &endpoints)
+    let first = derive_reciprocal_desired(&intents, &BTreeSet::new(), &endpoints)
         .into_iter()
         .map(|entry| entry.peer_id.clone())
         .collect::<BTreeSet<_>>();
-    let second = derive_reciprocal_desired(&intents, &endpoints)
+    let second = derive_reciprocal_desired(&intents, &BTreeSet::new(), &endpoints)
         .into_iter()
         .map(|entry| entry.peer_id.clone())
         .collect::<BTreeSet<_>>();
@@ -66,6 +66,7 @@ fn reciprocal_derivation_is_idempotent_and_convergent() {
 
 struct ReciprocalPartitionStore {
     intents: BTreeSet<String>,
+    revoked_members: BTreeSet<String>,
     endpoints: BTreeMap<String, NetworkEndpointEntry>,
     reciprocal_owned: Mutex<BTreeMap<String, ReciprocalRowState>>,
     operator_owned: BTreeSet<String>,
@@ -82,6 +83,7 @@ impl ReciprocalPartitionStore {
     ) -> Self {
         Self {
             intents: intents.iter().map(|value| value.to_string()).collect(),
+            revoked_members: BTreeSet::new(),
             endpoints: endpoints
                 .into_iter()
                 .map(|entry| (entry.agent_did.clone(), entry))
@@ -113,6 +115,10 @@ impl ReciprocalPartitionStore {
 impl ReciprocalStore for ReciprocalPartitionStore {
     async fn load_intent_dids(&self) -> Result<BTreeSet<String>> {
         Ok(self.intents.clone())
+    }
+
+    async fn load_revoked_member_dids(&self) -> Result<BTreeSet<String>> {
+        Ok(self.revoked_members.clone())
     }
 
     async fn load_endpoint_for_did(&self, did: &str) -> Result<Option<NetworkEndpointEntry>> {
@@ -267,4 +273,32 @@ async fn reciprocal_retraction_removes_only_derived_rows() {
         .lock()
         .unwrap()
         .contains(&"peer-operator".to_string()));
+}
+
+/// Mirrors Lean `deriveReciprocal_retraction_sound_revocation`: a verified
+/// revocation retracts only rows derived for that member DID.
+#[tokio::test]
+async fn reciprocal_revocation_retracts_only_the_revoked_member() {
+    let mut store = ReciprocalPartitionStore::new(
+        &["did:key:phone-a", "did:key:phone-b"],
+        vec![
+            endpoint("did:key:phone-a", "peer-a", "/ticket/a"),
+            endpoint("did:key:phone-b", "peer-b", "/ticket/b"),
+        ],
+        &[("peer-a", "/ticket/a"), ("peer-b", "/ticket/b")],
+        &[],
+    );
+    store.revoked_members.insert("did:key:phone-a".to_string());
+
+    let outcome = reconcile_reciprocal_tick(&store, "did:key:server")
+        .await
+        .expect("tick");
+
+    assert_eq!(outcome.retracted, BTreeSet::from(["peer-a".to_string()]));
+    assert_eq!(*store.deletes.lock().unwrap(), vec!["peer-a".to_string()]);
+    assert!(store
+        .reciprocal_owned
+        .lock()
+        .unwrap()
+        .contains_key("peer-b"));
 }

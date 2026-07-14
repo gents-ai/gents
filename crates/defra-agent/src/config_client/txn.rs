@@ -1,9 +1,11 @@
-//! Open-write transaction wrapper around `ConfigAccess`.
+//! Open-write transaction wrapper around [`ConfigAccess`].
 //!
 //! `ConfigApplyTxn` is the only access type passed through the apply pipeline
 //! once `config apply` has begun a transaction. The top-level orchestrator
 //! drives `begin_apply_txn` → `apply_desired_state_changes` → `commit` (on
-//! success) or `discard` (on error).
+//! success) or `discard` (on error). The runtime self-config tools drive the
+//! same shape per patch via [`ConfigApplyTxn::begin_local`], with the agent
+//! DID attached so DefraDB ACP checks every statement.
 //!
 //! Discard semantics differ between backends:
 //! - **Embedded.** `runner.rollback_txn` returns `TransactionError` only in
@@ -15,87 +17,112 @@
 //!   committed effect: a transaction that never sees a `commit` yields no
 //!   externally-visible mutations. The orphaned handle is bounded by
 //!   DefraDB's per-request HTTP timeout (30s default), not an active idle-GC
-//!   sweep — see `docs/superpowers/audits/2026-05-20-defradb-tx-idle-timeout-audit.md` (removed from the tree; see git history).
+//!   sweep.
 //!
 //! Both return `Result<()>` so callers can log discrepancies, but neither
 //! changes operator-facing behavior on failure: the apply error is what
 //! surfaces, and the DB ends at the pre-apply snapshot via atomicity.
 
 use anyhow::{Context, Result};
-use defra_agent::defra_node::QueryRequest;
 use defra_agent_protocol::graphql::{execute_graphql_async_with_tx, GraphqlRequestOptions};
+use defra_node::{EmbeddedNode, QueryRequest};
+use identity::Did;
 use query::TransactionHandle;
 use serde_json::{json, Value};
 
-use crate::config_writes::ConfigAccess;
-use crate::graphql_access::{graphql_api_base, graphql_diagnostic_hint};
+use super::{graphql_api_base, graphql_diagnostic_hint, ConfigAccess};
 
-#[derive(Debug)]
-pub(crate) enum TxnHandle {
-    /// Numeric txn id parsed from `POST /api/v0/tx`.
-    Graphql(String),
+enum TxnBackend<'a> {
+    /// Numeric txn id parsed from `POST /api/v0/tx`. Identity cannot ride
+    /// this path (`QueryRequest.identity` is `#[serde(skip)]`); HTTP writes
+    /// execute under the node's ambient identity policy.
+    Graphql {
+        endpoint: &'a str,
+        id: String,
+        http_client: reqwest::Client,
+    },
     /// Embedded transaction handle returned by `runner.begin_txn(false)`.
-    Local(TransactionHandle),
+    /// When `identity` is set, every statement carries it as the DefraDB
+    /// document-ACP actor.
+    Local {
+        node: &'a EmbeddedNode,
+        handle: TransactionHandle,
+        identity: Option<Did>,
+    },
 }
 
-pub(crate) struct ConfigApplyTxn<'a> {
-    access: &'a ConfigAccess,
-    handle: TxnHandle,
-    http_client: reqwest::Client,
+pub struct ConfigApplyTxn<'a> {
+    backend: TxnBackend<'a>,
 }
 
 impl<'a> ConfigApplyTxn<'a> {
-    pub(crate) fn new(
-        access: &'a ConfigAccess,
-        handle: TxnHandle,
-        http_client: reqwest::Client,
-    ) -> Self {
-        Self {
-            access,
-            handle,
-            http_client,
-        }
+    /// Begin an embedded-node transaction, optionally executing under a
+    /// specific DID identity so document ACP applies to every statement.
+    ///
+    /// This is the runtime self-config entry point; the CLI apply path goes
+    /// through [`ConfigAccess::begin_apply_txn`] (identity-less).
+    pub async fn begin_local(node: &'a EmbeddedNode, identity: Option<Did>) -> Result<Self> {
+        let handle = node
+            .runner()
+            .begin_txn(false)
+            .await
+            .map_err(|error| anyhow::anyhow!("begin_txn: {error}"))?;
+        Ok(Self {
+            backend: TxnBackend::Local {
+                node,
+                handle,
+                identity,
+            },
+        })
     }
 
     /// Execute a GraphQL query within this transaction.
-    pub(crate) async fn execute(&self, query: &str) -> Result<Value> {
-        match (&self.access, &self.handle) {
-            (ConfigAccess::Graphql(endpoint), TxnHandle::Graphql(id)) => {
-                execute_graphql_async_with_tx(
-                    endpoint,
-                    query,
-                    GraphqlRequestOptions {
-                        timeout: std::time::Duration::from_secs(30),
-                        max_attempts: 5,
-                        retry_backoff: std::time::Duration::from_millis(100),
-                    },
-                    Some(id),
-                )
-                .await
-                .map_err(|error| anyhow::anyhow!("{error}\n{}", graphql_diagnostic_hint(endpoint)))
-            }
-            (ConfigAccess::Local(node), TxnHandle::Local(handle)) => {
-                let request = QueryRequest::new(query);
+    pub async fn execute(&self, query: &str) -> Result<Value> {
+        match &self.backend {
+            TxnBackend::Graphql {
+                endpoint,
+                id,
+                http_client: _,
+            } => execute_graphql_async_with_tx(
+                endpoint,
+                query,
+                GraphqlRequestOptions {
+                    timeout: std::time::Duration::from_secs(30),
+                    max_attempts: 5,
+                    retry_backoff: std::time::Duration::from_millis(100),
+                },
+                Some(id),
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error}\n{}", graphql_diagnostic_hint(endpoint))),
+            TxnBackend::Local {
+                node,
+                handle,
+                identity,
+            } => {
+                let request = QueryRequest::new(query).with_identity(identity.clone());
                 let response = node.runner().execute_in_txn(request, handle).await;
                 if response.has_errors() {
                     anyhow::bail!("graphql returned errors: {:?}", response.errors);
                 }
                 Ok(json!({ "data": response.data.unwrap_or(Value::Null) }))
             }
-            _ => anyhow::bail!("ConfigApplyTxn backend/handle mismatch (internal bug)"),
         }
     }
 
     /// Commit the transaction. Apply is durable after this returns Ok.
-    pub(crate) async fn commit(self) -> Result<()> {
-        match (self.access, self.handle) {
-            (ConfigAccess::Graphql(endpoint), TxnHandle::Graphql(id)) => {
+    pub async fn commit(self) -> Result<()> {
+        match self.backend {
+            TxnBackend::Graphql {
+                endpoint,
+                id,
+                http_client,
+            } => {
                 let api_base = graphql_api_base(endpoint)?;
                 let status;
                 let bytes;
                 {
-                    let response = self
-                        .http_client
+                    let response = http_client
                         .post(format!("{api_base}/tx/{id}"))
                         .send()
                         .await
@@ -114,27 +141,29 @@ impl<'a> ConfigApplyTxn<'a> {
                 }
                 Ok(())
             }
-            (ConfigAccess::Local(node), TxnHandle::Local(handle)) => node
+            TxnBackend::Local { node, handle, .. } => node
                 .runner()
                 .commit_txn(&handle)
                 .await
                 .map_err(|error| anyhow::anyhow!("commit_txn: {error}")),
-            _ => anyhow::bail!("ConfigApplyTxn backend/handle mismatch on commit (internal bug)"),
         }
     }
 
     /// Discard the transaction. Returns the underlying error if the explicit
     /// round-trip fails; callers are expected to log and swallow that error so
     /// the original apply error remains what surfaces to the operator.
-    pub(crate) async fn discard(self) -> Result<()> {
-        match (self.access, self.handle) {
-            (ConfigAccess::Graphql(endpoint), TxnHandle::Graphql(id)) => {
+    pub async fn discard(self) -> Result<()> {
+        match self.backend {
+            TxnBackend::Graphql {
+                endpoint,
+                id,
+                http_client,
+            } => {
                 let api_base = graphql_api_base(endpoint)?;
                 let status;
                 let bytes;
                 {
-                    let response = self
-                        .http_client
+                    let response = http_client
                         .delete(format!("{api_base}/tx/{id}"))
                         .send()
                         .await
@@ -153,19 +182,18 @@ impl<'a> ConfigApplyTxn<'a> {
                 }
                 Ok(())
             }
-            (ConfigAccess::Local(node), TxnHandle::Local(handle)) => node
+            TxnBackend::Local { node, handle, .. } => node
                 .runner()
                 .rollback_txn(&handle)
                 .await
                 .map_err(|error| anyhow::anyhow!("rollback_txn: {error}")),
-            _ => anyhow::bail!("ConfigApplyTxn backend/handle mismatch on discard (internal bug)"),
         }
     }
 }
 
 impl ConfigAccess {
     /// Begin a write transaction on the underlying backend.
-    pub(crate) async fn begin_apply_txn(&self) -> Result<ConfigApplyTxn<'_>> {
+    pub async fn begin_apply_txn(&self) -> Result<ConfigApplyTxn<'_>> {
         match self {
             ConfigAccess::Graphql(endpoint) => {
                 let api_base = graphql_api_base(endpoint)?;
@@ -200,7 +228,13 @@ impl ConfigAccess {
                             .or_else(|| v.as_u64().map(|n| n.to_string()))
                     })
                     .ok_or_else(|| anyhow::anyhow!("tx begin missing id: {body}"))?;
-                Ok(ConfigApplyTxn::new(self, TxnHandle::Graphql(id), client))
+                Ok(ConfigApplyTxn {
+                    backend: TxnBackend::Graphql {
+                        endpoint,
+                        id,
+                        http_client: client,
+                    },
+                })
             }
             ConfigAccess::Local(node) => {
                 let handle = node
@@ -208,11 +242,13 @@ impl ConfigAccess {
                     .begin_txn(false)
                     .await
                     .map_err(|error| anyhow::anyhow!("begin_txn: {error}"))?;
-                Ok(ConfigApplyTxn::new(
-                    self,
-                    TxnHandle::Local(handle),
-                    reqwest::Client::new(),
-                ))
+                Ok(ConfigApplyTxn {
+                    backend: TxnBackend::Local {
+                        node,
+                        handle,
+                        identity: None,
+                    },
+                })
             }
         }
     }

@@ -326,31 +326,31 @@ impl CompletionRetryState {
                 let is_fresh = self.last_parse_error.as_deref() != Some(error_text);
                 let resample_budget_spent = self.resample_used >= self.policy.max_resample;
 
-                if is_fresh && !resample_budget_spent {
-                    // Fresh error with resample room: attempt a resample,
-                    // sharing the transport ladder indexed by the resample
-                    // counter. A deadline overshoot here fails immediately —
-                    // it does NOT fall through to repair (mirrors Lean
-                    // `parseExhaust`, whose guard is independent of
-                    // `repair`'s deterministic-or-budget-spent condition).
-                    match ladder_delay(&self.policy.transport_backoff, self.resample_used) {
-                        Some(base_delay) => {
-                            let delay = jitter(base_delay, &mut rand::rng());
-                            if exceeds_deadline(now, delay, deadline) {
-                                return PreStreamDirective::Fail {
-                                    reason: deadline_reason(delay, deadline),
-                                };
-                            }
-                            self.resample_used += 1;
-                            self.last_parse_error = Some(error_text.to_string());
-                            PreStreamDirective::RetryAfter {
-                                delay,
-                                kind: RetryKind::Resample,
-                            }
-                        }
-                        None => PreStreamDirective::Fail {
-                            reason: "resample retry budget exhausted".to_string(),
-                        },
+                // The resample delay saturates at the ladder's last step, so a
+                // budget larger than the ladder is honored in full (#653). A
+                // ladder with no steps at all has no pacing to offer: that is
+                // the only case with no resample delay, and it falls through to
+                // repair rather than pretending the budget was spent.
+                let resample_pacing =
+                    resample_delay(&self.policy.transport_backoff, self.resample_used);
+
+                if is_fresh && !resample_budget_spent && resample_pacing.is_some() {
+                    // Fresh error with resample room. A deadline overshoot here
+                    // fails immediately — it does NOT fall through to repair
+                    // (mirrors Lean `parseExhaust`, whose guard is independent
+                    // of `repair`'s deterministic-or-budget-spent condition).
+                    let base_delay = resample_pacing.expect("checked above");
+                    let delay = jitter(base_delay, &mut rand::rng());
+                    if exceeds_deadline(now, delay, deadline) {
+                        return PreStreamDirective::Fail {
+                            reason: deadline_reason(delay, deadline),
+                        };
+                    }
+                    self.resample_used += 1;
+                    self.last_parse_error = Some(error_text.to_string());
+                    PreStreamDirective::RetryAfter {
+                        delay,
+                        kind: RetryKind::Resample,
                     }
                 } else if self.policy.allow_repair && !self.repair_used {
                     self.last_parse_error = Some(error_text.to_string());
@@ -399,6 +399,23 @@ impl CompletionRetryState {
 
 fn ladder_delay(backoff: &[Duration], used: u32) -> Option<Duration> {
     backoff.get(used as usize).copied()
+}
+
+/// Delay for the next resample, drawn from the transport ladder but SATURATING
+/// at its last step (#653).
+///
+/// The resample budget is independent of the ladder — the Lean model's only
+/// guard is `resampleUsed < budget.resampleRetries`, and `transportRetries` is
+/// what the ladder length means. Indexing the ladder by `resampleUsed` and
+/// treating "ran off the end" as "budget spent" silently capped the resample
+/// budget at the ladder length and, worse, hard-failed instead of falling
+/// through to repair. The ladder is a *pacing* source here, not a budget: once
+/// its steps are used up, keep pacing at the slowest one.
+fn resample_delay(backoff: &[Duration], used: u32) -> Option<Duration> {
+    backoff
+        .get(used as usize)
+        .or_else(|| backoff.last())
+        .copied()
 }
 
 fn exceeds_deadline(now: DateTime<Utc>, delay: Duration, deadline: Option<DateTime<Utc>>) -> bool {

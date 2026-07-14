@@ -14,6 +14,7 @@ fn request() -> AgentRequest {
         doc_id: String::new(),
         request_id: "request-123".to_string(),
         agent_did: String::new(),
+        requester_did: None,
         behavior_id: None,
         session_id: "session-456".to_string(),
         content: String::new(),
@@ -52,6 +53,7 @@ fn thinking_default_merges_under_provider_and_sampling_params() {
         top_p: Some(0.95),
         top_k: Some(40),
         max_tokens: Some(1024),
+        ..Default::default()
     };
 
     let value = merge_optional_params(
@@ -156,6 +158,7 @@ fn sampling_additional_params_merge_with_provider_params() {
         top_p: Some(0.95),
         top_k: Some(40),
         max_tokens: Some(1024),
+        ..Default::default()
     };
 
     let value = merge_optional_params(
@@ -178,6 +181,7 @@ fn sampling_additional_params_omit_dedicated_completion_fields() {
         top_p: None,
         top_k: None,
         max_tokens: Some(1024),
+        ..Default::default()
     };
 
     assert!(sampling.additional_params().is_none());
@@ -190,11 +194,13 @@ fn request_sampling_overrides_behavior_defaults() {
         top_p: Some(0.9),
         top_k: Some(20),
         max_tokens: Some(2048),
+        ..Default::default()
     };
     let request = AgentRequest {
         doc_id: String::new(),
         request_id: String::new(),
         agent_did: String::new(),
+        requester_did: None,
         behavior_id: None,
         session_id: String::new(),
         content: String::new(),
@@ -325,4 +331,54 @@ fn behavior_with_retry(completion_retry: CompletionRetryProfileFields) -> AgentB
         sampling: SamplingConfig::default(),
         skills: Vec::new(),
     }
+}
+
+/// #649: every sampling knob a profile can pin must reach the provider body.
+///
+/// rig's `CompletionRequest` models only `temperature`/`max_tokens`, so the
+/// rest ride `additional_params` — if a knob is missing here it is silently at
+/// the mercy of the served checkpoint's `generation_config.json`, which is
+/// exactly the gap #649 reports.
+#[test]
+fn every_profile_sampling_knob_reaches_the_provider_body() {
+    let sampling = SamplingConfig {
+        temperature: Some(0.7),
+        top_p: Some(0.95),
+        top_k: Some(40),
+        min_p: Some(0.05),
+        frequency_penalty: Some(0.5),
+        presence_penalty: Some(-0.25),
+        repetition_penalty: Some(1.1),
+        max_tokens: Some(1024),
+    };
+
+    let value = sampling
+        .additional_params()
+        .expect("pinned sampling knobs must produce provider params");
+
+    assert_eq!(value["top_p"], 0.95);
+    assert_eq!(value["top_k"], 40);
+    assert_eq!(value["min_p"], 0.05);
+    assert_eq!(value["frequency_penalty"], 0.5);
+    assert_eq!(value["presence_penalty"], -0.25);
+    assert_eq!(value["repetition_penalty"], 1.1);
+    // temperature and max_tokens are modeled rig fields, not body extras —
+    // emitting them here too would double-send them.
+    assert!(value.get("temperature").is_none());
+    assert!(value.get("max_tokens").is_none());
+}
+
+/// An unpinned knob must emit NOTHING: the served model's own default has to
+/// stand. Emitting a null/zero would silently override the checkpoint.
+#[test]
+fn unpinned_sampling_knobs_emit_no_provider_params() {
+    let sampling = SamplingConfig {
+        temperature: Some(0.0),
+        max_tokens: Some(256),
+        ..Default::default()
+    };
+    assert!(
+        sampling.additional_params().is_none(),
+        "a profile that pins no body-param knob must not send any"
+    );
 }

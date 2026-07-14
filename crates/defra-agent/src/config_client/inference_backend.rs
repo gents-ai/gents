@@ -1,28 +1,30 @@
+use crate::graphql::escape_graphql_string;
+use crate::{BackendProviderKind, OpenAiWireApi};
 use anyhow::Result;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{BackendProviderKind, OpenAiWireApi};
 
-use crate::config_writes::ConfigAccess;
-use crate::{graphql_bool_literal, nullable_string_field, string_list_field};
+use super::ConfigAccess;
+use defra_agent_protocol::graphql::{
+    graphql_bool_literal, nullable_string_field, string_list_field,
+};
 
 #[derive(Debug, Clone)]
-pub(crate) struct InferenceBackendUpsertDocument {
-    pub(crate) backend_id: String,
-    pub(crate) name: String,
-    pub(crate) provider_kind: BackendProviderKind,
-    pub(crate) openai_wire_api: Option<OpenAiWireApi>,
-    pub(crate) endpoint: String,
-    pub(crate) api_key: Option<String>,
-    pub(crate) api_key_env_var: Option<String>,
-    pub(crate) max_concurrent: i64,
-    pub(crate) max_queue_depth: i64,
-    pub(crate) enabled: bool,
-    pub(crate) models_on_add: Vec<String>,
-    pub(crate) models_on_update: Option<Vec<String>>,
-    pub(crate) probe_status: String,
+pub struct InferenceBackendUpsertDocument {
+    pub backend_id: String,
+    pub name: String,
+    pub provider_kind: BackendProviderKind,
+    pub openai_wire_api: Option<OpenAiWireApi>,
+    pub endpoint: String,
+    pub api_key: Option<String>,
+    pub api_key_env_var: Option<String>,
+    pub max_concurrent: i64,
+    pub max_queue_depth: i64,
+    pub enabled: bool,
+    pub models_on_add: Vec<String>,
+    pub models_on_update: Option<Vec<String>>,
+    pub probe_status: String,
 }
 
-pub(crate) async fn write_inference_backend_document(
+pub async fn write_inference_backend_document(
     access: &ConfigAccess,
     backend: &InferenceBackendUpsertDocument,
 ) -> Result<String> {
@@ -112,5 +114,5 @@ pub(crate) async fn write_inference_backend_document(
         update_fields = update_fields,
     );
     let response = access.execute(&mutation).await?;
-    crate::extract_mutation_doc_id(&response, "InferenceBackend")
+    defra_agent_protocol::graphql::extract_mutation_doc_id(&response, "InferenceBackend")
 }

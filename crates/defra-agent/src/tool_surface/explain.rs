@@ -374,6 +374,17 @@ fn explain_builtin_reads(
     } else {
         builder.exclude("built_in_read", DEFRA_QUERY_TOOL_NAME);
     }
+
+    if surface.self_config.enabled {
+        builder.include_many(
+            "self_config",
+            crate::self_config::self_config_tool_names(&surface.self_config),
+        );
+    } else if config.self_config_requested() {
+        builder.unavailable("self_config", crate::self_config::GET_MY_CONFIG_TOOL_NAME);
+    } else {
+        builder.exclude("self_config", crate::self_config::GET_MY_CONFIG_TOOL_NAME);
+    }
 }
 
 fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
@@ -407,6 +418,13 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
         vec![
             format!("enabled:{}", policy.defra_query),
             format!("collections:{}", policy.defra_collections.kind()),
+        ],
+    );
+    summary.insert(
+        "self_config".to_string(),
+        vec![
+            format!("enabled:{}", policy.self_config),
+            format!("categories:{}", policy.self_config_categories.kind()),
         ],
     );
     summary.insert(

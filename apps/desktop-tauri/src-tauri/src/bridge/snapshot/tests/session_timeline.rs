@@ -10,6 +10,7 @@ fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
             session_id: "sess-1".to_string(),
             agent_name: Some("Amy".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
             title_source: Some("generated".to_string()),
@@ -22,6 +23,7 @@ fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
         requests: vec![AgentRequestRow {
             request_id: "req-1".to_string(),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("sess-1".to_string()),
             retry_parent_request: None,
@@ -54,6 +56,7 @@ fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
         messages: vec![AgentMessageRow {
             message_key: "msg-1".to_string(),
             session_id: Some("sess-1".to_string()),
+            requester_did: None,
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some(user_message_json("hello")),
@@ -64,6 +67,7 @@ fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("sess-1".to_string()),
             content: Some(content.to_string()),
@@ -106,6 +110,7 @@ fn session_snapshot_deduplicates_persisted_rows_from_multiple_sources() {
     let assistant = AgentMessageRow {
         message_key: "msg-2".to_string(),
         session_id: Some("sess-1".to_string()),
+        requester_did: None,
         sequence: Some(2),
         role: Some("assistant".to_string()),
         content: Some(assistant_message_json("hello back")),
@@ -148,6 +153,7 @@ fn session_snapshot_hides_live_overlay_matching_last_materialized_assistant() {
     rows.messages.push(AgentMessageRow {
         message_key: "msg-2".to_string(),
         session_id: Some("sess-1".to_string()),
+        requester_did: None,
         sequence: Some(2),
         role: Some("assistant".to_string()),
         content: Some(assistant_message_json(reply)),
@@ -181,6 +187,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
             title_source: Some("generated".to_string()),
@@ -194,6 +201,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
             AgentRequestRow {
                 request_id: "req-1".to_string(),
                 agent_did: Some("did:defra:amy".to_string()),
+                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
                 retry_parent_request: None,
@@ -226,6 +234,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
             AgentRequestRow {
                 request_id: "req-2".to_string(),
                 agent_did: Some("did:defra:amy".to_string()),
+                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
                 retry_parent_request: None,
@@ -259,6 +268,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
         messages: vec![AgentMessageRow {
             message_key: "msg-1".to_string(),
             session_id: Some("session-1".to_string()),
+            requester_did: None,
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some(user_message_json("turn one")),
@@ -269,6 +279,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
             response_key: "resp-2".to_string(),
             request_id: Some("req-2".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
             content: Some("streaming reply".to_string()),
@@ -288,6 +299,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
             tool_call_key: "tool-1".to_string(),
             session_id: Some("session-1".to_string()),
             request_id: None,
+            requester_did: None,
             message_sequence: None,
             tool_name: Some("glob".to_string()),
             tool_call_id: Some("call-1".to_string()),
@@ -341,6 +353,7 @@ fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
             title_source: Some("generated".to_string()),
@@ -353,6 +366,7 @@ fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
         requests: vec![AgentRequestRow {
             request_id: "req-1".to_string(),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
             retry_parent_request: None,
@@ -385,6 +399,7 @@ fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
         messages: vec![AgentMessageRow {
             message_key: "msg-1".to_string(),
             session_id: Some("session-1".to_string()),
+            requester_did: None,
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some(user_message_json("turn one")),
@@ -395,6 +410,7 @@ fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
             content: Some("partial answer before timeout".to_string()),
@@ -445,6 +461,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
             title_source: Some("generated".to_string()),
@@ -458,6 +475,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
             AgentRequestRow {
                 request_id: "req-1".to_string(),
                 agent_did: Some("did:defra:amy".to_string()),
+                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
                 retry_parent_request: None,
@@ -490,6 +508,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
             AgentRequestRow {
                 request_id: "req-2".to_string(),
                 agent_did: Some("did:defra:amy".to_string()),
+                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
                 retry_parent_request: None,
@@ -524,6 +543,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
             AgentMessageRow {
                 message_key: "msg-1".to_string(),
                 session_id: Some("session-1".to_string()),
+                requester_did: None,
                 sequence: Some(1),
                 role: Some("user".to_string()),
                 content: Some(user_message_json("turn one")),
@@ -533,6 +553,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
             AgentMessageRow {
                 message_key: "msg-2".to_string(),
                 session_id: Some("session-1".to_string()),
+                requester_did: None,
                 sequence: Some(2),
                 role: Some("assistant".to_string()),
                 content: Some(
@@ -545,6 +566,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
             AgentMessageRow {
                 message_key: "msg-3".to_string(),
                 session_id: Some("session-1".to_string()),
+                requester_did: None,
                 sequence: Some(3),
                 role: Some("user".to_string()),
                 content: Some(user_message_json("turn two")),
@@ -556,6 +578,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
             response_key: "resp-2".to_string(),
             request_id: Some("req-2".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
             content: Some("I'll investigate further into p2p".to_string()),
@@ -590,6 +613,7 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
             title_source: Some("generated".to_string()),
@@ -602,6 +626,7 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
         requests: vec![AgentRequestRow {
             request_id: "req-1".to_string(),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
             retry_parent_request: None,
@@ -634,6 +659,7 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
         messages: vec![AgentMessageRow {
             message_key: "msg-1".to_string(),
             session_id: Some("session-1".to_string()),
+            requester_did: None,
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some(user_message_json("turn one")),
@@ -644,6 +670,7 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
             tool_call_key: "tool-1".to_string(),
             session_id: Some("session-1".to_string()),
             request_id: None,
+            requester_did: None,
             message_sequence: Some(2),
             tool_name: Some("glob".to_string()),
             tool_call_id: Some("call-1".to_string()),
@@ -712,6 +739,7 @@ fn structured_command_policy_denial_projects_to_rendered_tool() {
         sessions: vec![AgentSessionRow {
             session_id: "session-denial".to_string(),
             agent_name: Some("Amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             started: None,
             ended: None,
@@ -721,6 +749,7 @@ fn structured_command_policy_denial_projects_to_rendered_tool() {
             tool_call_key: "tool-denial".to_string(),
             session_id: Some("session-denial".to_string()),
             request_id: None,
+            requester_did: None,
             message_sequence: Some(1),
             tool_name: Some("bash".to_string()),
             tool_call_id: Some("call-denial".to_string()),

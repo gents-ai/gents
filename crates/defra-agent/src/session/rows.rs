@@ -30,9 +30,10 @@ pub(super) struct SessionDocument {
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct ConversationDocument {
     #[serde(rename = "_docID")]
-    #[allow(dead_code)]
     #[serde(default)]
     pub(super) doc_id: String,
+    #[serde(default)]
+    pub(super) updated_at: String,
     #[serde(default)]
     pub(super) title: String,
     #[serde(default)]

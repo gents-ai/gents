@@ -22,6 +22,7 @@ def Surface.meet (a b : Surface) : Surface :=
   , bash := a.bash.meet b.bash
   , meta := a.meta && b.meta
   , defraQuery := a.defraQuery && b.defraQuery
+  , selfConfig := a.selfConfig && b.selfConfig
   , memory := a.memory && b.memory
   , sessionHistory := a.sessionHistory && b.sessionHistory
   , contextBudget := a.contextBudget && b.contextBudget
@@ -34,6 +35,7 @@ def Surface.meet (a b : Surface) : Surface :=
   , cliTools := a.cliTools.meet rootVM b.cliTools
   , mcpServices := a.mcpServices.meet unitVM b.mcpServices
   , defraCollections := a.defraCollections.meet unitVM b.defraCollections
+  , selfConfigCategories := a.selfConfigCategories.meet unitVM b.selfConfigCategories
   , subagentTargets := a.subagentTargets.meet unitVM b.subagentTargets
   , backgroundTools := a.backgroundTools.meet unitVM b.backgroundTools
   , writeTools := a.writeTools.meet fieldsVM b.writeTools }
@@ -89,6 +91,40 @@ theorem effective_defraQuery_le_behavior :
   unfold effective Surface.meet
   intro h
   exact bool_and_left (bool_and_left h)
+
+theorem effective_selfConfig_le_ceiling :
+    (effective behavior ceiling runtime).selfConfig = true → ceiling.selfConfig = true := by
+  unfold effective Surface.meet
+  intro h
+  exact bool_and_right (bool_and_left h)
+
+theorem effective_selfConfig_le_behavior :
+    (effective behavior ceiling runtime).selfConfig = true → behavior.selfConfig = true := by
+  unfold effective Surface.meet
+  intro h
+  exact bool_and_left (bool_and_left h)
+
+theorem effective_selfConfigCategories_subset_ceiling (k : ToolId) :
+    (effective behavior ceiling runtime).selfConfigCategories.permits k →
+      ceiling.selfConfigCategories.permits k := by
+  unfold effective Surface.meet
+  intro h
+  have hin := EndpointScope.meet_permits_left unitVM
+    (behavior.selfConfigCategories.meet unitVM ceiling.selfConfigCategories)
+    runtime.selfConfigCategories k h
+  exact EndpointScope.meet_permits_right unitVM behavior.selfConfigCategories
+    ceiling.selfConfigCategories k hin
+
+theorem effective_selfConfigCategories_subset_behavior (k : ToolId) :
+    (effective behavior ceiling runtime).selfConfigCategories.permits k →
+      behavior.selfConfigCategories.permits k := by
+  unfold effective Surface.meet
+  intro h
+  have hin := EndpointScope.meet_permits_left unitVM
+    (behavior.selfConfigCategories.meet unitVM ceiling.selfConfigCategories)
+    runtime.selfConfigCategories k h
+  exact EndpointScope.meet_permits_left unitVM behavior.selfConfigCategories
+    ceiling.selfConfigCategories k hin
 
 theorem effective_memory_le_ceiling :
     (effective behavior ceiling runtime).memory = true → ceiling.memory = true := by

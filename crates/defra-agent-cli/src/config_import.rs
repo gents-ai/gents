@@ -1996,6 +1996,10 @@ mod lean_apply_write_boundary_tests {
             subagent_allow_cross_deployment: false,
             cross_deployment_spawn_timeout_seconds: None,
             write_tools: Vec::new(),
+            enable_self_config: false,
+            self_config_categories: Vec::new(),
+            self_config_no_lockout: false,
+            self_config_dry_run: false,
         }
     }
 
@@ -2031,6 +2035,7 @@ mod lean_apply_write_boundary_tests {
             retry_max_resample: None,
             retry_allow_repair: None,
             retry_interactive_max: None,
+            ..Default::default()
         }
     }
 

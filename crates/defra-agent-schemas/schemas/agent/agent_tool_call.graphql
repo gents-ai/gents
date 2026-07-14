@@ -3,6 +3,7 @@ type AgentToolCall @branchable {
     request_id: String @index
     session_id: String @index
     agent_did: String @index @immutable
+    requester_did: String @index @immutable
     message_sequence: Int
     tool_name: String @index
     tool_call_id: String @index

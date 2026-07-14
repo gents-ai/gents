@@ -7,6 +7,7 @@ fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
             title_source: Some("generated".to_string()),
@@ -19,6 +20,7 @@ fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is
         requests: vec![AgentRequestRow {
             request_id: "req-1".to_string(),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
             retry_parent_request: None,
@@ -52,6 +54,7 @@ fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is
             AgentMessageRow {
                 message_key: "msg-1".to_string(),
                 session_id: Some("session-1".to_string()),
+                requester_did: None,
                 sequence: Some(1),
                 role: Some("user".to_string()),
                 content: Some(user_message_json("turn one")),
@@ -61,6 +64,7 @@ fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is
             AgentMessageRow {
                 message_key: "msg-2".to_string(),
                 session_id: Some("session-1".to_string()),
+                requester_did: None,
                 sequence: Some(2),
                 role: Some("assistant".to_string()),
                 content: Some(
@@ -75,6 +79,7 @@ fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
             content: Some("final answer".to_string()),
@@ -110,6 +115,7 @@ fn session_snapshot_hides_live_overlay_once_response_is_interrupted() {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
             title_source: Some("generated".to_string()),
@@ -122,6 +128,7 @@ fn session_snapshot_hides_live_overlay_once_response_is_interrupted() {
         requests: vec![AgentRequestRow {
             request_id: "req-1".to_string(),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
             retry_parent_request: None,
@@ -155,6 +162,7 @@ fn session_snapshot_hides_live_overlay_once_response_is_interrupted() {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
             content: Some("partial answer before interrupt".to_string()),
@@ -195,6 +203,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
             title_source: Some("generated".to_string()),
@@ -208,6 +217,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
             AgentRequestRow {
                 request_id: "req-1".to_string(),
                 agent_did: Some("did:defra:amy".to_string()),
+                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
                 retry_parent_request: None,
@@ -240,6 +250,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
             AgentRequestRow {
                 request_id: "req-2".to_string(),
                 agent_did: Some("did:defra:amy".to_string()),
+                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
                 retry_parent_request: None,
@@ -272,6 +283,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
             AgentRequestRow {
                 request_id: "req-3".to_string(),
                 agent_did: Some("did:defra:amy".to_string()),
+                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
                 retry_parent_request: None,
@@ -307,6 +319,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
                 response_key: "resp-1".to_string(),
                 request_id: Some("req-1".to_string()),
                 agent_did: Some("did:defra:amy".to_string()),
+                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
                 content: Some("answer one".to_string()),
@@ -326,6 +339,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
                 response_key: "resp-2".to_string(),
                 request_id: Some("req-2".to_string()),
                 agent_did: Some("did:defra:amy".to_string()),
+                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
                 content: Some("answer two".to_string()),
@@ -345,6 +359,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
                 response_key: "resp-3".to_string(),
                 request_id: Some("req-3".to_string()),
                 agent_did: Some("did:defra:amy".to_string()),
+                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
                 content: Some("answer three in progress".to_string()),
@@ -365,6 +380,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
             AgentMessageRow {
                 message_key: "msg-1".to_string(),
                 session_id: Some("session-1".to_string()),
+                requester_did: None,
                 sequence: Some(1),
                 role: Some("user".to_string()),
                 content: Some(user_message_json("turn one")),
@@ -374,6 +390,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
             AgentMessageRow {
                 message_key: "msg-2".to_string(),
                 session_id: Some("session-1".to_string()),
+                requester_did: None,
                 sequence: Some(2),
                 role: Some("assistant".to_string()),
                 content: Some("{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"answer one\"}]}".to_string()),
@@ -383,6 +400,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
             AgentMessageRow {
                 message_key: "msg-3".to_string(),
                 session_id: Some("session-1".to_string()),
+                requester_did: None,
                 sequence: Some(3),
                 role: Some("user".to_string()),
                 content: Some(user_message_json("turn two")),
@@ -392,6 +410,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
             AgentMessageRow {
                 message_key: "msg-4".to_string(),
                 session_id: Some("session-1".to_string()),
+                requester_did: None,
                 sequence: Some(4),
                 role: Some("assistant".to_string()),
                 content: Some("{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"answer two\"}]}".to_string()),

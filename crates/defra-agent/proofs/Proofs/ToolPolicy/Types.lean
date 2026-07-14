@@ -98,6 +98,7 @@ structure Surface where
   bash : BashPolicy
   meta : Bool
   defraQuery : Bool
+  selfConfig : Bool
   memory : Bool
   sessionHistory : Bool
   contextBudget : Bool
@@ -110,6 +111,7 @@ structure Surface where
   cliTools : EndpointScope ToolId (Finset String)
   mcpServices : EndpointScope ToolId Unit
   defraCollections : EndpointScope ToolId Unit
+  selfConfigCategories : EndpointScope ToolId Unit
   subagentTargets : EndpointScope (String × String) Unit
   backgroundTools : EndpointScope ToolId Unit
   writeTools : EndpointScope (String × String) (Finset String)

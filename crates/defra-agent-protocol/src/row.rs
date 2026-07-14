@@ -182,6 +182,8 @@ pub struct AgentConversationRow {
     #[serde(default)]
     pub agent_did: Option<String>,
     #[serde(default)]
+    pub requester_did: Option<String>,
+    #[serde(default)]
     pub behavior_id: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
@@ -204,6 +206,8 @@ pub struct AgentRequestRow {
     pub request_id: String,
     #[serde(default)]
     pub agent_did: Option<String>,
+    #[serde(default)]
+    pub requester_did: Option<String>,
     #[serde(default)]
     pub behavior_id: Option<String>,
     #[serde(default)]
@@ -270,6 +274,8 @@ pub struct AgentResponseRow {
     #[serde(default)]
     pub agent_did: Option<String>,
     #[serde(default)]
+    pub requester_did: Option<String>,
+    #[serde(default)]
     pub behavior_id: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
@@ -305,6 +311,8 @@ pub struct AgentMessageRow {
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
+    pub requester_did: Option<String>,
+    #[serde(default)]
     pub sequence: Option<i64>,
     #[serde(default)]
     pub role: Option<String>,
@@ -326,6 +334,8 @@ pub struct AgentSessionRow {
     #[serde(default)]
     pub agent_name: Option<String>,
     #[serde(default)]
+    pub requester_did: Option<String>,
+    #[serde(default)]
     pub behavior_id: Option<String>,
     #[serde(default)]
     pub started: Option<String>,
@@ -342,6 +352,8 @@ pub struct AgentToolCallRow {
     pub session_id: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub requester_did: Option<String>,
     #[serde(default)]
     pub message_sequence: Option<i64>,
     #[serde(default)]
@@ -401,6 +413,8 @@ pub struct AgentToolResultRow {
     #[serde(default)]
     pub agent_did: Option<String>,
     #[serde(default)]
+    pub requester_did: Option<String>,
+    #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
     pub tool_name: Option<String>,
@@ -425,6 +439,8 @@ pub struct CompactionEntryRow {
     pub compaction_key: String,
     #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub requester_did: Option<String>,
     #[serde(default)]
     pub sequence: Option<i64>,
     #[serde(default)]
@@ -671,6 +687,16 @@ pub struct ToolSelectionRow {
     /// fails the whole `ToolSelection` load, so writers must emit valid JSON.
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub write_tools: Vec<String>,
+    /// Self-configuration gate (#654): opt-in, never backfilled true.
+    #[serde(default)]
+    pub enable_self_config: Option<bool>,
+    /// Self-config category allowlist; empty = unset (core spine).
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    pub self_config_categories: Vec<String>,
+    #[serde(default)]
+    pub self_config_no_lockout: Option<bool>,
+    #[serde(default)]
+    pub self_config_dry_run: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -744,6 +770,20 @@ pub struct InferenceProfileRow {
     pub max_turns: Option<i64>,
     #[serde(default)]
     pub temperature: Option<f64>,
+    /// Sampling knobs beyond temperature (#649). `None` inherits the served
+    /// model's `generation_config.json`; `Some` pins the value explicitly.
+    #[serde(default)]
+    pub top_p: Option<f64>,
+    #[serde(default)]
+    pub top_k: Option<i64>,
+    #[serde(default)]
+    pub min_p: Option<f64>,
+    #[serde(default)]
+    pub frequency_penalty: Option<f64>,
+    #[serde(default)]
+    pub presence_penalty: Option<f64>,
+    #[serde(default)]
+    pub repetition_penalty: Option<f64>,
     #[serde(default)]
     pub stream_batch_ms: Option<i64>,
     #[serde(default)]

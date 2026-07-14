@@ -1455,7 +1455,7 @@ mod tests {
     }
 
     #[test]
-    fn data_plane_subagent_host_scopes_request_to_signed_requester() {
+    fn data_plane_subagent_host_scopes_all_artifacts_to_signed_requester() {
         let signed_endpoint = NetworkEndpointEntry {
             peer_id: "peer-a".to_string(),
             agent_did: "did:key:coord".to_string(),
@@ -1476,18 +1476,9 @@ mod tests {
         .expect("some data-plane layer");
 
         assert_eq!(desired.replicator_filter.len(), 8);
-        let request = desired
-            .replicator_filter
-            .get("AgentRequest")
-            .expect("request route filter");
-        assert_eq!(request.field, "requester_did");
-        assert_eq!(request.value, "did:key:coord");
-        for (collection, predicate) in &desired.replicator_filter {
-            if collection == "AgentRequest" {
-                continue;
-            }
-            assert_eq!(predicate.field, "agent_did");
-            assert_eq!(predicate.value, "did:key:host");
+        for predicate in desired.replicator_filter.values() {
+            assert_eq!(predicate.field, "requester_did");
+            assert_eq!(predicate.value, "did:key:coord");
         }
     }
 
@@ -1828,7 +1819,6 @@ mod tests {
             },
         );
         let mut replay_connections = BTreeMap::new();
-        let mut failing_peers = BTreeSet::<String>::new();
 
         // A degraded first sweep must keep the startup replay pending. The
         // startup replay compensates for reconnect edges missed while this
@@ -1971,7 +1961,6 @@ mod tests {
             },
         );
         let mut replay_connections = BTreeMap::new();
-        let mut failing_peers = BTreeSet::<String>::new();
 
         sweep_pairings(
             &admin,
@@ -2559,7 +2548,7 @@ mod tests {
     }
 
     #[test]
-    fn subagent_host_template_filters_request_to_requester() {
+    fn subagent_host_template_filters_all_artifacts_to_requester() {
         let desired = desired_from_pairing_row(
             desired_row(Some("subagent-host"), Some("did:key:coord")),
             "did:key:host",
@@ -2570,18 +2559,9 @@ mod tests {
         assert!(desired.collections.is_empty());
         assert!(desired.replicator_collections.contains("AgentToolCall"));
         assert_eq!(desired.replicator_filter.len(), 8);
-        let request = desired
-            .replicator_filter
-            .get("AgentRequest")
-            .expect("request filter");
-        assert_eq!(request.field, "requester_did");
-        assert_eq!(request.value, "did:key:coord");
-        for (collection, predicate) in &desired.replicator_filter {
-            if collection == "AgentRequest" {
-                continue;
-            }
-            assert_eq!(predicate.field, "agent_did");
-            assert_eq!(predicate.value, "did:key:host");
+        for predicate in desired.replicator_filter.values() {
+            assert_eq!(predicate.field, "requester_did");
+            assert_eq!(predicate.value, "did:key:coord");
         }
     }
 

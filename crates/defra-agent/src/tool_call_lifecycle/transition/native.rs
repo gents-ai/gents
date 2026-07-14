@@ -1,6 +1,10 @@
 use super::*;
 
 impl ToolCallLifecycle {
+    fn requester_did_fragment(&self) -> String {
+        crate::session::requester_did_create_field(self.requester_did.as_deref())
+    }
+
     /// GraphQL fragment for the durable workflow-group projection fields,
     /// emitted on every create path so a bridge stays projectable by
     /// `workflow_group_id` regardless of which transition created its row.
@@ -84,6 +88,7 @@ impl ToolCallLifecycle {
         } else {
             String::new()
         };
+        let requester_did_field = self.requester_did_fragment();
         let workflow_fields = self.workflow_fields_fragment();
 
         let mutation = format!(
@@ -93,6 +98,7 @@ impl ToolCallLifecycle {
                     request_id: "{escaped_request_id}",
                     session_id: "{escaped_session_id}",
                     agent_did: "{escaped_agent_did}",
+                    {requester_did_field}
                     message_sequence: {message_sequence},
                     tool_name: "{escaped_tool_name}",
                     tool_call_id: "{escaped_tool_call_id}",
@@ -292,6 +298,7 @@ impl ToolCallLifecycle {
         let message_sequence = self.message_sequence;
         let failure_class_str = failure.as_str();
         let command_denial_fields = command_denial_fields_fragment(command_denial);
+        let requester_did_field = self.requester_did_fragment();
         let workflow_fields = self.workflow_fields_fragment();
 
         let mutation = format!(
@@ -301,6 +308,7 @@ impl ToolCallLifecycle {
                     request_id: "{escaped_request_id}",
                     session_id: "{escaped_session_id}",
                     agent_did: "{escaped_agent_did}",
+                    {requester_did_field}
                     message_sequence: {message_sequence},
                     tool_name: "{escaped_tool_name}",
                     tool_call_id: "{escaped_tool_call_id}",
@@ -409,6 +417,7 @@ impl ToolCallLifecycle {
         let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
         let message_sequence = self.message_sequence;
         let cancel_cause = cause.as_str();
+        let requester_did_field = self.requester_did_fragment();
         let workflow_fields = self.workflow_fields_fragment();
 
         let escaped_result = escape_graphql_string("tool call cancelled before dispatch");
@@ -420,6 +429,7 @@ impl ToolCallLifecycle {
                     request_id: "{escaped_request_id}",
                     session_id: "{escaped_session_id}",
                     agent_did: "{escaped_agent_did}",
+                    {requester_did_field}
                     message_sequence: {message_sequence},
                     tool_name: "{escaped_tool_name}",
                     tool_call_id: "{escaped_tool_call_id}",

@@ -526,6 +526,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ToolPolicyCases".to_string(),
         ));
     }
+    if !snapshot.self_config_field_tables.is_empty() {
+        emitted.insert((
+            "self_config_field_tables".to_string(),
+            "SelfConfigFieldTables".to_string(),
+        ));
+    }
+    if !snapshot.self_config_cases.is_empty() {
+        emitted.insert((
+            "self_config_cases".to_string(),
+            "SelfConfigCases".to_string(),
+        ));
+    }
     if !snapshot.session_recovery_cases.is_empty() {
         emitted.insert((
             "session_recovery_cases".to_string(),
@@ -752,6 +764,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CodexShimBindingCases".to_string(),
         ));
     }
+    if !lean_startup_readiness_cases().is_empty() {
+        emitted.insert((
+            "startup_readiness_cases".to_string(),
+            "StartupReadinessCases".to_string(),
+        ));
+    }
     if !lean_codex_shim_turn_lifecycle_cases().is_empty() {
         emitted.insert((
             "codex_shim_turn_lifecycle_cases".to_string(),
@@ -811,6 +829,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "runtime_cases",
         "apply_reconcile_cases",
         "tool_policy_cases",
+        "self_config_field_tables",
+        "self_config_cases",
         "session_recovery_cases",
         "slot_cases",
         "fleet_cases",
@@ -841,6 +861,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "r4c_background_work_cases",
         "codex_shim_projection_cases",
         "codex_shim_binding_cases",
+        "startup_readiness_cases",
         "codex_shim_turn_lifecycle_cases",
         "r6_background_cases",
         "r5_cross_deployment_cases",

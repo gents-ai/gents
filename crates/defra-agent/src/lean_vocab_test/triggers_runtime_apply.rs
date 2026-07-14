@@ -145,3 +145,16 @@ pub(crate) struct LeanApplyReconcileCase {
     #[serde(default)]
     pub(crate) delete_safety_holds: bool,
 }
+
+/// Startup-readiness vectors for the bounded build-failure barrier (#559).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanStartupReadinessCase {
+    pub(crate) witness: String,
+    pub(crate) lean_theorems: Vec<String>,
+    pub(crate) budget: u64,
+    pub(crate) outcomes: Vec<String>,
+    pub(crate) retired_after: bool,
+    pub(crate) post_standing: String,
+    pub(crate) blocks_ready: bool,
+    pub(crate) requires_restart: bool,
+}

@@ -147,6 +147,62 @@ pub async fn select_materializable_entries(
     Ok(out)
 }
 
+/// Return DIDs carrying an explicit, valid admin-signed revocation.
+///
+/// Absence is deliberately not revocation: reciprocal conversation pairing
+/// does not require positive network membership. This negative gate only
+/// honors `status="revoked"` rows from the selected network after verifying
+/// both the network root and membership signature.
+pub async fn select_revoked_member_dids(
+    identity: &dyn AgentIdentity,
+    network: &NetworkRecord,
+    memberships: &[MembershipRecord],
+) -> Result<BTreeSet<String>> {
+    if !verify_record(
+        identity,
+        &network.admin_did,
+        &network.signing_payload(),
+        &network.sig,
+        "AgentNetwork",
+    )
+    .await?
+    {
+        tracing::warn!(
+            network_id = %network.network_id,
+            admin_did = %network.admin_did,
+            "reciprocal revocation gate ignored AgentNetwork with invalid admin signature"
+        );
+        return Ok(BTreeSet::new());
+    }
+
+    let mut revoked = BTreeSet::new();
+    for membership in memberships {
+        if membership.network_id != network.network_id || membership.status.trim() != "revoked" {
+            continue;
+        }
+        if !verify_record(
+            identity,
+            &network.admin_did,
+            &membership.signing_payload(),
+            &membership.sig,
+            "NetworkMembership",
+        )
+        .await?
+        {
+            tracing::warn!(
+                member_did = %membership.member_did,
+                "reciprocal revocation gate ignored membership with invalid admin signature"
+            );
+            continue;
+        }
+        let member_did = membership.member_did.trim();
+        if !member_did.is_empty() {
+            revoked.insert(member_did.to_string());
+        }
+    }
+    Ok(revoked)
+}
+
 /// Return the signed materialized endpoint for a Layer-2 data-plane peer. The
 /// endpoint set has already passed the network/membership/signature/freshness
 /// gate in [`select_materializable_entries`], so callers must use the returned
@@ -382,6 +438,48 @@ pub struct GraphqlNetworkStore {
 impl GraphqlNetworkStore {
     pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn AgentIdentity>) -> Self {
         Self { node, identity }
+    }
+
+    pub(super) async fn load_revoked_member_dids(&self) -> Result<BTreeSet<String>> {
+        let query = r#"{
+            AgentNetwork {
+                network_id
+                admin_did
+                display_name
+                default_template
+                created_at
+                admin_sig
+            }
+            NetworkMembership {
+                network_id
+                member_did
+                status
+                granted_at
+                revoked_at
+                admin_sig
+            }
+        }"#;
+        let response = self.node.execute(query).await;
+        ensure_no_errors(&response, "query reciprocal revocation inputs")?;
+
+        let network_rows = rows::<NetworkRow>(&response, "AgentNetwork")?;
+        let network = match network_rows.as_slice() {
+            [] => return Ok(BTreeSet::new()),
+            [row] => network_record(row)?,
+            rows => network_record(select_local_network(rows, self.identity.did()))?,
+        };
+        let memberships = rows::<MembershipRow>(&response, "NetworkMembership")?
+            .into_iter()
+            .filter_map(|row| match membership_record(&row) {
+                Ok(record) => Some(record),
+                Err(error) => {
+                    tracing::warn!(error = %error, "reciprocal revocation gate skipped malformed NetworkMembership");
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        select_revoked_member_dids(self.identity.as_ref(), &network, &memberships).await
     }
 
     async fn list_peers_by_source(&self, source: &str) -> Result<BTreeSet<String>> {

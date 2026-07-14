@@ -41,6 +41,63 @@ enum BackgroundTaskResult {
     DiscoveryReconcile(Result<()>),
 }
 
+/// Startup demotion policy (#559): demote a behavior only while the startup
+/// barrier is still waiting on it, releasing the barrier without claiming
+/// health and surfacing the reason through the ledger, the status counts, and
+/// the log. `RuntimeReconcile.StartupReadiness` is the model; the conformance
+/// fence drives its emitted vectors through the same `BuildStanding` the slot
+/// loop steps.
+struct StartupSlotFailurePolicy {
+    barrier: Arc<StartupBarrier>,
+    demotions: Arc<crate::startup_readiness::StartupDemotions>,
+    runtime_status: RuntimeStatusHandle,
+    budget: u32,
+}
+
+#[async_trait::async_trait]
+impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
+    fn build_failure_budget(&self) -> u32 {
+        self.budget.max(1)
+    }
+
+    async fn try_demote(&self, behavior_id: &str, error: &str) -> bool {
+        // The authoritative pending check happens here, at the demotion
+        // moment: a behavior that started once (this or a sibling worker) or
+        // that never entered the barrier is not a startup demotion.
+        if !self.barrier.is_pending(behavior_id).await {
+            return false;
+        }
+        let reason = format!(
+            "demoted after {} consecutive startup build failures; last error: {error}",
+            self.build_failure_budget()
+        );
+        self.demotions.record(behavior_id, reason.clone());
+        self.barrier.mark_behavior_demoted(behavior_id).await;
+        self.runtime_status.record_startup_demotion().await;
+        tracing::error!(
+            behavior_id = %behavior_id,
+            budget = self.build_failure_budget(),
+            error = %error,
+            "behavior demoted: its completion client failed to build repeatedly; \
+             the process will report Ready without it. Fix the behavior/backend \
+             config — a config change re-admits it with a fresh budget."
+        );
+        true
+    }
+
+    async fn on_slot_retired(&self, behavior_id: &str, recreated: bool) {
+        // Retirement releases a never-started behavior (superseded) so a
+        // mid-startup generation change cannot orphan its barrier entry; a
+        // recreated slot earns a fresh budget, so its old demotion is lifted.
+        self.barrier.mark_behavior_superseded(behavior_id).await;
+        // Recreated: fresh budget lifts the old demotion. Removed: drop the
+        // stale reason so the router does not reject with a demotion message
+        // for a behavior that no longer exists. Either way the entry goes.
+        let _ = recreated;
+        self.demotions.clear(behavior_id);
+    }
+}
+
 pub(in crate::agent) async fn run_agent(
     agent: DefraAgent,
     mut shutdown: watch::Receiver<bool>,
@@ -147,8 +204,18 @@ pub(in crate::agent) async fn run_agent(
         rendered_request_capture_factory: agent.rendered_request_capture_factory.clone(),
         background_execution_registry: agent.background_execution_registry.clone(),
         startup_barrier: startup_barrier.clone(),
+        startup_readiness: agent.startup_readiness.clone(),
+        startup_demotions: runtime_status.startup_demotions(),
     };
     let runtime_for_runner = runtime.clone();
+    let startup_demotions = runtime_status.startup_demotions();
+    let slot_failure_policy: Arc<dyn crate::agent::reconcile::SlotFailurePolicy> =
+        Arc::new(StartupSlotFailurePolicy {
+            barrier: startup_barrier.clone(),
+            demotions: startup_demotions.clone(),
+            runtime_status: runtime_status.clone(),
+            budget: agent.startup_readiness.build_failure_budget,
+        });
     let generation_supervisor = GenerationSupervisor::bootstrap(
         resolved_snapshot,
         admission_registry.clone(),
@@ -163,6 +230,7 @@ pub(in crate::agent) async fn run_agent(
         },
         runtime_status.clone(),
         shutdown.clone(),
+        Some(slot_failure_policy),
     )?;
     let initial_active_snapshot = generation_supervisor.current_snapshot();
     runtime_status
@@ -278,10 +346,27 @@ pub(in crate::agent) async fn run_agent(
     let ready_runtime_status = runtime_status.clone();
     let ready_behavior_count = initial_active_snapshot.behaviors.len();
     let ready_unavailable_count = initial_active_snapshot.unavailable_behaviors.len();
+    let ready_demotions = startup_demotions.clone();
     let readiness_handle = tokio::spawn(async move {
-        tokio::select! {
-            _ = ready_cancel.cancelled() => return,
-            _ = ready_startup_barrier.wait_ready() => {}
+        // Watchdog, not a deadline: demotion (budget) and supersession
+        // (retirement) make the barrier terminate by construction, and the
+        // per-attempt build timeout converts hangs into failures — so nothing
+        // here force-flips Ready. This only makes an unforeseen wedge loud.
+        let mut watchdog = tokio::time::interval(std::time::Duration::from_secs(60));
+        watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        watchdog.tick().await;
+        loop {
+            tokio::select! {
+                _ = ready_cancel.cancelled() => return,
+                _ = ready_startup_barrier.wait_ready() => break,
+                _ = watchdog.tick() => {
+                    let pending = ready_startup_barrier.pending_behaviors().await;
+                    tracing::warn!(
+                        pending_behaviors = ?pending,
+                        "startup readiness barrier is still waiting; a build may be wedged"
+                    );
+                }
+            }
         }
         ready_runtime_status
             .set_process_state(ProcessLifecycleState::Ready)
@@ -289,11 +374,23 @@ pub(in crate::agent) async fn run_agent(
         if let Some(observer) = &ready_observer {
             observer.on_process_state_change(ProcessLifecycleState::Ready);
         }
-        tracing::info!(
-            runnable_behaviors = ready_behavior_count,
-            unavailable_behaviors = ready_unavailable_count,
-            "defra-agent ready"
-        );
+        let demoted = ready_demotions.snapshot();
+        if demoted.is_empty() {
+            tracing::info!(
+                runnable_behaviors = ready_behavior_count,
+                unavailable_behaviors = ready_unavailable_count,
+                "defra-agent ready"
+            );
+        } else {
+            let mut demoted_ids: Vec<&String> = demoted.keys().collect();
+            demoted_ids.sort();
+            tracing::warn!(
+                runnable_behaviors = ready_behavior_count.saturating_sub(demoted.len()),
+                unavailable_behaviors = ready_unavailable_count + demoted.len(),
+                demoted_behaviors = ?demoted_ids,
+                "defra-agent ready (degraded: startup build failures demoted behaviors)"
+            );
+        }
     });
 
     let mut background_tasks = JoinSet::new();
@@ -428,6 +525,7 @@ pub(in crate::agent) async fn run_agent(
     let router_agent_did = agent.agent_did().to_string();
     let router_active_snapshot_rx = active_snapshot_rx.clone();
     let router_shutdown = shutdown.clone();
+    let router_startup_demotions = startup_demotions.clone();
     background_tasks.spawn(async move {
         BackgroundTaskResult::Router(
             super::router::run_router(
@@ -435,6 +533,7 @@ pub(in crate::agent) async fn run_agent(
                 router_agent_did,
                 router_active_snapshot_rx,
                 router_shutdown,
+                router_startup_demotions,
             )
             .await,
         )
@@ -629,6 +728,17 @@ async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_
                     agent_did = %agent_did,
                     count = report.conversations_recovered,
                     "recovered stuck conversations"
+                );
+            }
+            if report.conversations_failed > 0 {
+                // Failed attempts found stuck documents, so the pass was not
+                // a no-op — but they are the opposite of a recovery and must
+                // never inflate the recovered count (#693).
+                recovered_any = true;
+                tracing::warn!(
+                    agent_did = %agent_did,
+                    count = report.conversations_failed,
+                    "startup conversation recovery attempts failed"
                 );
             }
         }

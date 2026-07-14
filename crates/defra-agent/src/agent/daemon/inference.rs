@@ -189,8 +189,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 .await?
                 .with_background_tool_registry(self.background_tool_registry.clone())
                 .with_background_execution_registry(self.background_execution_registry.clone());
-                hook.set_active_request_id(Some(request.request_id.clone()))
-                    .await;
+                hook.set_active_request_lineage(
+                    Some(request.request_id.clone()),
+                    request.requester_did.clone(),
+                )
+                .await;
                 hook.set_request_deadline_at(request_deadline).await;
                 let persistence_hook = hook.clone();
 
@@ -553,7 +556,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     ) -> Result<()> {
         let doc_id = self
             .stream_writer
-            .begin(&request.session_id, &request.request_id, behavior_id)
+            .begin_with_requester_did(
+                &request.session_id,
+                &request.request_id,
+                behavior_id,
+                request.requester_did.as_deref(),
+            )
             .await?;
         let error_reason = error.to_string();
         let error_text = format!("Error: {}", error_reason);
@@ -572,9 +580,205 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 mod tests {
     use super::{
         await_with_request_deadline, ensure_request_deadline_open, request_deadline_remaining,
-        terminal_response_has_visible_output,
+        terminal_response_has_visible_output, BehaviorDaemon,
     };
+    use crate::agent::completion_retry::CompletionRetryProfileFields;
+    use crate::agent::runtime::StartupBarrier;
+    use crate::backend_provider::BackendProviderKind;
+    use crate::compaction::CompactionStrategy;
+    use crate::config::{AgentBehavior, SamplingConfig};
+    use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
+    use crate::identity::{AgentIdentity, AgentPrincipal, KeyIdentity};
+    use crate::llm::tool::ToolDyn;
+    use crate::prompt::LayeredPromptBuilder;
+    use crate::tool_surface::BehaviorToolConfig;
+    use crate::watcher::AgentRequest;
+    use futures::stream;
+    use rig::completion::{
+        CompletionError, CompletionModel, CompletionRequest, CompletionResponse,
+    };
+    use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
+    use std::sync::Arc;
     use std::time::Duration;
+
+    #[derive(Clone)]
+    struct RoutedReplyModel;
+
+    #[allow(refining_impl_trait)]
+    impl CompletionModel for RoutedReplyModel {
+        type Response = ();
+        type StreamingResponse = ();
+        type Client = ();
+
+        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+            Self
+        }
+
+        async fn completion(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+            Err(CompletionError::ProviderError(
+                "completion is unused in daemon lineage test".to_string(),
+            ))
+        }
+
+        async fn stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+            let items = vec![
+                Ok(RawStreamingChoice::Message("routed reply".to_string())),
+                Ok(RawStreamingChoice::FinalResponse(())),
+            ];
+            let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(items));
+            Ok(StreamingCompletionResponse::stream(inner))
+        }
+    }
+
+    fn test_behavior() -> Arc<AgentBehavior> {
+        let identity: Arc<dyn AgentIdentity> = Arc::new(
+            KeyIdentity::load_or_create(
+                std::env::temp_dir().join(format!("daemon-lineage-{}.key", uuid::Uuid::new_v4())),
+                None,
+            )
+            .expect("test identity"),
+        );
+        let principal = Arc::new(AgentPrincipal {
+            agent_did: identity.did().to_string(),
+            identity,
+            default_behavior_id: "general".to_string(),
+            display_name: None,
+            enabled: true,
+        });
+
+        Arc::new(AgentBehavior {
+            behavior_id: "general".to_string(),
+            principal,
+            backend_id: Some("backend-general".to_string()),
+            backend_provider_kind: BackendProviderKind::OpenAiCompatible,
+            openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
+            backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
+            backend_api_key: None,
+            backend_api_key_env_var: None,
+            model_name: "scripted".to_string(),
+            context_window: 8_192,
+            max_output_tokens: 1_024,
+            max_turns: 2,
+            system_prompt: "system".to_string(),
+            request_context_template: None,
+            tools: BehaviorToolConfig::meta_only(),
+            compaction_threshold: 0.75,
+            compaction_strategy: CompactionStrategy::StripThenSummarize,
+            stream_batch_ms: 0,
+            stream_liveness_timeout: Duration::from_secs(5),
+            deadline_duration: Duration::from_secs(30),
+            completion_retry: CompletionRetryProfileFields::default(),
+            sampling: SamplingConfig::default(),
+            skills: Vec::new(),
+        })
+    }
+
+    async fn create_routed_request(
+        node: &defra_node::EmbeddedNode,
+        behavior: &AgentBehavior,
+        requester_did: &str,
+    ) -> AgentRequest {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let created_at = chrono::Utc::now().to_rfc3339();
+        let escaped_request_id = crate::graphql::escape_graphql_string(&request_id);
+        let escaped_session_id = crate::graphql::escape_graphql_string(&session_id);
+        let escaped_agent_did = crate::graphql::escape_graphql_string(behavior.agent_did());
+        let escaped_requester_did = crate::graphql::escape_graphql_string(requester_did);
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentRequest(input: {{
+                    request_id: "{escaped_request_id}",
+                    agent_did: "{escaped_agent_did}",
+                    requester_did: "{escaped_requester_did}",
+                    behavior_id: "general",
+                    session_id: "{escaped_session_id}",
+                    retry_parent_request: "",
+                    retry_root_request: "{escaped_request_id}",
+                    superseded_by_request: "",
+                    content: "route this reply",
+                    status: "pending",
+                    lifecycle_state: "pending",
+                    backend_id: "backend-general",
+                    execution_origin: "interactive",
+                    failure_reason: "",
+                    created_at: "{created_at}",
+                    retry_count: 0,
+                    max_retries: 3,
+                    subagent_depth: 1
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = node.execute(&mutation).await;
+        assert!(
+            !response.has_errors(),
+            "create routed AgentRequest failed: {:?}",
+            response.errors
+        );
+        let doc_id = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("create_AgentRequest"))
+            .and_then(|value| value.get("_docID"))
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned);
+        let doc_id = match doc_id {
+            Some(doc_id) => doc_id,
+            None => {
+                let query = format!(
+                    r#"{{
+                        AgentRequest(
+                            filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                            limit: 1
+                        ) {{ _docID }}
+                    }}"#
+                );
+                let response = node.execute(&query).await;
+                assert!(
+                    !response.has_errors(),
+                    "query created AgentRequest failed: {:?}",
+                    response.errors
+                );
+                response
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("AgentRequest"))
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|rows| rows.first())
+                    .and_then(|row| row.get("_docID"))
+                    .and_then(serde_json::Value::as_str)
+                    .expect("created request _docID")
+                    .to_string()
+            }
+        };
+
+        AgentRequest {
+            doc_id,
+            request_id,
+            agent_did: behavior.agent_did().to_string(),
+            requester_did: Some(requester_did.to_string()),
+            behavior_id: Some(behavior.behavior_id.clone()),
+            session_id,
+            content: "route this reply".to_string(),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            max_tokens: None,
+            metadata: None,
+            execution_origin: Some("interactive".to_string()),
+            created_at,
+            deadline: None,
+            subagent_depth: 1,
+            caused_by_parent_request_id: Some("parent-request".to_string()),
+            caused_by_parent_tool_call_id: Some("parent-tool-call".to_string()),
+        }
+    }
 
     #[test]
     fn terminal_response_requires_visible_output() {
@@ -619,5 +823,92 @@ mod tests {
             .expect("fast work should finish before deadline");
 
         assert_eq!(result, 42);
+    }
+
+    #[tokio::test]
+    async fn daemon_request_path_stamps_requester_lineage_on_hook_messages() {
+        let data_path =
+            std::env::temp_dir().join(format!("daemon-requester-lineage-{}", uuid::Uuid::new_v4()));
+        let node = Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .data_path(&data_path)
+                .build()
+                .await
+                .expect("embedded node"),
+        );
+        crate::ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("runtime schemas");
+
+        let requester_did = "did:defra-agent:coordinator";
+        let behavior = test_behavior();
+        let request = create_routed_request(node.as_ref(), &behavior, requester_did).await;
+        let prompt_builder = LayeredPromptBuilder::for_behavior(
+            &behavior.system_prompt,
+            &behavior.behavior_id,
+            &[],
+            false,
+            behavior.context_window,
+            behavior.max_output_tokens,
+            &[],
+        );
+        let preamble = prompt_builder.preamble().to_string();
+        let loop_tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(Vec::new());
+        let mut daemon = BehaviorDaemon::new(
+            node.clone(),
+            behavior,
+            Arc::new(RoutedReplyModel),
+            preamble,
+            loop_tools,
+            prompt_builder,
+            FailurePolicy::default(),
+            None,
+            BackgroundToolRegistry::default(),
+            BackgroundExecutionRegistry::default(),
+            Arc::new(StartupBarrier::ready_for_test()),
+        );
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        daemon.process_request(request.clone(), shutdown_rx).await;
+
+        let escaped_session_id = crate::graphql::escape_graphql_string(&request.session_id);
+        let query = format!(
+            r#"{{
+                AgentMessage(
+                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}
+                ) {{
+                    role
+                    content
+                    requester_did
+                }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "query routed AgentMessage failed: {:?}",
+            response.errors
+        );
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentMessage"))
+            .and_then(serde_json::Value::as_array)
+            .expect("AgentMessage rows");
+        assert!(
+            rows.iter().any(|row| {
+                row.get("role").and_then(serde_json::Value::as_str) == Some("assistant")
+                    && row
+                        .get("content")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|content| content.contains("routed reply"))
+                    && row.get("requester_did").and_then(serde_json::Value::as_str)
+                        == Some(requester_did)
+            }),
+            "daemon-persisted assistant message must carry requester lineage; rows={rows:?}"
+        );
+
+        node.shutdown().await;
+        let _ = std::fs::remove_dir_all(data_path);
     }
 }

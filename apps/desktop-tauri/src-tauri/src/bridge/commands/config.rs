@@ -255,6 +255,16 @@ pub(crate) async fn save_inference_profile_config(
             retry_max_resample: None,
             retry_allow_repair: None,
             retry_interactive_max: None,
+            // Sampling knobs (#649) are not on the desktop form yet, same as the
+            // retry_* fields. `row` is cloned from the existing store row, so a
+            // value pinned via CLI or manifest SURVIVES a desktop save — only a
+            // brand-new profile starts them unset.
+            top_p: None,
+            top_k: None,
+            min_p: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            repetition_penalty: None,
         });
     row.display_name = Some(display_name);
     row.context_window = request.context_window;
@@ -289,6 +299,10 @@ pub(crate) async fn save_tool_selection_config(
             tool_policy_version: None,
             subagent_default_await_mode: None,
             write_tools: Vec::new(),
+            enable_self_config: None,
+            self_config_categories: Vec::new(),
+            self_config_no_lockout: None,
+            self_config_dry_run: None,
             enable_file_tools: Some(false),
             file_tools_mode: None,
             file_tool_root: None,

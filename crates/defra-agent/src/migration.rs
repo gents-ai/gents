@@ -50,6 +50,20 @@ const ADD_AGENT_REQUEST_TERMINAL_REDRIVE_ATTEMPTS_FIELD: &str = r#"{"op":"add","
 // filter key so a request cannot drift between peer scopes after creation.
 const ADD_AGENT_REQUEST_REQUESTER_DID_FIELD: &str = r#"{"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"requester_did","Kind":"String","Immutable":true}}"#;
 
+// #713 subagent-return lineage routing. Each returned artifact carries the
+// same immutable requester DID as its child AgentRequest, so the host return
+// pairing can filter a coordinator's lineage without matching unrelated
+// host-owned history.
+const SUBAGENT_RETURN_ARTIFACT_COLLECTIONS: [&str; 7] = [
+    "AgentResponse",
+    "AgentMessage",
+    "AgentToolCall",
+    "AgentToolResult",
+    "AgentSession",
+    "AgentConversation",
+    "CompactionEntry",
+];
+
 // DefraDB #1106 rejects numeric Kind values in schema patches. Canonical SDL
 // strings keep scalar and array intent explicit and avoid the #661 class where
 // a numeric IntArray code was used for an intended scalar Int field.
@@ -153,12 +167,26 @@ const ADD_CONSUMED_INVITE_NONCE_CLAIMANT_PATCH: &str = r#"[
 /// canonical DefraDB patch kinds.
 /// The runtime queries these at startup, so an upgraded home MUST gain them
 /// before the first profile read or the server fails to boot.
-const INFERENCE_PROFILE_RETRY_FIELDS: &[(&str, &str)] = &[
+/// Additive `InferenceProfile` fields patched onto pre-existing collections.
+///
+/// Adding to this table is the whole migration: every field is nullable, so an
+/// upgraded store gains it with no backfill and a fresh store gets it straight
+/// from the SDL. The sampling knobs beyond `temperature` are #649 — before
+/// them, `top_p`/`top_k` were entirely at the mercy of the served checkpoint's
+/// `generation_config.json`, with no way to correct a wrong default from
+/// desired state.
+const INFERENCE_PROFILE_ADDITIVE_FIELDS: &[(&str, &str)] = &[
     ("retry_max_transport", "Int"),
     ("retry_backoff_ms", "[Int]"),
     ("retry_max_resample", "Int"),
     ("retry_allow_repair", "Boolean"),
     ("retry_interactive_max", "Int"),
+    ("top_p", "Float"),
+    ("top_k", "Int"),
+    ("min_p", "Float"),
+    ("frequency_penalty", "Float"),
+    ("presence_penalty", "Float"),
+    ("repetition_penalty", "Float"),
 ];
 
 const ADD_PEER_PAIRING_APPLIED_REPLICATOR_FILTER_PATCH: &str = r#"[
@@ -504,6 +532,7 @@ fn subagent_lens_wasm_path() -> Result<String> {
 /// Applies the three subagent-extension patches and registers the unified
 /// lens. Re-running after a partial failure picks up at the un-migrated
 /// collection without manual intervention.
+#[allow(unused_assignments)]
 pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
     // 1. AgentToolCall — patch only if v3 fields not already present.
     let atc_collection = node
@@ -802,6 +831,10 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
                 v10 = %v10.version_id,
                 "ToolSelection patched with context budget flag"
             );
+            // Intentionally advance the cursor even though v10 is currently the
+            // final hand-written patch. The next patch must inspect v10 rather
+            // than the stale v9 schema (see abc30235).
+            active_version = v10;
         }
     } else {
         tracing::debug!("ToolSelection collection absent; subagent patch no-op");
@@ -1174,7 +1207,7 @@ pub async fn ensure_inference_profile_migrations(node: Arc<EmbeddedNode>) -> Res
         };
     };
 
-    let missing: Vec<&(&str, &str)> = INFERENCE_PROFILE_RETRY_FIELDS
+    let missing: Vec<&(&str, &str)> = INFERENCE_PROFILE_ADDITIVE_FIELDS
         .iter()
         .filter(|(name, _)| !collection_has_field(&collection, name))
         .collect();
@@ -1195,14 +1228,14 @@ pub async fn ensure_inference_profile_migrations(node: Arc<EmbeddedNode>) -> Res
     let next = node
         .patch_collection("InferenceProfile", &patch)
         .await
-        .context("patch_collection InferenceProfile retry fields")?;
+        .context("patch_collection InferenceProfile additive fields")?;
     node.set_active_collection_version(&next.version_id)
         .await
-        .context("set_active_collection_version InferenceProfile retry fields")?;
+        .context("set_active_collection_version InferenceProfile additive fields")?;
     tracing::info!(
         version = %next.version_id,
         added = missing.len(),
-        "InferenceProfile patched with per-completion retry fields"
+        "InferenceProfile patched with additive fields"
     );
     Ok(())
 }
@@ -1678,6 +1711,57 @@ pub async fn ensure_agent_request_requester_did_migration(node: Arc<EmbeddedNode
         version = %next.version_id,
         "AgentRequest patched with immutable requester_did route key"
     );
+    Ok(())
+}
+
+/// Add and validate the immutable requester route key on every returned child
+/// artifact collection (#713). Existing rows remain null and therefore cannot
+/// be reclassified into a coordinator's return scope.
+pub async fn ensure_subagent_return_requester_did_migrations(
+    node: Arc<EmbeddedNode>,
+) -> Result<()> {
+    for collection_name in SUBAGENT_RETURN_ARTIFACT_COLLECTIONS {
+        let Some(collection) = node
+            .get_collection(collection_name)
+            .with_context(|| format!("get {collection_name} collection"))?
+        else {
+            continue;
+        };
+
+        ensure_field_kind_matches_reference(
+            &collection,
+            collection_name,
+            "requester_did",
+            &["agent_did"],
+            "String",
+        )?;
+
+        if collection_has_field(&collection, "requester_did") {
+            anyhow::ensure!(
+                field_is_immutable(&collection, "requester_did"),
+                "{collection_name}.requester_did exists but is not immutable; filtered subagent-return replication cannot be installed safely"
+            );
+            continue;
+        }
+
+        let patch = format!(
+            r#"[{{"op":"add","path":"/{collection_name}/Fields/-","value":{{"Name":"requester_did","Kind":"String","Immutable":true}}}}]"#
+        );
+        let next = node
+            .patch_collection(collection_name, &patch)
+            .await
+            .with_context(|| format!("patch_collection {collection_name} requester_did"))?;
+        node.set_active_collection_version(&next.version_id)
+            .await
+            .with_context(|| {
+                format!("set_active_collection_version {collection_name} requester_did")
+            })?;
+        tracing::info!(
+            collection = collection_name,
+            version = %next.version_id,
+            "subagent return artifact patched with immutable requester_did route key"
+        );
+    }
     Ok(())
 }
 
@@ -2626,12 +2710,15 @@ pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()
     ensure_agent_request_requester_did_migration(node.clone())
         .await
         .context("ensure AgentRequest requester_did migration")?;
-    ensure_agent_request_terminal_durability_migrations(node.clone())
-        .await
-        .context("ensure AgentRequest terminal durability migrations")?;
     ensure_conversation_scope_key_migrations(node.clone())
         .await
         .context("ensure conversation agent_did scope-key migrations")?;
+    ensure_subagent_return_requester_did_migrations(node.clone())
+        .await
+        .context("ensure subagent return requester_did migrations")?;
+    ensure_agent_request_terminal_durability_migrations(node.clone())
+        .await
+        .context("ensure AgentRequest terminal durability migrations")?;
     // LAST, after every hand-written migration: schema-driven reconciliation
     // sweeps up any bundled-schema field that has no hand-written patch (the
     // recurring upgrade-crash class: tool_policy_version, write_tools,
@@ -3236,6 +3323,46 @@ mod patch_kind_tests {
             rewrite.has_errors(),
             "requester_did must remain immutable after creation"
         );
+    }
+
+    #[tokio::test]
+    async fn subagent_return_migration_adds_immutable_route_keys() {
+        let node = test_node().await;
+        for schema in [
+            OLD_AGENT_RESPONSE_SCHEMA,
+            OLD_AGENT_MESSAGE_SCHEMA,
+            OLD_AGENT_TOOL_CALL_SCHEMA,
+            OLD_AGENT_TOOL_RESULT_SCHEMA,
+            OLD_AGENT_SESSION_SCHEMA,
+            OLD_AGENT_CONVERSATION_SCHEMA,
+            OLD_COMPACTION_ENTRY_SCHEMA,
+        ] {
+            node.add_schema(schema).await.unwrap();
+        }
+
+        ensure_conversation_scope_key_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_subagent_return_requester_did_migrations(node.clone())
+            .await
+            .unwrap();
+        ensure_subagent_return_requester_did_migrations(node.clone())
+            .await
+            .unwrap();
+
+        for collection_name in SUBAGENT_RETURN_ARTIFACT_COLLECTIONS {
+            let collection = node
+                .get_collection(collection_name)
+                .unwrap()
+                .unwrap_or_else(|| panic!("{collection_name} collection"));
+            assert!(collection_has_field(&collection, "requester_did"));
+            assert!(field_is_immutable(&collection, "requester_did"));
+            assert_eq!(
+                field_kind_value(&collection, "requester_did"),
+                field_kind_value(&collection, "agent_did"),
+                "{collection_name}.requester_did must remain an all-String route key"
+            );
+        }
     }
 
     #[tokio::test]
@@ -4105,6 +4232,10 @@ mod patch_kind_tests {
             "subagent_default_await_mode",
             "enable_session_history_tool",
             "enable_context_budget",
+            "enable_self_config",
+            "self_config_categories",
+            "self_config_no_lockout",
+            "self_config_dry_run",
         ] {
             assert!(
                 collection_has_field(&collection, field),
@@ -4271,7 +4402,7 @@ mod patch_kind_tests {
             .unwrap()
             .expect("InferenceProfile collection must exist after migration");
         let hand_patched_version = collection.version_id.clone();
-        for (field, _) in INFERENCE_PROFILE_RETRY_FIELDS {
+        for (field, _) in INFERENCE_PROFILE_ADDITIVE_FIELDS {
             assert!(
                 collection_has_field(&collection, field),
                 "InferenceProfile must have field '{field}' after migration"
@@ -4299,7 +4430,7 @@ mod patch_kind_tests {
             swept.version_id, hand_patched_version,
             "bundled sweep must not double-patch #680 retry fields"
         );
-        for (field, _) in INFERENCE_PROFILE_RETRY_FIELDS {
+        for (field, _) in INFERENCE_PROFILE_ADDITIVE_FIELDS {
             assert_eq!(
                 swept
                     .fields

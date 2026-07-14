@@ -66,6 +66,15 @@ pub(crate) async fn load_session_behavior_id(
         }))
 }
 
+/// Load the canonical conversation document for a session.
+///
+/// A store can carry more than one `AgentConversation` document per
+/// `session_id` (#693): P2P merge enforces no unique index, and stores from
+/// the schema-broken era minted such twins. This loader reads every match
+/// and deterministically picks the canonical document — latest `updated_at`,
+/// `_docID` as tie-break — warning per duplicated session. Duplicates are
+/// flagged, never deleted; writers key their mutations on the returned
+/// document's `_docID` so a duplicate can never fail a write.
 pub(super) async fn load_conversation_document(
     node: &EmbeddedNode,
     session_id: &str,
@@ -76,10 +85,10 @@ pub(super) async fn load_conversation_document(
             AgentConversation(
                 filter: {{
                     session_id: {{ _eq: "{escaped_session_id}" }}
-                }},
-                limit: 1
+                }}
             ) {{
                 _docID
+                updated_at
                 title
                 title_source
                 preview_text
@@ -114,7 +123,28 @@ pub(super) async fn load_conversation_document(
         None => Vec::new(),
     };
 
+    rows.sort_by(|left, right| conversation_recency(left).cmp(&conversation_recency(right)));
+    if rows.len() > 1 {
+        tracing::warn!(
+            session_id = %session_id,
+            duplicate_count = rows.len(),
+            canonical_doc_id = %rows.last().map(|row| row.doc_id.as_str()).unwrap_or(""),
+            "duplicate AgentConversation documents share one session_id; \
+             using the canonical document (latest updated_at, docID tie-break) — \
+             duplicates are flagged, not deleted"
+        );
+    }
     Ok(rows.pop())
+}
+
+/// Canonical ordering key for duplicated conversation documents: latest
+/// `updated_at` wins, `_docID` breaks ties. An unparseable timestamp sorts
+/// oldest, so a malformed twin never outranks a well-formed one.
+fn conversation_recency(document: &ConversationDocument) -> (chrono::DateTime<chrono::Utc>, &str) {
+    let updated_at = chrono::DateTime::parse_from_rfc3339(&document.updated_at)
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC);
+    (updated_at, document.doc_id.as_str())
 }
 
 pub(super) async fn load_recent_conversation_titles(

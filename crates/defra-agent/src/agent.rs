@@ -103,6 +103,10 @@ pub struct DocumentRuntimeOptions {
     /// re-derive their enablement from `runnable` instead of a boot-time sample
     /// (#699).
     pub runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
+    /// Startup readiness knobs (#559): the build-failure budget that demotes a
+    /// persistently un-buildable behavior instead of wedging `Ready`, and the
+    /// per-attempt build timeout that turns a hanging build into a failure.
+    pub startup_readiness: crate::startup_readiness::StartupReadinessOptions,
 }
 
 #[derive(Clone)]
@@ -132,6 +136,7 @@ pub struct DefraAgent {
     backend_health: BackendHealthMap,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
+    startup_readiness: crate::startup_readiness::StartupReadinessOptions,
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     /// Populated once the runtime's `TriggerEngine` has constructed the
@@ -216,6 +221,7 @@ impl DefraAgent {
             backend_health,
             process_state_observer: options.process_state_observer,
             runtime_snapshot_observer: options.runtime_snapshot_observer,
+            startup_readiness: options.startup_readiness,
             rendered_request_capture_factory: None,
             manual_trigger_handle: Arc::new(OnceCell::new()),
         })
@@ -385,8 +391,12 @@ pub(crate) fn behavior_config_from_documents(
         completion_retry: completion_retry_fields_from_profile(inference_profile),
         sampling: SamplingConfig {
             temperature: inference_profile.temperature,
-            top_p: None,
-            top_k: None,
+            top_p: inference_profile.top_p,
+            top_k: inference_profile.top_k,
+            min_p: inference_profile.min_p,
+            frequency_penalty: inference_profile.frequency_penalty,
+            presence_penalty: inference_profile.presence_penalty,
+            repetition_penalty: inference_profile.repetition_penalty,
             max_tokens: profile_max_tokens,
         },
         skills,
