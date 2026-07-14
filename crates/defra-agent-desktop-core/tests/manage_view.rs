@@ -63,6 +63,12 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         retry_max_resample: None,
         retry_allow_repair: None,
         retry_interactive_max: None,
+        top_p: Some(0.95),
+        top_k: Some(40),
+        min_p: None,
+        frequency_penalty: None,
+        presence_penalty: None,
+        repetition_penalty: None,
     })
     .await?;
 
@@ -176,11 +182,17 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         .inference_backends
         .iter()
         .any(|row| row.backend_id == "backend-amy" && row.name.as_deref() == Some("OpenRouter")));
-    assert!(snapshot
+    let profile = snapshot
         .inference_profiles
         .iter()
-        .any(|row| row.profile_id == "profile-amy"
-            && row.display_name.as_deref() == Some("Amy Profile")));
+        .find(|row| row.profile_id == "profile-amy")
+        .expect("inference profile should be present");
+    assert_eq!(profile.display_name.as_deref(), Some("Amy Profile"));
+    // #649: the desktop's profile writer and reader must carry the sampling
+    // knobs, not just compile against them — a dropped field here would silently
+    // strand `top_p`/`top_k` at the served checkpoint's default.
+    assert_eq!(profile.top_p, Some(0.95));
+    assert_eq!(profile.top_k, Some(40));
     let tools = snapshot
         .tool_selections
         .iter()

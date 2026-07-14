@@ -50,7 +50,7 @@ Agent frameworks bolt persistence, identity, and coordination onto a loop. defra
 
 ## Architecture
 
-```
+``` md
             documents in ────────────► documents out
                  │                            ▲
    ┌─────────────▼────────────────────────────┴──────────────┐

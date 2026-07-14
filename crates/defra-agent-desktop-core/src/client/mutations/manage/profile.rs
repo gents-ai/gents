@@ -39,6 +39,21 @@ pub async fn upsert_inference_profile(
         )),
         Some(graphql_optional_int_field("max_turns", row.max_turns)),
         Some(graphql_optional_float_field("temperature", row.temperature)),
+        Some(graphql_optional_float_field("top_p", row.top_p)),
+        Some(graphql_optional_int_field("top_k", row.top_k)),
+        Some(graphql_optional_float_field("min_p", row.min_p)),
+        Some(graphql_optional_float_field(
+            "frequency_penalty",
+            row.frequency_penalty,
+        )),
+        Some(graphql_optional_float_field(
+            "presence_penalty",
+            row.presence_penalty,
+        )),
+        Some(graphql_optional_float_field(
+            "repetition_penalty",
+            row.repetition_penalty,
+        )),
         Some(graphql_optional_int_field(
             "stream_batch_ms",
             row.stream_batch_ms,
@@ -87,6 +102,21 @@ pub async fn upsert_inference_profile(
         )),
         Some(graphql_optional_int_field("max_turns", row.max_turns)),
         Some(graphql_optional_float_field("temperature", row.temperature)),
+        Some(graphql_optional_float_field("top_p", row.top_p)),
+        Some(graphql_optional_int_field("top_k", row.top_k)),
+        Some(graphql_optional_float_field("min_p", row.min_p)),
+        Some(graphql_optional_float_field(
+            "frequency_penalty",
+            row.frequency_penalty,
+        )),
+        Some(graphql_optional_float_field(
+            "presence_penalty",
+            row.presence_penalty,
+        )),
+        Some(graphql_optional_float_field(
+            "repetition_penalty",
+            row.repetition_penalty,
+        )),
         Some(graphql_optional_int_field(
             "stream_batch_ms",
             row.stream_batch_ms,
