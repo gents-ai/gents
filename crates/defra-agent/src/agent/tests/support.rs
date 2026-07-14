@@ -70,6 +70,12 @@ pub(super) async fn insert_inference_profile(node: &EmbeddedNode, profile_id: &s
                 max_output_tokens: 4096,
                 max_turns: 8,
                 temperature: 0.2,
+                top_p: 0.95,
+                top_k: 40,
+                min_p: 0.05,
+                frequency_penalty: 0.5,
+                presence_penalty: -0.25,
+                repetition_penalty: 1.1,
                 stream_batch_ms: 500,
                 stream_liveness_timeout_secs: 45,
                 deadline_duration_secs: 120

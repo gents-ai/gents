@@ -11,7 +11,7 @@ use crate::config::{
 use crate::graphql::escape_graphql_string;
 use crate::retry::execute_graphql_with_conflict_retry;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct InferenceProfile {
     pub profile_id: String,
     pub display_name: Option<String>,
@@ -19,6 +19,14 @@ pub struct InferenceProfile {
     pub max_output_tokens: Option<i64>,
     pub max_turns: Option<i64>,
     pub temperature: Option<f64>,
+    /// Sampling knobs beyond temperature (#649). `None` inherits the served
+    /// model's `generation_config.json`; `Some` pins the value explicitly.
+    pub top_p: Option<f64>,
+    pub top_k: Option<i64>,
+    pub min_p: Option<f64>,
+    pub frequency_penalty: Option<f64>,
+    pub presence_penalty: Option<f64>,
+    pub repetition_penalty: Option<f64>,
     pub stream_batch_ms: Option<i64>,
     pub stream_liveness_timeout_secs: Option<i64>,
     pub deadline_duration_secs: Option<i64>,
@@ -43,6 +51,15 @@ pub(super) fn default_inference_profile_for_behavior(behavior_id: &str) -> Infer
         max_output_tokens: Some(DEFAULT_MAX_OUTPUT_TOKENS as i64),
         max_turns: Some(DEFAULT_MAX_TURNS as i64),
         temperature: Some(0.0),
+        // Unset: inherit whatever the served model's generation_config.json
+        // specifies. The default profile must not silently impose sampling the
+        // operator never asked for.
+        top_p: None,
+        top_k: None,
+        min_p: None,
+        frequency_penalty: None,
+        presence_penalty: None,
+        repetition_penalty: None,
         stream_batch_ms: Some(DEFAULT_STREAM_BATCH_MS as i64),
         stream_liveness_timeout_secs: Some(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
         deadline_duration_secs: Some(DEFAULT_DEADLINE_DURATION_SECS as i64),
@@ -90,6 +107,12 @@ pub(crate) async fn load_inference_profile_record(
                 max_output_tokens
                 max_turns
                 temperature
+                top_p
+                top_k
+                min_p
+                frequency_penalty
+                presence_penalty
+                repetition_penalty
                 stream_batch_ms
                 stream_liveness_timeout_secs
                 deadline_duration_secs
@@ -131,6 +154,12 @@ pub(crate) async fn load_inference_profile_by_doc_id(
                 max_output_tokens
                 max_turns
                 temperature
+                top_p
+                top_k
+                min_p
+                frequency_penalty
+                presence_penalty
+                repetition_penalty
                 stream_batch_ms
                 stream_liveness_timeout_secs
                 deadline_duration_secs
@@ -166,6 +195,12 @@ pub async fn list_inference_profile_records(
                 max_output_tokens
                 max_turns
                 temperature
+                top_p
+                top_k
+                min_p
+                frequency_penalty
+                presence_penalty
+                repetition_penalty
                 stream_batch_ms
                 stream_liveness_timeout_secs
                 deadline_duration_secs
@@ -212,6 +247,18 @@ pub(crate) fn upsert_inference_profile_mutation(profile: &InferenceProfile) -> S
         graphql_fields::graphql_optional_int_field("max_output_tokens", profile.max_output_tokens),
         graphql_fields::graphql_optional_int_field("max_turns", profile.max_turns),
         graphql_fields::graphql_optional_float_field("temperature", profile.temperature),
+        graphql_fields::graphql_optional_float_field("top_p", profile.top_p),
+        graphql_fields::graphql_optional_int_field("top_k", profile.top_k),
+        graphql_fields::graphql_optional_float_field("min_p", profile.min_p),
+        graphql_fields::graphql_optional_float_field(
+            "frequency_penalty",
+            profile.frequency_penalty,
+        ),
+        graphql_fields::graphql_optional_float_field("presence_penalty", profile.presence_penalty),
+        graphql_fields::graphql_optional_float_field(
+            "repetition_penalty",
+            profile.repetition_penalty,
+        ),
         graphql_fields::graphql_optional_int_field("stream_batch_ms", profile.stream_batch_ms),
         graphql_fields::graphql_optional_int_field(
             "stream_liveness_timeout_secs",
@@ -253,6 +300,18 @@ pub(crate) fn upsert_inference_profile_mutation(profile: &InferenceProfile) -> S
         graphql_fields::graphql_optional_int_field("max_output_tokens", profile.max_output_tokens),
         graphql_fields::graphql_optional_int_field("max_turns", profile.max_turns),
         graphql_fields::graphql_optional_float_field("temperature", profile.temperature),
+        graphql_fields::graphql_optional_float_field("top_p", profile.top_p),
+        graphql_fields::graphql_optional_int_field("top_k", profile.top_k),
+        graphql_fields::graphql_optional_float_field("min_p", profile.min_p),
+        graphql_fields::graphql_optional_float_field(
+            "frequency_penalty",
+            profile.frequency_penalty,
+        ),
+        graphql_fields::graphql_optional_float_field("presence_penalty", profile.presence_penalty),
+        graphql_fields::graphql_optional_float_field(
+            "repetition_penalty",
+            profile.repetition_penalty,
+        ),
         graphql_fields::graphql_optional_int_field("stream_batch_ms", profile.stream_batch_ms),
         graphql_fields::graphql_optional_int_field(
             "stream_liveness_timeout_secs",

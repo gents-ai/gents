@@ -647,6 +647,7 @@ async fn inference_profile_completion_retry_fields_round_trip() {
         retry_max_resample: Some(2),
         retry_allow_repair: Some(false),
         retry_interactive_max: Some(2),
+        ..Default::default()
     };
 
     upsert_inference_profile(&node, &profile)
@@ -694,6 +695,7 @@ fn inference_profile_empty_retry_backoff_serializes_null_and_resolves_defaults()
         retry_max_resample: None,
         retry_allow_repair: None,
         retry_interactive_max: None,
+        ..Default::default()
     };
     let mutation = super::inference_profile::upsert_inference_profile_mutation(&profile);
     assert!(

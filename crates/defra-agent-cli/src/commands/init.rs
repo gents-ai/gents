@@ -788,6 +788,7 @@ fn standard_inference_profile(profile_id: &str) -> InferenceProfile {
         retry_max_resample: None,
         retry_allow_repair: None,
         retry_interactive_max: None,
+        ..Default::default()
     }
 }
 

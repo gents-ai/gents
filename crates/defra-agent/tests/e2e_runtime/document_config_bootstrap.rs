@@ -116,8 +116,56 @@ async fn load_inference_profile_reads_document_fields() {
     assert_eq!(profile.context_window, Some(32768));
     assert_eq!(profile.max_output_tokens, Some(4096));
     assert_eq!(profile.temperature, Some(0.2));
+    // #649: sampling knobs beyond temperature must survive the document
+    // round-trip — before this they could not even be stored.
+    assert_eq!(profile.top_p, Some(0.95));
+    assert_eq!(profile.top_k, Some(40));
+    assert_eq!(profile.min_p, Some(0.05));
+    assert_eq!(profile.frequency_penalty, Some(0.5));
+    assert_eq!(profile.presence_penalty, Some(-0.25));
+    assert_eq!(profile.repetition_penalty, Some(1.1));
     assert_eq!(profile.stream_liveness_timeout_secs, Some(45));
     assert_eq!(profile.deadline_duration_secs, Some(120));
+}
+
+/// #649 end to end: a profile's pinned sampling knobs must reach the behavior's
+/// `SamplingConfig`, and from there the provider request body.
+///
+/// This is the hop that was broken: `behavior_config_from_documents` hardcoded
+/// `top_p: None, top_k: None`, so a profile could not express them at all and
+/// every agent silently inherited whatever the served checkpoint's
+/// `generation_config.json` happened to bake in.
+#[tokio::test]
+async fn profile_sampling_knobs_reach_the_behavior_and_provider_body() {
+    let db = test_db("profile-sampling-knobs").await;
+    let profile_id = "sampling";
+    insert_inference_profile(db.node.as_ref(), profile_id).await;
+
+    let profile = load_inference_profile(db.node.as_ref(), profile_id)
+        .await
+        .expect("load succeeds")
+        .expect("profile exists");
+
+    let sampling = defra_agent::SamplingConfig {
+        temperature: profile.temperature,
+        top_p: profile.top_p,
+        top_k: profile.top_k,
+        min_p: profile.min_p,
+        frequency_penalty: profile.frequency_penalty,
+        presence_penalty: profile.presence_penalty,
+        repetition_penalty: profile.repetition_penalty,
+        max_tokens: None,
+    };
+    let params = sampling
+        .additional_params()
+        .expect("pinned knobs must produce provider body params");
+
+    assert_eq!(params["top_p"], 0.95);
+    assert_eq!(params["top_k"], 40);
+    assert_eq!(params["min_p"], 0.05);
+    assert_eq!(params["frequency_penalty"], 0.5);
+    assert_eq!(params["presence_penalty"], -0.25);
+    assert_eq!(params["repetition_penalty"], 1.1);
 }
 
 #[tokio::test]
@@ -143,6 +191,7 @@ async fn upsert_helpers_roundtrip_behavior_and_profile() {
             retry_max_resample: None,
             retry_allow_repair: None,
             retry_interactive_max: None,
+            ..Default::default()
         },
     )
     .await
@@ -255,6 +304,12 @@ async fn insert_inference_profile(node: &defra_agent::defra_node::EmbeddedNode, 
                 max_output_tokens: 4096,
                 max_turns: 8,
                 temperature: 0.2,
+                top_p: 0.95,
+                top_k: 40,
+                min_p: 0.05,
+                frequency_penalty: 0.5,
+                presence_penalty: -0.25,
+                repetition_penalty: 1.1,
                 stream_batch_ms: 500,
                 stream_liveness_timeout_secs: 45,
                 deadline_duration_secs: 120

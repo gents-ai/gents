@@ -215,6 +215,12 @@ async fn seed_live_behavior_documents(
         retry_max_resample: None,
         retry_allow_repair: None,
         retry_interactive_max: None,
+        top_p: None,
+        top_k: None,
+        min_p: None,
+        frequency_penalty: None,
+        presence_penalty: None,
+        repetition_penalty: None,
     })
     .await?;
     core.save_behavior(&AgentBehaviorRow {

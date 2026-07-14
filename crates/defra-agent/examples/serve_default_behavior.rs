@@ -172,6 +172,7 @@ async fn seed_demo_documents(
             retry_max_resample: None,
             retry_allow_repair: None,
             retry_interactive_max: None,
+            ..Default::default()
         },
     )
     .await?;

@@ -167,12 +167,26 @@ const ADD_CONSUMED_INVITE_NONCE_CLAIMANT_PATCH: &str = r#"[
 /// canonical DefraDB patch kinds.
 /// The runtime queries these at startup, so an upgraded home MUST gain them
 /// before the first profile read or the server fails to boot.
-const INFERENCE_PROFILE_RETRY_FIELDS: &[(&str, &str)] = &[
+/// Additive `InferenceProfile` fields patched onto pre-existing collections.
+///
+/// Adding to this table is the whole migration: every field is nullable, so an
+/// upgraded store gains it with no backfill and a fresh store gets it straight
+/// from the SDL. The sampling knobs beyond `temperature` are #649 — before
+/// them, `top_p`/`top_k` were entirely at the mercy of the served checkpoint's
+/// `generation_config.json`, with no way to correct a wrong default from
+/// desired state.
+const INFERENCE_PROFILE_ADDITIVE_FIELDS: &[(&str, &str)] = &[
     ("retry_max_transport", "Int"),
     ("retry_backoff_ms", "[Int]"),
     ("retry_max_resample", "Int"),
     ("retry_allow_repair", "Boolean"),
     ("retry_interactive_max", "Int"),
+    ("top_p", "Float"),
+    ("top_k", "Int"),
+    ("min_p", "Float"),
+    ("frequency_penalty", "Float"),
+    ("presence_penalty", "Float"),
+    ("repetition_penalty", "Float"),
 ];
 
 const ADD_PEER_PAIRING_APPLIED_REPLICATOR_FILTER_PATCH: &str = r#"[
@@ -1193,7 +1207,7 @@ pub async fn ensure_inference_profile_migrations(node: Arc<EmbeddedNode>) -> Res
         };
     };
 
-    let missing: Vec<&(&str, &str)> = INFERENCE_PROFILE_RETRY_FIELDS
+    let missing: Vec<&(&str, &str)> = INFERENCE_PROFILE_ADDITIVE_FIELDS
         .iter()
         .filter(|(name, _)| !collection_has_field(&collection, name))
         .collect();
@@ -1214,14 +1228,14 @@ pub async fn ensure_inference_profile_migrations(node: Arc<EmbeddedNode>) -> Res
     let next = node
         .patch_collection("InferenceProfile", &patch)
         .await
-        .context("patch_collection InferenceProfile retry fields")?;
+        .context("patch_collection InferenceProfile additive fields")?;
     node.set_active_collection_version(&next.version_id)
         .await
-        .context("set_active_collection_version InferenceProfile retry fields")?;
+        .context("set_active_collection_version InferenceProfile additive fields")?;
     tracing::info!(
         version = %next.version_id,
         added = missing.len(),
-        "InferenceProfile patched with per-completion retry fields"
+        "InferenceProfile patched with additive fields"
     );
     Ok(())
 }
@@ -4384,7 +4398,7 @@ mod patch_kind_tests {
             .unwrap()
             .expect("InferenceProfile collection must exist after migration");
         let hand_patched_version = collection.version_id.clone();
-        for (field, _) in INFERENCE_PROFILE_RETRY_FIELDS {
+        for (field, _) in INFERENCE_PROFILE_ADDITIVE_FIELDS {
             assert!(
                 collection_has_field(&collection, field),
                 "InferenceProfile must have field '{field}' after migration"
@@ -4412,7 +4426,7 @@ mod patch_kind_tests {
             swept.version_id, hand_patched_version,
             "bundled sweep must not double-patch #680 retry fields"
         );
-        for (field, _) in INFERENCE_PROFILE_RETRY_FIELDS {
+        for (field, _) in INFERENCE_PROFILE_ADDITIVE_FIELDS {
             assert_eq!(
                 swept
                     .fields

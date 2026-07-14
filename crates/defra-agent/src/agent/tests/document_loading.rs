@@ -99,6 +99,27 @@ async fn from_default_behavior_documents_composes_behavior_and_inference_profile
     assert_eq!(behavior.stream_batch_ms, 500);
     assert_eq!(behavior.stream_liveness_timeout, Duration::from_secs(45));
     assert_eq!(behavior.deadline_duration, Duration::from_secs(120));
+
+    // #649: the profile's sampling knobs must land on the behavior. This hop
+    // hardcoded `top_p: None, top_k: None`, so a profile could not express any
+    // sampling beyond temperature and every agent silently inherited whatever
+    // the served checkpoint's generation_config.json baked in.
+    assert_eq!(behavior.sampling.temperature, Some(0.2));
+    assert_eq!(behavior.sampling.top_p, Some(0.95));
+    assert_eq!(behavior.sampling.top_k, Some(40));
+    assert_eq!(behavior.sampling.min_p, Some(0.05));
+    assert_eq!(behavior.sampling.frequency_penalty, Some(0.5));
+    assert_eq!(behavior.sampling.presence_penalty, Some(-0.25));
+    assert_eq!(behavior.sampling.repetition_penalty, Some(1.1));
+
+    // ...and from the behavior they must reach the provider request body.
+    let params = behavior
+        .sampling
+        .additional_params()
+        .expect("pinned sampling knobs must produce provider body params");
+    assert_eq!(params["top_p"], 0.95);
+    assert_eq!(params["top_k"], 40);
+    assert_eq!(params["repetition_penalty"], 1.1);
 }
 
 #[tokio::test]

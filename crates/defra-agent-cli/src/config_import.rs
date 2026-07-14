@@ -2031,6 +2031,7 @@ mod lean_apply_write_boundary_tests {
             retry_max_resample: None,
             retry_allow_repair: None,
             retry_interactive_max: None,
+            ..Default::default()
         }
     }
 
