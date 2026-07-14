@@ -183,7 +183,8 @@ async fn apply_manifest_pairing_documents(
                         doc.unique_value
                     )
                 })?;
-            let add_literal = graphql_input_literal(&doc.add_doc)?;
+            let add_doc = crate::config_writes::mint_recreate_identity(&doc.add_doc);
+            let add_literal = graphql_input_literal(&add_doc)?;
             let update_literal =
                 graphql_input_literal(doc.update_doc.as_ref().ok_or_else(|| {
                     anyhow::anyhow!("missing update document for PeerPairingDesired")
@@ -356,7 +357,12 @@ fn generic_import_mutation_field(
     override_existing: bool,
 ) -> Result<AliasedMutationField> {
     let alias = format!("doc_{index}");
-    let add_literal = graphql_input_literal(&doc.add_doc)?;
+    let add_doc = if override_existing {
+        crate::config_writes::mint_recreate_identity(&doc.add_doc)
+    } else {
+        doc.add_doc.clone()
+    };
+    let add_literal = graphql_input_literal(&add_doc)?;
     let field = if override_existing {
         // This is the generic production bridge for apply retry convergence:
         // after a partial prefix, rerunning `config apply` recomputes live diff
@@ -403,7 +409,12 @@ async fn apply_generic_import_document(
     doc: &PreparedImportDocument,
     override_existing: bool,
 ) -> Result<()> {
-    let add_literal = graphql_input_literal(&doc.add_doc)?;
+    let add_doc = if override_existing {
+        crate::config_writes::mint_recreate_identity(&doc.add_doc)
+    } else {
+        doc.add_doc.clone()
+    };
+    let add_literal = graphql_input_literal(&add_doc)?;
     let mutation = if override_existing {
         // Per-document fallback preserves the same retry property as the batch
         // path: the unique-field filter makes repeated successful writes land
@@ -862,6 +873,36 @@ mod tests {
     }
 
     #[test]
+    fn every_apply_collection_schema_has_a_recreate_identity_field() {
+        use defra_agent_protocol::schemas;
+
+        for collection in Collection::ALL {
+            let schema = match collection {
+                Collection::AgentPrincipal => schemas::AGENT_PRINCIPAL,
+                Collection::AgentBehavior => schemas::AGENT_BEHAVIOR,
+                Collection::Skill => schemas::SKILL,
+                Collection::ToolSelection => schemas::TOOL_SELECTION,
+                Collection::InferenceBackend => schemas::INFERENCE_BACKEND,
+                Collection::InferenceProfile => schemas::INFERENCE_PROFILE,
+                Collection::ToolServiceRegistry => schemas::TOOL_SERVICE_REGISTRY,
+                Collection::ProjectionAcpBinding => schemas::PROJECTION_ACP_BINDING,
+                Collection::PeerPairingDesired => schemas::PEER_PAIRING_DESIRED,
+                Collection::Task => schemas::TASK,
+                Collection::Schedule => schemas::SCHEDULE,
+                Collection::EventTrigger => schemas::EVENT_TRIGGER,
+            };
+
+            assert!(
+                schema
+                    .lines()
+                    .any(|line| line.trim_start().starts_with("updated_at:")),
+                "{} must expose updated_at for tombstone-safe recreation",
+                collection.graphql_type()
+            );
+        }
+    }
+
+    #[test]
     fn config_apply_order_has_retry_safe_prefixes() {
         for prefix_len in 0..=CONFIG_APPLY_ORDER_FOR_TESTS.len() {
             let prefix = &CONFIG_APPLY_ORDER_FOR_TESTS[..prefix_len];
@@ -1002,6 +1043,95 @@ doc_1: create_Task(input: { task_id: "b" }) { _docID }
         ];
 
         assert!(has_duplicate_unique_values(&docs));
+    }
+
+    #[test]
+    fn generic_override_stamps_only_the_add_branch() {
+        let doc = PreparedImportDocument {
+            unique_value: "tools-a".to_string(),
+            add_doc: json!({
+                "selection_id": "tools-a",
+                "agent_did": "did:example:agent"
+            }),
+            update_doc: Some(json!({ "agent_did": "did:example:agent" })),
+        };
+
+        let field =
+            generic_import_mutation_field(0, "ToolSelection", "selection_id", &doc, true).unwrap();
+
+        let (_, update) = field.field.split_once("update:").unwrap();
+        assert!(field.field.contains("updated_at:"));
+        assert!(!update.contains("updated_at:"));
+    }
+
+    #[tokio::test]
+    async fn generic_override_recreates_a_tombstoned_tool_selection() -> Result<()> {
+        use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
+        use defra_agent::ensure_runtime_schemas;
+
+        let tempdir = tempfile::tempdir()?;
+        let node = EmbeddedNode::builder()
+            .data_path(tempdir.path().join("data"))
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(node);
+        let doc = json!({
+            "selection_id": "tools-a",
+            "agent_did": "did:example:agent",
+            "display_name": "Tools A"
+        });
+
+        let txn = access.begin_apply_txn().await?;
+        apply_import_collection(
+            &txn,
+            "ToolSelection",
+            "selection_id",
+            std::slice::from_ref(&doc),
+            true,
+        )
+        .await?;
+        txn.commit().await?;
+        let first_doc_id = tool_selection_doc_id(&access).await?;
+
+        access
+            .execute(
+                r#"mutation {
+                    delete_ToolSelection(filter: { selection_id: { _eq: "tools-a" } }) { _docID }
+                }"#,
+            )
+            .await?;
+
+        let txn = access.begin_apply_txn().await?;
+        apply_import_collection(
+            &txn,
+            "ToolSelection",
+            "selection_id",
+            std::slice::from_ref(&doc),
+            true,
+        )
+        .await?;
+        txn.commit().await?;
+        let recreated_doc_id = tool_selection_doc_id(&access).await?;
+
+        assert_ne!(first_doc_id, recreated_doc_id);
+        Ok(())
+    }
+
+    async fn tool_selection_doc_id(access: &ConfigAccess) -> Result<String> {
+        let response = access
+            .execute(
+                r#"{
+                    ToolSelection(filter: { selection_id: { _eq: "tools-a" } }) { _docID }
+                }"#,
+            )
+            .await?;
+        response
+            .pointer("/data/ToolSelection/0/_docID")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("live ToolSelection missing after apply: {response}"))
     }
 
     #[test]

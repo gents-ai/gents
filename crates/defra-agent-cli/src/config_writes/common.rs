@@ -84,23 +84,41 @@ pub(super) fn select_existing_document(
     Ok(deleted_rows.first().map(|row| (*row).clone()))
 }
 
-/// Mint a fresh document identity for a recreate over a tombstone.
+/// Mint a fresh document identity for an apply-owned create.
 ///
 /// Deletion is terminal in DefraDB and docIDs are content-addressed, so
 /// recreating a row whose manifest content is IDENTICAL to the tombstoned one
-/// would regenerate the tombstoned docID — and a create onto a tombstoned
-/// docID does not produce a live row (#700). Stamping the apply time gives the
-/// new incarnation distinct content, and with it a new identity.
+/// would regenerate the tombstoned docID. Every apply-controlled collection
+/// carries `updated_at`, so stamping the add branch gives each incarnation a
+/// distinct identity without changing a live row's update payload.
 pub(crate) fn mint_recreate_identity(add_doc: &serde_json::Value) -> serde_json::Value {
     let mut doc = add_doc.clone();
     if let Some(map) = doc.as_object_mut() {
-        let now = chrono::Utc::now().to_rfc3339();
         map.insert(
             "updated_at".to_string(),
-            serde_json::Value::String(now.clone()),
+            serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
         );
-        map.entry("created_at".to_string())
-            .or_insert(serde_json::Value::String(now));
     }
     doc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn recreate_identity_preserves_content_and_stamps_updated_at() {
+        let original = json!({
+            "selection_id": "tools-a",
+            "created_at": "2026-01-01T00:00:00Z"
+        });
+
+        let minted = mint_recreate_identity(&original);
+
+        assert_eq!(minted.get("selection_id"), original.get("selection_id"));
+        assert_eq!(minted.get("created_at"), original.get("created_at"));
+        assert!(minted.get("updated_at").and_then(Value::as_str).is_some());
+        assert!(original.get("updated_at").is_none());
+    }
 }

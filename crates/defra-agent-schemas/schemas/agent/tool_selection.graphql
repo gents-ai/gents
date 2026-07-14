@@ -40,4 +40,5 @@ type ToolSelection {
     enable_defra_query: Boolean
     defra_query_collections: [String]
     write_tools: [String]
+    updated_at: DateTime @index(direction: DESC)
 }
