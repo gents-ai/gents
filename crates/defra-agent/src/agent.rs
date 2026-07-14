@@ -84,6 +84,10 @@ pub struct DocumentRuntimeOptions {
     /// the runtime create its own.
     pub backend_health: Option<BackendHealthMap>,
     pub process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
+    /// Startup readiness knobs (#559): the build-failure budget that demotes a
+    /// persistently un-buildable behavior instead of wedging `Ready`, and the
+    /// per-attempt build timeout that turns a hanging build into a failure.
+    pub startup_readiness: crate::startup_readiness::StartupReadinessOptions,
 }
 
 #[derive(Clone)]
@@ -112,6 +116,7 @@ pub struct DefraAgent {
     backend_prober_options: BackendProberOptions,
     backend_health: BackendHealthMap,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
+    startup_readiness: crate::startup_readiness::StartupReadinessOptions,
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     /// Populated once the runtime's `TriggerEngine` has constructed the
@@ -195,6 +200,7 @@ impl DefraAgent {
             backend_prober_options: options.backend_prober_options,
             backend_health,
             process_state_observer: options.process_state_observer,
+            startup_readiness: options.startup_readiness,
             rendered_request_capture_factory: None,
             manual_trigger_handle: Arc::new(OnceCell::new()),
         })

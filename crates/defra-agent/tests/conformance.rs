@@ -52,9 +52,10 @@ use lean_vocab_test::{
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_equivalence_cases,
     lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_interrupt_flow_cases,
     lean_response_transition_cases, lean_runtime_reconcile_case, lean_runtime_reconcile_cases,
-    lean_session_recovery_case, lean_state_machine_contract, lean_subagent_delegation_graph_cases,
-    lean_transcript_case, lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
-    LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
+    lean_session_recovery_case, lean_startup_readiness_cases, lean_state_machine_contract,
+    lean_subagent_delegation_graph_cases, lean_transcript_case, lean_transcript_cases,
+    lean_vocabulary_values, LeanEventDeliveryAction, LeanLifecycleTransitionCase,
+    LeanR4cBackgroundWorkCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -122,6 +123,8 @@ mod replicated_request_convergence;
 mod request_lifecycle;
 #[path = "conformance/session_recovery.rs"]
 mod session_recovery;
+#[path = "conformance/startup_readiness.rs"]
+mod startup_readiness;
 #[path = "conformance/streaming_compaction.rs"]
 mod streaming_compaction;
 #[path = "conformance/tool_call.rs"]
@@ -232,6 +235,11 @@ fn generated_r4c_background_work_cases_pin_observable_shapes() {
 #[test]
 fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     codex_shim::generated_codex_shim_projection_cases_pin_adapter_mapping();
+}
+
+#[test]
+fn generated_startup_readiness_cases_pin_bounded_barrier_release() {
+    startup_readiness::generated_startup_readiness_cases_pin_bounded_barrier_release();
 }
 
 #[tokio::test]

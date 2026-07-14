@@ -522,6 +522,7 @@ async fn behavior_slot_fans_out_background_children_to_backend_capacity() {
         },
         runner,
         shutdown_rx,
+        None,
     );
     let dispatcher = slots
         .get("general")
@@ -629,6 +630,7 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
         runner,
         runtime_status,
         shutdown_rx.clone(),
+        None,
     )
     .unwrap();
     let active_snapshot = supervisor.current_snapshot();
@@ -781,6 +783,7 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
         runner,
         runtime_status.clone(),
         shutdown_rx.clone(),
+        None,
     )
     .unwrap();
     let active_snapshot = supervisor.current_snapshot();
@@ -924,6 +927,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
         runner,
         runtime_status.clone(),
         shutdown_rx.clone(),
+        None,
     )
     .unwrap();
     let initial_active = supervisor.current_snapshot();
@@ -1107,6 +1111,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         runner,
         runtime_status.clone(),
         shutdown_rx.clone(),
+        None,
     )
     .unwrap();
     let active_snapshot = supervisor.current_snapshot();
@@ -1140,6 +1145,112 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
 
     let _ = shutdown_tx.send(true);
     tokio::time::timeout(Duration::from_secs(1), task)
+        .await
+        .expect("supervisor should stop on shutdown")
+        .unwrap()
+        .unwrap();
+}
+
+/// #559: a slot retired by a generation change must release its behavior from
+/// the startup barrier (superseded) instead of orphaning the pending entry —
+/// the policy's retirement hook is the only path that knowledge can take.
+#[tokio::test]
+async fn retiring_a_slot_notifies_the_failure_policy() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct RecordingPolicy {
+        retired: std::sync::Mutex<Vec<(String, bool)>>,
+        demote_calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl slot::SlotFailurePolicy for RecordingPolicy {
+        fn build_failure_budget(&self) -> u32 {
+            3
+        }
+        async fn try_demote(&self, _behavior_id: &str, _error: &str) -> bool {
+            self.demote_calls.fetch_add(1, Ordering::SeqCst);
+            false
+        }
+        async fn on_slot_retired(&self, behavior_id: &str, recreated: bool) {
+            self.retired
+                .lock()
+                .expect("retired mutex")
+                .push((behavior_id.to_string(), recreated));
+        }
+    }
+
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let runtime_status =
+        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), "did:test:policy");
+    let behavior = Arc::new(
+        PendingAgentBehavior::new("general")
+            .build_with_identity_for_test(test_identity("policy-retirement-559")),
+    );
+    let initial_snapshot =
+        snapshot_for_behaviors(node.as_ref(), "general", vec![behavior.clone()]).await;
+    // A runner that parks until shutdown: the behavior never "starts", exactly
+    // the mid-startup window the retirement release exists for.
+    let runner = |_behavior: Arc<AgentBehavior>,
+                  _tool_surface: Arc<ToolSurface>,
+                  _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                  mut shutdown: watch::Receiver<bool>| async move {
+        let _ = shutdown.changed().await;
+        Ok(())
+    };
+
+    let policy = Arc::new(RecordingPolicy {
+        retired: std::sync::Mutex::new(Vec::new()),
+        demote_calls: AtomicUsize::new(0),
+    });
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let supervisor = GenerationSupervisor::bootstrap(
+        initial_snapshot,
+        crate::admission::AdmissionRegistry::new(node.clone()),
+        crate::retry::RetryPolicy {
+            max_retries: 1,
+            base_delay_ms: 1,
+            max_delay_ms: 2,
+        },
+        runner,
+        runtime_status,
+        shutdown_rx.clone(),
+        Some(policy.clone() as Arc<dyn slot::SlotFailurePolicy>),
+    )
+    .unwrap();
+    let (active_tx, mut active_rx) = watch::channel(supervisor.current_snapshot());
+    let (proposal_tx, proposal_rx) = mpsc::channel(4);
+    let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
+
+    // A generation without the behavior: its slot is retired outright.
+    let empty_snapshot = snapshot_for_behaviors(node.as_ref(), "general", vec![]).await;
+    proposal_tx.send(empty_snapshot).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), active_rx.changed())
+        .await
+        .expect("removal generation should publish")
+        .unwrap();
+
+    // The retirement hook runs on a spawned task; give it a beat.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        if policy
+            .retired
+            .lock()
+            .expect("retired mutex")
+            .contains(&("general".to_string(), false))
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "retirement must notify the policy so the barrier is released"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let _ = shutdown_tx.send(true);
+    tokio::time::timeout(Duration::from_secs(2), task)
         .await
         .expect("supervisor should stop on shutdown")
         .unwrap()

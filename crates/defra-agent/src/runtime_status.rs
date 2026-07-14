@@ -96,6 +96,10 @@ impl RuntimeStatusRow {
 pub(crate) struct RuntimeStatusHandle {
     node: Arc<defra_node::EmbeddedNode>,
     state: Arc<Mutex<RuntimeStatusRow>>,
+    /// Startup build-failure demotions (#559), folded into the runnable /
+    /// unavailable counts at every publish so a reconcile republish cannot
+    /// silently undo them — and `/healthz` degrades instead of reading green.
+    startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
 }
 
 impl RuntimeStatusHandle {
@@ -103,7 +107,25 @@ impl RuntimeStatusHandle {
         Self {
             node,
             state: Arc::new(Mutex::new(RuntimeStatusRow::new(agent_did.into()))),
+            startup_demotions: Arc::new(crate::startup_readiness::StartupDemotions::new()),
         }
+    }
+
+    pub(crate) fn startup_demotions(&self) -> Arc<crate::startup_readiness::StartupDemotions> {
+        self.startup_demotions.clone()
+    }
+
+    /// Re-publish counts after a startup demotion so the degradation is
+    /// visible immediately, not only at the next reconcile publish.
+    pub(crate) async fn record_startup_demotion(&self) {
+        self.update(|row| {
+            if row.runnable_behavior_count > 0 {
+                row.runnable_behavior_count -= 1;
+            }
+            row.unavailable_behavior_count += 1;
+            true
+        })
+        .await;
     }
 
     pub(crate) async fn set_process_state(&self, state: ProcessLifecycleState) {
@@ -190,13 +212,24 @@ impl RuntimeStatusHandle {
 
     async fn publish_snapshot(&self, snapshot: &ActiveRuntimeSnapshot, result: ReconcileResult) {
         let executor_status = executor_status_fields(snapshot);
+        // A behavior demoted for startup build failures is still in the
+        // snapshot's runnable set (the snapshot is document-derived); fold the
+        // ledger in so republishes report it unavailable, not healthy.
+        let demoted = self.startup_demotions.snapshot();
+        let demoted_runnable = snapshot
+            .behaviors
+            .keys()
+            .filter(|behavior_id| demoted.contains_key(*behavior_id))
+            .count();
         self.update(|row| {
             let mut changed = false;
             let generation = i64::try_from(snapshot.generation).unwrap_or(i64::MAX);
             let runnable_behavior_count =
-                i64::try_from(snapshot.behaviors.len()).unwrap_or(i64::MAX);
+                i64::try_from(snapshot.behaviors.len().saturating_sub(demoted_runnable))
+                    .unwrap_or(i64::MAX);
             let unavailable_behavior_count =
-                i64::try_from(snapshot.unavailable_behaviors.len()).unwrap_or(i64::MAX);
+                i64::try_from(snapshot.unavailable_behaviors.len() + demoted_runnable)
+                    .unwrap_or(i64::MAX);
             if row.reconcile_phase != ReconcilePhase::Idle.as_str() {
                 row.reconcile_phase = ReconcilePhase::Idle.as_str().to_string();
                 changed = true;

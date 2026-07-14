@@ -63,6 +63,7 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
     background_tool_registry: crate::hook::BackgroundToolRegistry,
     background_execution_registry: crate::hook::BackgroundExecutionRegistry,
     startup_barrier: Arc<StartupBarrier>,
+    startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
 }
 
 enum HandleRequestOutcome {
@@ -86,6 +87,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         background_tool_registry: crate::hook::BackgroundToolRegistry,
         background_execution_registry: crate::hook::BackgroundExecutionRegistry,
         startup_barrier: Arc<StartupBarrier>,
+        startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
     ) -> Self {
         let stream_writer = DefraStreamWriter::new(
             node.clone(),
@@ -118,6 +120,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             background_tool_registry,
             background_execution_registry,
             startup_barrier,
+            startup_demotions,
         }
     }
 
@@ -137,6 +140,10 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         self.startup_barrier
             .mark_behavior_ready(&self.behavior.behavior_id)
             .await;
+        // A successful start supersedes any demotion that raced it: the
+        // behavior is serving, so the ledger entry (which would make the
+        // router reject its requests) must not survive.
+        self.startup_demotions.clear(&self.behavior.behavior_id);
         tracing::info!(
             behavior_id = %self.behavior.behavior_id,
             did = %self.behavior.agent_did(),

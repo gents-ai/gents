@@ -20,6 +20,7 @@ mod slot;
 use diff::diff_counts;
 #[cfg(test)]
 use slot::spawn_slot;
+pub(in crate::agent) use slot::SlotFailurePolicy;
 use slot::{
     behavior_executor_capacity, retire_slot, spawn_slot_with_capacity, spawn_slots, BehaviorSlot,
     BehaviorSlotState,
@@ -32,6 +33,7 @@ pub(super) struct GenerationSupervisor<F> {
     retry_policy: RetryPolicy,
     runner: F,
     runtime_status: RuntimeStatusHandle,
+    slot_failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
 }
 
 impl<F, Fut> GenerationSupervisor<F>
@@ -55,6 +57,7 @@ where
         runner: F,
         runtime_status: RuntimeStatusHandle,
         shutdown: watch::Receiver<bool>,
+        slot_failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
     ) -> Result<Self> {
         admission_registry.reconcile(1, &resolved_snapshot.backend_admission_configs);
         let active_slots = spawn_slots(
@@ -62,6 +65,7 @@ where
             retry_policy.clone(),
             runner.clone(),
             shutdown,
+            slot_failure_policy.clone(),
         );
         let dispatchers = active_slots
             .iter()
@@ -89,6 +93,7 @@ where
             retry_policy,
             runner,
             runtime_status,
+            slot_failure_policy,
         })
     }
 
@@ -210,6 +215,10 @@ where
     ) -> Result<()> {
         let mut next_slots = HashMap::new();
         let mut retired_slots = Vec::new();
+        // (behavior_id, recreated): retirement must release a never-started
+        // behavior from the startup barrier (superseded), and a recreated slot
+        // earns a fresh build budget (#559).
+        let mut retired_behaviors: Vec<(String, bool)> = Vec::new();
 
         for (behavior_id, behavior) in &resolved_snapshot.behaviors {
             let tool_surface = resolved_snapshot
@@ -226,6 +235,7 @@ where
                 }
                 Some(existing) => {
                     retired_slots.push(existing);
+                    retired_behaviors.push((behavior_id.clone(), true));
                     next_slots.insert(
                         behavior_id.clone(),
                         spawn_slot_with_capacity(
@@ -235,6 +245,7 @@ where
                             self.retry_policy.clone(),
                             self.runner.clone(),
                             shutdown.clone(),
+                            self.slot_failure_policy.clone(),
                         ),
                     );
                 }
@@ -248,12 +259,18 @@ where
                             self.retry_policy.clone(),
                             self.runner.clone(),
                             shutdown.clone(),
+                            self.slot_failure_policy.clone(),
                         ),
                     );
                 }
             }
         }
 
+        retired_behaviors.extend(
+            self.active_slots
+                .keys()
+                .map(|behavior_id| (behavior_id.clone(), false)),
+        );
         retired_slots.extend(self.active_slots.drain().map(|(_, slot)| slot));
 
         let dispatchers = next_slots
@@ -285,6 +302,13 @@ where
 
         for slot in retired_slots {
             retire_slot(slot);
+        }
+        if let Some(policy) = self.slot_failure_policy.clone() {
+            tokio::spawn(async move {
+                for (behavior_id, recreated) in retired_behaviors {
+                    policy.on_slot_retired(&behavior_id, recreated).await;
+                }
+            });
         }
 
         Ok(())

@@ -10,6 +10,7 @@ use crate::admission::BackendAdmissionConfig;
 use crate::config::AgentBehavior;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
+use crate::startup_readiness::{BuildOutcome, BuildStanding};
 use crate::tool_surface::ToolSurface;
 use crate::watcher::AgentRequest;
 
@@ -46,11 +47,134 @@ impl BehaviorSlot {
     }
 }
 
+/// Decides what a slot does about repeated failures before its behavior ever
+/// started (#559).
+///
+/// The slot loop counts consecutive pre-start failures on one shared standing
+/// per slot (mirroring `RuntimeReconcile.StartupReadiness`); when the budget is
+/// spent it asks the policy to demote. The policy re-checks the startup barrier
+/// at that moment: a behavior that already started once (this worker or a
+/// sibling) is a post-start crash and keeps today's unbounded restart behavior.
+/// Behaviors spawned by post-startup generations never enter the barrier, so
+/// `try_demote` declines them and they also keep today's behavior.
+#[async_trait::async_trait]
+pub(crate) trait SlotFailurePolicy: Send + Sync {
+    /// Consecutive pre-start build failures tolerated before demotion.
+    fn build_failure_budget(&self) -> u32;
+    /// Demote the behavior if it is still startup-pending: release it from the
+    /// barrier without claiming health, record the reason, surface it. Returns
+    /// whether the demotion was actually taken.
+    async fn try_demote(&self, behavior_id: &str, error: &str) -> bool;
+    /// Reconcile retired this behavior's slot. A still-pending behavior must be
+    /// released as superseded so mid-startup retirement cannot orphan its
+    /// barrier entry; a recreated slot starts with a fresh budget.
+    async fn on_slot_retired(&self, behavior_id: &str, recreated: bool);
+}
+
+/// Count a worker failure against the slot's build budget and demote at the
+/// budget. Returns `true` when this worker should stop (parked after a
+/// demotion) instead of taking the classic restart path.
+///
+/// The stepping mirrors `RuntimeReconcile.StartupReadiness.step`; the policy's
+/// `try_demote` re-checks the startup barrier at the demotion moment, so a
+/// behavior that started on a sibling worker (post-start crash) or that never
+/// entered the barrier (post-startup generations) declines demotion and keeps
+/// today's restart behavior.
+async fn handle_slot_failure(
+    behavior_id: &str,
+    error: &str,
+    failure_policy: Option<&dyn SlotFailurePolicy>,
+    standing: &Arc<std::sync::Mutex<BuildStanding>>,
+    shutdown: &mut watch::Receiver<bool>,
+    state_rx: &mut watch::Receiver<BehaviorSlotState>,
+) -> bool {
+    let Some(policy) = failure_policy else {
+        return false;
+    };
+    enum Verdict {
+        /// Ready (post-start crash) or lock poisoned: classic restarts.
+        Restart,
+        /// A sibling already spent the budget; this worker parks too.
+        AlreadyDemoted,
+        /// This failure consumed the last of the budget.
+        Transitioned,
+        /// Budget remains: classic restart, keep counting.
+        StillPending,
+    }
+    let verdict = match standing.lock() {
+        Err(_) => Verdict::Restart,
+        Ok(mut standing) => {
+            if standing.released() {
+                if *standing == BuildStanding::Demoted {
+                    Verdict::AlreadyDemoted
+                } else {
+                    Verdict::Restart
+                }
+            } else {
+                let next = standing.step(policy.build_failure_budget(), BuildOutcome::Failed);
+                *standing = next;
+                if next == BuildStanding::Demoted {
+                    Verdict::Transitioned
+                } else {
+                    Verdict::StillPending
+                }
+            }
+        }
+    };
+    match verdict {
+        Verdict::Restart | Verdict::StillPending => return false,
+        Verdict::AlreadyDemoted => {
+            park_until_retired(shutdown, state_rx).await;
+            return true;
+        }
+        Verdict::Transitioned => {}
+    }
+    if policy.try_demote(behavior_id, error).await {
+        park_until_retired(shutdown, state_rx).await;
+        true
+    } else {
+        // The barrier had already released this behavior (it started once, or
+        // never entered the barrier): not a startup demotion. Absorb to Ready
+        // so the budget machinery stays out of the way of classic restarts.
+        if let Ok(mut standing) = standing.lock() {
+            *standing = BuildStanding::Ready;
+        }
+        false
+    }
+}
+
+/// Park a demoted worker: the behavior cannot serve, so restarting the build
+/// would only burn CPU against a spent budget. Wakes only for shutdown or
+/// slot retirement.
+async fn park_until_retired(
+    shutdown: &mut watch::Receiver<bool>,
+    state_rx: &mut watch::Receiver<BehaviorSlotState>,
+) {
+    loop {
+        if *shutdown.borrow() || *state_rx.borrow() == BehaviorSlotState::Retiring {
+            return;
+        }
+        tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+            }
+            changed = state_rx.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
 pub(super) fn spawn_slots<F, Fut>(
     resolved_snapshot: &ResolvedRuntimeSnapshot,
     retry_policy: RetryPolicy,
     runner: F,
     shutdown: watch::Receiver<bool>,
+    failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
 ) -> HashMap<String, BehaviorSlot>
 where
     F: Fn(
@@ -81,6 +205,7 @@ where
                 retry_policy.clone(),
                 runner.clone(),
                 shutdown.clone(),
+                failure_policy.clone(),
             ),
         );
     }
@@ -108,7 +233,15 @@ where
         + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
-    spawn_slot_with_capacity(behavior, tool_surface, 1, retry_policy, runner, shutdown)
+    spawn_slot_with_capacity(
+        behavior,
+        tool_surface,
+        1,
+        retry_policy,
+        runner,
+        shutdown,
+        None,
+    )
 }
 
 pub(super) fn spawn_slot_with_capacity<F, Fut>(
@@ -118,6 +251,7 @@ pub(super) fn spawn_slot_with_capacity<F, Fut>(
     retry_policy: RetryPolicy,
     runner: F,
     shutdown: watch::Receiver<bool>,
+    failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
 ) -> BehaviorSlot
 where
     F: Fn(
@@ -139,6 +273,10 @@ where
     let behavior_fingerprint = format!("{behavior:?}");
     let tool_surface_fingerprint = format!("{tool_surface:?}");
 
+    // One standing per slot, shared across its executor workers: the budget
+    // is a per-behavior property, and the interleaved worker outcomes are the
+    // model's single outcome list.
+    let standing = Arc::new(std::sync::Mutex::new(BuildStanding::seeded()));
     let handle = tokio::spawn(run_slot_workers(
         behavior,
         tool_surface,
@@ -148,6 +286,8 @@ where
         runner,
         shutdown,
         state_rx,
+        failure_policy,
+        standing,
     ));
 
     BehaviorSlot {
@@ -200,7 +340,9 @@ async fn run_slot_loop<F, Fut>(
     retry_policy: RetryPolicy,
     runner: F,
     mut shutdown: watch::Receiver<bool>,
-    state_rx: watch::Receiver<BehaviorSlotState>,
+    mut state_rx: watch::Receiver<BehaviorSlotState>,
+    failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
+    standing: Arc<std::sync::Mutex<BuildStanding>>,
 ) where
     F: Fn(
             Arc<AgentBehavior>,
@@ -217,6 +359,16 @@ async fn run_slot_loop<F, Fut>(
     let mut failure_count = 0u32;
     loop {
         if *shutdown.borrow() || *state_rx.borrow() == BehaviorSlotState::Retiring {
+            return;
+        }
+        // A sibling worker may have spent the budget already; a demoted slot
+        // must not keep rebuilding against a verdict that is already final.
+        if standing
+            .lock()
+            .map(|standing| *standing == BuildStanding::Demoted)
+            .unwrap_or(false)
+        {
+            park_until_retired(&mut shutdown, &mut state_rx).await;
             return;
         }
 
@@ -236,6 +388,12 @@ async fn run_slot_loop<F, Fut>(
         match outcome {
             Ok(Ok(())) if *state_rx.borrow() == BehaviorSlotState::Retiring => return,
             Ok(Ok(())) => {
+                // The daemon ran (it only returns Ok after starting), so the
+                // behavior started at least once: absorb the standing so later
+                // errors are the post-start crash class, not build failures.
+                if let Ok(mut standing) = standing.lock() {
+                    *standing = standing.step(u32::MAX, BuildOutcome::Started);
+                }
                 let delay = retry_policy.delay_for_attempt(failure_count);
                 failure_count += 1;
                 tracing::warn!(
@@ -248,6 +406,18 @@ async fn run_slot_loop<F, Fut>(
                 }
             }
             Ok(Err(error)) => {
+                if handle_slot_failure(
+                    &behavior.behavior_id,
+                    &format!("{error:#}"),
+                    failure_policy.as_deref(),
+                    &standing,
+                    &mut shutdown,
+                    &mut state_rx,
+                )
+                .await
+                {
+                    return;
+                }
                 let delay = retry_policy.delay_for_attempt(failure_count);
                 failure_count += 1;
                 tracing::error!(
@@ -261,6 +431,18 @@ async fn run_slot_loop<F, Fut>(
                 }
             }
             Err(_) => {
+                if handle_slot_failure(
+                    &behavior.behavior_id,
+                    "behavior runner panicked",
+                    failure_policy.as_deref(),
+                    &standing,
+                    &mut shutdown,
+                    &mut state_rx,
+                )
+                .await
+                {
+                    return;
+                }
                 let delay = retry_policy.delay_for_attempt(failure_count);
                 failure_count += 1;
                 tracing::error!(
@@ -285,6 +467,8 @@ async fn run_slot_workers<F, Fut>(
     runner: F,
     shutdown: watch::Receiver<bool>,
     state_rx: watch::Receiver<BehaviorSlotState>,
+    failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
+    standing: Arc<std::sync::Mutex<BuildStanding>>,
 ) where
     F: Fn(
             Arc<AgentBehavior>,
@@ -314,6 +498,8 @@ async fn run_slot_workers<F, Fut>(
             runner.clone(),
             shutdown.clone(),
             state_rx.clone(),
+            failure_policy.clone(),
+            standing.clone(),
         ));
         tracing::debug!(
             behavior_id = %behavior.behavior_id,
