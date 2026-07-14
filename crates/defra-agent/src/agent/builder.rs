@@ -302,6 +302,31 @@ impl BehaviorBuilder {
         self
     }
 
+    pub fn enable_self_config(mut self, enable_self_config: bool) -> Self {
+        self.behavior.tool_selection.enable_self_config = enable_self_config;
+        self
+    }
+
+    pub fn self_config_categories<I, S>(mut self, categories: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.behavior.tool_selection.self_config_categories =
+            Some(categories.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn self_config_no_lockout(mut self, no_lockout: bool) -> Self {
+        self.behavior.tool_selection.self_config_no_lockout = no_lockout;
+        self
+    }
+
+    pub fn self_config_dry_run(mut self, dry_run: bool) -> Self {
+        self.behavior.tool_selection.self_config_dry_run = dry_run;
+        self
+    }
+
     pub fn enable_context_budget(mut self, enable_context_budget: bool) -> Self {
         self.behavior.tool_selection.enable_context_budget = enable_context_budget;
         self

@@ -1,8 +1,8 @@
+use crate::graphql::escape_graphql_string;
 use anyhow::Result;
-use defra_agent::graphql::escape_graphql_string;
 use serde_json::Value;
 
-use crate::graphql_input_literal;
+use defra_agent_protocol::graphql::graphql_input_literal;
 
 use super::common::{query_documents_by_unique_value, select_existing_document};
 
@@ -20,7 +20,7 @@ use super::common::{query_documents_by_unique_value, select_existing_document};
 /// SELECT, and never participate in `row_matches_expected`. This preserves
 /// the contract that reapplying a manifest does not reset live scheduler
 /// state.
-pub(crate) async fn write_schedule_document(
+pub async fn write_schedule_document(
     txn: &super::ConfigApplyTxn<'_>,
     schedule_id: &str,
     add_doc: &Value,
@@ -50,7 +50,7 @@ pub(crate) async fn write_schedule_document(
     );
 
     let response = txn.execute(&mutation).await?;
-    match crate::extract_mutation_doc_id(&response, "Schedule") {
+    match defra_agent_protocol::graphql::extract_mutation_doc_id(&response, "Schedule") {
         Ok(doc_id) => Ok(doc_id),
         Err(extract_error) => {
             let current = select_matching_schedule_row(txn, schedule_id, update_doc).await?;
@@ -99,7 +99,7 @@ async fn create_schedule_document(
         input_literal = input_literal,
     );
     let response = txn.execute(&mutation).await?;
-    match crate::extract_mutation_doc_id(&response, "Schedule") {
+    match defra_agent_protocol::graphql::extract_mutation_doc_id(&response, "Schedule") {
         Ok(doc_id) => Ok(doc_id),
         Err(extract_error) => {
             let current = select_matching_schedule_row(txn, schedule_id, add_doc).await?;
@@ -210,7 +210,7 @@ async fn query_schedule_rows(
 /// contains only apply-owned keys, runtime-owned fields in the live row are
 /// never inspected here — even if present and non-null, they can never cause
 /// convergence to fail, preserving runtime ownership.
-pub(crate) fn schedule_row_matches_expected(row: &Value, expected: &Value) -> Result<bool> {
+pub fn schedule_row_matches_expected(row: &Value, expected: &Value) -> Result<bool> {
     let expected = expected
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("Schedule expected document must be an object"))?;

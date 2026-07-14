@@ -153,6 +153,7 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         || META_TOOL_NAMES.contains(&name)
         || SUBAGENT_TOOL_NAMES.contains(&name)
         || SINGLETON_TOOL_NAMES.contains(&name)
+        || crate::self_config::SELF_CONFIG_TOOL_NAMES.contains(&name)
 }
 
 /// Deserialize the `write_tools` field from either representation:
@@ -314,6 +315,20 @@ pub struct ToolSelectionDocument {
     pub defra_query_collections: Option<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_optional_write_tools")]
     pub write_tools: Option<Vec<WriteToolDecl>>,
+    /// Self-configuration gate (#654): opt-in, never backfilled true.
+    pub enable_self_config: Option<bool>,
+    /// Self-config category allowlist; unset means the core spine
+    /// (behavior, tools, profile). See `config_client::patch`.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
+    pub self_config_categories: Option<Vec<String>>,
+    /// Opt-in guardrail: refuse self-config patches that would strip the
+    /// agent's own reconfigure ability.
+    pub self_config_no_lockout: Option<bool>,
+    /// Opt-in guardrail: `get_my_config` accepts a patch preview.
+    pub self_config_dry_run: Option<bool>,
 }
 
 /// Canonical per-principal id for the seeded `wide-open` preset. Prefixed with
@@ -415,6 +430,17 @@ impl ToolSelectionDocument {
                     return Err(anyhow::anyhow!(
                         "backgroundable_tool_names[{}] is empty; tool names must be non-empty strings",
                         i
+                    ));
+                }
+            }
+        }
+        if let Some(categories) = &self.self_config_categories {
+            for (i, category) in categories.iter().enumerate() {
+                if !crate::config_client::patch::SELF_CONFIG_CATEGORIES.contains(&category.as_str())
+                {
+                    return Err(anyhow::anyhow!(
+                        "self_config_categories[{i}] is {category:?}; valid categories: {}",
+                        crate::config_client::patch::SELF_CONFIG_CATEGORIES.join(", ")
                     ));
                 }
             }
@@ -576,6 +602,10 @@ pub(crate) async fn load_tool_selection_record(
                 enable_defra_query
                 defra_query_collections
                 write_tools
+                enable_self_config
+                self_config_categories
+                self_config_no_lockout
+                self_config_dry_run
             }}
         }}"#
     );
@@ -635,6 +665,10 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 enable_defra_query
                 defra_query_collections
                 write_tools
+                enable_self_config
+                self_config_categories
+                self_config_no_lockout
+                self_config_dry_run
             }}
         }}"#
     );
@@ -694,6 +728,10 @@ pub(crate) async fn list_tool_selection_records(
                 enable_defra_query
                 defra_query_collections
                 write_tools
+                enable_self_config
+                self_config_categories
+                self_config_no_lockout
+                self_config_dry_run
             }}
         }}"#
     );
@@ -747,6 +785,10 @@ pub(crate) async fn list_all_tool_selection_records(
                 enable_defra_query
                 defra_query_collections
                 write_tools
+                enable_self_config
+                self_config_categories
+                self_config_no_lockout
+                self_config_dry_run
             }
         }"#;
 
@@ -875,6 +917,22 @@ pub async fn upsert_tool_selection(
             selection.defra_query_collections.as_deref(),
         ),
         graphql_write_tools_field(selection.write_tools.as_deref()),
+        graphql_fields::graphql_optional_bool_field(
+            "enable_self_config",
+            selection.enable_self_config,
+        ),
+        graphql_fields::graphql_string_list_field(
+            "self_config_categories",
+            selection.self_config_categories.as_deref(),
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "self_config_no_lockout",
+            selection.self_config_no_lockout,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "self_config_dry_run",
+            selection.self_config_dry_run,
+        ),
     ]
     .into_iter()
     .flatten()
@@ -987,6 +1045,22 @@ pub async fn upsert_tool_selection(
             selection.defra_query_collections.as_deref(),
         ),
         graphql_write_tools_field(selection.write_tools.as_deref()),
+        graphql_fields::graphql_optional_bool_field(
+            "enable_self_config",
+            selection.enable_self_config,
+        ),
+        graphql_fields::graphql_string_list_field(
+            "self_config_categories",
+            selection.self_config_categories.as_deref(),
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "self_config_no_lockout",
+            selection.self_config_no_lockout,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "self_config_dry_run",
+            selection.self_config_dry_run,
+        ),
     ]
     .into_iter()
     .flatten()

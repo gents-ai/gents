@@ -152,6 +152,10 @@ async fn seed_demo_documents(
             enable_defra_query: None,
             defra_query_collections: None,
             write_tools: None,
+            enable_self_config: None,
+            self_config_categories: None,
+            self_config_no_lockout: None,
+            self_config_dry_run: None,
         },
     )
     .await?;

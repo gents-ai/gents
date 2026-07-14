@@ -44,6 +44,7 @@ import Proofs.Conformance.SchedulerConformance
 import Proofs.Conformance.CoverageLedger
 import Proofs.Conformance.Contracts
 import Proofs.ApplyReconcile
+import Proofs.SelfConfig
 import Proofs.ReversePairingHandlers
 import Proofs.Identity
 import Proofs.Skills

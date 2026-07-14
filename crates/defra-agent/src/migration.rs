@@ -4232,6 +4232,10 @@ mod patch_kind_tests {
             "subagent_default_await_mode",
             "enable_session_history_tool",
             "enable_context_budget",
+            "enable_self_config",
+            "self_config_categories",
+            "self_config_no_lockout",
+            "self_config_dry_run",
         ] {
             assert!(
                 collection_has_field(&collection, field),

@@ -1,18 +1,20 @@
+use crate::graphql::escape_graphql_string;
+use crate::ToolSelectionDocument;
 use anyhow::Result;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::ToolSelectionDocument;
 
-use crate::config_writes::ConfigAccess;
-use crate::{optional_bool_field, optional_string_field, string_list_field};
+use super::ConfigAccess;
+use defra_agent_protocol::graphql::{
+    optional_bool_field, optional_string_field, string_list_field,
+};
 
-pub(crate) async fn write_tool_selection_document(
+pub async fn write_tool_selection_document(
     access: &ConfigAccess,
     selection: &ToolSelectionDocument,
 ) -> Result<String> {
     write_tool_selection_document_with_clear_fields(access, selection, &[]).await
 }
 
-pub(crate) async fn write_tool_selection_document_with_clear_fields(
+pub async fn write_tool_selection_document_with_clear_fields(
     access: &ConfigAccess,
     selection: &ToolSelectionDocument,
     clear_update_fields: &[&str],
@@ -48,15 +50,15 @@ pub(crate) async fn write_tool_selection_document_with_clear_fields(
         update_fields = update_fields,
     );
     let response = access.execute(&mutation).await?;
-    crate::extract_mutation_doc_id(&response, "ToolSelection")
+    defra_agent_protocol::graphql::extract_mutation_doc_id(&response, "ToolSelection")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ensure_runtime_schemas, load_tool_selection};
     use anyhow::Result;
-    use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
-    use defra_agent::{ensure_runtime_schemas, load_tool_selection};
+    use defra_node::{EmbeddedNode, StorageBackend};
 
     /// Round-trip test: write a `ToolSelectionDocument` with subagent
     /// enablement fields set, then read it back and assert every field persisted.
@@ -76,7 +78,7 @@ mod tests {
 
         // A valid `subagent_targets` entry is the JSON serialization of a named
         // SubagentTarget, not a bare behavior id.
-        let target = defra_agent::subagent_target_entry(
+        let target = crate::subagent_target_entry(
             "amy-research",
             "did:test:subagent-enablement",
             "amy-research",
@@ -171,12 +173,8 @@ mod tests {
 
         // A valid `subagent_targets` entry is the JSON serialization of a named
         // SubagentTarget, not a bare behavior id.
-        let target = defra_agent::subagent_target_entry(
-            "amy-research",
-            "did:test:clobber",
-            "amy-research",
-            None,
-        );
+        let target =
+            crate::subagent_target_entry("amy-research", "did:test:clobber", "amy-research", None);
 
         // Step 1: an apply-style write enables subagents.
         let applied = ToolSelectionDocument {
@@ -444,6 +442,13 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
             selection
                 .cross_deployment_spawn_timeout_seconds
                 .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
+            optional_bool_field("enable_self_config", selection.enable_self_config),
+            selection
+                .self_config_categories
+                .as_ref()
+                .and_then(|values| string_list_field("self_config_categories", values)),
+            optional_bool_field("self_config_no_lockout", selection.self_config_no_lockout),
+            optional_bool_field("self_config_dry_run", selection.self_config_dry_run),
             // NOTE: `write_tools` is deliberately NOT encoded here. The
             // imperative path always sets `write_tools: None` (it is
             // apply-managed only), so there is nothing to render.

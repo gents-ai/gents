@@ -194,6 +194,12 @@ fn tool_selection_command_plan(args: &ToolSelectionUpsertArgs) -> Result<ToolSel
         // the imperative command exposes no flag, so leave it `None` to preserve
         // any apply-managed decls on update (same rationale as subagent_targets).
         write_tools: None,
+        // No imperative flags for self-config (#654): `None` preserves any
+        // stored gate/guardrail values on update.
+        enable_self_config: None,
+        self_config_categories: None,
+        self_config_no_lockout: None,
+        self_config_dry_run: None,
     };
     selection.validate()?;
     Ok(ToolSelectionCommandPlan {

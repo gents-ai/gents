@@ -40,4 +40,15 @@ type ToolSelection {
     enable_defra_query: Boolean
     defra_query_collections: [String]
     write_tools: [String]
+    # Self-configuration gate (#654): opt-in, never backfilled true.
+    enable_self_config: Boolean
+    # Category allowlist: behavior, tools, profile, backend, mcp_service,
+    # automation. Unset means the core spine (behavior, tools, profile).
+    self_config_categories: [String]
+    # Opt-in guardrail: refuse a self-config patch that would strip the
+    # agent's own reconfigure ability.
+    self_config_no_lockout: Boolean
+    # Opt-in guardrail: get_my_config accepts a patch preview (diff without
+    # committing).
+    self_config_dry_run: Boolean
 }

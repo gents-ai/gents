@@ -36,6 +36,10 @@ fn tool_selection_doc(bash_mode: &str) -> ToolSelectionDocument {
         enable_defra_query: None,
         defra_query_collections: None,
         write_tools: None,
+        enable_self_config: None,
+        self_config_categories: None,
+        self_config_no_lockout: None,
+        self_config_dry_run: None,
     }
 }
 

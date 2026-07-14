@@ -218,6 +218,12 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.operatorUi]
     , deferred := []
     }
+  , { feature := "self-config"
+    , required := [Surface.agentFacing]
+    , deferred :=
+        [ (Surface.api, "MCP self-config surface deferred until MCP calls carry a DID (#654)")
+        ]
+    }
   , { feature := "recovery"
     , required := [Surface.runtimeInternal]
     , deferred := []
@@ -466,6 +472,16 @@ def caseCoverage : List CoverageEntry :=
       "ToolPolicyCases"
       "conformance::generated_tool_policy_cases_match_lean_composition")
       "tool-policy" [Surface.operatorUi, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "self_config_field_tables"
+      "SelfConfigFieldTables"
+      "conformance::self_config_field_tables_match_lean_contract")
+      "self-config" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "self_config_cases"
+      "SelfConfigCases"
+      "conformance::generated_self_config_cases_fence_patch_merge")
+      "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
       "session_recovery_cases"
       "SessionRecoveryCases"
