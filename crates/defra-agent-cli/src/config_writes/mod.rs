@@ -8,6 +8,7 @@ mod tool_selection;
 mod txn;
 
 pub(crate) use agent_behavior::write_agent_behavior_document;
+pub(crate) use common::mint_recreate_identity;
 pub(crate) use event_trigger::write_event_trigger_document;
 pub(crate) use inference_backend::{
     write_inference_backend_document, InferenceBackendUpsertDocument,

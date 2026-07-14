@@ -83,3 +83,24 @@ pub(super) fn select_existing_document(
 
     Ok(deleted_rows.first().map(|row| (*row).clone()))
 }
+
+/// Mint a fresh document identity for a recreate over a tombstone.
+///
+/// Deletion is terminal in DefraDB and docIDs are content-addressed, so
+/// recreating a row whose manifest content is IDENTICAL to the tombstoned one
+/// would regenerate the tombstoned docID — and a create onto a tombstoned
+/// docID does not produce a live row (#700). Stamping the apply time gives the
+/// new incarnation distinct content, and with it a new identity.
+pub(crate) fn mint_recreate_identity(add_doc: &serde_json::Value) -> serde_json::Value {
+    let mut doc = add_doc.clone();
+    if let Some(map) = doc.as_object_mut() {
+        let now = chrono::Utc::now().to_rfc3339();
+        map.insert(
+            "updated_at".to_string(),
+            serde_json::Value::String(now.clone()),
+        );
+        map.entry("created_at".to_string())
+            .or_insert(serde_json::Value::String(now));
+    }
+    doc
+}

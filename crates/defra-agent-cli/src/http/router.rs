@@ -574,6 +574,7 @@ mod tests {
                         "completed_total": 79,
                         "failed_total": 4,
                         "stale_head_retirements_total": 17,
+                        "peer_capacity_parks_total": 3,
                         "per_cid_retry_counts": [{
                             "cid": "bafy-retry",
                             "retry_count": 19
@@ -591,6 +592,7 @@ mod tests {
                     "encode_cache_entries": 5,
                     "broadcast_coalesced_total": 41,
                     "push_updates_coalesced_total": 43,
+                    "gossip_direction_filtered_total": 47,
                     "pending_dags": 13,
                     "pending_dag_capacity": 1000,
                     "persisted_pending_dags": 17,
@@ -599,7 +601,13 @@ mod tests {
                     "retained_background_tasks": 6,
                     "missing_link_retries": 23,
                     "pending_dag_resolved": 29,
-                    "pending_dag_expired": 31
+                    "pending_dag_expired": 31,
+                    "single_flight_suppressed": 53,
+                    "already_merged_fast_path": 59,
+                    "pending_dag_capacity_shed": 61,
+                    "pending_dag_retry_dispatched": 67,
+                    "pending_dag_retry_suppressed": 71,
+                    "next_pending_retry_in_ms": 250
                 }
             }),
             None,
@@ -616,6 +624,10 @@ mod tests {
         assert_eq!(sync.push_updates_coalesced_total, 43);
         assert_eq!(sync.persisted_pending_dags, 17);
         assert_eq!(sync.missing_link_retries, 23);
+        assert_eq!(sync.push_backlog.peer_capacity_parks_total, 3);
+        assert_eq!(sync.gossip_direction_filtered_total, 47);
+        assert_eq!(sync.pending_dag_retry_dispatched, 67);
+        assert_eq!(sync.next_pending_retry_in_ms, Some(250));
     }
 
     #[test]

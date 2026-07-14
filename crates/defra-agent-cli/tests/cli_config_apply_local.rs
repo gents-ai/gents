@@ -595,3 +595,148 @@ async fn config_apply_rebinds_placeholder_manifest_to_home_identity_locally() ->
 
     Ok(())
 }
+
+/// #700 regression: a config row deleted by prune leaves a tombstone, and
+/// re-applying a manifest that wants the same unique id back must converge —
+/// the tombstone-aware writer issues `create_`, and the store must accept it
+/// (a tombstone never holds a unique slot; a stale index entry pointing at one
+/// is healed by the store, sourcenetwork/defradb.rs#1111).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reapply_recreates_a_pruned_unique_row() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-recreate-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-recreate-{}", Uuid::new_v4().simple());
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    run_cli_text(
+        &home_dir,
+        &[
+            "config",
+            "export",
+            "--root",
+            root.to_str().expect("utf-8 root"),
+        ],
+    )?;
+    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let behavior_id = principal
+        .get("default_behavior_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
+        .to_string();
+
+    let task_id = format!("recreate-task-{}", Uuid::new_v4().simple());
+    let task_dir = root.join("tasks").join(&task_id);
+    let task_object = serde_json::json!({
+        "task_id": task_id.clone(),
+        "name": "Recreate Me",
+        "description": "Tombstoned unique row recreate regression (#700).",
+        "behavior_id": behavior_id.clone(),
+        "prompt_template": "Check convergence.",
+        "enabled": false,
+    });
+    write_json_file(&task_dir.join("object.json"), &task_object)?;
+
+    let root_str = root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let explicit_home = home_dir.join(".defra-agent");
+    let explicit_home_str = explicit_home
+        .to_str()
+        .ok_or_else(|| anyhow!("explicit home path is not UTF-8"))?;
+
+    // 1. Create the row.
+    let created = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+        ],
+    )?;
+    assert_eq!(
+        created.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+
+    // 2. Tombstone it: drop the task from the manifest and prune.
+    fs::remove_dir_all(&task_dir).with_context(|| format!("removing {}", task_dir.display()))?;
+    let pruned = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+            "--prune",
+        ],
+    )?;
+    assert_eq!(pruned.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        pruned.pointer("/pruned/tasks").and_then(Value::as_u64),
+        Some(1)
+    );
+
+    // 3. Want the SAME unique task_id back. The live bundle does not see the
+    //    tombstone, the diff says "create", and the create must succeed —
+    //    this is exactly the step #700's wounded store could never pass.
+    write_json_file(&task_dir.join("object.json"), &task_object)?;
+    let recreated = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+        ],
+    )?;
+    assert_eq!(
+        recreated.get("ok").and_then(Value::as_bool),
+        Some(true),
+        "recreating a pruned unique row must converge: {recreated}"
+    );
+    assert_eq!(
+        recreated.pointer("/applied/tasks").and_then(Value::as_u64),
+        Some(1),
+        "the tombstoned task must be recreated: {recreated}"
+    );
+
+    // 4. And the store must be exactly converged afterwards.
+    let settled = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "diff",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+        ],
+    )?;
+    assert_eq!(
+        settled.get("ok").and_then(Value::as_bool),
+        Some(true),
+        "diff must be exact after the recreate: {settled}"
+    );
+
+    Ok(())
+}

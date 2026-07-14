@@ -603,7 +603,15 @@ fn custom_override_mutation_field(
             doc_id = escape_graphql_string(doc_id),
         )
     } else {
-        let add_literal = graphql_input_literal(&doc.add_doc)?;
+        // A tombstone occupies this unique value: identical manifest content
+        // would regenerate the tombstoned docID and never produce a live row
+        // (#700) — mint a fresh identity for the new incarnation.
+        let add_doc = if existing.is_some() {
+            crate::config_writes::mint_recreate_identity(&doc.add_doc)
+        } else {
+            doc.add_doc.clone()
+        };
+        let add_literal = graphql_input_literal(&add_doc)?;
         format!(r#"{alias}: create_{collection_name}(input: {add_literal}) {{ _docID }}"#)
     };
 
