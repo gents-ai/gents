@@ -9,8 +9,9 @@ import Mathlib.Data.Finset.Prod
 This model is the document-driven bridge for mobile `conversation` dapair
 pairings. A server-authored reciprocal intent plus a live, self-signed endpoint
 for the invited DID derives exactly one reciprocal data-plane desired row scoped
-to the server's own DID. The existing pairing reconciler consumes the derived
-row; this derivation owns only the reciprocal partition.
+to the server's own DID, unless a valid network revocation explicitly blocks
+that DID. The existing pairing reconciler consumes the derived row; this
+derivation owns only the reciprocal partition.
 -/
 
 namespace PeerRegistryDiscovery
@@ -74,8 +75,10 @@ def reciprocalDataPlaneDesired
 def deriveReciprocal
     (self : Did)
     (intents : Finset ReciprocalIntent)
-    (endpoints : Finset PeerEndpoint) : Finset DataPlaneRow :=
-  (((intents ×ˢ endpoints).filter (fun pair => materializable pair.1 pair.2))).image
+    (endpoints : Finset PeerEndpoint)
+    (revokedMembers : Finset Did) : Finset DataPlaneRow :=
+  (((intents ×ˢ endpoints).filter (fun pair =>
+      pair.1.memberDid ∉ revokedMembers ∧ materializable pair.1 pair.2))).image
     (fun pair => {
       peer := pair.2.peer,
       agentDid := self,
@@ -89,6 +92,7 @@ structure ReciprocalState where
   self : Did
   intents : Finset ReciprocalIntent
   endpoints : Finset PeerEndpoint
+  revokedMembers : Finset Did
   operatorDesired : Finset DataPlaneRow
   networkDesired : Finset DataPlaneRow
   registryDesired : Finset DataPlaneRow
@@ -98,7 +102,7 @@ structure ReciprocalState where
 namespace ReciprocalState
 
 def settled (s : ReciprocalState) : Prop :=
-  s.reciprocalDesired = deriveReciprocal s.self s.intents s.endpoints
+  s.reciprocalDesired = deriveReciprocal s.self s.intents s.endpoints s.revokedMembers
 
 instance (s : ReciprocalState) : Decidable s.settled := by
   unfold settled
@@ -106,7 +110,8 @@ instance (s : ReciprocalState) : Decidable s.settled := by
 
 /-- Canonical reciprocal sweep. -/
 def deriveStep (s : ReciprocalState) : ReciprocalState :=
-  { s with reciprocalDesired := deriveReciprocal s.self s.intents s.endpoints }
+  { s with reciprocalDesired :=
+      deriveReciprocal s.self s.intents s.endpoints s.revokedMembers }
 
 end ReciprocalState
 
@@ -118,10 +123,11 @@ materialized. -/
 theorem mem_deriveReciprocal {self : Did}
     {intents : Finset ReciprocalIntent}
     {endpoints : Finset PeerEndpoint}
+    {revokedMembers : Finset Did}
     {row : DataPlaneRow} :
-    row ∈ deriveReciprocal self intents endpoints ↔
+    row ∈ deriveReciprocal self intents endpoints revokedMembers ↔
       ∃ intent ∈ intents, ∃ endpoint ∈ endpoints,
-        materializable intent endpoint ∧
+        intent.memberDid ∉ revokedMembers ∧ materializable intent endpoint ∧
         row = {
           peer := endpoint.peer,
           agentDid := self,
@@ -131,10 +137,13 @@ theorem mem_deriveReciprocal {self : Did}
   unfold deriveReciprocal
   simp only [Finset.mem_image, Finset.mem_filter, Finset.mem_product]
   constructor
-  · rintro ⟨pair, ⟨⟨h_intent, h_endpoint⟩, h_materializable⟩, h_row⟩
-    exact ⟨pair.1, h_intent, pair.2, h_endpoint, h_materializable, h_row.symm⟩
-  · rintro ⟨intent, h_intent, endpoint, h_endpoint, h_materializable, h_row⟩
-    exact ⟨(intent, endpoint), ⟨⟨h_intent, h_endpoint⟩, h_materializable⟩, h_row.symm⟩
+  · rintro ⟨pair, ⟨⟨h_intent, h_endpoint⟩, h_revoked, h_materializable⟩, h_row⟩
+    exact ⟨pair.1, h_intent, pair.2, h_endpoint,
+      h_revoked, h_materializable, h_row.symm⟩
+  · rintro ⟨intent, h_intent, endpoint, h_endpoint,
+      h_revoked, h_materializable, h_row⟩
+    exact ⟨(intent, endpoint),
+      ⟨⟨h_intent, h_endpoint⟩, h_revoked, h_materializable⟩, h_row.symm⟩
 
 /-! ## (1) Idempotence -/
 
@@ -181,11 +190,12 @@ still present in the input. -/
 theorem deriveReciprocal_retraction_sound_intent {self : Did}
     {intents : Finset ReciprocalIntent}
     {endpoints : Finset PeerEndpoint}
+    {revokedMembers : Finset Did}
     {removed : ReciprocalIntent}
     {row : DataPlaneRow} :
-    row ∈ deriveReciprocal self (intents.erase removed) endpoints ↔
+    row ∈ deriveReciprocal self (intents.erase removed) endpoints revokedMembers ↔
       ∃ intent ∈ intents, intent ≠ removed ∧ ∃ endpoint ∈ endpoints,
-        materializable intent endpoint ∧
+        intent.memberDid ∉ revokedMembers ∧ materializable intent endpoint ∧
         row = {
           peer := endpoint.peer,
           agentDid := self,
@@ -194,12 +204,15 @@ theorem deriveReciprocal_retraction_sound_intent {self : Did}
         } := by
   rw [mem_deriveReciprocal]
   constructor
-  · rintro ⟨intent, h_intent, endpoint, h_endpoint, h_materializable, h_row⟩
+  · rintro ⟨intent, h_intent, endpoint, h_endpoint,
+      h_revoked, h_materializable, h_row⟩
     exact ⟨intent, Finset.mem_of_mem_erase h_intent,
-      Finset.ne_of_mem_erase h_intent, endpoint, h_endpoint, h_materializable, h_row⟩
-  · rintro ⟨intent, h_intent, h_ne, endpoint, h_endpoint, h_materializable, h_row⟩
+      Finset.ne_of_mem_erase h_intent, endpoint, h_endpoint,
+      h_revoked, h_materializable, h_row⟩
+  · rintro ⟨intent, h_intent, h_ne, endpoint, h_endpoint,
+      h_revoked, h_materializable, h_row⟩
     exact ⟨intent, Finset.mem_erase.mpr ⟨h_ne, h_intent⟩,
-      endpoint, h_endpoint, h_materializable, h_row⟩
+      endpoint, h_endpoint, h_revoked, h_materializable, h_row⟩
 
 /-- Removing or staling an endpoint retracts exactly the rows whose only endpoint
 witness was that endpoint; all remaining rows are backed by a different live
@@ -207,10 +220,40 @@ endpoint still present in the input. -/
 theorem deriveReciprocal_retraction_sound_endpoint {self : Did}
     {intents : Finset ReciprocalIntent}
     {endpoints : Finset PeerEndpoint}
+    {revokedMembers : Finset Did}
     {removed : PeerEndpoint}
     {row : DataPlaneRow} :
-    row ∈ deriveReciprocal self intents (endpoints.erase removed) ↔
+    row ∈ deriveReciprocal self intents (endpoints.erase removed) revokedMembers ↔
       ∃ intent ∈ intents, ∃ endpoint ∈ endpoints, endpoint ≠ removed ∧
+        intent.memberDid ∉ revokedMembers ∧ materializable intent endpoint ∧
+        row = {
+          peer := endpoint.peer,
+          agentDid := self,
+          address := endpoint.address,
+          template := "conversation"
+        } := by
+  rw [mem_deriveReciprocal]
+  constructor
+  · rintro ⟨intent, h_intent, endpoint, h_endpoint,
+      h_revoked, h_materializable, h_row⟩
+    exact ⟨intent, h_intent, endpoint, Finset.mem_of_mem_erase h_endpoint,
+      Finset.ne_of_mem_erase h_endpoint, h_revoked, h_materializable, h_row⟩
+  · rintro ⟨intent, h_intent, endpoint, h_endpoint, h_ne,
+      h_revoked, h_materializable, h_row⟩
+    exact ⟨intent, h_intent, endpoint, Finset.mem_erase.mpr ⟨h_ne, h_endpoint⟩,
+      h_revoked, h_materializable, h_row⟩
+
+/-- Adding an explicit revocation retracts exactly the rows whose intent names
+that DID. Intents for every other non-revoked DID remain derivation witnesses. -/
+theorem deriveReciprocal_retraction_sound_revocation {self : Did}
+    {intents : Finset ReciprocalIntent}
+    {endpoints : Finset PeerEndpoint}
+    {revokedMembers : Finset Did}
+    {revokedDid : Did}
+    {row : DataPlaneRow} :
+    row ∈ deriveReciprocal self intents endpoints (insert revokedDid revokedMembers) ↔
+      ∃ intent ∈ intents, intent.memberDid ≠ revokedDid ∧
+        intent.memberDid ∉ revokedMembers ∧ ∃ endpoint ∈ endpoints,
         materializable intent endpoint ∧
         row = {
           peer := endpoint.peer,
@@ -220,12 +263,19 @@ theorem deriveReciprocal_retraction_sound_endpoint {self : Did}
         } := by
   rw [mem_deriveReciprocal]
   constructor
-  · rintro ⟨intent, h_intent, endpoint, h_endpoint, h_materializable, h_row⟩
-    exact ⟨intent, h_intent, endpoint, Finset.mem_of_mem_erase h_endpoint,
-      Finset.ne_of_mem_erase h_endpoint, h_materializable, h_row⟩
-  · rintro ⟨intent, h_intent, endpoint, h_endpoint, h_ne, h_materializable, h_row⟩
-    exact ⟨intent, h_intent, endpoint, Finset.mem_erase.mpr ⟨h_ne, h_endpoint⟩,
-      h_materializable, h_row⟩
+  · rintro ⟨intent, h_intent, endpoint, h_endpoint,
+      h_not_revoked, h_materializable, h_row⟩
+    have h_parts : intent.memberDid ≠ revokedDid ∧
+        intent.memberDid ∉ revokedMembers := by
+      simpa using h_not_revoked
+    exact ⟨intent, h_intent, h_parts.1, h_parts.2,
+      endpoint, h_endpoint, h_materializable, h_row⟩
+  · rintro ⟨intent, h_intent, h_ne, h_not_revoked,
+      endpoint, h_endpoint, h_materializable, h_row⟩
+    have h_not_insert : intent.memberDid ∉ insert revokedDid revokedMembers := by
+      simpa using And.intro h_ne h_not_revoked
+    exact ⟨intent, h_intent, endpoint, h_endpoint,
+      h_not_insert, h_materializable, h_row⟩
 
 /-- Staling an endpoint (setting `live = false`) makes that physical endpoint no
 longer materializable. -/
