@@ -27,6 +27,7 @@ fn session_state_for_test() -> SessionState {
     SessionState {
         session_id: Some("session-1".to_string()),
         current_request_id: None,
+        current_requester_did: None,
         request_deadline_at: None,
         agent_name: "agent".to_string(),
         sequence: 0,

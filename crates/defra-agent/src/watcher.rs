@@ -24,6 +24,9 @@ pub struct AgentRequest {
     pub doc_id: String,
     pub request_id: String,
     pub agent_did: String,
+    /// Coordinator DID that owns this remote child lineage's return route.
+    /// Ordinary local requests leave it unset.
+    pub requester_did: Option<String>,
     pub behavior_id: Option<String>,
     pub session_id: String,
     pub content: String,

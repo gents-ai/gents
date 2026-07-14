@@ -38,6 +38,7 @@ fn status_test_request(request_id: &str) -> crate::watcher::AgentRequest {
         doc_id: format!("{request_id}-doc"),
         request_id: request_id.to_string(),
         agent_did: "did:defra-agent:status-test".to_string(),
+        requester_did: None,
         behavior_id: Some("general".to_string()),
         session_id: format!("{request_id}-session"),
         content: "status test".to_string(),

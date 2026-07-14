@@ -688,10 +688,11 @@ pub(crate) async fn append_background_tool_completion(
             None => {
                 let notification =
                     render_tool_completion(tool_call_id, tool_name, status, result, reason);
-                let sequence = session::append_message(
+                let sequence = session::append_message_with_requester_did(
                     node,
                     parent_session_id,
                     &parent_request.agent_did,
+                    parent_request.requester_did.as_deref(),
                     "user",
                     &notification,
                     None,
@@ -756,10 +757,11 @@ async fn ensure_projection_side_effects(
             Some(existing) => (existing.sequence, existing.timestamp, false),
             None => {
                 let notification = render_notification(edge, status, summary);
-                let sequence = session::append_message(
+                let sequence = session::append_message_with_requester_did(
                     node,
                     parent_session_id,
                     &parent_request.agent_did,
+                    parent_request.requester_did.as_deref(),
                     "user",
                     &notification,
                     None,
@@ -1333,6 +1335,7 @@ struct AgentRequestQueueRow {
     doc_id: String,
     request_id: String,
     agent_did: String,
+    requester_did: Option<String>,
     behavior_id: Option<String>,
     session_id: String,
     content: String,
@@ -1363,6 +1366,7 @@ async fn load_agent_request_for_queue(
                 _docID
                 request_id
                 agent_did
+                requester_did
                 behavior_id
                 session_id
                 content
@@ -1396,6 +1400,7 @@ async fn load_agent_request_for_queue(
         doc_id: row.doc_id,
         request_id: row.request_id,
         agent_did: row.agent_did,
+        requester_did: normalize_optional_string(row.requester_did),
         behavior_id: normalize_optional_string(row.behavior_id),
         session_id: row.session_id,
         content: row.content,

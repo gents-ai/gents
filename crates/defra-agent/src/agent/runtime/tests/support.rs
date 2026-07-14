@@ -30,6 +30,7 @@ pub(super) fn request(behavior_id: Option<&str>, session_id: &str) -> AgentReque
         doc_id: "doc-1".to_string(),
         request_id: "req-1".to_string(),
         agent_did: "did:defra-agent:test".to_string(),
+        requester_did: None,
         behavior_id: behavior_id.map(ToOwned::to_owned),
         session_id: session_id.to_string(),
         content: "hello".to_string(),

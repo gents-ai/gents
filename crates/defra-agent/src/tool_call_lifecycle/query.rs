@@ -208,6 +208,7 @@ impl ToolCallLifecycle {
             request_id: row.request_id.unwrap_or_default(),
             session_id: session_id.to_string(),
             agent_did: row.agent_did.unwrap_or_default(),
+            requester_did: None,
             tool_call_id: tool_call_id.to_string(),
             message_sequence: row.message_sequence,
             tool_name: row.tool_name,

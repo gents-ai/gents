@@ -28,6 +28,7 @@ fn request_backed_conversation_summaries_include_in_flight_sessions() {
         requests: vec![AgentRequestRow {
             request_id: "req-live".to_string(),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-live".to_string()),
             retry_parent_request: None,
@@ -80,6 +81,7 @@ fn conversation_task_tag_uses_latest_schedule_lineage() {
             AgentRequestRow {
                 request_id: "req-old".to_string(),
                 agent_did: Some("did:defra:amy".to_string()),
+                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
                 retry_parent_request: None,
@@ -112,6 +114,7 @@ fn conversation_task_tag_uses_latest_schedule_lineage() {
             AgentRequestRow {
                 request_id: "req-new".to_string(),
                 agent_did: Some("did:defra:amy".to_string()),
+                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
                 retry_parent_request: None,
@@ -177,6 +180,7 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
             AgentRequestRow {
                 request_id: "req-mini-1".to_string(),
                 agent_did: Some("did:defra:mini-1".to_string()),
+                requester_did: None,
                 behavior_id: Some("default".to_string()),
                 session_id: Some("session-mini-1".to_string()),
                 retry_parent_request: None,
@@ -209,6 +213,7 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
             AgentRequestRow {
                 request_id: "req-mini-2".to_string(),
                 agent_did: Some("did:defra:mini-2".to_string()),
+                requester_did: None,
                 behavior_id: Some("default".to_string()),
                 session_id: Some("session-mini-2".to_string()),
                 retry_parent_request: None,
@@ -353,6 +358,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
             requests: vec![AgentRequestRow {
                 request_id: request_id.clone(),
                 agent_did: Some("did:defra:contract-agent".to_string()),
+                requester_did: None,
                 behavior_id: Some("contract-behavior".to_string()),
                 session_id: Some(format!("contract-session-{index}")),
                 retry_parent_request: None,

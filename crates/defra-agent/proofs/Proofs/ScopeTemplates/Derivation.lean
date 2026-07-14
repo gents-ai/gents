@@ -159,21 +159,27 @@ theorem subagentCoordinator_filter_eq (peerDid localDid : Did) :
       = [ { collection := "AgentToolCall", field := "spawn_target_did", value := peerDid } ] := by
   simp [scopeFilter, subagentCoordinatorRules]
 
-/-- The host subagent leg returns each child request only to the peer that
-requested it. The other conversation collections retain their existing
-host-owner scope; narrowing those collections is outside this request-state
-model. -/
+/-- The host subagent leg returns every child-lineage artifact only to the peer
+that requested it. Host-owned artifacts outside that requester lineage carry a
+different or null route key and therefore do not match this filter. -/
 theorem subagentHost_filter_eq (peerDid localDid : Did) :
     scopeFilter (.perCollection subagentHostRules) [] peerDid localDid
       = [ { collection := "AgentRequest",      field := "requester_did", value := peerDid }
-        , { collection := "AgentResponse",     field := "agent_did",     value := localDid }
-        , { collection := "AgentMessage",      field := "agent_did",     value := localDid }
-        , { collection := "AgentToolCall",     field := "agent_did",     value := localDid }
-        , { collection := "AgentToolResult",   field := "agent_did",     value := localDid }
-        , { collection := "AgentSession",      field := "agent_did",     value := localDid }
-        , { collection := "AgentConversation", field := "agent_did",     value := localDid }
-        , { collection := "CompactionEntry",   field := "agent_did",     value := localDid } ] := by
+        , { collection := "AgentResponse",     field := "requester_did", value := peerDid }
+        , { collection := "AgentMessage",      field := "requester_did", value := peerDid }
+        , { collection := "AgentToolCall",     field := "requester_did", value := peerDid }
+        , { collection := "AgentToolResult",   field := "requester_did", value := peerDid }
+        , { collection := "AgentSession",      field := "requester_did", value := peerDid }
+        , { collection := "AgentConversation", field := "requester_did", value := peerDid }
+        , { collection := "CompactionEntry",   field := "requester_did", value := peerDid } ] := by
   simp [scopeFilter, subagentHostRules, subagentHostCollections, conversationCollections]
+
+/-- Every host-return predicate is keyed to the requesting peer, so local DID
+ownership alone is insufficient for an unrelated host artifact to cross. -/
+theorem subagentHost_filters_requester_lineage (peerDid localDid : Did) :
+    (scopeFilter subagentHostTemplate.scope [] peerDid localDid).all
+      (fun k => k.field = "requester_did" ∧ k.value = peerDid) = true := by
+  simp [scopeFilter, subagentHostTemplate, subagentHostRules]
 
 /-- Request-state crossing is party-scoped: coordinator-owned parent requests
 do not appear on the forward leg, while a host-owned child request is filtered
@@ -195,6 +201,14 @@ theorem subagentCoordinator_filters_declared_collections (peerDid localDid : Did
         (fun k => k.collection)).toFinset
       = subagentCoordinatorTemplate.collections := by
   simp [scopeFilter, subagentCoordinatorTemplate, subagentCoordinatorRules]
+
+/-- The lineage-scoped host rules cover every returned artifact collection. -/
+theorem subagentHost_filters_declared_collections (peerDid localDid : Did) :
+    ((scopeFilter subagentHostTemplate.scope [] peerDid localDid).map
+        (fun k => k.collection)).toFinset
+      = subagentHostTemplate.collections := by
+  simp [scopeFilter, subagentHostTemplate, subagentHostRules,
+    subagentHostCollections, conversationCollections]
 
 /-- Concrete catalog membership: the coordinator template resolves from the
 built-in catalog. -/

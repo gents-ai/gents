@@ -47,10 +47,28 @@ pub async fn load_history(node: &EmbeddedNode, session_id: &str) -> Result<Vec<M
     Ok(history)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn save_message(
     node: &EmbeddedNode,
     session_id: &str,
     agent_did: &str,
+    sequence: u32,
+    role: &str,
+    content: &str,
+    reasoning: Option<&str>,
+) -> Result<()> {
+    save_message_with_requester_did(
+        node, session_id, agent_did, None, sequence, role, content, reasoning,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn save_message_with_requester_did(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
     sequence: u32,
     role: &str,
     content: &str,
@@ -62,6 +80,7 @@ pub(crate) async fn save_message(
         node,
         session_id,
         agent_did,
+        requester_did,
         sequence,
         role,
         content,
@@ -71,10 +90,37 @@ pub(crate) async fn save_message(
     .await
 }
 
+#[allow(dead_code)]
 pub(crate) async fn save_message_with_key(
     node: &EmbeddedNode,
     session_id: &str,
     agent_did: &str,
+    sequence: u32,
+    role: &str,
+    content: &str,
+    reasoning: Option<&str>,
+    message_key: &str,
+) -> Result<()> {
+    save_message_with_key_and_requester_did(
+        node,
+        session_id,
+        agent_did,
+        None,
+        sequence,
+        role,
+        content,
+        reasoning,
+        message_key,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn save_message_with_key_and_requester_did(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
     sequence: u32,
     role: &str,
     content: &str,
@@ -86,6 +132,7 @@ pub(crate) async fn save_message_with_key(
         node,
         session_id,
         agent_did,
+        requester_did,
         sequence,
         role,
         content,
@@ -100,6 +147,7 @@ async fn save_message_inner(
     node: &EmbeddedNode,
     session_id: &str,
     agent_did: &str,
+    requester_did: Option<&str>,
     sequence: u32,
     role: &str,
     content: &str,
@@ -110,6 +158,7 @@ async fn save_message_inner(
     let escaped = escape_graphql_string(content);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
+    let requester_did_field = super::requester_did_create_field(requester_did);
     let escaped_role = escape_graphql_string(role);
     // #492: persist the durable reasoning copy alongside content. Empty/absent
     // reasoning is written as "" so the field round-trips deterministically.
@@ -125,6 +174,7 @@ async fn save_message_inner(
                     message_key: "{escaped_message_key}",
                     session_id: "{escaped_session_id}",
                     agent_did: "{escaped_agent_did}",
+                    {requester_did_field}
                     sequence: {sequence},
                     role: "{escaped_role}",
                     content: "{escaped}",
@@ -144,10 +194,28 @@ async fn save_message_inner(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) async fn append_message(
     node: &EmbeddedNode,
     session_id: &str,
     agent_did: &str,
+    role: &str,
+    content: &str,
+    reasoning: Option<&str>,
+    request_id: Option<&str>,
+) -> Result<u32> {
+    append_message_with_requester_did(
+        node, session_id, agent_did, None, role, content, reasoning, request_id,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn append_message_with_requester_did(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
     role: &str,
     content: &str,
     reasoning: Option<&str>,
@@ -158,7 +226,15 @@ pub(crate) async fn append_message(
         attempts += 1;
         let sequence = next_append_sequence(node, session_id).await?;
         match create_message(
-            node, session_id, agent_did, sequence, role, content, reasoning, request_id,
+            node,
+            session_id,
+            agent_did,
+            requester_did,
+            sequence,
+            role,
+            content,
+            reasoning,
+            request_id,
         )
         .await
         {
@@ -284,6 +360,7 @@ async fn create_message(
     node: &EmbeddedNode,
     session_id: &str,
     agent_did: &str,
+    requester_did: Option<&str>,
     sequence: u32,
     role: &str,
     content: &str,
@@ -294,6 +371,7 @@ async fn create_message(
     let escaped = escape_graphql_string(content);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
+    let requester_did_field = super::requester_did_create_field(requester_did);
     let escaped_role = escape_graphql_string(role);
     // #492: durable reasoning copy written at materialize time (see save_message).
     let escaped_reasoning = escape_graphql_string(reasoning.unwrap_or(""));
@@ -310,6 +388,7 @@ async fn create_message(
                 message_key: "{message_key}",
                 session_id: "{escaped_session_id}",
                 agent_did: "{escaped_agent_did}",
+                {requester_did_field}
                 request_id: "{escaped_request_id}",
                 sequence: {sequence},
                 role: "{escaped_role}",

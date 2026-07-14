@@ -280,6 +280,7 @@ pub struct ToolCallLifecycle {
     /// onto the AgentToolCall row at create so filtered replication can scope the
     /// collection to one agent (`@immutable` scope key).
     agent_did: String,
+    requester_did: Option<String>,
     tool_call_id: String,
     message_sequence: u32,
     tool_name: String,
@@ -319,6 +320,7 @@ impl ToolCallLifecycle {
             request_id,
             session_id,
             agent_did,
+            requester_did: None,
             tool_call_id,
             message_sequence,
             tool_name,
@@ -337,6 +339,14 @@ impl ToolCallLifecycle {
             workflow_group_id: None,
             workflow_role: None,
         }
+    }
+
+    pub(crate) fn with_requester_did(mut self, requester_did: Option<String>) -> Self {
+        self.requester_did = requester_did.and_then(|did| {
+            let did = did.trim();
+            (!did.is_empty()).then(|| did.to_string())
+        });
+        self
     }
 
     /// Constructor for the subagent invocation path. Sets child_request_id (the
@@ -364,6 +374,7 @@ impl ToolCallLifecycle {
             request_id,
             session_id,
             agent_did,
+            requester_did: None,
             tool_call_id,
             message_sequence,
             tool_name,
@@ -403,6 +414,7 @@ impl ToolCallLifecycle {
             request_id,
             session_id,
             agent_did,
+            requester_did: None,
             tool_call_id,
             message_sequence,
             tool_name,

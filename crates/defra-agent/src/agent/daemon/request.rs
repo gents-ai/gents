@@ -7,7 +7,6 @@ use crate::compaction::{self, CompactionOptions, Compactor};
 use crate::prompt::PromptBuilder;
 use crate::runtime_trace::RequestTraceAttrs;
 use crate::session;
-use crate::streaming::StreamWriter;
 
 /// Grace period after cancellation before force-aborting children, so in-flight
 /// cancellable work can observe the cancel and return cleanly. Codex-aligned:
@@ -141,10 +140,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     // sees it.
                     history = result.messages;
                     if let Some(summary) = result.summary {
-                        let entry = session::save_compaction_entry(
+                        let entry = session::save_compaction_entry_with_requester_did(
                             &self.node,
                             &request.session_id,
                             &request.agent_did,
+                            request.requester_did.as_deref(),
                             &summary,
                             &result.files_read,
                             &result.files_modified,
@@ -204,10 +204,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             let response_behavior_id = lifecycle.behavior_id().to_string();
             let doc_id = self
                 .stream_writer
-                .begin(
+                .begin_with_requester_did(
                     &request.session_id,
                     &request.request_id,
                     lifecycle.behavior_id(),
+                    request.requester_did.as_deref(),
                 )
                 .instrument(tracing::info_span!(
                     "request.begin_response",

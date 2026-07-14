@@ -109,13 +109,13 @@ def subagentCoordinatorRules : List CollectionRule :=
 
 def subagentHostRules : List CollectionRule :=
   [ { collection := "AgentRequest",      field := "requester_did", source := .peerDid }
-  , { collection := "AgentResponse",     field := "agent_did",     source := .localDid }
-  , { collection := "AgentMessage",      field := "agent_did",     source := .localDid }
-  , { collection := "AgentToolCall",     field := "agent_did",     source := .localDid }
-  , { collection := "AgentToolResult",   field := "agent_did",     source := .localDid }
-  , { collection := "AgentSession",      field := "agent_did",     source := .localDid }
-  , { collection := "AgentConversation", field := "agent_did",     source := .localDid }
-  , { collection := "CompactionEntry",   field := "agent_did",     source := .localDid } ]
+  , { collection := "AgentResponse",     field := "requester_did", source := .peerDid }
+  , { collection := "AgentMessage",      field := "requester_did", source := .peerDid }
+  , { collection := "AgentToolCall",     field := "requester_did", source := .peerDid }
+  , { collection := "AgentToolResult",   field := "requester_did", source := .peerDid }
+  , { collection := "AgentSession",      field := "requester_did", source := .peerDid }
+  , { collection := "AgentConversation", field := "requester_did", source := .peerDid }
+  , { collection := "CompactionEntry",   field := "requester_did", source := .peerDid } ]
 
 def conversationTemplate : Template :=
   { id := "conversation"

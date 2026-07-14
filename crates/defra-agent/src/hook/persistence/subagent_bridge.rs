@@ -1017,7 +1017,8 @@ impl DefraSessionHook {
             SPAWN_SUBAGENT_TOOL_NAME.to_string(),
             args.to_string(),
             deadline_at,
-        );
+        )
+        .with_requester_did(self.active_requester_did().await);
         lifecycle.spawn_failed(failure_class, &result).await?;
         Ok(self.skip_tool_result(SPAWN_SUBAGENT_TOOL_NAME, result))
     }
@@ -1045,7 +1046,8 @@ impl DefraSessionHook {
             tool_name.to_string(),
             args.to_string(),
             deadline_at,
-        );
+        )
+        .with_requester_did(self.active_requester_did().await);
         lifecycle.spawn_failed(failure_class, &result).await?;
         Ok(self.skip_tool_result(tool_name, result))
     }

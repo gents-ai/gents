@@ -182,6 +182,8 @@ pub struct AgentConversationRow {
     #[serde(default)]
     pub agent_did: Option<String>,
     #[serde(default)]
+    pub requester_did: Option<String>,
+    #[serde(default)]
     pub behavior_id: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
@@ -204,6 +206,8 @@ pub struct AgentRequestRow {
     pub request_id: String,
     #[serde(default)]
     pub agent_did: Option<String>,
+    #[serde(default)]
+    pub requester_did: Option<String>,
     #[serde(default)]
     pub behavior_id: Option<String>,
     #[serde(default)]
@@ -270,6 +274,8 @@ pub struct AgentResponseRow {
     #[serde(default)]
     pub agent_did: Option<String>,
     #[serde(default)]
+    pub requester_did: Option<String>,
+    #[serde(default)]
     pub behavior_id: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
@@ -305,6 +311,8 @@ pub struct AgentMessageRow {
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
+    pub requester_did: Option<String>,
+    #[serde(default)]
     pub sequence: Option<i64>,
     #[serde(default)]
     pub role: Option<String>,
@@ -326,6 +334,8 @@ pub struct AgentSessionRow {
     #[serde(default)]
     pub agent_name: Option<String>,
     #[serde(default)]
+    pub requester_did: Option<String>,
+    #[serde(default)]
     pub behavior_id: Option<String>,
     #[serde(default)]
     pub started: Option<String>,
@@ -342,6 +352,8 @@ pub struct AgentToolCallRow {
     pub session_id: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub requester_did: Option<String>,
     #[serde(default)]
     pub message_sequence: Option<i64>,
     #[serde(default)]
@@ -401,6 +413,8 @@ pub struct AgentToolResultRow {
     #[serde(default)]
     pub agent_did: Option<String>,
     #[serde(default)]
+    pub requester_did: Option<String>,
+    #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
     pub tool_name: Option<String>,
@@ -425,6 +439,8 @@ pub struct CompactionEntryRow {
     pub compaction_key: String,
     #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub requester_did: Option<String>,
     #[serde(default)]
     pub sequence: Option<i64>,
     #[serde(default)]

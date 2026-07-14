@@ -8,6 +8,7 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
                 session_id: "shared-session".to_string(),
                 agent_name: Some("Mini 1".to_string()),
                 agent_did: Some("did:defra:mini-1".to_string()),
+                requester_did: None,
                 behavior_id: Some("default".to_string()),
                 title: Some("mini-1 run".to_string()),
                 title_source: Some("manual".to_string()),
@@ -21,6 +22,7 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
                 session_id: "shared-session".to_string(),
                 agent_name: Some("Mini 2".to_string()),
                 agent_did: Some("did:defra:mini-2".to_string()),
+                requester_did: None,
                 behavior_id: Some("default".to_string()),
                 title: Some("mini-2 run".to_string()),
                 title_source: Some("manual".to_string()),
@@ -35,6 +37,7 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
             AgentMessageRow {
                 message_key: "msg-mini-1".to_string(),
                 session_id: Some("shared-session".to_string()),
+                requester_did: None,
                 sequence: Some(1),
                 role: Some("user".to_string()),
                 content: Some(user_message_json("mini 1 only")),
@@ -44,6 +47,7 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
             AgentMessageRow {
                 message_key: "msg-mini-2".to_string(),
                 session_id: Some("shared-session".to_string()),
+                requester_did: None,
                 sequence: Some(2),
                 role: Some("user".to_string()),
                 content: Some(user_message_json("mini 2 only")),
@@ -79,6 +83,7 @@ fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("architecture-review".to_string()),
             title_source: Some("generated".to_string()),
@@ -92,6 +97,7 @@ fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized
             AgentRequestRow {
                 request_id: "req-1".to_string(),
                 agent_did: Some("did:defra:amy".to_string()),
+                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
                 retry_parent_request: None,
@@ -124,6 +130,7 @@ fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized
             AgentRequestRow {
                 request_id: "req-2".to_string(),
                 agent_did: Some("did:defra:amy".to_string()),
+                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
                 retry_parent_request: None,
@@ -157,6 +164,7 @@ fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized
         messages: vec![AgentMessageRow {
             message_key: "msg-1".to_string(),
             session_id: Some("session-1".to_string()),
+            requester_did: None,
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some(user_message_json("first question")),
@@ -181,6 +189,7 @@ fn session_snapshot_hides_pending_turn_once_user_message_is_materialized() {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("architecture-review".to_string()),
             title_source: Some("generated".to_string()),
@@ -193,6 +202,7 @@ fn session_snapshot_hides_pending_turn_once_user_message_is_materialized() {
         requests: vec![AgentRequestRow {
             request_id: "req-2".to_string(),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
             retry_parent_request: None,
@@ -225,6 +235,7 @@ fn session_snapshot_hides_pending_turn_once_user_message_is_materialized() {
         messages: vec![AgentMessageRow {
             message_key: "msg-2".to_string(),
             session_id: Some("session-1".to_string()),
+            requester_did: None,
             sequence: Some(2),
             role: Some("user".to_string()),
             content: Some(user_message_json("follow up question")),
@@ -247,6 +258,7 @@ fn session_snapshot_keeps_pending_turn_for_repeated_prompt_until_second_user_mes
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
             agent_did: Some("did:defra:amy".to_string()),
+            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
             title_source: Some("generated".to_string()),
@@ -260,6 +272,7 @@ fn session_snapshot_keeps_pending_turn_for_repeated_prompt_until_second_user_mes
             AgentRequestRow {
                 request_id: "req-1".to_string(),
                 agent_did: Some("did:defra:amy".to_string()),
+                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
                 retry_parent_request: None,
@@ -292,6 +305,7 @@ fn session_snapshot_keeps_pending_turn_for_repeated_prompt_until_second_user_mes
             AgentRequestRow {
                 request_id: "req-2".to_string(),
                 agent_did: Some("did:defra:amy".to_string()),
+                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
                 retry_parent_request: None,
@@ -325,6 +339,7 @@ fn session_snapshot_keeps_pending_turn_for_repeated_prompt_until_second_user_mes
         messages: vec![AgentMessageRow {
             message_key: "msg-1".to_string(),
             session_id: Some("session-1".to_string()),
+            requester_did: None,
             sequence: Some(1),
             role: Some("user".to_string()),
             content: Some(user_message_json("same prompt")),

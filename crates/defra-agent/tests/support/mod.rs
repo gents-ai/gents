@@ -525,6 +525,7 @@ pub fn build_request(
         doc_id,
         request_id,
         agent_did: AGENT_DID.into(),
+        requester_did: None,
         behavior_id: Some(AGENT_NAME.into()),
         session_id,
         content: "hello".into(),

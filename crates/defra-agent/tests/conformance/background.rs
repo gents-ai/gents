@@ -49,6 +49,7 @@ struct BackgroundTheoremChildRequestRow {
     doc_id: String,
     request_id: String,
     agent_did: String,
+    requester_did: Option<String>,
     behavior_id: Option<String>,
     session_id: String,
     content: String,
@@ -73,6 +74,7 @@ impl BackgroundTheoremChildRequestRow {
             doc_id: self.doc_id,
             request_id: self.request_id,
             agent_did: self.agent_did,
+            requester_did: self.requester_did,
             behavior_id: self
                 .behavior_id
                 .and_then(|value| (!value.trim().is_empty()).then_some(value)),
@@ -423,6 +425,7 @@ async fn fetch_background_theorem_child_request(
                 _docID
                 request_id
                 agent_did
+                requester_did
                 behavior_id
                 session_id
                 content
@@ -459,6 +462,7 @@ async fn fetch_background_theorem_child_request_optional(
                 _docID
                 request_id
                 agent_did
+                requester_did
                 behavior_id
                 session_id
                 content

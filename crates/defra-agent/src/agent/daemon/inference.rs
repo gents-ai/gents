@@ -189,8 +189,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 .await?
                 .with_background_tool_registry(self.background_tool_registry.clone())
                 .with_background_execution_registry(self.background_execution_registry.clone());
-                hook.set_active_request_id(Some(request.request_id.clone()))
-                    .await;
+                hook.set_active_request_lineage(
+                    Some(request.request_id.clone()),
+                    request.requester_did.clone(),
+                )
+                .await;
                 hook.set_request_deadline_at(request_deadline).await;
                 let persistence_hook = hook.clone();
 
@@ -553,7 +556,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     ) -> Result<()> {
         let doc_id = self
             .stream_writer
-            .begin(&request.session_id, &request.request_id, behavior_id)
+            .begin_with_requester_did(
+                &request.session_id,
+                &request.request_id,
+                behavior_id,
+                request.requester_did.as_deref(),
+            )
             .await?;
         let error_reason = error.to_string();
         let error_text = format!("Error: {}", error_reason);

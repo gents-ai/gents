@@ -293,7 +293,8 @@ impl DefraSessionHook {
                 tool_name.to_string(),
                 args.to_string(),
                 deadline_at,
-            );
+            )
+            .with_requester_did(self.active_requester_did().await);
             lc.start_running().await?;
 
             self.in_flight_lifecycles
@@ -392,7 +393,8 @@ impl DefraSessionHook {
             };
 
             let truncator =
-                DefraSpillTruncator::new(self.node.clone(), &self.agent_did, &session_id);
+                DefraSpillTruncator::new(self.node.clone(), &self.agent_did, &session_id)
+                    .with_requester_did(self.active_requester_did().await);
             // The owned loop (#400) passes the full tool output here directly, so
             // the persisted copy spills/truncates the complete result. (The old
             // rig path needed a recorder shim to recover the full output; gone.)

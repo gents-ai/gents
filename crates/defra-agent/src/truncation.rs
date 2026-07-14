@@ -81,6 +81,7 @@ pub trait Truncator: Send + Sync {
 pub struct DefraSpillTruncator {
     node: Arc<EmbeddedNode>,
     agent_did: String,
+    requester_did: Option<String>,
     session_id: String,
 }
 
@@ -89,7 +90,16 @@ impl DefraSpillTruncator {
         Self {
             node,
             agent_did: agent_did.to_string(),
+            requester_did: None,
             session_id: session_id.to_string(),
         }
+    }
+
+    pub(crate) fn with_requester_did(mut self, requester_did: Option<String>) -> Self {
+        self.requester_did = requester_did.and_then(|did| {
+            let did = did.trim();
+            (!did.is_empty()).then(|| did.to_string())
+        });
+        self
     }
 }

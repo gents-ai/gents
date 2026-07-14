@@ -100,7 +100,8 @@ impl DefraSessionHook {
                     FAN_OUT_AND_SYNTHESIZE_TOOL_NAME.to_string(),
                     args.to_string(),
                     hook_deadline_at,
-                );
+                )
+                .with_requester_did(self.active_requester_did().await);
                 let payload = invalid_tool_arguments_payload(
                     FAN_OUT_AND_SYNTHESIZE_TOOL_NAME,
                     "/",
@@ -124,7 +125,8 @@ impl DefraSessionHook {
             FAN_OUT_AND_SYNTHESIZE_TOOL_NAME.to_string(),
             args.to_string(),
             parent_context.request_deadline_at,
-        );
+        )
+        .with_requester_did(self.active_requester_did().await);
 
         if let Some((failure_class, payload)) = self
             .validate_workflow_invocation(&parent_context, &parsed)
@@ -714,7 +716,8 @@ impl DefraSessionHook {
             CancelPolicy::Cascade,
             child_request_id.clone(),
             target_agent_did,
-        );
+        )
+        .with_requester_did(self.active_requester_did().await);
         lifecycle.set_workflow_group(workflow_group_id, workflow_role);
         // A background (cross-deployment) child that is never CLAIMED by its
         // remote node must not hold the barrier open until the whole parent

@@ -19,6 +19,32 @@ pub(crate) async fn upsert_conversation_from_request_with_identity(
     content: &str,
     status: &str,
 ) -> Result<()> {
+    upsert_conversation_from_request_with_identity_and_requester_did(
+        node,
+        session_id,
+        agent_name,
+        agent_did,
+        behavior_id,
+        request_id,
+        content,
+        status,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn upsert_conversation_from_request_with_identity_and_requester_did(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_name: &str,
+    agent_did: &str,
+    behavior_id: &str,
+    request_id: &str,
+    content: &str,
+    status: &str,
+    requester_did: Option<&str>,
+) -> Result<()> {
     upsert_conversation_from_request_with_identity_and_title(
         node,
         session_id,
@@ -28,6 +54,7 @@ pub(crate) async fn upsert_conversation_from_request_with_identity(
         request_id,
         content,
         status,
+        requester_did,
         None,
     )
     .await
@@ -43,12 +70,14 @@ pub(crate) async fn upsert_conversation_from_request_with_identity_and_title(
     request_id: &str,
     content: &str,
     status: &str,
+    requester_did: Option<&str>,
     title_override: Option<(&str, &str)>,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_name = escape_graphql_string(agent_name);
     let escaped_agent_did = escape_graphql_string(agent_did);
+    let requester_did_field = super::requester_did_create_field(requester_did);
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_preview = escape_graphql_string(&derive_conversation_preview(content));
     let escaped_status = escape_graphql_string(status);
@@ -100,6 +129,7 @@ pub(crate) async fn upsert_conversation_from_request_with_identity_and_title(
                     add: {{
                         session_id: "{escaped_session_id}",
                         agent_did: "{escaped_agent_did}",
+                        {requester_did_field}
                         {assignments}
                     }},
                     update: {{ {assignments} }}

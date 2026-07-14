@@ -58,6 +58,7 @@ async fn router_dispatches_first_request_after_snapshot_change_to_latest_generat
             doc_id: "doc-router".to_string(),
             request_id: "req-router".to_string(),
             agent_did: agent_did.to_string(),
+            requester_did: None,
             behavior_id: None,
             session_id: "session-router".to_string(),
             content: "hello".to_string(),

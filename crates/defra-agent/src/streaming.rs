@@ -128,6 +128,17 @@ impl DefraStreamWriter {
         }
     }
 
+    pub async fn begin_with_requester_did(
+        &self,
+        session_id: &str,
+        request_id: &str,
+        behavior_id: &str,
+        requester_did: Option<&str>,
+    ) -> Result<String> {
+        self.begin_inner(session_id, request_id, behavior_id, requester_did)
+            .await
+    }
+
     async fn flush_snapshot(&self, doc_id: &str, snapshot: &StreamBufferSnapshot) -> Result<()> {
         tracing::debug!(
             doc_id = %doc_id,
@@ -560,6 +571,35 @@ impl DefraStreamWriter {
 
 impl StreamWriter for DefraStreamWriter {
     async fn begin(&self, session_id: &str, request_id: &str, behavior_id: &str) -> Result<String> {
+        self.begin_inner(session_id, request_id, behavior_id, None)
+            .await
+    }
+
+    async fn write_tokens(&self, doc_id: &str, tokens: &str) -> Result<bool> {
+        DefraStreamWriter::write_tokens(self, doc_id, tokens).await
+    }
+
+    async fn write_reasoning(&self, doc_id: &str, reasoning: &str) -> Result<bool> {
+        DefraStreamWriter::write_reasoning(self, doc_id, reasoning).await
+    }
+
+    async fn flush_pending(&self, doc_id: &str) -> Result<bool> {
+        DefraStreamWriter::flush_pending(self, doc_id).await
+    }
+
+    async fn finalize(&self, doc_id: &str, status: StreamStatus) -> Result<StreamResult> {
+        DefraStreamWriter::finalize(self, doc_id, status).await
+    }
+}
+
+impl DefraStreamWriter {
+    async fn begin_inner(
+        &self,
+        session_id: &str,
+        request_id: &str,
+        behavior_id: &str,
+        requester_did: Option<&str>,
+    ) -> Result<String> {
         if let Some(existing) = load_response_state_by_key(&self.node, request_id).await? {
             anyhow::bail!(
                 "refusing to begin response for request_id={} because AgentResponse {} already exists with status={}",
@@ -573,6 +613,7 @@ impl StreamWriter for DefraStreamWriter {
         let response_key = escape_graphql_string(request_id);
         let escaped_request_id = escape_graphql_string(request_id);
         let escaped_agent_did = escape_graphql_string(&self.agent_did);
+        let requester_did_field = crate::session::requester_did_create_field(requester_did);
         let escaped_session_id = escape_graphql_string(session_id);
         let escaped_behavior_id = escape_graphql_string(behavior_id);
         let mutation = format!(
@@ -581,6 +622,7 @@ impl StreamWriter for DefraStreamWriter {
                     response_key: "{response_key}",
                     request_id: "{escaped_request_id}",
                     agent_did: "{escaped_agent_did}",
+                    {requester_did_field}
                     behavior_id: "{escaped_behavior_id}",
                     session_id: "{escaped_session_id}",
                     content: "",

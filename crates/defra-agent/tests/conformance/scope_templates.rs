@@ -59,9 +59,9 @@ fn unscoped_scope_resolves_to_no_filter() {
 }
 
 /// Mirrors Lean `subagentCoordinator_filter_eq` / `subagentHost_filter_eq` /
-/// `subagentRequest_crossing_is_peer_scoped`: coordinator parent requests do
-/// not fan out to hosts, and host-owned child requests return only to the
-/// paired requester DID.
+/// `subagentHost_filters_requester_lineage`: coordinator parent requests do
+/// not fan out to hosts, and every host artifact returns only to the paired
+/// requester DID.
 #[test]
 fn subagent_templates_resolve_to_exact_directional_filters() {
     const CONVERSATION: &[&str] = &[
@@ -111,16 +111,12 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
             value: "did:key:coord".to_string(),
         })
     );
-    for collection in CONVERSATION
-        .iter()
-        .copied()
-        .filter(|collection| *collection != "AgentRequest")
-    {
+    for collection in CONVERSATION {
         assert_eq!(
-            host_filter.get(collection),
+            host_filter.get(*collection),
             Some(&FilterPredicate {
-                field: "agent_did".to_string(),
-                value: "did:key:host".to_string(),
+                field: "requester_did".to_string(),
+                value: "did:key:coord".to_string(),
             }),
             "unexpected host filter for {collection}"
         );
@@ -132,6 +128,30 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
             "subagent filters must not include third-party DIDs"
         );
     }
+}
+
+/// Regression for #713: owner scoping made an unrelated host conversation
+/// match the return leg. The requester route key keeps the coordinator-spawned
+/// child conversation and excludes unrelated host history, even though both
+/// rows share the same host `agent_did`.
+#[test]
+fn subagent_host_conversation_filter_excludes_unrelated_host_history() {
+    let host = resolve_template("subagent-host").expect("host template");
+    let filter = scope_filter(
+        &host.scope,
+        host.collections,
+        "did:key:coord",
+        "did:key:host",
+    );
+    let predicate = filter
+        .get("AgentConversation")
+        .expect("conversation filter");
+
+    let child_requester_did = Some("did:key:coord");
+    let unrelated_requester_did: Option<&str> = None;
+    assert_eq!(predicate.field, "requester_did");
+    assert_eq!(child_requester_did, Some(predicate.value.as_str()));
+    assert_ne!(unrelated_requester_did, Some(predicate.value.as_str()));
 }
 
 /// Regression/measurement for #683. Under the former coordinator rule, one

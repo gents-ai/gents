@@ -453,6 +453,7 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
                 }}
             ) {{
                 request_id
+                requester_did
                 behavior_id
                 session_id
             }}
@@ -478,6 +479,7 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
     let mut recovered = 0;
     for row in rows {
         let request_id = row.get("request_id").and_then(|v| v.as_str()).unwrap_or("");
+        let requester_did = row.get("requester_did").and_then(|v| v.as_str());
         let behavior_id = row
             .get("behavior_id")
             .and_then(|v| v.as_str())
@@ -502,12 +504,14 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
         let escaped_agent_did = escape_graphql_string(agent_did);
         let escaped_behavior_id = escape_graphql_string(behavior_id);
         let escaped_session_id = escape_graphql_string(session_id);
+        let requester_did_field = crate::session::requester_did_create_field(requester_did);
         let mutation = format!(
             r#"mutation {{
                 create_AgentResponse(input: {{
                     response_key: "{escaped_request_id}",
                     request_id: "{escaped_request_id}",
                     agent_did: "{escaped_agent_did}",
+                    {requester_did_field}
                     behavior_id: "{escaped_behavior_id}",
                     session_id: "{escaped_session_id}",
                     content: "{error_text}",

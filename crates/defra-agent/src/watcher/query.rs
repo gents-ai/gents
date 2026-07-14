@@ -10,6 +10,7 @@ const AGENT_REQUEST_FIELDS: &str = r#"
                     _docID
                     request_id
                     agent_did
+                    requester_did
                     behavior_id
                     session_id
                     content
@@ -203,6 +204,7 @@ struct AgentRequestRow {
     doc_id: String,
     request_id: String,
     agent_did: String,
+    requester_did: Option<String>,
     behavior_id: Option<String>,
     session_id: String,
     content: String,
@@ -266,6 +268,7 @@ impl AgentRequestRow {
             doc_id: self.doc_id,
             request_id: self.request_id,
             agent_did: self.agent_did,
+            requester_did: normalize_optional_string(self.requester_did),
             behavior_id: normalize_optional_string(self.behavior_id),
             session_id: self.session_id,
             content: self.content,
