@@ -2344,3 +2344,89 @@ fn assert_all_history_tool_args_object_shaped(history: &[Message]) {
         }
     }
 }
+
+/// #652: the repair pass must sanitize the LOADED HISTORY, not just the
+/// run-threaded messages.
+///
+/// The motivating failure (the vLLM parse-signature 400) originates from
+/// `json.loads` of tool-call arguments in the INPUT TRANSCRIPT — i.e. exactly
+/// the history the repair pass used to skip. With the poison in history and
+/// none in the new messages, repair used to re-issue a byte-identical poisoned
+/// request and fail the same way: the fence described a transform that did not
+/// exist.
+#[tokio::test(start_paused = true)]
+async fn repair_sanitizes_poisoned_tool_args_in_loaded_history() {
+    let poison = format!("bad{}value", '\u{0007}');
+
+    // The poison lives ONLY in the loaded conversation history — a prior turn's
+    // persisted tool call. The current run produces nothing dirty.
+    let poisoned_call = crate::llm::message::ToolCall {
+        id: "call-historic".to_string(),
+        call_id: Some("call-historic".to_string()),
+        function: crate::llm::message::ToolFunction {
+            name: "echo".to_string(),
+            arguments: serde_json::json!({ "note": poison }),
+        },
+        signature: None,
+        additional_params: None,
+    };
+    let history = vec![
+        Message::user("earlier"),
+        Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::ToolCall(poisoned_call)],
+        },
+        Message::User {
+            content: vec![UserContent::tool_result(
+                "call-historic",
+                vec![ToolResultContent::text("ok")],
+            )],
+        },
+    ];
+    assert!(
+        history_has_control_char_tool_arg(&history),
+        "the fixture must actually carry poisoned history"
+    );
+
+    // Two identical parse-400s: resample once, then repair.
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::FailStream(parse_400_error("same")),
+        ScriptedCall::FailStream(parse_400_error("same")),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("repaired".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("hi"),
+        history,
+        Arc::new(Vec::new()),
+        config(0),
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.final_text.as_deref(), Some("repaired"));
+    assert_eq!(collected.error, None);
+
+    let histories = model.seen_histories().await;
+    assert_eq!(
+        histories.len(),
+        3,
+        "parse failure, resample, and the repaired retry"
+    );
+    assert!(
+        history_has_control_char_tool_arg(&histories[0]),
+        "the poisoned history must reach the provider before repair: {:?}",
+        histories[0]
+    );
+    assert!(
+        !history_has_control_char_tool_arg(&histories[2]),
+        "repair must sanitize tool arguments in the LOADED HISTORY, not only \
+         the run-threaded messages — otherwise it re-issues the same poisoned \
+         input and fails identically (#652): {:?}",
+        histories[2]
+    );
+}
