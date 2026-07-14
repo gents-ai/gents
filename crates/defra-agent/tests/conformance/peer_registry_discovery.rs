@@ -19,8 +19,8 @@ use defra_agent::agent::p2p_reconcile::discovery::{
 };
 use defra_agent::agent::p2p_reconcile::network::{
     decide_v5_admission, derive_network_desired, peer_is_materializable, reconcile_network_tick,
-    select_materializable_entries, NetworkEndpointEntry, NetworkStore, V5AdmissionClaim,
-    V5Rejection,
+    select_materializable_entries, select_revoked_member_dids, NetworkEndpointEntry, NetworkStore,
+    V5AdmissionClaim, V5Rejection,
 };
 use defra_agent::identity::{AgentIdentity, KeyIdentity};
 use defra_agent_protocol::network_token::{EndpointRecord, MembershipRecord, NetworkRecord};
@@ -450,6 +450,29 @@ async fn gate_excludes_revoked_member() {
         out.is_empty(),
         "revoked membership must not materialize (Lean revoke_drops_member)"
     );
+}
+
+/// The reciprocal negative gate accepts only explicit revocations signed by
+/// the selected network's admin. Active and forged rows cannot suppress a
+/// standing conversation intent.
+#[tokio::test]
+async fn reciprocal_gate_selects_only_verified_revocations() {
+    let admin = gate_identity("reciprocal-revoke-admin");
+    let valid_member = gate_identity("reciprocal-revoke-valid");
+    let forged_member = gate_identity("reciprocal-revoke-forged");
+    let active_member = gate_identity("reciprocal-revoke-active");
+    let net = signed_network(&admin).await;
+    let valid = signed_membership(&admin, &net.network_id, valid_member.did(), "revoked").await;
+    let mut forged =
+        signed_membership(&admin, &net.network_id, forged_member.did(), "revoked").await;
+    forged.sig = vec![0u8; 64];
+    let active = signed_membership(&admin, &net.network_id, active_member.did(), "active").await;
+
+    let revoked = select_revoked_member_dids(&admin, &net, &[valid, forged, active])
+        .await
+        .expect("revocation gate");
+
+    assert_eq!(revoked, BTreeSet::from([valid_member.did().to_string()]));
 }
 
 /// Mirrors `unsigned_membership_not_materialized`: a membership whose admin
