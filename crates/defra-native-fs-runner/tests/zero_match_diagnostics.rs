@@ -93,3 +93,34 @@ fn zero_match_grep_reports_search_dir_entries() {
     let entries = value["search_dir_entries"].as_array().unwrap();
     assert!(entries.iter().any(|entry| entry == "docs"), "{entries:?}");
 }
+
+#[test]
+fn budget_exhausted_zero_match_omits_search_dir_entries() {
+    // Review finding: a budget-stopped zero-match is NOT an anchoring
+    // problem; emitting the "your path anchor is wrong" hint sends the model
+    // off to re-anchor a correct pattern.
+    let root = unique_root("budget-no-hint");
+    for index in 0..30 {
+        std::fs::write(root.join(format!("file-{index:02}.txt")), "x").unwrap();
+    }
+
+    let output = execute_request_with_base(
+        root.clone(),
+        None,
+        NativeFsRunnerRequest::Glob(GlobArgs {
+            pattern: "**/*.zzz".to_string(),
+            path: None,
+            max_matches: 100,
+            raw_json: true,
+            max_entries_visited: Some(5),
+            max_wall_ms: None,
+        }),
+    )
+    .unwrap();
+    let value: Value = serde_json::from_str(&output).unwrap();
+
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(value["returned_count"], 0, "{value}");
+    assert_eq!(value["walk"]["budget_exhausted"], true, "{value}");
+    assert!(value["search_dir_entries"].is_null(), "{value}");
+}

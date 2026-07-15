@@ -83,13 +83,93 @@ impl WalkState {
         }
     }
 
+    /// Bound a single directory scan. Stops collecting once the remaining
+    /// entry budget is exceeded (the admit loop then reports exhaustion) or
+    /// the wall budget has expired (reported here, at the directory).
+    pub(crate) fn dir_scan_should_stop(
+        &mut self,
+        context: &RunnerContext,
+        dir: &Path,
+        collected: usize,
+    ) -> bool {
+        if self.exhausted {
+            return true;
+        }
+        if self.started.elapsed() >= self.limits.max_wall {
+            self.stop_at(context, dir);
+            return true;
+        }
+        let remaining = self
+            .limits
+            .max_entries_visited
+            .saturating_sub(self.entries_visited);
+        collected > remaining
+    }
+
     fn stop_at(&mut self, context: &RunnerContext, path: &Path) {
         self.exhausted = true;
         self.stopped_at = Some(context.display_path(path));
     }
 }
 
-pub(super) fn sorted_children(dir: &Path) -> Result<Vec<std::fs::DirEntry>> {
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn test_context_and_dir(entries: usize) -> (RunnerContext, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "defra-fs-common-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for index in 0..entries {
+            std::fs::write(dir.join(format!("f-{index:03}")), "x").unwrap();
+        }
+        let context = RunnerContext::new_with_base(dir.clone(), None).unwrap();
+        (context, std::fs::canonicalize(&dir).unwrap())
+    }
+
+    fn limits(max_entries: usize, max_wall: Duration) -> WalkLimits {
+        WalkLimits {
+            max_entries_visited: max_entries,
+            max_bytes_read: u64::MAX,
+            max_wall,
+        }
+    }
+
+    #[test]
+    fn dir_scan_stops_collecting_at_entry_budget() {
+        let (context, dir) = test_context_and_dir(100);
+        let mut walk = WalkState::new(limits(5, Duration::from_secs(60)));
+        let children = sorted_children(&context, &dir, &mut walk).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            children.len() <= 6,
+            "collected {} dirents past the entry budget",
+            children.len()
+        );
+    }
+
+    #[test]
+    fn dir_scan_stops_on_expired_wall_budget() {
+        let (context, dir) = test_context_and_dir(100);
+        let mut walk = WalkState::new(limits(1000, Duration::ZERO));
+        let children = sorted_children(&context, &dir, &mut walk).unwrap();
+        let stats_exhausted = walk.exhausted();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(children.is_empty(), "collected {}", children.len());
+        assert!(stats_exhausted);
+    }
+}
+
+pub(super) fn sorted_children(
+    context: &RunnerContext,
+    dir: &Path,
+    walk: &mut WalkState,
+) -> Result<Vec<std::fs::DirEntry>> {
     if let Some(duration) = sorted_children_block_for_test(dir) {
         std::thread::sleep(duration);
     }
@@ -100,6 +180,14 @@ pub(super) fn sorted_children(dir: &Path) -> Result<Vec<std::fs::DirEntry>> {
     };
     let mut children = Vec::new();
     for entry in read_dir {
+        // Budgets must bind DURING the readdir: a directory with millions of
+        // direct children would otherwise be fully read and sorted before the
+        // first admit_entry check — the exact #729 pathology. When the scan
+        // is cut short, the sorted result covers only the collected subset,
+        // which is fine: the walk is about to report budget exhaustion.
+        if walk.dir_scan_should_stop(context, dir, children.len()) {
+            break;
+        }
         match entry {
             Ok(entry) => children.push(entry),
             Err(error) if should_skip_io_error(&error) => continue,

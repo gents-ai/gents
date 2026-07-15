@@ -45,7 +45,7 @@ fn collect_entries_inner(
     truncated: &mut bool,
     walk: &mut WalkState,
 ) -> Result<()> {
-    for entry in sorted_children(dir)? {
+    for entry in sorted_children(context, dir, walk)? {
         if *truncated || walk.exhausted() {
             break;
         }

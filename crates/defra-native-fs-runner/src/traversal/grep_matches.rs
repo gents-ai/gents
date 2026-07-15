@@ -109,6 +109,7 @@ pub(crate) fn collect_grep_matches(
             &mut truncated,
             &mut walk,
             &mut file_stats,
+            true,
         )?;
     }
     let bytes_read = walk.bytes_read();
@@ -135,7 +136,7 @@ fn collect_grep_matches_inner(
     walk: &mut WalkState,
     file_stats: &mut GrepFileStats,
 ) -> Result<()> {
-    for entry in sorted_children(dir)? {
+    for entry in sorted_children(context, dir, walk)? {
         if *truncated || walk.exhausted() {
             break;
         }
@@ -175,6 +176,7 @@ fn collect_grep_matches_inner(
             truncated,
             walk,
             file_stats,
+            false,
         )?;
     }
     Ok(())
@@ -191,6 +193,7 @@ fn grep_file(
     truncated: &mut bool,
     walk: &mut WalkState,
     file_stats: &mut GrepFileStats,
+    explicit_file: bool,
 ) -> Result<()> {
     if should_ignore_path(traversal_root, path) {
         return Ok(());
@@ -198,7 +201,10 @@ fn grep_file(
     let Ok(file_metadata) = std::fs::metadata(path) else {
         return Ok(());
     };
-    if file_metadata.len() > MAX_GREP_FILE_BYTES {
+    // The per-file size cap is a tree-walk guard. A file the caller named
+    // explicitly must be searched (the byte budget still bounds it, and an
+    // over-budget read reports exhaustion instead of silence).
+    if !explicit_file && file_metadata.len() > MAX_GREP_FILE_BYTES {
         file_stats.skipped_large_files += 1;
         return Ok(());
     }

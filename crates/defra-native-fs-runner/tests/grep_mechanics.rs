@@ -89,3 +89,77 @@ fn grep_case_insensitive_non_ascii_needle_still_matches() {
     let _ = std::fs::remove_dir_all(&root);
     assert_eq!(value["returned_count"], 1, "{value}");
 }
+
+#[test]
+fn grep_explicit_single_file_over_size_cap_is_still_searched() {
+    // Review finding: the 2 MiB per-file cap is a tree-walk guard. A file the
+    // caller names explicitly must be searched (the byte budget still bounds
+    // it honestly), not silently skipped with returned_count=0.
+    let root = unique_root("explicit-large");
+    let mut big = String::from("needle at the top\n");
+    big.push_str(&"padding\n".repeat(400_000)); // ~3.2 MiB
+    std::fs::write(root.join("big.log"), big).unwrap();
+
+    let output = execute_request_with_base(
+        root.clone(),
+        None,
+        NativeFsRunnerRequest::Grep(GrepArgs {
+            pattern: "needle".to_string(),
+            path: Some("big.log".to_string()),
+            case_sensitive: true,
+            max_matches: 10,
+            raw_json: true,
+            max_entries_visited: None,
+            max_bytes_read: None,
+            max_wall_ms: None,
+        }),
+    )
+    .unwrap();
+    let value: Value = serde_json::from_str(&output).unwrap();
+
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(value["returned_count"], 1, "{value}");
+    assert_eq!(value["skipped_large_files"], 0, "{value}");
+}
+
+#[test]
+fn grep_explicit_file_over_byte_budget_reports_exhaustion_not_silence() {
+    let root = unique_root("explicit-budget");
+    std::fs::write(root.join("big.log"), "needle\n".repeat(50)).unwrap();
+
+    let output = execute_request_with_base(
+        root.clone(),
+        None,
+        NativeFsRunnerRequest::Grep(GrepArgs {
+            pattern: "needle".to_string(),
+            path: Some("big.log".to_string()),
+            case_sensitive: true,
+            max_matches: 100,
+            raw_json: true,
+            max_entries_visited: None,
+            max_bytes_read: Some(10),
+            max_wall_ms: None,
+        }),
+    )
+    .unwrap();
+    let value: Value = serde_json::from_str(&output).unwrap();
+
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(value["returned_count"], 0, "{value}");
+    assert_eq!(value["walk"]["budget_exhausted"], true, "{value}");
+    assert_eq!(value["truncated"], true, "{value}");
+}
+
+#[test]
+fn grep_searches_non_utf8_text_files_lossily() {
+    // Deliberate behavior (documented fence): NUL-free non-UTF-8 text (e.g.
+    // Latin-1 logs) is lossily decoded and searched. Previously such files
+    // were silently skipped because read_to_string errored.
+    let root = unique_root("latin1");
+    std::fs::write(root.join("legacy.log"), b"caf\xe9 needle here\n").unwrap();
+
+    let value = run_grep(&root, "needle", true);
+
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(value["returned_count"], 1, "{value}");
+}

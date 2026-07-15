@@ -45,15 +45,21 @@ fn top_level_entry_names(dir: &Path) -> Vec<String> {
     let Ok(read_dir) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
-    let mut names: Vec<String> = read_dir
-        .filter_map(|entry| {
-            entry
-                .ok()
-                .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        })
-        .collect();
-    names.sort();
-    names.truncate(SEARCH_DIR_ENTRY_HINTS);
+    // Keep only the lexicographically smallest names while scanning: the
+    // searched directory can be huge, and allocating + sorting every entry
+    // name would re-do unbudgeted work the walk just gave up on.
+    let mut names: Vec<String> = Vec::with_capacity(SEARCH_DIR_ENTRY_HINTS + 1);
+    for entry in read_dir.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if names.len() == SEARCH_DIR_ENTRY_HINTS
+            && names.last().is_some_and(|last| *last <= name)
+        {
+            continue;
+        }
+        let position = names.binary_search(&name).unwrap_or_else(|position| position);
+        names.insert(position, name);
+        names.truncate(SEARCH_DIR_ENTRY_HINTS);
+    }
     names
 }
 
@@ -132,12 +138,31 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
     let walk = walk_state(args.max_entries_visited, None, args.max_wall_ms);
     let prefix = glob_literal_prefix(&args.pattern);
     let pattern_prefix = (!prefix.is_empty()).then(|| prefix.join("/"));
-    let walk_dir = if prefix.is_empty() {
-        Some(dir.clone())
+    // The pattern is matched against BASE-relative display paths, so its
+    // literal prefix resolves against the base — never against the path
+    // argument (double-joining broke path+pattern combinations). The walk is
+    // the intersection of the path subtree and the prefix subtree; when the
+    // two are disjoint nothing can match and no walk happens at all.
+    let (walk_dir, pattern_prefix_exists) = if prefix.is_empty() {
+        (Some(dir.clone()), true)
+    } else if !dir.starts_with(context.base_dir()) {
+        // Absolute path argument outside the base: display paths are not
+        // base-relative here, so prefix pruning assumptions do not hold.
+        (Some(dir.clone()), true)
     } else {
-        context.resolve_prune_subdir(&dir, &prefix)
+        match context.resolve_prune_subdir(context.base_dir(), &prefix) {
+            Some(prefix_dir) => {
+                if prefix_dir.starts_with(&dir) {
+                    (Some(prefix_dir), true)
+                } else if dir.starts_with(&prefix_dir) {
+                    (Some(dir.clone()), true)
+                } else {
+                    (None, true)
+                }
+            }
+            None => (None, false),
+        }
     };
-    let pattern_prefix_exists = walk_dir.is_some();
     let matches = match walk_dir {
         Some(walk_dir) => {
             collect_glob_matches(context, &walk_dir, &pattern, args.max_matches.max(1), walk)?
@@ -149,7 +174,10 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
         },
     };
     let truncated = matches.truncated || matches.walk.budget_exhausted;
-    let search_dir_entries = matches.items.is_empty().then(|| top_level_entry_names(&dir));
+    // Anchor hint only when the zero-match is a genuine miss: a budget-
+    // stopped search says nothing about the anchor being wrong.
+    let search_dir_entries = (matches.items.is_empty() && !matches.walk.budget_exhausted)
+        .then(|| top_level_entry_names(&dir));
     let output = GlobOutput {
         metadata: GlobMetadata {
             ok: true,
@@ -205,8 +233,10 @@ fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
         .collect::<Vec<_>>();
 
     let truncated = collected.truncated || collected.walk.budget_exhausted;
-    let search_dir_entries =
-        (matches.is_empty() && path.is_dir()).then(|| top_level_entry_names(&path));
+    let search_dir_entries = (matches.is_empty()
+        && path.is_dir()
+        && !collected.walk.budget_exhausted)
+        .then(|| top_level_entry_names(&path));
     let output = GrepOutput {
         metadata: GrepMetadata {
             ok: true,
