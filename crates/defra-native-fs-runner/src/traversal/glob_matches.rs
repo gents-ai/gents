@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use glob::Pattern;
+use globset::GlobMatcher;
 
 use crate::context::RunnerContext;
 use crate::model::{Collected, FilesystemEntry};
@@ -12,7 +12,7 @@ use crate::traversal::common::{
 pub(crate) fn collect_glob_matches(
     context: &RunnerContext,
     dir: &Path,
-    pattern: &Pattern,
+    pattern: &GlobMatcher,
     max_matches: usize,
     mut walk: WalkState,
 ) -> Result<Collected<FilesystemEntry>> {
@@ -40,7 +40,7 @@ fn collect_glob_matches_inner(
     context: &RunnerContext,
     traversal_root: &Path,
     dir: &Path,
-    pattern: &Pattern,
+    pattern: &GlobMatcher,
     max_matches: usize,
     matches: &mut Vec<FilesystemEntry>,
     truncated: &mut bool,
@@ -63,7 +63,7 @@ fn collect_glob_matches_inner(
             Err(error) => return Err(error.into()),
         };
         let display = context.display_path(&path);
-        if pattern.matches(&display) {
+        if pattern.is_match(&display) {
             if matches.len() >= max_matches {
                 *truncated = true;
                 break;

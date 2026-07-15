@@ -15,45 +15,43 @@ const MAX_GREP_FILE_BYTES: u64 = 2 * 1024 * 1024;
 /// A NUL byte in this leading window classifies the file as binary.
 const BINARY_SNIFF_BYTES: usize = 4096;
 
-/// Search needle prepared once per grep. The ASCII case-insensitive form
-/// avoids the per-line `to_lowercase` allocation the old implementation paid
-/// on every line of every file scanned.
-enum Needle {
-    Exact(String),
-    AsciiCi(String),
-    UnicodeCi(String),
+/// Search needle prepared once per grep (#732 stage 1): the pattern is a
+/// Rust regex (linear-time finite automata — no catastrophic backtracking;
+/// literal and literal-prefixed patterns get memchr/aho-corasick prefilters,
+/// and case folding is full Unicode simple folding). A pattern that fails to
+/// parse as regex falls back to an escaped literal so `foo(` keeps working.
+struct Needle {
+    regex: regex::Regex,
+    syntax: &'static str,
 }
+
+/// Bound regex compilation so a hostile pattern cannot balloon memory.
+const REGEX_SIZE_LIMIT: usize = 10 * (1 << 20);
 
 impl Needle {
     fn new(pattern: &str, case_sensitive: bool) -> Self {
-        if case_sensitive {
-            Needle::Exact(pattern.to_string())
-        } else if pattern.is_ascii() {
-            Needle::AsciiCi(pattern.to_ascii_lowercase())
-        } else {
-            Needle::UnicodeCi(pattern.to_lowercase())
+        let compile = |source: &str| {
+            regex::RegexBuilder::new(source)
+                .case_insensitive(!case_sensitive)
+                .size_limit(REGEX_SIZE_LIMIT)
+                .build()
+        };
+        match compile(pattern) {
+            Ok(regex) => Needle {
+                regex,
+                syntax: "regex",
+            },
+            Err(_) => Needle {
+                regex: compile(&regex::escape(pattern))
+                    .expect("escaped literal always compiles"),
+                syntax: "literal",
+            },
         }
     }
 
     fn matches_line(&self, line: &str) -> bool {
-        match self {
-            Needle::Exact(needle) => line.contains(needle.as_str()),
-            Needle::AsciiCi(needle) => contains_ascii_ci(line.as_bytes(), needle.as_bytes()),
-            Needle::UnicodeCi(needle) => line.to_lowercase().contains(needle.as_str()),
-        }
+        self.regex.is_match(line)
     }
-}
-
-/// Allocation-free ASCII case-insensitive substring search. Multi-byte UTF-8
-/// units are all >= 0x80 and never ASCII-case-equal to the (ASCII) needle
-/// bytes, so scanning raw bytes is sound.
-fn contains_ascii_ci(haystack: &[u8], needle: &[u8]) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    haystack
-        .windows(needle.len())
-        .any(|window| window.eq_ignore_ascii_case(needle))
 }
 
 #[derive(Default)]
@@ -66,6 +64,7 @@ pub(crate) struct CollectedGrep {
     pub(crate) collected: Collected<GrepMatch>,
     pub(crate) bytes_read: u64,
     pub(crate) file_stats: GrepFileStats,
+    pub(crate) pattern_syntax: &'static str,
 }
 
 pub(crate) fn collect_grep_matches(
@@ -121,6 +120,7 @@ pub(crate) fn collect_grep_matches(
         },
         bytes_read,
         file_stats,
+        pattern_syntax: needle.syntax,
     })
 }
 

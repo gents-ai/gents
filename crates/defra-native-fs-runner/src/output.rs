@@ -64,6 +64,7 @@ pub(crate) struct GrepMetadata {
     pub(crate) status: &'static str,
     pub(crate) tool: &'static str,
     pub(crate) pattern: String,
+    pub(crate) pattern_syntax: &'static str,
     pub(crate) search_dir_entries: Option<Vec<String>>,
     pub(crate) path: String,
     pub(crate) case_sensitive: bool,

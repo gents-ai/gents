@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use glob::Pattern;
+use globset::GlobBuilder;
 
 use crate::context::RunnerContext;
 use crate::output::{
@@ -122,7 +122,7 @@ fn glob_literal_prefix(pattern: &str) -> Vec<&str> {
             || component.is_empty()
             || *component == "."
             || *component == ".."
-            || component.contains(['*', '?', '[', ']'])
+            || component.contains(['*', '?', '[', ']', '{', '}'])
         {
             break;
         }
@@ -133,8 +133,10 @@ fn glob_literal_prefix(pattern: &str) -> Vec<&str> {
 
 fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
     let dir = context.resolve_existing_dir(args.path.as_deref())?;
-    let pattern = Pattern::new(&args.pattern)
-        .with_context(|| format!("invalid glob pattern {}", args.pattern))?;
+    let pattern = GlobBuilder::new(&args.pattern)
+        .build()
+        .with_context(|| format!("invalid glob pattern {}", args.pattern))?
+        .compile_matcher();
     let walk = walk_state(args.max_entries_visited, None, args.max_wall_ms);
     let prefix = glob_literal_prefix(&args.pattern);
     let pattern_prefix = (!prefix.is_empty()).then(|| prefix.join("/"));
@@ -217,6 +219,7 @@ fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
     )?;
     let bytes_read = collected.bytes_read;
     let file_stats = collected.file_stats;
+    let pattern_syntax = collected.pattern_syntax;
     let collected = collected.collected;
     let mut files_with_matches = BTreeSet::new();
     let matches = collected
@@ -243,6 +246,7 @@ fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
             status: "success",
             tool: "grep",
             pattern: args.pattern,
+            pattern_syntax,
             search_dir_entries,
             path: context.display_path(&path),
             case_sensitive: args.case_sensitive,
