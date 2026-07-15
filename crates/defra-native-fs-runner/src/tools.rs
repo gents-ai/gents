@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use glob::Pattern;
@@ -11,7 +12,29 @@ use crate::output::{
     GrepOutput, GrepOutputMatch, ListFilesMetadata, ListFilesOutput,
 };
 use crate::protocol::{GlobArgs, GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
-use crate::traversal::{collect_entries, collect_glob_matches, collect_grep_matches};
+use crate::traversal::{
+    collect_entries, collect_glob_matches, collect_grep_matches, WalkLimits, WalkState,
+};
+
+// Walk budgets (#729): bound what a single search may do before returning
+// partial results with explicit exhaustion metadata. Without these, a
+// zero-match pattern over a large tool root (a home directory is ~6M entries)
+// walks everything and looks like a hang to the model.
+const DEFAULT_MAX_ENTRIES_VISITED: usize = 200_000;
+const DEFAULT_MAX_BYTES_READ: u64 = 128 * 1024 * 1024;
+const DEFAULT_MAX_WALL_MS: u64 = 15_000;
+
+fn walk_state(
+    max_entries_visited: Option<usize>,
+    max_bytes_read: Option<u64>,
+    max_wall_ms: Option<u64>,
+) -> WalkState {
+    WalkState::new(WalkLimits {
+        max_entries_visited: max_entries_visited.unwrap_or(DEFAULT_MAX_ENTRIES_VISITED).max(1),
+        max_bytes_read: max_bytes_read.unwrap_or(DEFAULT_MAX_BYTES_READ).max(1),
+        max_wall: Duration::from_millis(max_wall_ms.unwrap_or(DEFAULT_MAX_WALL_MS).max(1)),
+    })
+}
 
 pub fn execute_request(root: PathBuf, request: NativeFsRunnerRequest) -> Result<String> {
     execute_request_with_base(root, None, request)
@@ -32,7 +55,9 @@ pub fn execute_request_with_base(
 
 fn list_files(context: &RunnerContext, args: ListFilesArgs) -> Result<String> {
     let dir = context.resolve_existing_dir(args.path.as_deref())?;
-    let entries = collect_entries(context, &dir, args.recursive, args.max_entries.max(1))?;
+    let walk = walk_state(args.max_entries_visited, None, args.max_wall_ms);
+    let entries = collect_entries(context, &dir, args.recursive, args.max_entries.max(1), walk)?;
+    let truncated = entries.truncated || entries.walk.budget_exhausted;
     let metadata = ListFilesMetadata {
         ok: true,
         status: "success",
@@ -40,10 +65,11 @@ fn list_files(context: &RunnerContext, args: ListFilesArgs) -> Result<String> {
         path: context.display_path(&dir),
         recursive: args.recursive,
         returned_count: entries.items.len(),
-        total_count: total_count(entries.items.len(), entries.truncated),
-        truncated: entries.truncated,
+        total_count: total_count(entries.items.len(), truncated),
+        truncated,
         default_ignored: default_ignored_names(),
         summary: summarize_entries(&entries.items),
+        walk: entries.walk,
     };
     let output = ListFilesOutput {
         metadata,
@@ -61,7 +87,9 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
     let dir = context.resolve_existing_dir(args.path.as_deref())?;
     let pattern = Pattern::new(&args.pattern)
         .with_context(|| format!("invalid glob pattern {}", args.pattern))?;
-    let matches = collect_glob_matches(context, &dir, &pattern, args.max_matches.max(1))?;
+    let walk = walk_state(args.max_entries_visited, None, args.max_wall_ms);
+    let matches = collect_glob_matches(context, &dir, &pattern, args.max_matches.max(1), walk)?;
+    let truncated = matches.truncated || matches.walk.budget_exhausted;
     let output = GlobOutput {
         metadata: GlobMetadata {
             ok: true,
@@ -70,9 +98,10 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
             pattern: args.pattern,
             path: context.display_path(&dir),
             returned_count: matches.items.len(),
-            total_count: total_count(matches.items.len(), matches.truncated),
-            truncated: matches.truncated,
+            total_count: total_count(matches.items.len(), truncated),
+            truncated,
             default_ignored: default_ignored_names(),
+            walk: matches.walk,
         },
         matches: matches.items,
     };
@@ -86,13 +115,17 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
 
 fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
     let path = context.resolve_existing_path(args.path.as_deref())?;
+    let walk = walk_state(args.max_entries_visited, args.max_bytes_read, args.max_wall_ms);
     let collected = collect_grep_matches(
         context,
         &path,
         &args.pattern,
         args.case_sensitive,
         args.max_matches.max(1),
+        walk,
     )?;
+    let bytes_read = collected.bytes_read;
+    let collected = collected.collected;
     let mut files_with_matches = BTreeSet::new();
     let matches = collected
         .items
@@ -107,6 +140,7 @@ fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
         })
         .collect::<Vec<_>>();
 
+    let truncated = collected.truncated || collected.walk.budget_exhausted;
     let output = GrepOutput {
         metadata: GrepMetadata {
             ok: true,
@@ -116,10 +150,12 @@ fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
             path: context.display_path(&path),
             case_sensitive: args.case_sensitive,
             returned_count: matches.len(),
-            total_count: total_count(matches.len(), collected.truncated),
+            total_count: total_count(matches.len(), truncated),
             files_with_matches: files_with_matches.len(),
-            truncated: collected.truncated,
+            truncated,
             default_ignored: default_ignored_names(),
+            bytes_read,
+            walk: collected.walk,
         },
         matches,
     };

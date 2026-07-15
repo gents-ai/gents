@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::model::{FilesystemEntry, DEFAULT_IGNORED_NAMES};
+use crate::model::{FilesystemEntry, WalkStats, DEFAULT_IGNORED_NAMES};
 
 const DEFAULT_GREP_PREVIEW_CHARS: usize = 240;
 const OUTPUT_META_PREFIX: &str = "defra_fs: ";
@@ -24,6 +24,7 @@ pub(crate) struct ListFilesMetadata {
     pub(crate) truncated: bool,
     pub(crate) default_ignored: &'static [&'static str],
     pub(crate) summary: EntrySummary,
+    pub(crate) walk: WalkStats,
 }
 
 #[derive(Serialize)]
@@ -44,6 +45,7 @@ pub(crate) struct GlobMetadata {
     pub(crate) total_count: Option<usize>,
     pub(crate) truncated: bool,
     pub(crate) default_ignored: &'static [&'static str],
+    pub(crate) walk: WalkStats,
 }
 
 #[derive(Serialize)]
@@ -66,6 +68,8 @@ pub(crate) struct GrepMetadata {
     pub(crate) files_with_matches: usize,
     pub(crate) truncated: bool,
     pub(crate) default_ignored: &'static [&'static str],
+    pub(crate) bytes_read: u64,
+    pub(crate) walk: WalkStats,
 }
 
 #[derive(Serialize)]

@@ -30,4 +30,15 @@ pub(crate) struct GrepMatch {
 pub(crate) struct Collected<T> {
     pub(crate) items: Vec<T>,
     pub(crate) truncated: bool,
+    pub(crate) walk: WalkStats,
+}
+
+/// What a traversal actually did, reported back to the model so an expensive
+/// or budget-stopped walk is never indistinguishable from a cheap miss (#729).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct WalkStats {
+    pub(crate) entries_visited: usize,
+    pub(crate) elapsed_ms: u64,
+    pub(crate) budget_exhausted: bool,
+    pub(crate) stopped_at: Option<String>,
 }

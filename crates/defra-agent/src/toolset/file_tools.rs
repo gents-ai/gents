@@ -153,6 +153,8 @@ impl Tool for ListFilesTool {
                     recursive: args.recursive,
                     max_entries: args.max_entries.max(1).min(self.default_max_entries.max(1)),
                     raw_json: args.raw_json,
+                    max_entries_visited: None,
+                    max_wall_ms: None,
                 }),
                 Self::NAME,
             )
@@ -291,6 +293,8 @@ impl Tool for GlobTool {
                     path: args.path,
                     max_matches: args.max_matches.min(self.default_max_matches).max(1),
                     raw_json: args.raw_json,
+                    max_entries_visited: None,
+                    max_wall_ms: None,
                 }),
                 Self::NAME,
             )
@@ -353,6 +357,9 @@ impl Tool for GrepTool {
                     case_sensitive: args.case_sensitive,
                     max_matches: args.max_matches.min(self.default_max_matches).max(1),
                     raw_json: args.raw_json,
+                    max_entries_visited: None,
+                    max_bytes_read: None,
+                    max_wall_ms: None,
                 }),
                 Self::NAME,
             )
