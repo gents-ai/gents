@@ -76,6 +76,14 @@ pub(crate) struct LeanContractSnapshot {
     #[serde(default)]
     pub(crate) codex_shim_projection_cases: Vec<LeanCodexShimProjectionCase>,
     #[serde(default)]
+    pub(crate) codex_shim_subagent_tool_cases: Vec<LeanCodexShimSubagentToolCase>,
+    #[serde(default)]
+    pub(crate) codex_shim_subagent_status_cases: Vec<LeanCodexShimSubagentStatusCase>,
+    #[serde(default)]
+    pub(crate) codex_shim_context_usage_cases: Vec<LeanCodexShimContextUsageCase>,
+    #[serde(default)]
+    pub(crate) codex_shim_compaction_projection_cases: Vec<LeanCodexShimCompactionProjectionCase>,
+    #[serde(default)]
     pub(crate) codex_shim_turn_lifecycle_cases: Vec<LeanCodexShimTurnLifecycleCase>,
     #[serde(default)]
     pub(crate) codex_shim_binding_cases: Vec<LeanCodexShimBindingCase>,
@@ -522,6 +530,24 @@ pub(crate) fn lean_codex_shim_projection_case(
         .iter()
         .find(|case| case.witness == witness)
         .unwrap_or_else(|| panic!("Lean Codex shim projection witness {witness:?} was not emitted"))
+}
+
+pub(crate) fn lean_codex_shim_subagent_tool_cases() -> &'static [LeanCodexShimSubagentToolCase] {
+    &lean_contract_snapshot().codex_shim_subagent_tool_cases
+}
+
+pub(crate) fn lean_codex_shim_subagent_status_cases() -> &'static [LeanCodexShimSubagentStatusCase]
+{
+    &lean_contract_snapshot().codex_shim_subagent_status_cases
+}
+
+pub(crate) fn lean_codex_shim_context_usage_cases() -> &'static [LeanCodexShimContextUsageCase] {
+    &lean_contract_snapshot().codex_shim_context_usage_cases
+}
+
+pub(crate) fn lean_codex_shim_compaction_projection_cases(
+) -> &'static [LeanCodexShimCompactionProjectionCase] {
+    &lean_contract_snapshot().codex_shim_compaction_projection_cases
 }
 
 pub(crate) fn lean_codex_shim_turn_lifecycle_cases() -> &'static [LeanCodexShimTurnLifecycleCase] {

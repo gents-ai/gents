@@ -7,10 +7,15 @@ use codex_protocol::models::MessagePhase;
 use super::command_projection::{
     command_execution_item, command_output_payload, file_change_item, ToolProjectionStatus,
 };
+use super::compaction_projection::{
+    compaction_projection_events, context_compaction_item, CompactionProjectionEvent,
+    DefraCompactionProgress,
+};
 use super::progress::{defra_tool_item, DefraToolCallProgress};
 use super::protocol::{
     agent_message_item, agent_message_item_with_phase, now_millis, send_notification, turn_value,
 };
+use super::subagent_projection::{collab_tool_item, CollabProjection};
 use super::{Outbound, ShimState};
 
 pub(super) struct TurnProjection<'a> {
@@ -251,6 +256,53 @@ impl<'a> TurnProjection<'a> {
         .await
     }
 
+    async fn send_collab_started(
+        &mut self,
+        outbound: &Outbound,
+        tool: &DefraToolCallProgress,
+        projection: &CollabProjection,
+    ) -> Result<()> {
+        self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
+            .await?;
+        let mut started = projection.clone();
+        started.status = codex::CollabAgentToolCallStatus::InProgress;
+        send_notification(
+            outbound,
+            self.state,
+            codex::ServerNotification::ItemStarted(codex::ItemStartedNotification {
+                item: collab_tool_item(self.thread_id, tool, &started),
+                thread_id: self.thread_id.to_string(),
+                turn_id: self.turn_id.to_string(),
+                started_at_ms: now_millis(),
+            }),
+        )
+        .await
+    }
+
+    async fn send_collab_completed(
+        &mut self,
+        outbound: &Outbound,
+        tool: &DefraToolCallProgress,
+        projection: &CollabProjection,
+    ) -> Result<()> {
+        self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
+            .await?;
+        let item = collab_tool_item(self.thread_id, tool, projection);
+        send_notification(
+            outbound,
+            self.state,
+            codex::ServerNotification::ItemCompleted(codex::ItemCompletedNotification {
+                item: item.clone(),
+                thread_id: self.thread_id.to_string(),
+                turn_id: self.turn_id.to_string(),
+                completed_at_ms: now_millis(),
+            }),
+        )
+        .await?;
+        self.completed_items.push(item);
+        Ok(())
+    }
+
     async fn send_file_change_completed(
         &mut self,
         outbound: &Outbound,
@@ -341,6 +393,22 @@ impl<'a> TurnProjection<'a> {
                 self.send_command_execution_completed(outbound, tool, status.clone())
                     .await
             }
+            (
+                None | Some(ToolProjectionStatus::DeferredCollab),
+                ToolProjectionStatus::Collab(projection),
+            ) if projection.status != codex::CollabAgentToolCallStatus::InProgress => {
+                self.send_collab_started(outbound, tool, projection).await?;
+                self.send_collab_completed(outbound, tool, projection).await
+            }
+            (_, ToolProjectionStatus::Collab(projection))
+                if projection.status == codex::CollabAgentToolCallStatus::InProgress =>
+            {
+                self.send_collab_started(outbound, tool, projection).await
+            }
+            (_, ToolProjectionStatus::Collab(projection)) => {
+                self.send_collab_completed(outbound, tool, projection).await
+            }
+            (_, ToolProjectionStatus::DeferredCollab) => Ok(()),
             (_, ToolProjectionStatus::DeferredFileChange) => Ok(()),
             (None, ToolProjectionStatus::FileChange(status))
             | (
@@ -359,6 +427,55 @@ impl<'a> TurnProjection<'a> {
                     .await
             }
         }
+    }
+
+    pub(super) async fn send_compaction_projection_update(
+        &mut self,
+        outbound: &Outbound,
+        compaction: &DefraCompactionProgress,
+        previous_state: Option<&str>,
+    ) -> Result<()> {
+        let events = compaction_projection_events(previous_state, &compaction.call_state);
+        if events.is_empty() {
+            return Ok(());
+        }
+        self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
+            .await?;
+        for event in events {
+            let item = context_compaction_item(&compaction.call_id);
+            match event {
+                CompactionProjectionEvent::Started => {
+                    send_notification(
+                        outbound,
+                        self.state,
+                        codex::ServerNotification::ItemStarted(codex::ItemStartedNotification {
+                            item,
+                            thread_id: self.thread_id.to_string(),
+                            turn_id: self.turn_id.to_string(),
+                            started_at_ms: now_millis(),
+                        }),
+                    )
+                    .await?;
+                }
+                CompactionProjectionEvent::Completed => {
+                    send_notification(
+                        outbound,
+                        self.state,
+                        codex::ServerNotification::ItemCompleted(
+                            codex::ItemCompletedNotification {
+                                item: item.clone(),
+                                thread_id: self.thread_id.to_string(),
+                                turn_id: self.turn_id.to_string(),
+                                completed_at_ms: now_millis(),
+                            },
+                        ),
+                    )
+                    .await?;
+                    self.completed_items.push(item);
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(super) async fn finish_turn(

@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::{
     default_behavior_id_for_agent, load_agent_behavior, load_agent_principal,
-    load_inference_profile, AgentBehaviorDocument,
+    load_inference_profile, AgentBehaviorDocument, DEFAULT_CONTEXT_WINDOW,
 };
 
 pub(super) const MODEL_SELECTION_SEPARATOR: &str = "::";
@@ -74,6 +74,28 @@ pub(super) async fn load_bound_inference_profile_id(
         ));
     }
     Ok(profile_id)
+}
+
+/// Resolve the exact context window the runtime derives for a behavior. This
+/// mirrors `defra_agent::agent::load_document_agent`: invalid or absent profile
+/// values fall back to the runtime default.
+pub(super) async fn load_bound_context_window(
+    node: &EmbeddedNode,
+    behavior_id: &str,
+) -> Result<i64> {
+    let profile_id = load_bound_inference_profile_id(node, behavior_id).await?;
+    let profile = load_inference_profile(node, &profile_id)
+        .await?
+        .ok_or_else(|| anyhow!("InferenceProfile {profile_id:?} disappeared while loading"))?;
+    let context_window = effective_context_window(profile.context_window);
+    i64::try_from(context_window)
+        .map_err(|_| anyhow!("context window {context_window} does not fit the Codex protocol"))
+}
+
+fn effective_context_window(configured: Option<i64>) -> usize {
+    configured
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(DEFAULT_CONTEXT_WINDOW)
 }
 
 pub(super) async fn load_bound_model_selection_id(
@@ -170,5 +192,13 @@ mod tests {
             default_behavior_id_for_agent("did:key:zABC"),
             "did:key:zABC:default"
         );
+    }
+
+    #[test]
+    fn context_window_fallback_matches_runtime_loading() {
+        assert_eq!(effective_context_window(Some(32_768)), 32_768);
+        assert_eq!(effective_context_window(Some(0)), 0);
+        assert_eq!(effective_context_window(Some(-1)), DEFAULT_CONTEXT_WINDOW);
+        assert_eq!(effective_context_window(None), DEFAULT_CONTEXT_WINDOW);
     }
 }

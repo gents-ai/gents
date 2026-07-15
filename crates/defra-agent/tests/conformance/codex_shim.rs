@@ -167,6 +167,98 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     assert!(interrupt
         .lean_theorems
         .contains(&"CodexShim.interrupt_step_is_terminal".to_string()));
+
+    let tool_cases = lean_codex_shim_subagent_tool_cases();
+    assert_eq!(tool_cases.len(), 6);
+    for case in tool_cases {
+        let expected = match case.tool_name.as_str() {
+            "spawn_subagent" => ("collabAgentToolCall", Some("spawnAgent")),
+            "wait_subagent" => ("collabAgentToolCall", Some("wait")),
+            "steer_subagent" => ("collabAgentToolCall", Some("sendInput")),
+            "cancel_subagent" => ("collabAgentToolCall", Some("closeAgent")),
+            "list_subagents" | "read_subagent" => ("mcpToolCall", None),
+            other => panic!("{}: unmodeled subagent tool {other:?}", case.witness),
+        };
+        assert_eq!(case.projected_item_kind, expected.0, "{}", case.witness);
+        assert_eq!(case.collab_tool.as_deref(), expected.1, "{}", case.witness);
+    }
+
+    let status_cases = lean_codex_shim_subagent_status_cases();
+    assert_eq!(status_cases.len(), 9);
+    for case in status_cases {
+        let expected = match case.request_state.as_str() {
+            "pending" => ("pendingInit", false),
+            "claimed" | "processing" | "inputRequired" => ("running", false),
+            "completed" => ("completed", true),
+            "failed" | "dead" => ("errored", true),
+            "superseded" | "interrupted" => ("interrupted", true),
+            other => panic!("{}: unmodeled child request state {other:?}", case.witness),
+        };
+        assert_eq!(case.projected_agent_status, expected.0, "{}", case.witness);
+        assert_eq!(case.terminal, expected.1, "{}", case.witness);
+        assert!(case
+            .lean_theorems
+            .contains(&"CodexShim.subagent_status_terminal_precisely".to_string()));
+    }
+
+    let context_cases = lean_codex_shim_context_usage_cases();
+    assert_eq!(context_cases.len(), 2);
+    for case in context_cases {
+        assert_eq!(
+            case.total_tokens,
+            case.cumulative_input + case.cumulative_output,
+            "{}: cumulative accounting drifted",
+            case.witness
+        );
+        assert_eq!(
+            case.current_context_tokens,
+            case.latest_prompt + case.latest_completion,
+            "{}: current context must come from the latest inference call",
+            case.witness
+        );
+        assert_eq!(
+            case.remaining_tokens,
+            case.model_window
+                .saturating_sub(case.current_context_tokens),
+            "{}: remaining context must saturate at zero",
+            case.witness
+        );
+        assert!(case
+            .lean_theorems
+            .contains(&"CodexShim.current_context_uses_latest_call".to_string()));
+    }
+
+    let compaction_cases = lean_codex_shim_compaction_projection_cases();
+    assert_eq!(compaction_cases.len(), 6);
+    for case in compaction_cases {
+        assert_eq!(
+            case.claims_compacted,
+            case.projected_events
+                .iter()
+                .any(|event| event == "completed"),
+            "{}: only a completed item may claim context was compacted",
+            case.witness
+        );
+        match (
+            case.previous_call_state.as_deref(),
+            case.call_state.as_str(),
+        ) {
+            (None, "queued" | "running") => {
+                assert_eq!(case.projected_events, ["started"])
+            }
+            (None, "completed") => {
+                assert_eq!(case.projected_events, ["started", "completed"])
+            }
+            (Some("running"), "completed") => {
+                assert_eq!(case.projected_events, ["completed"])
+            }
+            (None, "failed" | "cancelled") => assert!(case.projected_events.is_empty()),
+            other => panic!(
+                "{}: unmodeled compaction projection {other:?}",
+                case.witness
+            ),
+        }
+    }
 }
 
 /// Fence for the runnable-gated shim binding (#699).

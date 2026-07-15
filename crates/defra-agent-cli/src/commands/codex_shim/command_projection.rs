@@ -5,11 +5,14 @@ use codex_app_server_protocol as codex;
 use serde_json::Value;
 
 use super::progress::{defra_exec_metadata, defra_tool_call_status, DefraToolCallProgress};
+use super::subagent_projection::{collab_projection, is_subagent_control_tool, CollabProjection};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum ToolProjectionStatus {
     Mcp(codex::McpToolCallStatus),
     Command(codex::CommandExecutionStatus),
+    Collab(CollabProjection),
+    DeferredCollab,
     DeferredFileChange,
     FileChange(codex::PatchApplyStatus),
 }
@@ -19,16 +22,30 @@ impl ToolProjectionStatus {
         match self {
             Self::Mcp(_) => codex::CommandExecutionStatus::InProgress,
             Self::Command(status) => status.clone(),
-            Self::DeferredFileChange | Self::FileChange(_) => {
-                codex::CommandExecutionStatus::InProgress
-            }
+            Self::Collab(_)
+            | Self::DeferredCollab
+            | Self::DeferredFileChange
+            | Self::FileChange(_) => codex::CommandExecutionStatus::InProgress,
         }
     }
 }
 
 pub(super) fn tool_projection_status(tool: &DefraToolCallProgress) -> ToolProjectionStatus {
     let status = defra_tool_call_status(tool);
-    if is_defra_file_change_tool(tool) {
+    if is_subagent_control_tool(&tool.tool_name) {
+        if let Some(projection) = collab_projection(tool) {
+            ToolProjectionStatus::Collab(projection)
+        } else if status == codex::McpToolCallStatus::Failed {
+            // A rejected control call may never create a child edge. Keep its
+            // error visible as an ordinary tool failure.
+            ToolProjectionStatus::Mcp(status)
+        } else {
+            // The child request and its reciprocal bridge may replicate just
+            // after the parent tool row. Do not publish the wrong item kind in
+            // that window; the live projection retries these rows.
+            ToolProjectionStatus::DeferredCollab
+        }
+    } else if is_defra_file_change_tool(tool) {
         if file_update_change(tool).is_none() {
             ToolProjectionStatus::DeferredFileChange
         } else {
@@ -99,6 +116,8 @@ pub(super) fn update_running_background_tools(
         }
         ToolProjectionStatus::Mcp(_)
         | ToolProjectionStatus::Command(_)
+        | ToolProjectionStatus::Collab(_)
+        | ToolProjectionStatus::DeferredCollab
         | ToolProjectionStatus::DeferredFileChange
         | ToolProjectionStatus::FileChange(_) => {
             running.remove(&tool.tool_call_key);
@@ -705,6 +724,7 @@ mod tests {
             child_request_id: None,
             args: args.to_string(),
             result: String::new(),
+            subagent_link: None,
         }
     }
 

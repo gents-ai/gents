@@ -2,6 +2,8 @@ use codex_app_server_protocol as codex;
 use defra_agent::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
+use super::subagent_projection::LinkedSubagentThread;
+
 #[derive(Debug, Clone)]
 pub(super) struct DefraToolCallProgress {
     pub(super) tool_call_key: String,
@@ -12,6 +14,7 @@ pub(super) struct DefraToolCallProgress {
     pub(super) child_request_id: Option<String>,
     pub(super) args: String,
     pub(super) result: String,
+    pub(super) subagent_link: Option<LinkedSubagentThread>,
 }
 
 pub(super) fn defra_turn_progress_query(request_id: &str, session_id: &str) -> String {
@@ -65,6 +68,23 @@ pub(super) fn defra_turn_progress_query(request_id: &str, session_id: &str) -> S
                 result
                 started_at
                 completed_at
+            }}
+            InferenceCall(
+                filter: {{
+                    request_id: {{ _eq: "{request_id}" }},
+                    call_kind: {{ _in: ["inference", "compaction"] }}
+                }},
+                order: {{ call_seq: ASC }}
+            ) {{
+                call_id
+                call_seq
+                call_kind
+                call_state
+                queued_at
+                started_at
+                ended_at
+                prompt_tokens
+                completion_tokens
             }}
         }}"#,
         request_id = escape_graphql_string(request_id),
@@ -127,6 +147,7 @@ pub(super) fn decode_defra_tool_call_progress(row: &Value) -> Option<DefraToolCa
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string(),
+        subagent_link: None,
     })
 }
 
@@ -385,6 +406,15 @@ mod tests {
         );
     }
 
+    #[test]
+    fn turn_progress_query_observes_compaction_lifecycle() {
+        let query = defra_turn_progress_query("request-1", "session-1");
+        assert!(query.contains("InferenceCall("));
+        assert!(query.contains(r#"call_kind: { _in: ["inference", "compaction"] }"#));
+        assert!(query.contains("call_state"));
+        assert!(query.contains("ended_at"));
+    }
+
     fn test_tool(tool_name: &str, status: &str, args: &str) -> DefraToolCallProgress {
         DefraToolCallProgress {
             tool_call_key: "session:call".to_string(),
@@ -395,6 +425,7 @@ mod tests {
             child_request_id: None,
             args: args.to_string(),
             result: String::new(),
+            subagent_link: None,
         }
     }
 

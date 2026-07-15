@@ -20,6 +20,7 @@ use super::protocol::{
     send_committed_user_message, send_error, send_notification, send_result, turn_value,
     user_text_from_input,
 };
+use super::thread_projection::load_codex_thread;
 use super::turn_projection::TurnProjection;
 use super::{
     ConnectionState, ShimState, JSONRPC_INTERNAL_ERROR, JSONRPC_INVALID_PARAMS,
@@ -34,6 +35,19 @@ pub(super) async fn start_defra_turn(
     thread_id: String,
     input: Vec<codex::UserInput>,
 ) -> Result<()> {
+    if load_codex_thread(state, &thread_id)
+        .await?
+        .is_some_and(|record| record.is_subagent())
+    {
+        return send_error(
+            &connection.outbound,
+            request_id,
+            JSONRPC_INVALID_PARAMS,
+            "linked DEFRA subagent threads are read-only; steer them from the parent thread"
+                .to_string(),
+        )
+        .await;
+    }
     let user_text = user_text_from_input(&input);
     // Explicitly-selected skills (the Codex "pill") are forwarded as id
     // REFERENCES on the request; the runtime resolves + injects their bodies
@@ -135,6 +149,19 @@ pub(super) async fn steer_defra_turn(
     request_id: codex::RequestId,
     params: codex::TurnSteerParams,
 ) -> Result<()> {
+    if load_codex_thread(state, &params.thread_id)
+        .await?
+        .is_some_and(|record| record.is_subagent())
+    {
+        return send_error(
+            &connection.outbound,
+            request_id,
+            JSONRPC_INVALID_PARAMS,
+            "linked DEFRA subagent threads are read-only; steer them from the parent thread"
+                .to_string(),
+        )
+        .await;
+    }
     if params.expected_turn_id.trim().is_empty() {
         return send_error(
             &connection.outbound,

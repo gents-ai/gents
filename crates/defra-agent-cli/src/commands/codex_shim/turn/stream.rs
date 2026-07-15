@@ -9,17 +9,23 @@ use serde_json::{json, Value};
 use tokio::sync::watch;
 
 use super::super::background::spawn_background_tool_watcher;
+use super::super::bound_behavior::load_bound_context_window;
 use super::super::command_projection::{
     tool_projection_status, update_running_background_tools, ToolProjectionStatus,
 };
+use super::super::compaction_projection::decode_defra_compaction_progress;
 use super::super::progress::{
     content_delta, decode_defra_tool_call_progress, defra_turn_progress_query,
     response_field_is_blank, terminal_error_message, terminal_turn_status,
 };
 use super::super::protocol::{send_committed_user_message, send_notification};
 use super::super::store::{hydrate_materialized_response_content, query_node_json};
+use super::super::subagent_projection::{
+    attach_subagent_link, is_subagent_control_tool, load_authorized_subagent_threads,
+};
 use super::super::thread_projection::{
-    requests_token_usage, session_token_usage, thread_token_usage,
+    latest_inference_usage_observation, latest_requests_token_usage, session_token_usage,
+    thread_token_usage,
 };
 use super::super::turn_projection::TurnProjection;
 use super::super::{ConnectionState, ShimState};
@@ -44,6 +50,7 @@ struct ProgressMarker {
     response_completed_at: Option<String>,
     response_interrupted_at: Option<String>,
     tools: Vec<ToolProgressMarker>,
+    inference_calls: Vec<InferenceCallProgressMarker>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,6 +65,18 @@ struct ToolProgressMarker {
     result_len: Option<usize>,
     started_at: Option<String>,
     completed_at: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InferenceCallProgressMarker {
+    call_id: Option<String>,
+    call_kind: Option<String>,
+    call_state: Option<String>,
+    queued_at: Option<String>,
+    started_at: Option<String>,
+    ended_at: Option<String>,
+    prompt_tokens: Option<String>,
+    completion_tokens: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -79,6 +98,8 @@ pub(super) async fn stream_defra_turn(
     let mut turn_request_ids = vec![current.request_id.clone()];
     let mut known_tool_calls: BTreeMap<String, ToolProjectionStatus> = BTreeMap::new();
     let mut known_tool_markers: BTreeMap<String, ToolProgressMarker> = BTreeMap::new();
+    let mut known_compaction_states: BTreeMap<String, String> = BTreeMap::new();
+    let mut known_inference_usage_call_id: Option<String> = None;
     let mut running_background_tools: BTreeMap<String, codex::CommandExecutionStatus> =
         BTreeMap::new();
     let mut updates = state.node.subscribe_updates();
@@ -129,25 +150,75 @@ pub(super) async fn stream_defra_turn(
             .and_then(Value::as_array)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
+        let inference_call_rows = response
+            .pointer("/data/InferenceCall")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
 
-        let marker = progress_marker(request_row, response_row, tool_rows);
+        let marker = progress_marker(request_row, response_row, tool_rows, inference_call_rows);
         let marker_changed = latest_progress_marker.as_ref() != Some(&marker);
         if marker_changed {
             latest_progress_marker = Some(marker);
             last_progress_at = tokio::time::Instant::now();
         }
 
+        for row in inference_call_rows {
+            let Some(compaction) = decode_defra_compaction_progress(row) else {
+                continue;
+            };
+            let previous_state = known_compaction_states
+                .get(&compaction.call_id)
+                .map(String::as_str);
+            projection
+                .send_compaction_projection_update(outbound, &compaction, previous_state)
+                .await?;
+            known_compaction_states.insert(compaction.call_id, compaction.call_state);
+        }
+
+        if let Some(usage) = latest_inference_usage_observation(inference_call_rows) {
+            if known_inference_usage_call_id.as_deref() != Some(&usage.call_id) {
+                send_thread_token_usage_update(
+                    outbound,
+                    state,
+                    projection,
+                    &current.session_id,
+                    usage.totals,
+                )
+                .await?;
+                known_inference_usage_call_id = Some(usage.call_id);
+            }
+        }
+
+        let subagent_links = if tool_rows.iter().any(|row| {
+            row.get("tool_name")
+                .and_then(Value::as_str)
+                .is_some_and(is_subagent_control_tool)
+        }) {
+            Some(load_authorized_subagent_threads(state).await?)
+        } else {
+            None
+        };
+
         for row in tool_rows {
             let tool_marker = tool_progress_marker(row);
             let Some(tool_key) = tool_marker.tool_call_key.as_deref() else {
                 continue;
             };
-            if known_tool_markers.get(tool_key) == Some(&tool_marker) {
+            let retry_subagent_projection = tool_marker
+                .tool_name
+                .as_deref()
+                .is_some_and(is_subagent_control_tool);
+            if known_tool_markers.get(tool_key) == Some(&tool_marker) && !retry_subagent_projection
+            {
                 continue;
             }
-            let Some(tool) = decode_defra_tool_call_progress(row) else {
+            let Some(mut tool) = decode_defra_tool_call_progress(row) else {
                 continue;
             };
+            if let Some(links) = subagent_links.as_deref() {
+                attach_subagent_link(&mut tool, links);
+            }
             let projection_status = tool_projection_status(&tool);
             let previous_status = known_tool_calls.get(&tool.tool_call_key).cloned();
             if previous_status.as_ref() == Some(&projection_status) {
@@ -325,6 +396,8 @@ pub(super) async fn stream_defra_turn(
                     turn_request_ids.push(current.request_id.clone());
                     known_tool_calls.clear();
                     known_tool_markers.clear();
+                    known_compaction_states.clear();
+                    known_inference_usage_call_id = None;
                     latest_content_cursor.reset();
                     latest_error_message = None;
                     latest_progress_marker = None;
@@ -332,22 +405,15 @@ pub(super) async fn stream_defra_turn(
                     continue;
                 }
             }
-            let last_usage = requests_token_usage(state, &turn_request_ids)
+            let last_usage = latest_requests_token_usage(state, &turn_request_ids)
                 .await
                 .unwrap_or_default();
-            let total_usage = session_token_usage(state, &current.session_id)
-                .await
-                .unwrap_or_default();
-            send_notification(
+            send_thread_token_usage_update(
                 outbound,
                 state,
-                codex::ServerNotification::ThreadTokenUsageUpdated(
-                    codex::ThreadTokenUsageUpdatedNotification {
-                        thread_id: projection.thread_id.to_string(),
-                        turn_id: projection.turn_id.to_string(),
-                        token_usage: thread_token_usage(total_usage, last_usage),
-                    },
-                ),
+                projection,
+                &current.session_id,
+                last_usage,
             )
             .await?;
 
@@ -408,6 +474,7 @@ fn progress_marker(
     request_row: Option<&Value>,
     response_row: Option<&Value>,
     tool_rows: &[Value],
+    inference_call_rows: &[Value],
 ) -> ProgressMarker {
     ProgressMarker {
         request_lifecycle_state: scalar_marker(request_row, "lifecycle_state"),
@@ -429,6 +496,10 @@ fn progress_marker(
         response_completed_at: scalar_marker(response_row, "completed_at"),
         response_interrupted_at: scalar_marker(response_row, "interrupted_at"),
         tools: tool_rows.iter().map(tool_progress_marker).collect(),
+        inference_calls: inference_call_rows
+            .iter()
+            .map(inference_call_progress_marker)
+            .collect(),
     }
 }
 
@@ -539,6 +610,56 @@ fn tool_progress_marker(row: &Value) -> ToolProgressMarker {
         started_at: scalar_marker(Some(row), "started_at"),
         completed_at: scalar_marker(Some(row), "completed_at"),
     }
+}
+
+fn inference_call_progress_marker(row: &Value) -> InferenceCallProgressMarker {
+    InferenceCallProgressMarker {
+        call_id: scalar_marker(Some(row), "call_id"),
+        call_kind: scalar_marker(Some(row), "call_kind"),
+        call_state: scalar_marker(Some(row), "call_state"),
+        queued_at: scalar_marker(Some(row), "queued_at"),
+        started_at: scalar_marker(Some(row), "started_at"),
+        ended_at: scalar_marker(Some(row), "ended_at"),
+        prompt_tokens: scalar_marker(Some(row), "prompt_tokens"),
+        completion_tokens: scalar_marker(Some(row), "completion_tokens"),
+    }
+}
+
+async fn send_thread_token_usage_update(
+    outbound: &super::super::Outbound,
+    state: &ShimState,
+    projection: &TurnProjection<'_>,
+    session_id: &str,
+    last_usage: super::super::thread_projection::TokenTotals,
+) -> Result<()> {
+    let total_usage = session_token_usage(state, session_id)
+        .await
+        .unwrap_or_default();
+    let model_context_window = load_bound_context_window(
+        state.node.as_ref(),
+        state.behavior_id.as_ref(),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!(
+            %error,
+            behavior_id = %state.behavior_id,
+            "Codex shim could not load the effective context window; using the runtime default"
+        );
+        defra_agent::DEFAULT_CONTEXT_WINDOW as i64
+    });
+    send_notification(
+        outbound,
+        state,
+        codex::ServerNotification::ThreadTokenUsageUpdated(
+            codex::ThreadTokenUsageUpdatedNotification {
+                thread_id: projection.thread_id.to_string(),
+                turn_id: projection.turn_id.to_string(),
+                token_usage: thread_token_usage(total_usage, last_usage, model_context_window),
+            },
+        ),
+    )
+    .await
 }
 
 fn scalar_marker(row: Option<&Value>, field: &str) -> Option<String> {

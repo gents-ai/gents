@@ -14,6 +14,48 @@ pub(crate) struct LeanCodexShimProjectionCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanCodexShimSubagentToolCase {
+    pub(crate) witness: String,
+    pub(crate) lean_theorems: Vec<String>,
+    pub(crate) tool_name: String,
+    pub(crate) projected_item_kind: String,
+    pub(crate) collab_tool: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanCodexShimSubagentStatusCase {
+    pub(crate) witness: String,
+    pub(crate) lean_theorems: Vec<String>,
+    pub(crate) request_state: String,
+    pub(crate) projected_agent_status: String,
+    pub(crate) terminal: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanCodexShimContextUsageCase {
+    pub(crate) witness: String,
+    pub(crate) lean_theorems: Vec<String>,
+    pub(crate) cumulative_input: usize,
+    pub(crate) cumulative_output: usize,
+    pub(crate) latest_prompt: usize,
+    pub(crate) latest_completion: usize,
+    pub(crate) model_window: usize,
+    pub(crate) total_tokens: usize,
+    pub(crate) current_context_tokens: usize,
+    pub(crate) remaining_tokens: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanCodexShimCompactionProjectionCase {
+    pub(crate) witness: String,
+    pub(crate) lean_theorems: Vec<String>,
+    pub(crate) previous_call_state: Option<String>,
+    pub(crate) call_state: String,
+    pub(crate) projected_events: Vec<String>,
+    pub(crate) claims_compacted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanCodexShimTurnLifecycleCase {
     pub(crate) witness: String,
     pub(crate) lean_theorems: Vec<String>,

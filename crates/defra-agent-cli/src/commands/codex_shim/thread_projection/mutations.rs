@@ -7,12 +7,6 @@ use crate::commands::codex_shim::ShimState;
 
 use super::{load_codex_thread, CodexThreadRecord};
 
-pub(in crate::commands::codex_shim) async fn loaded_codex_thread_ids(
-    state: &ShimState,
-) -> Result<Vec<String>> {
-    Ok(state.loaded_thread_ids().await)
-}
-
 pub(in crate::commands::codex_shim) async fn set_codex_thread_loaded(
     state: &ShimState,
     thread_id: &str,
@@ -21,6 +15,7 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_loaded(
     if super::storage::load_scoped_session(state, thread_id)
         .await?
         .is_none()
+        && load_codex_thread(state, thread_id).await?.is_none()
     {
         return Ok(());
     }

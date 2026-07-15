@@ -541,6 +541,11 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
         turn_usage.last.total_tokens > 0,
         "expected non-zero last-turn token usage on turn completion, got {turn_usage:?}"
     );
+    assert_eq!(
+        turn_usage.model_context_window,
+        Some(defra_agent::DEFAULT_CONTEXT_WINDOW as i64),
+        "context capacity should come from the bound DEFRA inference profile"
+    );
 
     // The thread goal's tokens_used is derived from real session usage, so it
     // must be non-zero now that a turn has run.
@@ -632,6 +637,14 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     assert!(
         replay_usage.total.total_tokens > 0,
         "thread/resume should replay non-zero session token usage, got {replay_usage:?}"
+    );
+    assert_eq!(
+        replay_usage.last.total_tokens, turn_usage.last.total_tokens,
+        "thread/resume should restore the latest inference context, not cumulative usage"
+    );
+    assert_eq!(
+        replay_usage.model_context_window, turn_usage.model_context_window,
+        "thread/resume should restore the effective context capacity"
     );
 
     send_client_request(

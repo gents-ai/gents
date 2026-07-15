@@ -130,7 +130,9 @@ fn spawn_background_tool_watcher_handle(
                         }
                         running.remove(&tool_key);
                     }
-                    ToolProjectionStatus::DeferredFileChange
+                    ToolProjectionStatus::Collab(_)
+                    | ToolProjectionStatus::DeferredCollab
+                    | ToolProjectionStatus::DeferredFileChange
                     | ToolProjectionStatus::FileChange(_) => {
                         running.remove(&tool_key);
                     }

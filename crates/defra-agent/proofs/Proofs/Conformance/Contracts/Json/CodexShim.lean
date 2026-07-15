@@ -225,6 +225,249 @@ def codexShimProjectionCases : List CodexShimProjectionCase :=
 def codexShimProjectionCasesJson : String :=
   jsonArray (codexShimProjectionCases.map codexShimProjectionCaseJson)
 
+structure CodexShimSubagentToolCase where
+  witness : String
+  leanTheorems : List String
+  toolName : String
+  projectedItemKind : String
+  collabTool : Option String
+
+def codexShimSubagentToolCaseJson
+    (witness : CodexShimSubagentToolCase) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString witness.witness ++ ","
+    ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
+    ++ "\"tool_name\":" ++ jsonString witness.toolName ++ ","
+    ++ "\"projected_item_kind\":" ++ jsonString witness.projectedItemKind ++ ","
+    ++ "\"collab_tool\":" ++ jsonOptionalString witness.collabTool
+    ++ "}"
+
+def codexShimSubagentToolCases : List CodexShimSubagentToolCase :=
+  [ { witness := "codex_shim.subagent_tool.spawn"
+    , leanTheorems := [ "CodexShim.known_subagent_control_projects_collab" ]
+    , toolName := "spawn_subagent"
+    , projectedItemKind := "collabAgentToolCall"
+    , collabTool := some "spawnAgent"
+    }
+  , { witness := "codex_shim.subagent_tool.wait"
+    , leanTheorems := [ "CodexShim.known_subagent_control_projects_collab" ]
+    , toolName := "wait_subagent"
+    , projectedItemKind := "collabAgentToolCall"
+    , collabTool := some "wait"
+    }
+  , { witness := "codex_shim.subagent_tool.steer"
+    , leanTheorems := [ "CodexShim.known_subagent_control_projects_collab" ]
+    , toolName := "steer_subagent"
+    , projectedItemKind := "collabAgentToolCall"
+    , collabTool := some "sendInput"
+    }
+  , { witness := "codex_shim.subagent_tool.cancel"
+    , leanTheorems := [ "CodexShim.known_subagent_control_projects_collab" ]
+    , toolName := "cancel_subagent"
+    , projectedItemKind := "collabAgentToolCall"
+    , collabTool := some "closeAgent"
+    }
+  , { witness := "codex_shim.subagent_tool.list"
+    , leanTheorems := [ "CodexShim.non_control_tool_stays_mcp" ]
+    , toolName := "list_subagents"
+    , projectedItemKind := "mcpToolCall"
+    , collabTool := none
+    }
+  , { witness := "codex_shim.subagent_tool.read"
+    , leanTheorems := [ "CodexShim.non_control_tool_stays_mcp" ]
+    , toolName := "read_subagent"
+    , projectedItemKind := "mcpToolCall"
+    , collabTool := none
+    }
+  ]
+
+def codexShimSubagentToolCasesJson : String :=
+  jsonArray (codexShimSubagentToolCases.map codexShimSubagentToolCaseJson)
+
+structure CodexShimSubagentStatusCase where
+  witness : String
+  leanTheorems : List String
+  requestState : String
+  projectedAgentStatus : String
+  terminal : Bool
+
+def codexShimSubagentStatusCaseJson
+    (witness : CodexShimSubagentStatusCase) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString witness.witness ++ ","
+    ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
+    ++ "\"request_state\":" ++ jsonString witness.requestState ++ ","
+    ++ "\"projected_agent_status\":"
+      ++ jsonString witness.projectedAgentStatus ++ ","
+    ++ "\"terminal\":" ++ boolString witness.terminal
+    ++ "}"
+
+def codexShimSubagentStatusCases : List CodexShimSubagentStatusCase :=
+  [ { witness := "codex_shim.subagent_status.pending"
+    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
+    , requestState := "pending", projectedAgentStatus := "pendingInit", terminal := false }
+  , { witness := "codex_shim.subagent_status.claimed"
+    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
+    , requestState := "claimed", projectedAgentStatus := "running", terminal := false }
+  , { witness := "codex_shim.subagent_status.processing"
+    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
+    , requestState := "processing", projectedAgentStatus := "running", terminal := false }
+  , { witness := "codex_shim.subagent_status.input_required"
+    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
+    , requestState := "inputRequired", projectedAgentStatus := "running", terminal := false }
+  , { witness := "codex_shim.subagent_status.completed"
+    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
+    , requestState := "completed", projectedAgentStatus := "completed", terminal := true }
+  , { witness := "codex_shim.subagent_status.failed"
+    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
+    , requestState := "failed", projectedAgentStatus := "errored", terminal := true }
+  , { witness := "codex_shim.subagent_status.dead"
+    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
+    , requestState := "dead", projectedAgentStatus := "errored", terminal := true }
+  , { witness := "codex_shim.subagent_status.superseded"
+    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
+    , requestState := "superseded", projectedAgentStatus := "interrupted", terminal := true }
+  , { witness := "codex_shim.subagent_status.interrupted"
+    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
+    , requestState := "interrupted", projectedAgentStatus := "interrupted", terminal := true }
+  ]
+
+def codexShimSubagentStatusCasesJson : String :=
+  jsonArray (codexShimSubagentStatusCases.map codexShimSubagentStatusCaseJson)
+
+structure CodexShimContextUsageCase where
+  witness : String
+  leanTheorems : List String
+  cumulativeInput : Nat
+  cumulativeOutput : Nat
+  latestPrompt : Nat
+  latestCompletion : Nat
+  modelWindow : Nat
+  totalTokens : Nat
+  currentContextTokens : Nat
+  remainingTokens : Nat
+
+def codexShimContextUsageCaseJson
+    (witness : CodexShimContextUsageCase) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString witness.witness ++ ","
+    ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
+    ++ "\"cumulative_input\":" ++ toString witness.cumulativeInput ++ ","
+    ++ "\"cumulative_output\":" ++ toString witness.cumulativeOutput ++ ","
+    ++ "\"latest_prompt\":" ++ toString witness.latestPrompt ++ ","
+    ++ "\"latest_completion\":" ++ toString witness.latestCompletion ++ ","
+    ++ "\"model_window\":" ++ toString witness.modelWindow ++ ","
+    ++ "\"total_tokens\":" ++ toString witness.totalTokens ++ ","
+    ++ "\"current_context_tokens\":"
+      ++ toString witness.currentContextTokens ++ ","
+    ++ "\"remaining_tokens\":" ++ toString witness.remainingTokens
+    ++ "}"
+
+def codexShimContextUsageCases : List CodexShimContextUsageCase :=
+  [ { witness := "codex_shim.context.latest_call_not_cumulative"
+    , leanTheorems :=
+        [ "CodexShim.current_context_uses_latest_call"
+        , "CodexShim.context_remaining_le_window"
+        ]
+    , cumulativeInput := 850
+    , cumulativeOutput := 150
+    , latestPrompt := 300
+    , latestCompletion := 20
+    , modelWindow := 1000
+    , totalTokens := 1000
+    , currentContextTokens := 320
+    , remainingTokens := 680
+    }
+  , { witness := "codex_shim.context.over_window_saturates_remaining"
+    , leanTheorems :=
+        [ "CodexShim.current_context_uses_latest_call"
+        , "CodexShim.context_remaining_le_window"
+        , "CodexShim.context_remaining_saturates_at_zero"
+        ]
+    , cumulativeInput := 1400
+    , cumulativeOutput := 200
+    , latestPrompt := 1100
+    , latestCompletion := 50
+    , modelWindow := 1000
+    , totalTokens := 1600
+    , currentContextTokens := 1150
+    , remainingTokens := 0
+    }
+  ]
+
+def codexShimContextUsageCasesJson : String :=
+  jsonArray (codexShimContextUsageCases.map codexShimContextUsageCaseJson)
+
+structure CodexShimCompactionProjectionCase where
+  witness : String
+  leanTheorems : List String
+  previousCallState : Option String
+  callState : String
+  projectedEvents : List String
+  claimsCompacted : Bool
+
+def codexShimCompactionProjectionCaseJson
+    (witness : CodexShimCompactionProjectionCase) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString witness.witness ++ ","
+    ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
+    ++ "\"previous_call_state\":"
+      ++ jsonOptionalString witness.previousCallState ++ ","
+    ++ "\"call_state\":" ++ jsonString witness.callState ++ ","
+    ++ "\"projected_events\":" ++ jsonStringArray witness.projectedEvents ++ ","
+    ++ "\"claims_compacted\":" ++ boolString witness.claimsCompacted
+    ++ "}"
+
+def codexShimCompactionProjectionCases : List CodexShimCompactionProjectionCase :=
+  [ { witness := "codex_shim.compaction.queued_first_observation"
+    , leanTheorems := [ "CodexShim.queued_compaction_projects_started" ]
+    , previousCallState := none
+    , callState := "queued"
+    , projectedEvents := ["started"]
+    , claimsCompacted := false
+    }
+  , { witness := "codex_shim.compaction.running_first_observation"
+    , leanTheorems := [ "CodexShim.running_compaction_projects_started" ]
+    , previousCallState := none
+    , callState := "running"
+    , projectedEvents := ["started"]
+    , claimsCompacted := false
+    }
+  , { witness := "codex_shim.compaction.completed_first_observation"
+    , leanTheorems :=
+        [ "CodexShim.completed_first_observation_projects_lifecycle_pair" ]
+    , previousCallState := none
+    , callState := "completed"
+    , projectedEvents := ["started", "completed"]
+    , claimsCompacted := true
+    }
+  , { witness := "codex_shim.compaction.running_to_completed"
+    , leanTheorems := [ "CodexShim.running_to_completed_projects_completion" ]
+    , previousCallState := some "running"
+    , callState := "completed"
+    , projectedEvents := ["completed"]
+    , claimsCompacted := true
+    }
+  , { witness := "codex_shim.compaction.failed_first_observation"
+    , leanTheorems := [ "CodexShim.failed_compaction_never_claims_completed" ]
+    , previousCallState := none
+    , callState := "failed"
+    , projectedEvents := []
+    , claimsCompacted := false
+    }
+  , { witness := "codex_shim.compaction.cancelled_first_observation"
+    , leanTheorems := [ "CodexShim.cancelled_compaction_never_claims_completed" ]
+    , previousCallState := none
+    , callState := "cancelled"
+    , projectedEvents := []
+    , claimsCompacted := false
+    }
+  ]
+
+def codexShimCompactionProjectionCasesJson : String :=
+  jsonArray
+    (codexShimCompactionProjectionCases.map codexShimCompactionProjectionCaseJson)
+
 structure CodexShimTurnLifecycleCase where
   witness : String
   leanTheorems : List String
