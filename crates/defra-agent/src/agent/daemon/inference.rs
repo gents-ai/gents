@@ -866,6 +866,7 @@ mod tests {
             BackgroundToolRegistry::default(),
             BackgroundExecutionRegistry::default(),
             Arc::new(StartupBarrier::ready_for_test()),
+            Arc::new(crate::startup_readiness::StartupDemotions::new()),
         );
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
