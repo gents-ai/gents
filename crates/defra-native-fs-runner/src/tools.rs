@@ -83,12 +83,50 @@ fn list_files(context: &RunnerContext, args: ListFilesArgs) -> Result<String> {
     )
 }
 
+/// Leading literal path components of a glob pattern. The walk only needs to
+/// enter this subtree — nothing outside it can ever match (#729). The final
+/// component is the filename position and is matched, not walked; `.`/`..`
+/// and metacharacter components end the prefix.
+fn glob_literal_prefix(pattern: &str) -> Vec<&str> {
+    let components: Vec<&str> = pattern.split('/').collect();
+    let mut literal = Vec::new();
+    for (index, component) in components.iter().enumerate() {
+        if index == components.len() - 1
+            || component.is_empty()
+            || *component == "."
+            || *component == ".."
+            || component.contains(['*', '?', '[', ']'])
+        {
+            break;
+        }
+        literal.push(*component);
+    }
+    literal
+}
+
 fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
     let dir = context.resolve_existing_dir(args.path.as_deref())?;
     let pattern = Pattern::new(&args.pattern)
         .with_context(|| format!("invalid glob pattern {}", args.pattern))?;
     let walk = walk_state(args.max_entries_visited, None, args.max_wall_ms);
-    let matches = collect_glob_matches(context, &dir, &pattern, args.max_matches.max(1), walk)?;
+    let prefix = glob_literal_prefix(&args.pattern);
+    let pattern_prefix = (!prefix.is_empty()).then(|| prefix.join("/"));
+    let walk_dir = if prefix.is_empty() {
+        Some(dir.clone())
+    } else {
+        context.resolve_prune_subdir(&dir, &prefix)
+    };
+    let pattern_prefix_exists = walk_dir.is_some();
+    let matches = match walk_dir {
+        Some(walk_dir) => {
+            collect_glob_matches(context, &walk_dir, &pattern, args.max_matches.max(1), walk)?
+        }
+        None => crate::model::Collected {
+            items: Vec::new(),
+            truncated: false,
+            walk: walk.into_stats(),
+        },
+    };
     let truncated = matches.truncated || matches.walk.budget_exhausted;
     let output = GlobOutput {
         metadata: GlobMetadata {
@@ -96,6 +134,8 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
             status: "success",
             tool: "glob",
             pattern: args.pattern,
+            pattern_prefix,
+            pattern_prefix_exists,
             path: context.display_path(&dir),
             returned_count: matches.items.len(),
             total_count: total_count(matches.items.len(), truncated),

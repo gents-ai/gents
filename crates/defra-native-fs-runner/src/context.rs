@@ -70,6 +70,23 @@ impl RunnerContext {
         }
     }
 
+    /// Resolve a literal pattern-prefix subdirectory for walk pruning. The
+    /// prefix components are plain names (never `..`), and the result must
+    /// canonicalize to a directory inside the allowed root — a symlink
+    /// escaping the root resolves to `None`, the same as a missing prefix.
+    pub(crate) fn resolve_prune_subdir(&self, dir: &Path, components: &[&str]) -> Option<PathBuf> {
+        let mut candidate = dir.to_path_buf();
+        for component in components {
+            candidate.push(component);
+        }
+        let resolved = std::fs::canonicalize(&candidate).ok()?;
+        if resolved.is_dir() && resolved.starts_with(&self.root) {
+            Some(resolved)
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn display_path(&self, path: &Path) -> String {
         for prefix in [&self.base, &self.root] {
             if let Ok(relative) = path.strip_prefix(prefix) {

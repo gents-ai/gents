@@ -40,6 +40,8 @@ pub(crate) struct GlobMetadata {
     pub(crate) status: &'static str,
     pub(crate) tool: &'static str,
     pub(crate) pattern: String,
+    pub(crate) pattern_prefix: Option<String>,
+    pub(crate) pattern_prefix_exists: bool,
     pub(crate) path: String,
     pub(crate) returned_count: usize,
     pub(crate) total_count: Option<usize>,
