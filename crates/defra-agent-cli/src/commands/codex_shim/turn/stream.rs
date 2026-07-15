@@ -22,6 +22,7 @@ use super::super::protocol::{send_committed_user_message, send_notification};
 use super::super::store::{hydrate_materialized_response_content, query_node_json};
 use super::super::subagent_projection::{
     attach_subagent_link, is_subagent_control_tool, load_authorized_subagent_threads_for_root,
+    SubagentProjectionUpdateFilter,
 };
 use super::super::thread_projection::{
     latest_inference_usage_observation, latest_requests_token_usage, session_token_usage,
@@ -147,6 +148,7 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
         BTreeMap::new();
     let mut updates = state.node.subscribe_updates();
     let mut updates_closed = false;
+    let subagent_update_filter = SubagentProjectionUpdateFilter::from_state(state);
     let mut subagent_links = Vec::new();
     let mut subagent_links_dirty = true;
     let mut latest_content_cursor = ContentCursor::default();
@@ -535,14 +537,24 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
                 }
             }
             msg = updates.recv(), if !updates_closed => {
-                if msg.is_none() {
-                    tracing::warn!("Codex shim embedded-node update subscription closed");
-                    updates_closed = true;
+                match msg {
+                    Some(message) => {
+                        if message.as_update().is_some_and(|update| {
+                            subagent_update_filter.affects_collection_id(&update.collection_id)
+                        }) {
+                            subagent_links_dirty = true;
+                        }
+                    }
+                    None => {
+                        tracing::warn!("Codex shim embedded-node update subscription closed");
+                        updates_closed = true;
+                        subagent_links_dirty = true;
+                    }
                 }
-                subagent_links_dirty = true;
                 let dropped = updates.check_and_reset_dropped();
                 if dropped > 0 {
                     tracing::warn!(dropped, "Codex shim update subscription dropped messages");
+                    subagent_links_dirty = true;
                 }
             }
             changed = cancel_rx.changed() => {

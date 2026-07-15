@@ -129,10 +129,64 @@ fn trace_thread_item(method: &str, item: &codex::ThreadItem) -> Value {
             "source": trace_json(source),
             "status": trace_json(status),
         }),
+        codex::ThreadItem::CollabAgentToolCall {
+            id,
+            tool,
+            status,
+            sender_thread_id,
+            receiver_thread_ids,
+            model,
+            agents_states,
+            ..
+        } => json!({
+            "method": method,
+            "item_type": "collabAgentToolCall",
+            "item_id": id,
+            "tool": trace_json(tool),
+            "status": trace_json(status),
+            "sender_thread_id": sender_thread_id,
+            "receiver_thread_ids": receiver_thread_ids,
+            "model": model,
+            "agents_states": trace_json(agents_states),
+        }),
         _ => json!({
             "method": method,
             "item_type": "other",
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn collaboration_items_are_named_in_debug_traces() {
+        let item = codex::ThreadItem::CollabAgentToolCall {
+            id: "spawn-1".to_string(),
+            tool: codex::CollabAgentTool::SpawnAgent,
+            status: codex::CollabAgentToolCallStatus::Completed,
+            sender_thread_id: "parent".to_string(),
+            receiver_thread_ids: vec!["child".to_string()],
+            prompt: Some("delegate".to_string()),
+            model: Some("backend::model".to_string()),
+            reasoning_effort: None,
+            agents_states: HashMap::from([(
+                "child".to_string(),
+                codex::CollabAgentState {
+                    status: codex::CollabAgentStatus::Completed,
+                    message: None,
+                },
+            )]),
+        };
+
+        let trace = trace_thread_item("item/completed", &item);
+        assert_eq!(trace["item_type"], "collabAgentToolCall");
+        assert_eq!(trace["item_id"], "spawn-1");
+        assert_eq!(trace["receiver_thread_ids"], json!(["child"]));
+        assert_eq!(trace["model"], "backend::model");
     }
 }
 

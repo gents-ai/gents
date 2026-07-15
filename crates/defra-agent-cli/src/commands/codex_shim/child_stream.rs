@@ -6,7 +6,9 @@ use defra_agent::UpdateSubscriptionSource;
 use tokio::sync::watch;
 
 use super::protocol::{send_committed_user_message, send_notification, turn_value};
-use super::subagent_projection::{load_authorized_subagent_threads_for_root, LinkedSubagentThread};
+use super::subagent_projection::{
+    load_authorized_subagent_threads_for_root, LinkedSubagentThread, SubagentProjectionUpdateFilter,
+};
 use super::thread_projection::CodexThreadRecord;
 use super::turn::{stream_defra_turn, TurnStreamOptions};
 use super::turn_projection::TurnProjection;
@@ -66,6 +68,7 @@ async fn watch_loaded_subagent_thread(
 
     let mut updates = state.node.subscribe_updates();
     let mut updates_closed = false;
+    let subagent_update_filter = SubagentProjectionUpdateFilter::from_state(state);
     loop {
         if !state.is_thread_loaded(&child_thread_id).await {
             return Ok(());
@@ -76,20 +79,29 @@ async fn watch_loaded_subagent_thread(
             ))
             .await;
         } else {
-            if updates.recv().await.is_none() {
-                updates_closed = true;
-                tracing::warn!(
-                    child_thread_id,
-                    "Codex shim loaded-child update subscription closed; polling"
-                );
-            }
-            let dropped = updates.check_and_reset_dropped();
-            if dropped > 0 {
-                tracing::warn!(
-                    child_thread_id,
-                    dropped,
-                    "Codex shim loaded-child update subscription dropped messages"
-                );
+            loop {
+                let Some(message) = updates.recv().await else {
+                    updates_closed = true;
+                    tracing::warn!(
+                        child_thread_id,
+                        "Codex shim loaded-child update subscription closed; polling"
+                    );
+                    break;
+                };
+                let dropped = updates.check_and_reset_dropped();
+                if dropped > 0 {
+                    tracing::warn!(
+                        child_thread_id,
+                        dropped,
+                        "Codex shim loaded-child update subscription dropped messages"
+                    );
+                    break;
+                }
+                if message.as_update().is_some_and(|update| {
+                    subagent_update_filter.affects_collection_id(&update.collection_id)
+                }) {
+                    break;
+                }
             }
         }
 

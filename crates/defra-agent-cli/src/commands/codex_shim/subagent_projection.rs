@@ -13,6 +13,56 @@ use super::progress::{defra_tool_call_status, DefraToolCallProgress};
 use super::store::query_node_json;
 use super::ShimState;
 
+// Requests and tool calls define the authorized bridge graph and lifecycle;
+// behaviors supply the optional model presentation metadata.
+const SUBAGENT_PROJECTION_COLLECTIONS: [&str; 3] =
+    ["AgentRequest", "AgentToolCall", "AgentBehavior"];
+
+#[derive(Clone, Debug)]
+pub(super) struct SubagentProjectionUpdateFilter {
+    collection_ids: HashSet<String>,
+    match_all_updates: bool,
+}
+
+impl SubagentProjectionUpdateFilter {
+    pub(super) fn from_state(state: &ShimState) -> Self {
+        let mut collection_ids = HashSet::new();
+        let mut match_all_updates = false;
+        for collection_name in SUBAGENT_PROJECTION_COLLECTIONS {
+            match state.node.get_collection(collection_name) {
+                Ok(Some(definition)) => {
+                    collection_ids.insert(definition.collection_id);
+                }
+                Ok(None) => {
+                    match_all_updates = true;
+                    tracing::warn!(
+                        collection_name,
+                        "Codex shim could not resolve a subagent projection collection; \
+                         falling back to invalidation on every document update"
+                    );
+                }
+                Err(error) => {
+                    match_all_updates = true;
+                    tracing::warn!(
+                        collection_name,
+                        %error,
+                        "Codex shim failed to resolve a subagent projection collection; \
+                         falling back to invalidation on every document update"
+                    );
+                }
+            }
+        }
+        Self {
+            collection_ids,
+            match_all_updates,
+        }
+    }
+
+    pub(super) fn affects_collection_id(&self, collection_id: &str) -> bool {
+        self.match_all_updates || self.collection_ids.contains(collection_id)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LinkedSubagentThread {
     pub(super) request_id: String,
@@ -1075,5 +1125,33 @@ mod tests {
             projection, completed_projection,
             "child lifecycle changes must refresh agentsStates even after the tool status settles"
         );
+    }
+
+    #[test]
+    fn subagent_update_filter_ignores_unrelated_document_updates() {
+        let filter = SubagentProjectionUpdateFilter {
+            collection_ids: HashSet::from([
+                "agent-request-id".to_string(),
+                "agent-tool-call-id".to_string(),
+                "agent-behavior-id".to_string(),
+            ]),
+            match_all_updates: false,
+        };
+
+        assert!(filter.affects_collection_id("agent-request-id"));
+        assert!(filter.affects_collection_id("agent-tool-call-id"));
+        assert!(filter.affects_collection_id("agent-behavior-id"));
+        assert!(!filter.affects_collection_id("agent-message-id"));
+        assert!(!filter.affects_collection_id("inference-call-id"));
+    }
+
+    #[test]
+    fn incomplete_subagent_update_filter_fails_open() {
+        let filter = SubagentProjectionUpdateFilter {
+            collection_ids: HashSet::new(),
+            match_all_updates: true,
+        };
+
+        assert!(filter.affects_collection_id("any-collection-id"));
     }
 }
