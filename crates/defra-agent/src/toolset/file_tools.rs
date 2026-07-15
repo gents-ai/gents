@@ -254,7 +254,7 @@ impl Tool for GlobTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Find files matching a glob pattern under the allowed root. Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact text with stable defra_fs metadata and skips common generated directories by default. Set raw_json=true for structured JSON.".to_string(),
+            description: "Find files matching a glob pattern under the allowed root. Relative paths resolve from the active request workspace when one is provided, otherwise from the root. The pattern is matched against the FULL path relative to that directory, so it must include every leading directory (or start with **/); check the search_dir_entries / pattern_prefix_exists fields on a zero-match result before retrying. Returns compact text with stable defra_fs metadata, skips common generated directories by default, and reports walk stats; large walks stop at a budget with partial results (walk.budget_exhausted=true). Set raw_json=true for structured JSON.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -312,13 +312,13 @@ impl Tool for GrepTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Search text files under the allowed root for a substring. Relative paths resolve from the active request workspace when one is provided, otherwise from the root. The path may be a directory or a single file. Returns compact path:Lline matches with stable defra_fs metadata and skips common generated directories by default. Set raw_json=true for structured JSON.".to_string(),
+            description: "Search text files under the allowed root for a LITERAL substring (not a regex — do not escape characters). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. The path may be a directory or a single file; prefer passing the narrowest directory you can. Returns compact path:Lline matches with stable defra_fs metadata, skips common generated directories, oversized files, and binary files by default, and reports walk stats; large walks stop at a budget with partial results (walk.budget_exhausted=true). Set raw_json=true for structured JSON.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Literal substring to search for in UTF-8 text files."
+                        "description": "Literal substring to search for in text files. Not a regex: every character matches itself, so do not backslash-escape."
                     },
                     "path": {
                         "type": "string",

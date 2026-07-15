@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -21,6 +21,9 @@ use crate::traversal::{
 // zero-match pattern over a large tool root (a home directory is ~6M entries)
 // walks everything and looks like a hang to the model.
 const DEFAULT_MAX_ENTRIES_VISITED: usize = 200_000;
+/// How many top-level names a zero-match diagnostic reveals (#729): enough to
+/// correct a wrong path anchor, small enough to stay cheap.
+const SEARCH_DIR_ENTRY_HINTS: usize = 10;
 const DEFAULT_MAX_BYTES_READ: u64 = 128 * 1024 * 1024;
 const DEFAULT_MAX_WALL_MS: u64 = 15_000;
 
@@ -34,6 +37,24 @@ fn walk_state(
         max_bytes_read: max_bytes_read.unwrap_or(DEFAULT_MAX_BYTES_READ).max(1),
         max_wall: Duration::from_millis(max_wall_ms.unwrap_or(DEFAULT_MAX_WALL_MS).max(1)),
     })
+}
+
+/// Top-level entry names of the searched directory, attached to zero-match
+/// results so a wrong anchor is visible on the first attempt.
+fn top_level_entry_names(dir: &Path) -> Vec<String> {
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = read_dir
+        .filter_map(|entry| {
+            entry
+                .ok()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        })
+        .collect();
+    names.sort();
+    names.truncate(SEARCH_DIR_ENTRY_HINTS);
+    names
 }
 
 pub fn execute_request(root: PathBuf, request: NativeFsRunnerRequest) -> Result<String> {
@@ -128,6 +149,7 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
         },
     };
     let truncated = matches.truncated || matches.walk.budget_exhausted;
+    let search_dir_entries = matches.items.is_empty().then(|| top_level_entry_names(&dir));
     let output = GlobOutput {
         metadata: GlobMetadata {
             ok: true,
@@ -136,6 +158,7 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
             pattern: args.pattern,
             pattern_prefix,
             pattern_prefix_exists,
+            search_dir_entries,
             path: context.display_path(&dir),
             returned_count: matches.items.len(),
             total_count: total_count(matches.items.len(), truncated),
@@ -182,12 +205,15 @@ fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
         .collect::<Vec<_>>();
 
     let truncated = collected.truncated || collected.walk.budget_exhausted;
+    let search_dir_entries =
+        (matches.is_empty() && path.is_dir()).then(|| top_level_entry_names(&path));
     let output = GrepOutput {
         metadata: GrepMetadata {
             ok: true,
             status: "success",
             tool: "grep",
             pattern: args.pattern,
+            search_dir_entries,
             path: context.display_path(&path),
             case_sensitive: args.case_sensitive,
             returned_count: matches.len(),
