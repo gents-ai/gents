@@ -10,6 +10,7 @@ pub mod network_token;
 pub mod pairing_token;
 pub mod row;
 pub mod schemas;
+pub mod timeline;
 pub mod transcript;
 
 pub use bearer_token::{

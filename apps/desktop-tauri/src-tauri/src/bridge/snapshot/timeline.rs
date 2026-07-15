@@ -1,5 +1,11 @@
 use serde_json::Value;
 
+use std::collections::BTreeMap;
+
+use defra_agent_protocol::timeline::{
+    build_timeline_order, TimelineMessageInput, TimelineRole, TimelineSlot,
+};
+
 use super::super::types::{
     normalize_optional, MessageView, PendingTurnView, RenderedTimelineItem, RenderedToolCallView,
     ResponseView, ToolCallView, ToolDetailFieldView, ToolDetailValueView,
@@ -115,35 +121,32 @@ pub(super) fn build_rendered_timeline(
     pending_turn: Option<&PendingTurnView>,
     active_response_overlay: Option<&ResponseView>,
 ) -> Vec<RenderedTimelineItem> {
-    let mut timeline = Vec::new();
-    let mut tool_groups: std::collections::BTreeMap<Option<i64>, Vec<ToolCallView>> =
-        std::collections::BTreeMap::new();
-
+    // Group tool calls by their owning message sequence (rich lookup for the
+    // mapping-back step); the presentation-neutral ORDER is decided by the
+    // shared, Lean-fenced skeleton, not here.
+    let mut tool_groups: BTreeMap<Option<i64>, Vec<ToolCallView>> = BTreeMap::new();
     for tool in tool_calls.iter().cloned() {
         tool_groups
             .entry(tool.message_sequence)
             .or_default()
             .push(tool);
     }
+    let group_sequences: Vec<Option<i64>> = tool_groups.keys().copied().collect();
 
-    let mut used_group_keys = std::collections::BTreeSet::new();
-
-    let mut timeline_messages = messages
-        .iter()
-        .filter(|message| {
-            !message.has_tool_results
-                && (!normalize_timeline_text(message.display_content.as_deref()).is_empty()
-                    || !normalize_timeline_text(message.reasoning.as_deref()).is_empty()
-                    || message.has_tool_calls)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    timeline_messages.sort_by_key(|message| message.sequence.unwrap_or_default());
-
-    let mut seen_message_keys = std::collections::BTreeSet::new();
-    let mut seen_presentations = std::collections::BTreeSet::new();
-
-    for message in timeline_messages {
+    // Candidate messages (step-2 filter: drop tool-result rows and rows with no
+    // rendered content/reasoning/tool-calls — a presentation decision). For each
+    // candidate, project the ordering-relevant fields the skeleton consumes, and
+    // remember the rich content by key for mapping the slots back.
+    let mut inputs: Vec<TimelineMessageInput> = Vec::new();
+    let mut rendered_message: BTreeMap<String, RenderedTimelineItem> = BTreeMap::new();
+    for message in messages.iter() {
+        let keep = !message.has_tool_results
+            && (!normalize_timeline_text(message.display_content.as_deref()).is_empty()
+                || !normalize_timeline_text(message.reasoning.as_deref()).is_empty()
+                || message.has_tool_calls);
+        if !keep {
+            continue;
+        }
         let role = message
             .display_role
             .as_deref()
@@ -151,73 +154,99 @@ pub(super) fn build_rendered_timeline(
             .unwrap_or("assistant");
         let normalized_content = normalize_optional(message.display_content.as_deref());
         let normalized_reasoning = normalize_optional(message.reasoning.as_deref());
-        if !seen_message_keys.insert(message.message_key.clone()) {
-            continue;
-        }
-        if let Some(presentation_key) =
-            message_presentation_key(&message, role, &normalized_content, &normalized_reasoning)
-        {
-            if !seen_presentations.insert(presentation_key) {
-                continue;
-            }
-        }
-
-        match role {
-            "user" => {
-                if let Some(content) = normalized_content.clone() {
-                    timeline.push(RenderedTimelineItem::UserMessage {
+        let is_user = role == "user";
+        let (emits_item, item) = if is_user {
+            match normalized_content.clone() {
+                Some(content) => (
+                    true,
+                    Some(RenderedTimelineItem::UserMessage {
                         item_key: message.message_key.clone(),
                         sequence: message.sequence,
                         content,
-                    });
-                }
+                    }),
+                ),
+                None => (false, None),
             }
-            _ => {
-                if normalized_content.is_some() || normalized_reasoning.is_some() {
-                    timeline.push(RenderedTimelineItem::AssistantMessage {
-                        item_key: message.message_key.clone(),
-                        sequence: message.sequence,
-                        content: normalized_content,
-                        reasoning: normalized_reasoning,
-                    });
-                }
-            }
+        } else if normalized_content.is_some() || normalized_reasoning.is_some() {
+            (
+                true,
+                Some(RenderedTimelineItem::AssistantMessage {
+                    item_key: message.message_key.clone(),
+                    sequence: message.sequence,
+                    content: normalized_content.clone(),
+                    reasoning: normalized_reasoning.clone(),
+                }),
+            )
+        } else {
+            (false, None)
+        };
+        if let Some(item) = item {
+            rendered_message.insert(message.message_key.clone(), item);
         }
-
-        let key = message.sequence;
-        if let Some(grouped_tools) = tool_groups.get(&key).cloned() {
-            used_group_keys.insert(key);
-            timeline.push(RenderedTimelineItem::ToolGroup {
-                item_key: format!("tools-{}", key.unwrap_or(-1)),
-                message_sequence: key,
-                tools: grouped_tools.into_iter().map(render_tool_call).collect(),
-            });
-        }
-    }
-
-    if let Some(pending_turn) = pending_turn {
-        timeline.push(RenderedTimelineItem::PendingUserTurn {
-            item_key: format!("pending-{}", pending_turn.request_id),
-            request_id: pending_turn.request_id.clone(),
-            content: pending_turn.content.clone(),
-            selected_skill_ids: pending_turn.selected_skill_ids.clone(),
-            lifecycle_state: pending_turn.lifecycle_state.clone(),
-            created_at: pending_turn.created_at.clone(),
+        // Presentation dedup token: the desktop only dedups by presentation when
+        // the message carries a sequence (None opts out). Serialize the same
+        // tuple the old `message_presentation_key` used, as an opaque token.
+        let dedup_token =
+            message_presentation_key(message, role, &normalized_content, &normalized_reasoning)
+                .map(|key| format!("{key:?}"));
+        inputs.push(TimelineMessageInput {
+            key: message.message_key.clone(),
+            sequence: message.sequence,
+            role: if is_user {
+                TimelineRole::User
+            } else {
+                TimelineRole::Assistant
+            },
+            emits_item,
+            dedup_token,
         });
     }
 
-    for (key, grouped_tools) in tool_groups {
-        if used_group_keys.contains(&key) {
-            continue;
-        }
+    // The parity-critical ordering + partition, computed once in the shared
+    // skeleton. Overlay is decided in the adapter (below) against the assembled
+    // rich items, so pass `None` here.
+    let order = build_timeline_order(&inputs, &group_sequences, pending_turn.is_some(), None);
 
-        timeline.push(RenderedTimelineItem::ToolGroup {
-            item_key: format!("tools-{}", key.unwrap_or(-1)),
-            message_sequence: key,
-            tools: grouped_tools.into_iter().map(render_tool_call).collect(),
-        });
+    let mut timeline = Vec::with_capacity(order.len());
+    for slot in order {
+        match slot {
+            TimelineSlot::Message { key, .. } => {
+                if let Some(item) = rendered_message.get(&key) {
+                    timeline.push(item.clone());
+                }
+            }
+            TimelineSlot::ToolGroup { message_sequence } => {
+                let tools = tool_groups
+                    .get(&message_sequence)
+                    .cloned()
+                    .unwrap_or_default();
+                timeline.push(RenderedTimelineItem::ToolGroup {
+                    item_key: format!("tools-{}", message_sequence.unwrap_or(-1)),
+                    message_sequence,
+                    tools: tools.into_iter().map(render_tool_call).collect(),
+                });
+            }
+            TimelineSlot::Pending => {
+                if let Some(pending_turn) = pending_turn {
+                    timeline.push(RenderedTimelineItem::PendingUserTurn {
+                        item_key: format!("pending-{}", pending_turn.request_id),
+                        request_id: pending_turn.request_id.clone(),
+                        content: pending_turn.content.clone(),
+                        selected_skill_ids: pending_turn.selected_skill_ids.clone(),
+                        lifecycle_state: pending_turn.lifecycle_state.clone(),
+                        created_at: pending_turn.created_at.clone(),
+                    });
+                }
+            }
+            // The skeleton was called with `overlay: None`, so it emits no
+            // overlay slot; the live overlay is appended below.
+            TimelineSlot::Overlay => {}
+        }
     }
 
+    // Overlay: appended last iff present and not a duplicate of the trailing
+    // assistant. Identical to the pre-#608 behavior; the skeleton also models
+    // this (`OverlayInput`) for a shell that prefers to pass the bit in.
     let overlay_content =
         active_response_overlay.and_then(|overlay| normalize_optional(overlay.content.as_deref()));
     let overlay_reasoning = active_response_overlay
