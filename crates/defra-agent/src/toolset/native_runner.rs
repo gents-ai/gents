@@ -12,6 +12,36 @@ use crate::tool_call_lifecycle::runtime::{
 
 const MAX_NATIVE_RUNNER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const RUNNER_ENV: &str = "DEFRA_NATIVE_FS_RUNNER";
+/// Hard backstop for a single filesystem-tool call (#729). The runner bounds
+/// itself with in-process walk budgets and returns partial results well
+/// before this; the cap only kills a wedged runner. Without it the only
+/// bound is the request deadline, which can be hours.
+const MAX_FS_RUNNER_SECONDS: i64 = 120;
+
+fn effective_deadline(
+    request_deadline: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> chrono::DateTime<chrono::Utc> {
+    let cap = now + chrono::Duration::seconds(MAX_FS_RUNNER_SECONDS);
+    request_deadline.map_or(cap, |deadline| deadline.min(cap))
+}
+
+/// Result for a killed runner. The lifecycle timeout marker (which the hook
+/// maps to the tool-call timedOut terminal and request termination) is only
+/// legal when the REQUEST deadline has actually expired — the per-call cap
+/// expiring first is an ordinary tool failure the model can react to.
+fn fs_runner_timed_out_result(
+    tool_name: &str,
+    request_deadline: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
+    if request_deadline.is_some_and(|deadline| now >= deadline) {
+        return timeout_result(request_deadline);
+    }
+    format!(
+        "native filesystem runner for {tool_name} exceeded the {MAX_FS_RUNNER_SECONDS}s per-call cap and was stopped before completing. Narrow the path or pattern (a more specific anchor prunes the walk), or split the search into smaller calls."
+    )
+}
 
 #[derive(Clone)]
 pub(super) struct NativeFsRunner {
@@ -33,7 +63,8 @@ impl NativeFsRunner {
         tool_name: &'static str,
     ) -> Result<String, ToolError> {
         let runtime = current_tool_runtime_context();
-        let deadline_at = runtime.as_ref().and_then(|runtime| runtime.deadline_at);
+        let request_deadline = runtime.as_ref().and_then(|runtime| runtime.deadline_at);
+        let deadline_at = Some(effective_deadline(request_deadline, chrono::Utc::now()));
         let cancellation_token = runtime
             .as_ref()
             .map(|runtime| runtime.cancellation_token.clone())
@@ -72,7 +103,11 @@ impl NativeFsRunner {
                 stdout_truncated,
                 stderr_truncated,
             ),
-            ManagedExecOutcome::TimedOut { .. } => Ok(timeout_result(deadline_at)),
+            ManagedExecOutcome::TimedOut { .. } => Ok(fs_runner_timed_out_result(
+                tool_name,
+                request_deadline,
+                chrono::Utc::now(),
+            )),
             ManagedExecOutcome::Cancelled { .. } => Ok(cancelled_result()),
             ManagedExecOutcome::SpawnFailed { error } => Err(anyhow!(
                 "native filesystem runner for {tool_name} failed to spawn: {error}"
@@ -260,4 +295,76 @@ fn truncate_error_preview(text: &str) -> String {
             .take(MAX_ERROR_PREVIEW_CHARS)
             .collect::<String>()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration as ChronoDuration, Utc};
+
+    #[test]
+    fn effective_deadline_caps_long_request_deadlines() {
+        let now = Utc::now();
+        let request_deadline = now + ChronoDuration::hours(12);
+        let effective = effective_deadline(Some(request_deadline), now);
+        assert_eq!(
+            effective,
+            now + ChronoDuration::seconds(MAX_FS_RUNNER_SECONDS)
+        );
+    }
+
+    #[test]
+    fn effective_deadline_keeps_shorter_request_deadlines() {
+        let now = Utc::now();
+        let request_deadline = now + ChronoDuration::seconds(30);
+        assert_eq!(
+            effective_deadline(Some(request_deadline), now),
+            request_deadline
+        );
+    }
+
+    #[test]
+    fn effective_deadline_bounds_calls_without_request_deadline() {
+        let now = Utc::now();
+        assert_eq!(
+            effective_deadline(None, now),
+            now + ChronoDuration::seconds(MAX_FS_RUNNER_SECONDS)
+        );
+    }
+
+    // The per-call cap must NOT surface as the lifecycle timeout marker: the
+    // hook maps that marker to lc.timeout() + HookAction::Terminate, killing
+    // the whole request. Only a genuinely expired REQUEST deadline may produce
+    // the marker; a cap expiry is an ordinary, model-actionable tool result.
+    #[test]
+    fn cap_expiry_before_request_deadline_is_not_a_lifecycle_timeout() {
+        let now = Utc::now();
+        let result = fs_runner_timed_out_result("grep", Some(now + ChronoDuration::hours(12)), now);
+        assert!(
+            !result.contains("__defra_agent_tool_lifecycle__"),
+            "cap expiry must not carry the lifecycle marker: {result}"
+        );
+        assert!(result.contains("per-call cap"), "{result}");
+    }
+
+    #[test]
+    fn cap_expiry_without_request_deadline_is_not_a_lifecycle_timeout() {
+        let now = Utc::now();
+        let result = fs_runner_timed_out_result("grep", None, now);
+        assert!(
+            !result.contains("__defra_agent_tool_lifecycle__"),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn expired_request_deadline_yields_lifecycle_timeout_marker() {
+        let now = Utc::now();
+        let deadline = now - ChronoDuration::seconds(1);
+        let result = fs_runner_timed_out_result("grep", Some(deadline), now);
+        assert!(
+            result.starts_with("__defra_agent_tool_lifecycle__:timedOut"),
+            "{result}"
+        );
+    }
 }

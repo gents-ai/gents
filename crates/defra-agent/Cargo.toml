@@ -30,7 +30,6 @@ defra-node.workspace = true
 dirs.workspace = true
 events.workspace = true
 futures = "0.3"
-glob = "0.3"
 hostname.workspace = true
 identity.workspace = true
 libc = "0.2"

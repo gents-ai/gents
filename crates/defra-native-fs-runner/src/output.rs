@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::model::{FilesystemEntry, DEFAULT_IGNORED_NAMES};
+use crate::model::{FilesystemEntry, WalkStats, DEFAULT_IGNORED_NAMES};
 
 const DEFAULT_GREP_PREVIEW_CHARS: usize = 240;
 const OUTPUT_META_PREFIX: &str = "defra_fs: ";
@@ -24,6 +24,7 @@ pub(crate) struct ListFilesMetadata {
     pub(crate) truncated: bool,
     pub(crate) default_ignored: &'static [&'static str],
     pub(crate) summary: EntrySummary,
+    pub(crate) walk: WalkStats,
 }
 
 #[derive(Serialize)]
@@ -39,11 +40,15 @@ pub(crate) struct GlobMetadata {
     pub(crate) status: &'static str,
     pub(crate) tool: &'static str,
     pub(crate) pattern: String,
+    pub(crate) pattern_prefix: Option<String>,
+    pub(crate) pattern_prefix_exists: bool,
+    pub(crate) search_dir_entries: Option<Vec<String>>,
     pub(crate) path: String,
     pub(crate) returned_count: usize,
     pub(crate) total_count: Option<usize>,
     pub(crate) truncated: bool,
     pub(crate) default_ignored: &'static [&'static str],
+    pub(crate) walk: WalkStats,
 }
 
 #[derive(Serialize)]
@@ -59,6 +64,8 @@ pub(crate) struct GrepMetadata {
     pub(crate) status: &'static str,
     pub(crate) tool: &'static str,
     pub(crate) pattern: String,
+    pub(crate) pattern_syntax: &'static str,
+    pub(crate) search_dir_entries: Option<Vec<String>>,
     pub(crate) path: String,
     pub(crate) case_sensitive: bool,
     pub(crate) returned_count: usize,
@@ -66,6 +73,10 @@ pub(crate) struct GrepMetadata {
     pub(crate) files_with_matches: usize,
     pub(crate) truncated: bool,
     pub(crate) default_ignored: &'static [&'static str],
+    pub(crate) bytes_read: u64,
+    pub(crate) skipped_large_files: usize,
+    pub(crate) skipped_binary_files: usize,
+    pub(crate) walk: WalkStats,
 }
 
 #[derive(Serialize)]

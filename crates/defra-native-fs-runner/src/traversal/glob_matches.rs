@@ -1,20 +1,22 @@
 use std::path::Path;
 
 use anyhow::Result;
-use glob::Pattern;
+use globset::GlobMatcher;
 
 use crate::context::RunnerContext;
 use crate::model::{Collected, FilesystemEntry};
-use crate::traversal::common::{should_ignore_path, should_skip_io_error, sorted_children};
+use crate::traversal::common::{admit_next, sorted_children, Admitted, GitignoreStack, WalkState};
 
 pub(crate) fn collect_glob_matches(
     context: &RunnerContext,
     dir: &Path,
-    pattern: &Pattern,
+    pattern: &GlobMatcher,
     max_matches: usize,
+    mut walk: WalkState,
 ) -> Result<Collected<FilesystemEntry>> {
     let mut items = Vec::new();
     let mut truncated = false;
+    let mut ignores = GitignoreStack::new();
     collect_glob_matches_inner(
         context,
         dir,
@@ -23,48 +25,50 @@ pub(crate) fn collect_glob_matches(
         max_matches,
         &mut items,
         &mut truncated,
+        &mut walk,
+        &mut ignores,
     )?;
-    Ok(Collected { items, truncated })
+    Ok(Collected {
+        items,
+        truncated,
+        walk: walk.into_stats(),
+    })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_glob_matches_inner(
     context: &RunnerContext,
     traversal_root: &Path,
     dir: &Path,
-    pattern: &Pattern,
+    pattern: &GlobMatcher,
     max_matches: usize,
     matches: &mut Vec<FilesystemEntry>,
     truncated: &mut bool,
+    walk: &mut WalkState,
+    ignores: &mut GitignoreStack,
 ) -> Result<()> {
-    for entry in sorted_children(dir)? {
-        if *truncated {
+    let pushed = ignores.push_dir(dir);
+    for entry in sorted_children(context, dir, walk)? {
+        if *truncated || walk.exhausted() {
             break;
         }
-        let path = entry.path();
-        if should_ignore_path(traversal_root, &path) {
-            continue;
-        }
-        let metadata = match entry.metadata() {
-            Ok(metadata) => metadata,
-            Err(error) if should_skip_io_error(&error) => continue,
-            Err(error) => return Err(error.into()),
+        let (path, is_dir) = match admit_next(context, traversal_root, &entry, walk, ignores) {
+            Admitted::Skip => continue,
+            Admitted::Stop => break,
+            Admitted::Entry { path, is_dir } => (path, is_dir),
         };
         let display = context.display_path(&path);
-        if pattern.matches(&display) {
+        if pattern.is_match(&display) {
             if matches.len() >= max_matches {
                 *truncated = true;
                 break;
             }
             matches.push(FilesystemEntry {
                 path: display,
-                entry_type: if metadata.is_dir() {
-                    "directory"
-                } else {
-                    "file"
-                },
+                entry_type: if is_dir { "directory" } else { "file" },
             });
         }
-        if metadata.is_dir() {
+        if is_dir {
             collect_glob_matches_inner(
                 context,
                 traversal_root,
@@ -73,8 +77,11 @@ fn collect_glob_matches_inner(
                 max_matches,
                 matches,
                 truncated,
+                walk,
+                ignores,
             )?;
         }
     }
+    ignores.pop(pushed);
     Ok(())
 }

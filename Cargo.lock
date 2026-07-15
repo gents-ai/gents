@@ -6724,7 +6724,6 @@ dependencies = [
  "dirs 5.0.1",
  "events",
  "futures",
- "glob",
  "hostname",
  "identity",
  "jsonschema",
@@ -6971,7 +6970,9 @@ name = "defra-native-fs-runner"
 version = "0.6.12"
 dependencies = [
  "anyhow",
- "glob",
+ "globset",
+ "ignore",
+ "regex",
  "serde",
  "serde_json",
 ]

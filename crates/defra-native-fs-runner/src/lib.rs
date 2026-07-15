@@ -27,6 +27,8 @@ pub fn self_test() -> Result<()> {
             path: Some(".".to_string()),
             max_matches: 10,
             raw_json: false,
+            max_entries_visited: None,
+            max_wall_ms: None,
         }),
     )?;
     let _ = std::fs::remove_dir_all(&root);
@@ -64,6 +66,8 @@ mod tests {
                 recursive: false,
                 max_entries: 10,
                 raw_json: false,
+                max_entries_visited: None,
+                max_wall_ms: None,
             }),
         )
         .unwrap();
@@ -92,6 +96,9 @@ mod tests {
                 case_sensitive: true,
                 max_matches: 10,
                 raw_json: false,
+                max_entries_visited: None,
+                max_bytes_read: None,
+                max_wall_ms: None,
             }),
         )
         .unwrap();

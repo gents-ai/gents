@@ -112,7 +112,7 @@ impl Tool for ListFilesTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
-                "List files and directories under the allowed root ({}). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact text with stable defra_fs metadata and skips common generated directories by default. Set raw_json=true for structured JSON.",
+                "List files and directories under the allowed root ({}). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact text with stable defra_fs metadata, skips common generated directories and paths ignored by in-tree .gitignore files by default, and reports walk stats; large walks stop at a budget with partial results (walk.budget_exhausted=true). Set raw_json=true for structured JSON.",
                 self.context.root().display()
             ),
             parameters: serde_json::json!({
@@ -153,6 +153,8 @@ impl Tool for ListFilesTool {
                     recursive: args.recursive,
                     max_entries: args.max_entries.max(1).min(self.default_max_entries.max(1)),
                     raw_json: args.raw_json,
+                    max_entries_visited: None,
+                    max_wall_ms: None,
                 }),
                 Self::NAME,
             )
@@ -252,7 +254,7 @@ impl Tool for GlobTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Find files matching a glob pattern under the allowed root. Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact text with stable defra_fs metadata and skips common generated directories by default. Set raw_json=true for structured JSON.".to_string(),
+            description: "Find files matching a glob pattern (supports *, ?, **, [..], and {a,b} alternation) under the allowed root. Relative paths resolve from the active request workspace when one is provided, otherwise from the root. The pattern is matched against the FULL path relative to that directory, so it must include every leading directory (or start with **/); check the search_dir_entries / pattern_prefix_exists fields on a zero-match result before retrying. Returns compact text with stable defra_fs metadata, skips common generated directories and paths ignored by in-tree .gitignore files by default, and reports walk stats; large walks stop at a budget with partial results (walk.budget_exhausted=true). Set raw_json=true for structured JSON.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -291,6 +293,8 @@ impl Tool for GlobTool {
                     path: args.path,
                     max_matches: args.max_matches.min(self.default_max_matches).max(1),
                     raw_json: args.raw_json,
+                    max_entries_visited: None,
+                    max_wall_ms: None,
                 }),
                 Self::NAME,
             )
@@ -308,13 +312,13 @@ impl Tool for GrepTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Search text files under the allowed root for a substring. Relative paths resolve from the active request workspace when one is provided, otherwise from the root. The path may be a directory or a single file. Returns compact path:Lline matches with stable defra_fs metadata and skips common generated directories by default. Set raw_json=true for structured JSON.".to_string(),
+            description: "Search text files under the allowed root with a regular expression (Rust regex syntax, case-insensitive by default; a pattern that fails to parse as regex is used as a literal substring — the result metadata reports pattern_syntax accordingly). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. The path may be a directory or a single file; prefer passing the narrowest directory you can. Returns compact path:Lline matches with stable defra_fs metadata, skips common generated directories, paths ignored by in-tree .gitignore files, oversized files, and binary files by default, and reports walk stats; large walks stop at a budget with partial results (walk.budget_exhausted=true). Set raw_json=true for structured JSON.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Literal substring to search for in UTF-8 text files."
+                        "description": "Regular expression (Rust regex syntax) matched against each line. Patterns that fail to parse as regex are matched as literal substrings."
                     },
                     "path": {
                         "type": "string",
@@ -353,6 +357,9 @@ impl Tool for GrepTool {
                     case_sensitive: args.case_sensitive,
                     max_matches: args.max_matches.min(self.default_max_matches).max(1),
                     raw_json: args.raw_json,
+                    max_entries_visited: None,
+                    max_bytes_read: None,
+                    max_wall_ms: None,
                 }),
                 Self::NAME,
             )

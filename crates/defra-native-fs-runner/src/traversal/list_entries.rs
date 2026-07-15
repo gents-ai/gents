@@ -4,16 +4,18 @@ use anyhow::Result;
 
 use crate::context::RunnerContext;
 use crate::model::{Collected, FilesystemEntry};
-use crate::traversal::common::{should_ignore_path, should_skip_io_error, sorted_children};
+use crate::traversal::common::{admit_next, sorted_children, Admitted, GitignoreStack, WalkState};
 
 pub(crate) fn collect_entries(
     context: &RunnerContext,
     dir: &Path,
     recursive: bool,
     max_entries: usize,
+    mut walk: WalkState,
 ) -> Result<Collected<FilesystemEntry>> {
     let mut items = Vec::new();
     let mut truncated = false;
+    let mut ignores = GitignoreStack::new();
     collect_entries_inner(
         context,
         dir,
@@ -22,10 +24,17 @@ pub(crate) fn collect_entries(
         max_entries,
         &mut items,
         &mut truncated,
+        &mut walk,
+        &mut ignores,
     )?;
-    Ok(Collected { items, truncated })
+    Ok(Collected {
+        items,
+        truncated,
+        walk: walk.into_stats(),
+    })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_entries_inner(
     context: &RunnerContext,
     traversal_root: &Path,
@@ -34,19 +43,18 @@ fn collect_entries_inner(
     max_entries: usize,
     entries: &mut Vec<FilesystemEntry>,
     truncated: &mut bool,
+    walk: &mut WalkState,
+    ignores: &mut GitignoreStack,
 ) -> Result<()> {
-    for entry in sorted_children(dir)? {
-        if *truncated {
+    let pushed = ignores.push_dir(dir);
+    for entry in sorted_children(context, dir, walk)? {
+        if *truncated || walk.exhausted() {
             break;
         }
-        let path = entry.path();
-        if should_ignore_path(traversal_root, &path) {
-            continue;
-        }
-        let metadata = match entry.metadata() {
-            Ok(metadata) => metadata,
-            Err(error) if should_skip_io_error(&error) => continue,
-            Err(error) => return Err(error.into()),
+        let (path, is_dir) = match admit_next(context, traversal_root, &entry, walk, ignores) {
+            Admitted::Skip => continue,
+            Admitted::Stop => break,
+            Admitted::Entry { path, is_dir } => (path, is_dir),
         };
         if entries.len() >= max_entries {
             *truncated = true;
@@ -54,13 +62,9 @@ fn collect_entries_inner(
         }
         entries.push(FilesystemEntry {
             path: context.display_path(&path),
-            entry_type: if metadata.is_dir() {
-                "directory"
-            } else {
-                "file"
-            },
+            entry_type: if is_dir { "directory" } else { "file" },
         });
-        if recursive && metadata.is_dir() {
+        if recursive && is_dir {
             collect_entries_inner(
                 context,
                 traversal_root,
@@ -69,8 +73,11 @@ fn collect_entries_inner(
                 max_entries,
                 entries,
                 truncated,
+                walk,
+                ignores,
             )?;
         }
     }
+    ignores.pop(pushed);
     Ok(())
 }
