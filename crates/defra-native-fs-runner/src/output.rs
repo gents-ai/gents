@@ -71,6 +71,8 @@ pub(crate) struct GrepMetadata {
     pub(crate) truncated: bool,
     pub(crate) default_ignored: &'static [&'static str],
     pub(crate) bytes_read: u64,
+    pub(crate) skipped_large_files: usize,
+    pub(crate) skipped_binary_files: usize,
     pub(crate) walk: WalkStats,
 }
 

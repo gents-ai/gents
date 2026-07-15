@@ -165,6 +165,7 @@ fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
         walk,
     )?;
     let bytes_read = collected.bytes_read;
+    let file_stats = collected.file_stats;
     let collected = collected.collected;
     let mut files_with_matches = BTreeSet::new();
     let matches = collected
@@ -195,6 +196,8 @@ fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
             truncated,
             default_ignored: default_ignored_names(),
             bytes_read,
+            skipped_large_files: file_stats.skipped_large_files,
+            skipped_binary_files: file_stats.skipped_binary_files,
             walk: collected.walk,
         },
         matches,
