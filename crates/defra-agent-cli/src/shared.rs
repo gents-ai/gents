@@ -74,6 +74,64 @@ pub(crate) struct StoredInitConfig {
 
 /// Operator-visible P2P admission bounds in effect for this server process.
 ///
+/// The Codex shim's live binding, as `/healthz` sees it (#699).
+///
+/// The shim used to be invisible to every health surface, so a node could report
+/// `ok: true` while its advertised WebSocket port was closed — which is exactly
+/// how a fleet-wide bring-up looked healthy while no operator could reach a
+/// single agent. The state is shared because the shim may bind *after* the HTTP
+/// surface is already serving: the supervisor flips it when a published
+/// generation makes the bound behavior runnable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CodexShimHealth {
+    /// `--no-codex-shim`: not an error, and not a thing to report as degraded.
+    Off,
+    /// Listening on its port.
+    Listening { websocket: String },
+    /// Waiting for the control plane to supply the bound behavior. Transient by
+    /// construction — the supervisor binds on the generation that carries it.
+    Pending {
+        bound_behavior_id: String,
+        reason: String,
+    },
+    /// A host resource we cannot get. No generation retracts this.
+    Disabled { reason: String },
+}
+
+impl CodexShimHealth {
+    /// Whether this state should show up as a degraded check. `Off` is a
+    /// deliberate operator choice, and a live listener is fine; everything else
+    /// means the advertised port is closed.
+    pub(crate) fn is_degraded(&self) -> bool {
+        matches!(self, Self::Pending { .. } | Self::Disabled { .. })
+    }
+
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        match self {
+            Self::Off => serde_json::json!({ "status": "off" }),
+            Self::Listening { websocket } => serde_json::json!({
+                "status": "ok",
+                "websocket": websocket,
+            }),
+            Self::Pending {
+                bound_behavior_id,
+                reason,
+            } => serde_json::json!({
+                "status": "pending",
+                "bound_behavior_id": bound_behavior_id,
+                "reason": reason,
+            }),
+            Self::Disabled { reason } => serde_json::json!({
+                "status": "disabled",
+                "reason": reason,
+            }),
+        }
+    }
+}
+
+/// Shared so the shim supervisor can flip it long after `/healthz` started serving.
+pub(crate) type CodexShimHealthHandle = std::sync::Arc<std::sync::RwLock<CodexShimHealth>>;
+
 /// Persisted so `/status`, `defra-agent status`, and `/metrics` can report the
 /// knobs that matter during hub saturation (#630) without re-resolving CLI args.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -50,6 +50,10 @@ pub(crate) struct RuntimeHttpState {
     /// Shared HTTP client for P2P self-status fetches on the scrape path
     /// (reuses connection pool; do not rebuild per scrape — #670).
     pub(crate) p2p_http_client: reqwest::Client,
+    /// The Codex shim's live binding. Shared because the shim may bind after the
+    /// HTTP surface is already serving (#699). `None` when the host does not run
+    /// a shim at all (embedders, desktop).
+    pub(crate) codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
 }
 
 pub(crate) fn runtime_contract_router(
@@ -62,6 +66,7 @@ pub(crate) fn runtime_contract_router(
     defra_query_mcp_scope: Option<CollectionScope>,
     backend_health: Option<defra_agent::BackendHealthMap>,
     p2p_admission: Option<P2pAdmissionState>,
+    codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
 ) -> Router {
     let graphql_for_mcp = graphql.clone();
     // Prefer the process-wide P2P client so CLI admin paths and /metrics share
@@ -82,6 +87,7 @@ pub(crate) fn runtime_contract_router(
         p2p_admission,
         p2p_metrics_cache: Arc::new(Mutex::new(None)),
         p2p_http_client,
+        codex_shim_health,
     };
 
     let mut router = Router::new()
@@ -520,6 +526,7 @@ mod tests {
             p2p_admission: None,
             p2p_metrics_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
             p2p_http_client: reqwest::Client::new(),
+            codex_shim_health: None,
         }
     }
 

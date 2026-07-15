@@ -30,10 +30,24 @@ pub(crate) fn render_healthz_payload(
                 .iter()
                 .any(|backend| backend.enabled && backend.probe_status != "healthy");
             let liveness_degraded = data.liveness.expired_processing_count > 0;
+            // A closed shim port used to be invisible here, so a node reported
+            // ok:true while nothing could reach its operator UI (#699). It stays
+            // `ok` (the runtime really is serving) but must be visible.
+            let codex_shim = state
+                .codex_shim_health
+                .as_ref()
+                .and_then(|handle| handle.read().ok().map(|health| health.clone()));
+            let codex_shim_degraded = codex_shim
+                .as_ref()
+                .is_some_and(|health| health.is_degraded());
             let ok = runtime_ready;
             let status = if !runtime_ready {
                 "unhealthy"
-            } else if runtime_degraded || backend_degraded || liveness_degraded {
+            } else if runtime_degraded
+                || backend_degraded
+                || liveness_degraded
+                || codex_shim_degraded
+            {
                 "degraded"
             } else {
                 "ok"
@@ -50,14 +64,7 @@ pub(crate) fn render_healthz_payload(
             let backend_status = if backend_degraded { "degraded" } else { "ok" };
             let liveness_status = if liveness_degraded { "degraded" } else { "ok" };
 
-            json!({
-                "status": status,
-                "ok": ok,
-                "service": SERVICE_NAME,
-                "version": version.version,
-                "started_at": state.started_at,
-                "uptime_seconds": uptime_seconds,
-                "checks": {
+            let mut checks = json!({
                     "http": {
                         "status": "ok",
                     },
@@ -84,7 +91,19 @@ pub(crate) fn render_healthz_payload(
                         "ignored_foreign_processing_count": data.liveness.ignored_foreign_processing_count,
                         "ignored_foreign_tool_call_count": data.liveness.ignored_foreign_tool_call_count,
                     },
-                },
+            });
+            if let Some(health) = codex_shim.as_ref() {
+                checks["codex_shim"] = health.to_json();
+            }
+
+            json!({
+                "status": status,
+                "ok": ok,
+                "service": SERVICE_NAME,
+                "version": version.version,
+                "started_at": state.started_at,
+                "uptime_seconds": uptime_seconds,
+                "checks": checks,
                 "runtimes": data.agent_runtimes,
                 "backends": data.inference_backends,
                 "liveness": data.liveness,
@@ -141,6 +160,7 @@ mod tests {
             p2p_admission: None,
             p2p_metrics_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
             p2p_http_client: reqwest::Client::new(),
+            codex_shim_health: None,
         }
     }
 
@@ -245,5 +265,80 @@ mod tests {
         let payload = render_healthz_payload(&state(), Some(&data), None);
 
         assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("ok"));
+    }
+
+    fn state_with_shim(health: crate::shared::CodexShimHealth) -> RuntimeHttpState {
+        let mut state = state();
+        state.codex_shim_health = Some(std::sync::Arc::new(std::sync::RwLock::new(health)));
+        state
+    }
+
+    fn healthy_data() -> MetricsQueryData {
+        MetricsQueryData {
+            agent_runtimes: vec![ready_runtime()],
+            inference_backends: vec![healthy_backend()],
+            liveness: RuntimeLivenessSnapshot::default(),
+        }
+    }
+
+    /// #699: a node reported `ok: true` while the shim's advertised port was
+    /// closed, so a fleet-wide bring-up looked healthy with every operator UI
+    /// unreachable. A shim that is not serving must be visible.
+    #[test]
+    fn healthz_reports_a_pending_shim_as_degraded() {
+        let state = state_with_shim(crate::shared::CodexShimHealth::Pending {
+            bound_behavior_id: "default".to_string(),
+            reason: "no AgentBehavior document with that behavior_id exists".to_string(),
+        });
+        let payload = render_healthz_payload(&state, Some(&healthy_data()), None);
+
+        assert_eq!(
+            payload
+                .pointer("/checks/codex_shim/status")
+                .and_then(Value::as_str),
+            Some("pending"),
+            "a shim waiting for its behavior must be visible in /healthz; payload was {payload}"
+        );
+        assert_eq!(
+            payload.get("status").and_then(Value::as_str),
+            Some("degraded"),
+            "a closed shim port must not read as fully healthy; payload was {payload}"
+        );
+        assert_eq!(
+            payload.get("ok").and_then(Value::as_bool),
+            Some(true),
+            "the runtime is still serving, so /healthz stays 200 OK"
+        );
+    }
+
+    #[test]
+    fn healthz_reports_a_listening_shim_as_ok() {
+        let state = state_with_shim(crate::shared::CodexShimHealth::Listening {
+            websocket: "ws://127.0.0.1:9292/".to_string(),
+        });
+        let payload = render_healthz_payload(&state, Some(&healthy_data()), None);
+
+        assert_eq!(
+            payload
+                .pointer("/checks/codex_shim/status")
+                .and_then(Value::as_str),
+            Some("ok")
+        );
+        assert_eq!(payload.get("status").and_then(Value::as_str), Some("ok"));
+    }
+
+    /// `--no-codex-shim` is a deliberate operator choice, not a degradation.
+    #[test]
+    fn healthz_does_not_degrade_when_the_shim_is_switched_off() {
+        let state = state_with_shim(crate::shared::CodexShimHealth::Off);
+        let payload = render_healthz_payload(&state, Some(&healthy_data()), None);
+
+        assert_eq!(
+            payload
+                .pointer("/checks/codex_shim/status")
+                .and_then(Value::as_str),
+            Some("off")
+        );
+        assert_eq!(payload.get("status").and_then(Value::as_str), Some("ok"));
     }
 }

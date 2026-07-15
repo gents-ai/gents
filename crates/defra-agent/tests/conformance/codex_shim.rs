@@ -168,3 +168,102 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
         .lean_theorems
         .contains(&"CodexShim.interrupt_step_is_terminal".to_string()));
 }
+
+/// Fence for the runnable-gated shim binding (#699).
+///
+/// Drives the real `ShimBinding` through every vector the Lean model emits. The
+/// shim disabled itself at boot on an empty store and never rebound when
+/// `config apply` later made the behavior runnable; these vectors pin that a
+/// published generation — not a process restart — is what binds it.
+pub(super) fn generated_codex_shim_binding_cases_pin_runnable_gated_binding() {
+    use defra_agent::codex_shim_binding::{ShimBinding, ShimBindingState, ShimUnboundReason};
+
+    let cases = lean_codex_shim_binding_cases();
+    assert_eq!(
+        cases.len(),
+        5,
+        "the Lean binding contract must stay fully consumed"
+    );
+
+    const BOUND_BEHAVIOR: &str = "default";
+
+    let reason_of = |state: ShimBindingState| match state {
+        ShimBindingState::Bound => None,
+        ShimBindingState::Unbound(ShimUnboundReason::DependencyMissing) => {
+            Some("dependencyMissing")
+        }
+        ShimBindingState::Unbound(ShimUnboundReason::HostResource) => Some("hostResource"),
+    };
+
+    for case in cases {
+        assert!(
+            !case.requires_restart,
+            "{}: convergence must follow from a published generation, never a restart",
+            case.witness
+        );
+
+        let mut shim = match (case.pre_state.as_str(), case.unbound_reason.as_deref()) {
+            ("bound", None) => ShimBinding::bound(BOUND_BEHAVIOR),
+            ("unbound", Some("dependencyMissing")) => {
+                ShimBinding::unbound(BOUND_BEHAVIOR, ShimUnboundReason::DependencyMissing)
+            }
+            ("unbound", Some("hostResource")) => {
+                ShimBinding::unbound(BOUND_BEHAVIOR, ShimUnboundReason::HostResource)
+            }
+            other => panic!("{}: unmodeled pre-state {other:?}", case.witness),
+        };
+
+        // The published generation either carries the bound behavior as runnable
+        // or it does not.
+        let runnable: Vec<&str> = if case.bound_behavior_runnable {
+            vec!["other", BOUND_BEHAVIOR]
+        } else {
+            vec!["other"]
+        };
+
+        // The listener is only ever acquired when the generation authorizes it.
+        let mut listen_attempts = 0usize;
+        let host_can_listen = case.host_can_listen;
+        let state = shim.observe_publish(runnable.iter().copied(), || {
+            listen_attempts += 1;
+            host_can_listen
+        });
+
+        let observed = if shim.is_bound() { "bound" } else { "unbound" };
+        assert_eq!(
+            observed, case.post_state,
+            "{}: observing a published generation must land in the modeled state",
+            case.witness
+        );
+        assert_eq!(
+            reason_of(state),
+            case.post_unbound_reason.as_deref(),
+            "{}: the unbound class decides whether a later generation may revive \
+             the shim; it must match the model",
+            case.witness
+        );
+
+        // The listener is acquired only when the dependency was actually
+        // supplied — never speculatively, and never for a host-resource fixpoint.
+        let expected_attempts = usize::from(
+            case.bound_behavior_runnable
+                && case.pre_state == "unbound"
+                && case.unbound_reason.as_deref() == Some("dependencyMissing"),
+        );
+        assert_eq!(
+            listen_attempts, expected_attempts,
+            "{}: the host must attempt the listen exactly when the generation grants it",
+            case.witness
+        );
+
+        // Re-observing the same generation must change nothing
+        // (CodexShim.Binding.Shim.observePublish_idempotent).
+        let settled = shim.clone();
+        shim.observe_publish(runnable.iter().copied(), || host_can_listen);
+        assert_eq!(
+            shim, settled,
+            "{}: re-observing one generation must be idempotent",
+            case.witness
+        );
+    }
+}

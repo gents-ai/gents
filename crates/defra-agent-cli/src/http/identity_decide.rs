@@ -314,6 +314,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;

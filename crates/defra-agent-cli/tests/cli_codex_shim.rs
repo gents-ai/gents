@@ -4307,7 +4307,7 @@ async fn read_token_usage_notification(ws: &mut ShimWebSocket) -> Result<codex::
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_disables_itself_when_bound_behavior_is_missing() -> Result<()> {
+async fn codex_shim_waits_for_a_missing_bound_behavior_instead_of_disabling() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -4332,9 +4332,11 @@ async fn codex_shim_disables_itself_when_bound_behavior_is_missing() -> Result<(
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
-    // Point the shim at a behavior_id that doesn't exist. The shim runs by
-    // default, so its startup precondition must not take the runtime down:
-    // the endpoint is disabled with guidance and the server keeps serving.
+    // Point the shim at a behavior_id that doesn't exist. A missing behavior is
+    // something the control plane can still supply, so the shim must WAIT for it
+    // rather than disable itself for the life of the process (#699). The port
+    // stays closed — there is nothing to serve yet — and the server keeps
+    // serving everything else.
     let mut serve = spawn_server_with_env(
         &home_dir,
         server_port,
@@ -4352,16 +4354,25 @@ async fn codex_shim_disables_itself_when_bound_behavior_is_missing() -> Result<(
 
     let (_stdout, stderr) = serve.captured_output()?;
     assert!(
-        stderr.contains("Codex endpoint disabled"),
-        "expected the shim to degrade rather than kill the server; got:\n{stderr}"
+        stderr.contains("Codex endpoint pending"),
+        "a missing bound behavior is suppliable, so the shim must wait rather than \
+         disable itself; got:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Codex endpoint disabled"),
+        "a missing behavior must not be reported as a terminal disable (#699); got:\n{stderr}"
     );
     assert!(
         stderr.contains("behavior-that-does-not-exist"),
-        "expected stderr to name the missing behavior id; got:\n{stderr}"
+        "expected stderr to name the behavior it is waiting for; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("no restart needed"),
+        "the operator must be told the shim converges on its own; got:\n{stderr}"
     );
     assert!(
         std::net::TcpStream::connect(("127.0.0.1", shim_port)).is_err(),
-        "shim port should not be listening after a failed bind precondition"
+        "the shim port must stay closed while its bound behavior does not exist"
     );
     Ok(())
 }
@@ -6241,5 +6252,123 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
         "re-import of export must round-trip"
     );
 
+    Ok(())
+}
+
+/// The #699 regression: a shim that boots with no bound behavior must bind
+/// itself when a later `config apply` makes that behavior runnable — with no
+/// restart.
+///
+/// This is what stranded all 19 fleet agents: they came up server-first on empty
+/// stores, the shim found no behavior and disabled itself permanently, and the
+/// manifest that arrived seconds later reconciled the runtime while the shim's
+/// port stayed closed behind a green /healthz.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-codex-shim-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "irrelevant")?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    let root_str = root.to_str().expect("utf-8 root");
+    run_cli_text(&home_dir, &["config", "export", "--root", root_str])?;
+
+    // Bind the shim to a behavior the store does not have yet. This is the
+    // empty-store bring-up, reduced to its essential shape.
+    const LATE_BEHAVIOR: &str = "late-arriving-behavior";
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-behavior-id",
+            LATE_BEHAVIOR,
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    // The runtime is up and healthy, but the shim has nothing to serve yet.
+    assert!(
+        std::net::TcpStream::connect(("127.0.0.1", shim_port)).is_err(),
+        "the shim must not listen before its bound behavior exists"
+    );
+
+    // Now supply the behavior the shim is waiting for, exactly as the fleet did:
+    // through the manifest, against the already-running server.
+    let behaviors_dir = root.join("agent-behaviors");
+    let existing = fs::read_dir(&behaviors_dir)
+        .context("reading agent-behaviors dir after export")?
+        .next()
+        .ok_or_else(|| anyhow!("no agent-behavior subdirs after export"))??;
+    let late_dir = behaviors_dir.join(LATE_BEHAVIOR);
+    fs::create_dir_all(&late_dir)?;
+    // Copy the whole behavior directory: the manifest carries sidecars
+    // (system_prompt.md) that object.json references by relative path.
+    for entry in fs::read_dir(existing.path()).context("reading exported behavior dir")? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            fs::copy(entry.path(), late_dir.join(entry.file_name()))?;
+        }
+    }
+    let mut behavior = read_json_file(&late_dir.join("object.json"))?;
+    behavior["behavior_id"] = Value::String(LATE_BEHAVIOR.to_string());
+    write_json_file(&late_dir.join("object.json"), &behavior)?;
+
+    let applied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        applied.get("ok").and_then(Value::as_bool),
+        Some(true),
+        "config apply must succeed: {applied}"
+    );
+
+    // The shim must now bind itself off the published generation. No restart.
+    let deadline = std::time::Instant::now() + Duration::from_secs(45);
+    loop {
+        if std::net::TcpStream::connect(("127.0.0.1", shim_port)).is_ok() {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let (_stdout, stderr) = serve.captured_output()?;
+            panic!(
+                "the shim never bound after `config apply` supplied behavior {LATE_BEHAVIOR:?} \
+                 — this is #699: the port stays closed until the process restarts.\nstderr:\n{stderr}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    let (_stdout, stderr) = serve.captured_output()?;
+    assert!(
+        stderr.contains("Codex endpoint bound"),
+        "the operator must see the shim converge; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("no restart was needed"),
+        "the fix is that no restart is needed; got:\n{stderr}"
+    );
     Ok(())
 }

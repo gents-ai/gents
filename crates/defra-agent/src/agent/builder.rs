@@ -229,6 +229,7 @@ impl DefraAgentBuilder {
             backend_prober_options: crate::backend_health::BackendProberOptions::default(),
             backend_health: crate::backend_health::BackendHealthMap::new(),
             process_state_observer: self.process_state_observer,
+            runtime_snapshot_observer: None,
             startup_readiness: Default::default(),
             rendered_request_capture_factory: self.rendered_request_capture_factory,
             manual_trigger_handle: Arc::new(tokio::sync::OnceCell::new()),

@@ -24,3 +24,17 @@ pub(crate) struct LeanCodexShimTurnLifecycleCase {
     pub(crate) post_lex_ord: usize,
     pub(crate) monotonic: bool,
 }
+
+/// Binding vectors for the runnable-gated Codex shim (#699).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanCodexShimBindingCase {
+    pub(crate) witness: String,
+    pub(crate) lean_theorems: Vec<String>,
+    pub(crate) pre_state: String,
+    pub(crate) unbound_reason: Option<String>,
+    pub(crate) bound_behavior_runnable: bool,
+    pub(crate) host_can_listen: bool,
+    pub(crate) post_state: String,
+    pub(crate) post_unbound_reason: Option<String>,
+    pub(crate) requires_restart: bool,
+}

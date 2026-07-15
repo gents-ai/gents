@@ -758,6 +758,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CodexShimProjectionCases".to_string(),
         ));
     }
+    if !lean_codex_shim_binding_cases().is_empty() {
+        emitted.insert((
+            "codex_shim_binding_cases".to_string(),
+            "CodexShimBindingCases".to_string(),
+        ));
+    }
     if !lean_startup_readiness_cases().is_empty() {
         emitted.insert((
             "startup_readiness_cases".to_string(),
@@ -854,6 +860,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "identity_contracts",
         "r4c_background_work_cases",
         "codex_shim_projection_cases",
+        "codex_shim_binding_cases",
         "startup_readiness_cases",
         "codex_shim_turn_lifecycle_cases",
         "r6_background_cases",

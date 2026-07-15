@@ -14,6 +14,7 @@ pub mod background_completion;
 pub(crate) mod background_tools;
 pub mod chatgpt_codex;
 pub mod chatgpt_oauth_refresh;
+pub mod codex_shim_binding;
 pub mod collection;
 pub mod compaction;
 pub(crate) mod completion_factory;
@@ -109,7 +110,7 @@ pub use admission::BackendAdmissionConfig;
 pub use admission::{InferenceCall, InferenceCallRecoveryReport};
 pub use agent::{
     BehaviorBuilder, DefraAgent, DefraAgentBuilder, DocumentRuntimeOptions,
-    ProcessLifecycleObserver, ProcessLifecycleState,
+    ProcessLifecycleObserver, ProcessLifecycleState, RuntimeSnapshotObserver,
 };
 pub use backend_health::{
     probe_backends_cycle, run_backend_probe_cycle, spawn_backend_prober, BackendHealthMap,

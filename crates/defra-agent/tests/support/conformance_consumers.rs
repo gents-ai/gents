@@ -497,6 +497,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_codex_shim_projection_cases_pin_adapter_mapping",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::generated_codex_shim_binding_cases_pin_runnable_gated_binding",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_codex_shim_binding_cases_pin_runnable_gated_binding",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::generated_startup_readiness_cases_pin_bounded_barrier_release",
             package: "defra-agent",
             source_path: "crates/defra-agent/tests/conformance.rs",

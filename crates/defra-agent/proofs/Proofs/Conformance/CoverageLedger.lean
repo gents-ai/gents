@@ -687,6 +687,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "codex_shim_binding_cases"
+      "CodexShimBindingCases"
+      "conformance::generated_codex_shim_binding_cases_pin_runnable_gated_binding")
+      "codex-shim" [Surface.api, Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "transcript_cases"
       "TranscriptConformanceCases"
       "conformance::generated_transcript_cases_drive_agent_message_ordering_contract")
