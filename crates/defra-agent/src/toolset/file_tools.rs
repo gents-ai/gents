@@ -613,10 +613,12 @@ impl Tool for EditFileTool {
             Some("insert_after") => Operation::InsertAfter,
             Some("insert_before") => Operation::InsertBefore,
             Some("delete") => Operation::Delete,
-            Some(other) => return Err(anyhow!(
+            Some(other) => {
+                return Err(anyhow!(
                 "unknown operation {other:?}; valid: replace, insert_after, insert_before, delete"
             )
-            .into()),
+                .into())
+            }
         };
         let match_mode = match args.match_mode.as_deref() {
             None | Some("ladder") => MatchMode::Ladder,

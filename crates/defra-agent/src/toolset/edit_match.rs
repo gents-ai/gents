@@ -509,7 +509,7 @@ fn closest_match(content_lines: &[&str], pattern_lines: &[&str]) -> Option<Close
             .map(|(k, p)| similarity(content_lines[i + k].trim(), p.trim()))
             .sum::<f64>()
             / pattern_lines.len() as f64;
-        if best.map_or(true, |(_, b)| score > b) {
+        if best.is_none_or(|(_, b)| score > b) {
             best = Some((i, score));
         }
     }
