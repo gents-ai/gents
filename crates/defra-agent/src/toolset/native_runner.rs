@@ -12,6 +12,19 @@ use crate::tool_call_lifecycle::runtime::{
 
 const MAX_NATIVE_RUNNER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const RUNNER_ENV: &str = "DEFRA_NATIVE_FS_RUNNER";
+/// Hard backstop for a single filesystem-tool call (#729). The runner bounds
+/// itself with in-process walk budgets and returns partial results well
+/// before this; the cap only kills a wedged runner. Without it the only
+/// bound is the request deadline, which can be hours.
+const MAX_FS_RUNNER_SECONDS: i64 = 120;
+
+fn effective_deadline(
+    request_deadline: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> chrono::DateTime<chrono::Utc> {
+    let cap = now + chrono::Duration::seconds(MAX_FS_RUNNER_SECONDS);
+    request_deadline.map_or(cap, |deadline| deadline.min(cap))
+}
 
 #[derive(Clone)]
 pub(super) struct NativeFsRunner {
@@ -33,7 +46,10 @@ impl NativeFsRunner {
         tool_name: &'static str,
     ) -> Result<String, ToolError> {
         let runtime = current_tool_runtime_context();
-        let deadline_at = runtime.as_ref().and_then(|runtime| runtime.deadline_at);
+        let deadline_at = Some(effective_deadline(
+            runtime.as_ref().and_then(|runtime| runtime.deadline_at),
+            chrono::Utc::now(),
+        ));
         let cancellation_token = runtime
             .as_ref()
             .map(|runtime| runtime.cancellation_token.clone())
@@ -247,6 +263,39 @@ fn decode_runner_response(stdout: &[u8]) -> Result<NativeFsRunnerResponse, ToolE
     serde_json::from_slice(stdout)
         .context("decoding native filesystem runner response")
         .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration as ChronoDuration, Utc};
+
+    #[test]
+    fn effective_deadline_caps_long_request_deadlines() {
+        let now = Utc::now();
+        let request_deadline = now + ChronoDuration::hours(12);
+        let effective = effective_deadline(Some(request_deadline), now);
+        assert_eq!(
+            effective,
+            now + ChronoDuration::seconds(MAX_FS_RUNNER_SECONDS)
+        );
+    }
+
+    #[test]
+    fn effective_deadline_keeps_shorter_request_deadlines() {
+        let now = Utc::now();
+        let request_deadline = now + ChronoDuration::seconds(30);
+        assert_eq!(effective_deadline(Some(request_deadline), now), request_deadline);
+    }
+
+    #[test]
+    fn effective_deadline_bounds_calls_without_request_deadline() {
+        let now = Utc::now();
+        assert_eq!(
+            effective_deadline(None, now),
+            now + ChronoDuration::seconds(MAX_FS_RUNNER_SECONDS)
+        );
+    }
 }
 
 fn truncate_error_preview(text: &str) -> String {
