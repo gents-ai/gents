@@ -596,6 +596,9 @@ fn append_request_items(
         });
     }
 
+    // The runtime performs automatic compaction after accepting this request
+    // and before entering the owned inference/tool loop. Preserve that durable
+    // order in replay: user request, compaction, then model-derived items.
     items.extend(
         compactions
             .iter()
@@ -1091,21 +1094,34 @@ mod tests {
             call_state: "completed".to_string(),
             call_seq: 1,
         }];
+        let response = ResponseRow {
+            request_id: request.request_id.clone(),
+            content: "Done".to_string(),
+            reasoning: String::new(),
+            status: "complete".to_string(),
+            error_message: None,
+            materialized_message_sequence: None,
+            created_at: None,
+            completed_at: None,
+            interrupted_at: None,
+        };
         let mut items = Vec::new();
         append_request_items(
             &record,
             &mut items,
             &request,
-            None,
+            Some(&response),
             Vec::new(),
             &compactions,
             &BTreeMap::new(),
         );
 
-        assert!(items.iter().any(|item| matches!(
-            item,
+        assert!(matches!(items[0], codex::ThreadItem::UserMessage { .. }));
+        assert!(matches!(
+            &items[1],
             codex::ThreadItem::ContextCompaction { id } if id == "compact-1"
-        )));
+        ));
+        assert!(matches!(items[2], codex::ThreadItem::AgentMessage { .. }));
     }
 
     #[test]

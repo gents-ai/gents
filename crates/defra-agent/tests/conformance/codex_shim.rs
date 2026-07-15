@@ -224,6 +224,45 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
         assert_eq!(case.projection_mode, expected, "{}", case.witness);
     }
 
+    let metadata_cases = lean_codex_shim_subagent_metadata_cases();
+    assert_eq!(metadata_cases.len(), 2);
+    for case in metadata_cases {
+        assert_eq!(case.projected_model, case.runtime_model, "{}", case.witness);
+        assert_eq!(
+            case.projected_reasoning_effort, case.runtime_reasoning_effort,
+            "{}: adapter must not invent reasoning effort",
+            case.witness
+        );
+        assert!(case
+            .lean_theorems
+            .contains(&"CodexShim.collab_model_is_runtime_model".to_string()));
+    }
+
+    let listing_cases = lean_codex_shim_subagent_listing_cases();
+    assert_eq!(listing_cases.len(), 5);
+    for case in listing_cases {
+        let source_matches = matches!(
+            case.source_kind.as_str(),
+            "subAgent" | "subAgentThreadSpawn"
+        );
+        assert_eq!(
+            case.listed,
+            case.authorized && source_matches,
+            "{}: listing must require authorization and a spawned-subagent source filter",
+            case.witness
+        );
+    }
+
+    let shape_cases = lean_codex_shim_subagent_thread_shape_cases();
+    assert_eq!(shape_cases.len(), 1);
+    let shape = &shape_cases[0];
+    assert_eq!(
+        shape.native_source_parent.as_deref(),
+        Some(shape.parent_thread_id.as_str())
+    );
+    assert_eq!(shape.legacy_top_level_parent, None);
+    assert_eq!(shape.replay_stages, ["user", "compaction", "modelItems"]);
+
     let context_cases = lean_codex_shim_context_usage_cases();
     assert_eq!(context_cases.len(), 2);
     for case in context_cases {

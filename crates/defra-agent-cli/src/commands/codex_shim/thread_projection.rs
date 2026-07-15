@@ -178,6 +178,34 @@ pub(super) async fn list_codex_threads_by_archived(
     Ok(records)
 }
 
+pub(super) async fn list_codex_subagent_threads_by_archived(
+    state: &ShimState,
+    archived: bool,
+) -> Result<Vec<CodexThreadRecord>> {
+    if archived {
+        return Ok(Vec::new());
+    }
+
+    // Start from durable Codex roots, then walk only their authorized bridge
+    // graph. This keeps thread/list scoped to the same DEFRA authority as
+    // thread/read and avoids a fleet-wide child scan.
+    let mut roots = list_codex_threads_by_archived(state, false).await?;
+    roots.extend(list_codex_threads_by_archived(state, true).await?);
+    let root_ids = roots
+        .into_iter()
+        .map(|record| record.session_id)
+        .collect::<Vec<_>>();
+    let links = load_authorized_subagent_threads_for_root_ids(state, &root_ids).await?;
+    let mut seen = std::collections::HashSet::<String>::new();
+    let mut records = Vec::with_capacity(links.len());
+    for link in links {
+        if seen.insert(link.session_id.clone()) {
+            records.push(assemble_subagent_record(state, link).await?);
+        }
+    }
+    Ok(records)
+}
+
 pub(super) async fn store_forked_codex_thread(
     state: &ShimState,
     source: &CodexThreadRecord,

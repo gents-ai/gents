@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
+use super::bound_behavior::model_selection_id;
 use super::progress::{defra_tool_call_status, DefraToolCallProgress};
 use super::store::query_node_json;
 use super::ShimState;
@@ -25,6 +26,7 @@ pub(super) struct LinkedSubagentThread {
     pub(super) depth: u32,
     pub(super) agent_did: String,
     pub(super) behavior_id: String,
+    pub(super) model: Option<String>,
     pub(super) nickname: String,
     pub(super) lifecycle_state: String,
     pub(super) failure_reason: Option<String>,
@@ -36,6 +38,7 @@ pub(super) struct CollabProjection {
     pub(super) status: codex::CollabAgentToolCallStatus,
     pub(super) tool: codex::CollabAgentTool,
     pub(super) receiver_thread_id: String,
+    pub(super) child_model: Option<String>,
     pub(super) child_lifecycle_state: String,
     pub(super) child_failure_reason: Option<String>,
 }
@@ -78,6 +81,15 @@ struct ToolLinkRow {
     spawn_target_did: Option<String>,
     #[serde(default)]
     args: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct BehaviorPresentationRow {
+    behavior_id: String,
+    #[serde(default)]
+    backend_id: Option<String>,
+    #[serde(default)]
+    model_name: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -257,12 +269,68 @@ async fn load_authorized_subagent_threads_for_roots(
         }
     }
 
-    Ok(resolve_authorized_subagent_threads(
+    let mut links = resolve_authorized_subagent_threads(
         &requests,
         &tools,
         state.agent_did.as_ref(),
         state.behavior_id.as_ref(),
-    ))
+    );
+    attach_runtime_models(state, &mut links).await;
+    Ok(links)
+}
+
+async fn attach_runtime_models(state: &ShimState, links: &mut [LinkedSubagentThread]) {
+    let mut behavior_ids = links
+        .iter()
+        .map(|link| link.behavior_id.clone())
+        .filter(|behavior_id| !behavior_id.trim().is_empty())
+        .collect::<Vec<_>>();
+    behavior_ids.sort_unstable();
+    behavior_ids.dedup();
+    if behavior_ids.is_empty() {
+        return;
+    }
+
+    let query = format!(
+        r#"{{
+            AgentBehavior(filter: {{ behavior_id: {{ _in: [{}] }} }}) {{
+                behavior_id
+                backend_id
+                model_name
+            }}
+        }}"#,
+        graphql_string_list(behavior_ids.iter().map(String::as_str)),
+    );
+    let response = match query_node_json(state.node.as_ref(), &query).await {
+        Ok(response) => response,
+        Err(error) => {
+            // Model metadata is optional presentation data. Authorization and
+            // thread navigation must remain available when an ACP view omits
+            // the child's behavior document.
+            tracing::debug!(%error, "unable to load child behavior model metadata");
+            return;
+        }
+    };
+    let rows = match decode_rows::<BehaviorPresentationRow>(&response, "AgentBehavior") {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::debug!(%error, "unable to decode child behavior model metadata");
+            return;
+        }
+    };
+    let models = rows
+        .into_iter()
+        .filter_map(|row| {
+            let model_name = nonempty(row.model_name.as_deref())?;
+            let model = nonempty(row.backend_id.as_deref())
+                .map(|backend_id| model_selection_id(backend_id, model_name))
+                .unwrap_or_else(|| model_name.to_string());
+            Some((row.behavior_id, model))
+        })
+        .collect::<HashMap<_, _>>();
+    for link in links {
+        link.model = models.get(&link.behavior_id).cloned();
+    }
 }
 
 fn root_requests_query(state: &ShimState, root_session_ids: Option<&[String]>) -> String {
@@ -481,6 +549,7 @@ fn resolve_authorized_subagent_threads(
                 depth: child_depth,
                 agent_did: child.agent_did.clone(),
                 behavior_id,
+                model: None,
                 nickname,
                 lifecycle_state: nonempty(child.lifecycle_state.as_deref())
                     .unwrap_or("pending")
@@ -650,6 +719,7 @@ pub(super) fn collab_projection(tool: &DefraToolCallProgress) -> Option<CollabPr
         status,
         tool: collab_tool,
         receiver_thread_id: link.session_id.clone(),
+        child_model: link.model.clone(),
         child_lifecycle_state: link.lifecycle_state.clone(),
         child_failure_reason: link.failure_reason.clone(),
     })
@@ -699,7 +769,9 @@ pub(super) fn collab_tool_item(
         sender_thread_id: sender_thread_id.to_string(),
         receiver_thread_ids: vec![projection.receiver_thread_id.clone()],
         prompt,
-        model: None,
+        model: (projection.tool == codex::CollabAgentTool::SpawnAgent)
+            .then(|| projection.child_model.clone())
+            .flatten(),
         reasoning_effort: None,
         agents_states,
     }
@@ -963,6 +1035,7 @@ mod tests {
             depth: 1,
             agent_did: "did:child".to_string(),
             behavior_id: "code-review".to_string(),
+            model: Some("child-model".to_string()),
             nickname: "reviewer".to_string(),
             lifecycle_state: "processing".to_string(),
             failure_reason: None,
@@ -979,6 +1052,8 @@ mod tests {
         assert_eq!(value["senderThreadId"], "parent-thread");
         assert_eq!(value["receiverThreadIds"], json!([child_session_id]));
         assert_eq!(value["prompt"], "Inspect the patch");
+        assert_eq!(value["model"], "child-model");
+        assert_eq!(value["reasoningEffort"], Value::Null);
         assert_eq!(
             value.pointer(&format!(
                 "/agentsStates/{}/status",

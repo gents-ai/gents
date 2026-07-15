@@ -630,6 +630,7 @@ fn prime_projection_from_turn(
                 tool,
                 status,
                 receiver_thread_ids,
+                model,
                 agents_states,
                 ..
             } => {
@@ -644,6 +645,7 @@ fn prime_projection_from_turn(
                             status: status.clone(),
                             tool: tool.clone(),
                             receiver_thread_id: receiver_thread_id.clone(),
+                            child_model: model.clone(),
                             child_lifecycle_state: child
                                 .map(|state| collab_lifecycle_state(&state.status))
                                 .unwrap_or("pending")

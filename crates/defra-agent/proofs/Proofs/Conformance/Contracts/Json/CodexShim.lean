@@ -416,6 +416,147 @@ def codexShimSubagentVisibilityCasesJson : String :=
   jsonArray
     (codexShimSubagentVisibilityCases.map codexShimSubagentVisibilityCaseJson)
 
+structure CodexShimSubagentMetadataCase where
+  witness : String
+  leanTheorems : List String
+  runtimeModel : Option String
+  runtimeReasoningEffort : Option String
+  projectedModel : Option String
+  projectedReasoningEffort : Option String
+
+def codexShimSubagentMetadataCaseJson
+    (witness : CodexShimSubagentMetadataCase) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString witness.witness ++ ","
+    ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
+    ++ "\"runtime_model\":" ++ jsonOptionalString witness.runtimeModel ++ ","
+    ++ "\"runtime_reasoning_effort\":"
+      ++ jsonOptionalString witness.runtimeReasoningEffort ++ ","
+    ++ "\"projected_model\":"
+      ++ jsonOptionalString witness.projectedModel ++ ","
+    ++ "\"projected_reasoning_effort\":"
+      ++ jsonOptionalString witness.projectedReasoningEffort
+    ++ "}"
+
+def codexShimSubagentMetadataCases : List CodexShimSubagentMetadataCase :=
+  [ { witness := "codex_shim.subagent_metadata.runtime_model"
+    , leanTheorems := [ "CodexShim.collab_model_is_runtime_model" ]
+    , runtimeModel := some "child-model"
+    , runtimeReasoningEffort := none
+    , projectedModel := some "child-model"
+    , projectedReasoningEffort := none
+    }
+  , { witness := "codex_shim.subagent_metadata.absent_values"
+    , leanTheorems :=
+        [ "CodexShim.collab_model_is_runtime_model"
+        , "CodexShim.absent_runtime_reasoning_effort_stays_absent"
+        ]
+    , runtimeModel := none
+    , runtimeReasoningEffort := none
+    , projectedModel := none
+    , projectedReasoningEffort := none
+    }
+  ]
+
+def codexShimSubagentMetadataCasesJson : String :=
+  jsonArray
+    (codexShimSubagentMetadataCases.map codexShimSubagentMetadataCaseJson)
+
+structure CodexShimSubagentListingCase where
+  witness : String
+  leanTheorems : List String
+  sourceKind : String
+  authorized : Bool
+  listed : Bool
+
+def codexShimSubagentListingCaseJson
+    (witness : CodexShimSubagentListingCase) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString witness.witness ++ ","
+    ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
+    ++ "\"source_kind\":" ++ jsonString witness.sourceKind ++ ","
+    ++ "\"authorized\":" ++ boolString witness.authorized ++ ","
+    ++ "\"listed\":" ++ boolString witness.listed
+    ++ "}"
+
+def codexShimSubagentListingCases : List CodexShimSubagentListingCase :=
+  [ { witness := "codex_shim.subagent_listing.generic"
+    , leanTheorems :=
+        [ "CodexShim.authorized_generic_subagent_filter_lists_child" ]
+    , sourceKind := "subAgent"
+    , authorized := true
+    , listed := true
+    }
+  , { witness := "codex_shim.subagent_listing.thread_spawn"
+    , leanTheorems :=
+        [ "CodexShim.authorized_thread_spawn_filter_lists_child" ]
+    , sourceKind := "subAgentThreadSpawn"
+    , authorized := true
+    , listed := true
+    }
+  , { witness := "codex_shim.subagent_listing.cli"
+    , leanTheorems := [ "CodexShim.cli_filter_does_not_list_spawned_child" ]
+    , sourceKind := "cli"
+    , authorized := true
+    , listed := false
+    }
+  , { witness := "codex_shim.subagent_listing.review"
+    , leanTheorems := [ "CodexShim.review_filter_does_not_list_spawned_child" ]
+    , sourceKind := "subAgentReview"
+    , authorized := true
+    , listed := false
+    }
+  , { witness := "codex_shim.subagent_listing.unauthorized"
+    , leanTheorems := [ "CodexShim.unauthorized_child_never_listed" ]
+    , sourceKind := "subAgentThreadSpawn"
+    , authorized := false
+    , listed := false
+    }
+  ]
+
+def codexShimSubagentListingCasesJson : String :=
+  jsonArray
+    (codexShimSubagentListingCases.map codexShimSubagentListingCaseJson)
+
+structure CodexShimSubagentThreadShapeCase where
+  witness : String
+  leanTheorems : List String
+  parentThreadId : String
+  nativeSourceParent : Option String
+  legacyTopLevelParent : Option String
+  replayStages : List String
+
+def codexShimSubagentThreadShapeCaseJson
+    (witness : CodexShimSubagentThreadShapeCase) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString witness.witness ++ ","
+    ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
+    ++ "\"parent_thread_id\":" ++ jsonString witness.parentThreadId ++ ","
+    ++ "\"native_source_parent\":"
+      ++ jsonOptionalString witness.nativeSourceParent ++ ","
+    ++ "\"legacy_top_level_parent\":"
+      ++ jsonOptionalString witness.legacyTopLevelParent ++ ","
+    ++ "\"replay_stages\":" ++ jsonStringArray witness.replayStages
+    ++ "}"
+
+def codexShimSubagentThreadShapeCases : List CodexShimSubagentThreadShapeCase :=
+  [ { witness := "codex_shim.subagent_thread.native_shape"
+    , leanTheorems :=
+        [ "CodexShim.subagent_parent_uses_native_source"
+        , "CodexShim.subagent_parent_omits_legacy_top_level"
+        , "CodexShim.completed_compaction_replay_matches_runtime_order"
+        ]
+    , parentThreadId := "parent-thread"
+    , nativeSourceParent := some "parent-thread"
+    , legacyTopLevelParent := none
+    , replayStages := ["user", "compaction", "modelItems"]
+    }
+  ]
+
+def codexShimSubagentThreadShapeCasesJson : String :=
+  jsonArray
+    (codexShimSubagentThreadShapeCases.map codexShimSubagentThreadShapeCaseJson)
+
 structure CodexShimContextUsageCase where
   witness : String
   leanTheorems : List String

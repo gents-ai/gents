@@ -43,6 +43,35 @@ pub(crate) struct LeanCodexShimSubagentVisibilityCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanCodexShimSubagentMetadataCase {
+    pub(crate) witness: String,
+    pub(crate) lean_theorems: Vec<String>,
+    pub(crate) runtime_model: Option<String>,
+    pub(crate) runtime_reasoning_effort: Option<String>,
+    pub(crate) projected_model: Option<String>,
+    pub(crate) projected_reasoning_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanCodexShimSubagentListingCase {
+    pub(crate) witness: String,
+    pub(crate) lean_theorems: Vec<String>,
+    pub(crate) source_kind: String,
+    pub(crate) authorized: bool,
+    pub(crate) listed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanCodexShimSubagentThreadShapeCase {
+    pub(crate) witness: String,
+    pub(crate) lean_theorems: Vec<String>,
+    pub(crate) parent_thread_id: String,
+    pub(crate) native_source_parent: Option<String>,
+    pub(crate) legacy_top_level_parent: Option<String>,
+    pub(crate) replay_stages: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanCodexShimContextUsageCase {
     pub(crate) witness: String,
     pub(crate) lean_theorems: Vec<String>,

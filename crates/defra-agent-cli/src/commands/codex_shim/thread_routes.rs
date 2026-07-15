@@ -11,8 +11,9 @@ use super::history_projection::load_thread_turns;
 use super::protocol::absolute_path;
 use super::store::query_node_json;
 use super::thread_projection::{
-    codex_thread_json, codex_thread_json_with_turns, list_codex_threads_by_archived,
-    load_codex_thread, store_forked_codex_thread, thread_response_json, CodexThreadRecord,
+    codex_thread_json, codex_thread_json_with_turns, list_codex_subagent_threads_by_archived,
+    list_codex_threads_by_archived, load_codex_thread, store_forked_codex_thread,
+    thread_response_json, CodexThreadRecord,
 };
 use super::{ShimState, JSONRPC_INTERNAL_ERROR, JSONRPC_INVALID_PARAMS};
 
@@ -85,7 +86,9 @@ pub(super) async fn list_threads_response(
     state: &ShimState,
     params: codex::ThreadListParams,
 ) -> std::result::Result<Value, ThreadRouteError> {
-    if !source_filter_allows_cli(params.source_kinds.as_deref())
+    let include_cli = source_filter_allows_cli(params.source_kinds.as_deref());
+    let include_subagents = source_filter_allows_spawned_subagent(params.source_kinds.as_deref());
+    if (!include_cli && !include_subagents)
         || !model_provider_filter_allows_defra(params.model_providers.as_deref())
     {
         return Ok(json!({
@@ -96,9 +99,21 @@ pub(super) async fn list_threads_response(
     }
 
     let archived = params.archived.unwrap_or(false);
-    let mut records = list_codex_threads_by_archived(state, archived)
-        .await
-        .map_err(internal_error)?;
+    let mut records = Vec::new();
+    if include_cli {
+        records.extend(
+            list_codex_threads_by_archived(state, archived)
+                .await
+                .map_err(internal_error)?,
+        );
+    }
+    if include_subagents {
+        records.extend(
+            list_codex_subagent_threads_by_archived(state, archived)
+                .await
+                .map_err(internal_error)?,
+        );
+    }
     if let Some(cwd_filter) = params.cwd.as_ref() {
         let allowed = cwd_filter_values(cwd_filter);
         records.retain(|record| allowed.iter().any(|cwd| cwd_matches_record(cwd, record)));
@@ -156,7 +171,9 @@ pub(super) async fn search_threads_response(
             "thread/search requires a non-empty searchTerm",
         ));
     }
-    if !source_filter_allows_cli(params.source_kinds.as_deref()) {
+    let include_cli = source_filter_allows_cli(params.source_kinds.as_deref());
+    let include_subagents = source_filter_allows_spawned_subagent(params.source_kinds.as_deref());
+    if !include_cli && !include_subagents {
         return Ok(json!({
             "data": [],
             "nextCursor": null,
@@ -166,9 +183,21 @@ pub(super) async fn search_threads_response(
 
     let mut matches = Vec::<(CodexThreadRecord, String)>::new();
     let archived = params.archived.unwrap_or(false);
-    let records = list_codex_threads_by_archived(state, archived)
-        .await
-        .map_err(internal_error)?;
+    let mut records = Vec::new();
+    if include_cli {
+        records.extend(
+            list_codex_threads_by_archived(state, archived)
+                .await
+                .map_err(internal_error)?,
+        );
+    }
+    if include_subagents {
+        records.extend(
+            list_codex_subagent_threads_by_archived(state, archived)
+                .await
+                .map_err(internal_error)?,
+        );
+    }
     for record in records {
         if let Some(snippet) = record_snippet(&record, search_term) {
             matches.push((record, snippet));
@@ -329,6 +358,17 @@ fn source_filter_allows_cli(source_kinds: Option<&[codex::ThreadSourceKind]>) ->
         .is_none_or(|kinds| kinds.contains(&codex::ThreadSourceKind::Cli))
 }
 
+fn source_filter_allows_spawned_subagent(source_kinds: Option<&[codex::ThreadSourceKind]>) -> bool {
+    source_kinds.is_some_and(|kinds| {
+        kinds.iter().any(|kind| {
+            matches!(
+                kind,
+                codex::ThreadSourceKind::SubAgent | codex::ThreadSourceKind::SubAgentThreadSpawn
+            )
+        })
+    })
+}
+
 fn record_snippet(record: &CodexThreadRecord, needle: &str) -> Option<String> {
     field_snippet(&record.name, needle)
         .or_else(|| {
@@ -446,5 +486,29 @@ fn internal_error(err: anyhow::Error) -> ThreadRouteError {
     ThreadRouteError {
         code: JSONRPC_INTERNAL_ERROR,
         message: err.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_filters_classify_defra_spawned_children() {
+        assert!(source_filter_allows_cli(None));
+        assert!(source_filter_allows_cli(Some(&[])));
+        assert!(!source_filter_allows_spawned_subagent(None));
+        assert!(!source_filter_allows_spawned_subagent(Some(&[])));
+
+        assert!(source_filter_allows_spawned_subagent(Some(&[
+            codex::ThreadSourceKind::SubAgent,
+        ])));
+        assert!(source_filter_allows_spawned_subagent(Some(&[
+            codex::ThreadSourceKind::SubAgentThreadSpawn,
+        ])));
+        assert!(!source_filter_allows_spawned_subagent(Some(&[
+            codex::ThreadSourceKind::Cli,
+            codex::ThreadSourceKind::SubAgentReview,
+        ])));
     }
 }

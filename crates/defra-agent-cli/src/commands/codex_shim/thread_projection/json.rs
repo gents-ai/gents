@@ -73,10 +73,6 @@ pub(in crate::commands::codex_shim) fn codex_thread_json_with_turns(
             Value::String(link.root_session_id.clone()),
         );
         object.insert(
-            "parentThreadId".to_string(),
-            Value::String(link.parent_session_id.clone()),
-        );
-        object.insert(
             "source".to_string(),
             json!({
                 "subAgent": {
@@ -210,6 +206,7 @@ mod tests {
                 depth: 1,
                 agent_did: "did:child".to_string(),
                 behavior_id: "code-review".to_string(),
+                model: Some("child-model".to_string()),
                 nickname: "reviewer".to_string(),
                 lifecycle_state: "processing".to_string(),
                 failure_reason: None,
@@ -222,7 +219,7 @@ mod tests {
             .expect("subagent projection must be a valid pinned Codex Thread");
         assert_eq!(value["id"], child_session_id);
         assert_eq!(value["sessionId"], root_session_id);
-        assert_eq!(value["parentThreadId"], parent_session_id);
+        assert!(value.get("parentThreadId").is_none());
         assert_eq!(value["threadSource"], "subagent");
         assert_eq!(value["agentNickname"], "reviewer");
         assert_eq!(value["agentRole"], "code-review");

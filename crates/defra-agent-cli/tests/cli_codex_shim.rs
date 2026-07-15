@@ -2176,6 +2176,9 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
     let agent_did = agent_did_from_init(&init)?;
     let behavior_id = format!("{agent_did}:default");
     let child_behavior_id = format!("{behavior_id}:reviewer");
+    let child_backend_id = "child-projection-backend";
+    let child_model_name = "child-projection-model";
+    let child_model_selection = format!("{child_backend_id}::{child_model_name}");
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -2239,16 +2242,51 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         &child_thread_id,
         &tool_call_id,
         &tool_call_key,
+        child_backend_id,
+        child_model_name,
     )
     .await?;
 
-    let running = tokio::time::timeout(
+    let (running, projected_model, reasoning_effort_absent) = tokio::time::timeout(
         Duration::from_secs(15),
         read_collab_agent_status(&mut ws, &tool_call_key, &child_thread_id),
     )
     .await
     .context("timed out waiting for native subagent projection")??;
     assert_eq!(running, codex::CollabAgentStatus::Running);
+    assert_eq!(
+        projected_model.as_deref(),
+        Some(child_model_selection.as_str())
+    );
+    assert!(reasoning_effort_absent);
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadList {
+            request_id: request_id(239),
+            params: codex::ThreadListParams {
+                cursor: None,
+                limit: None,
+                sort_key: None,
+                sort_direction: None,
+                model_providers: None,
+                source_kinds: Some(vec![codex::ThreadSourceKind::SubAgentThreadSpawn]),
+                archived: None,
+                cwd: None,
+                use_state_db_only: true,
+                search_term: None,
+            },
+        },
+    )
+    .await?;
+    let subagent_list: codex::ThreadListResponse =
+        read_typed_response(&mut ws, request_id(239)).await?;
+    assert_eq!(subagent_list.data.len(), 1, "{subagent_list:?}");
+    assert_eq!(subagent_list.data[0].id, child_thread_id);
+    assert!(matches!(
+        subagent_list.data[0].source,
+        codex::SessionSource::SubAgent(_)
+    ));
 
     send_client_request(
         &mut ws,
@@ -2274,6 +2312,7 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         child_json.pointer("/source/subAgent/thread_spawn/parent_thread_id"),
         Some(&Value::String(parent_thread_id.clone()))
     );
+    assert!(child_json.get("parentThreadId").is_none());
 
     send_client_request(
         &mut ws,
@@ -2318,7 +2357,7 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
     assert_eq!(projected_text, live_child_text);
 
     update_request_lifecycle(&graphql, &child_request_id, "completed").await?;
-    let completed = tokio::time::timeout(
+    let (completed, _, _) = tokio::time::timeout(
         Duration::from_secs(15),
         read_collab_agent_status(&mut ws, &tool_call_key, &child_thread_id),
     )
@@ -3730,6 +3769,8 @@ async fn seed_authorized_subagent_link(
     child_session_id: &str,
     tool_call_id: &str,
     tool_call_key: &str,
+    child_backend_id: &str,
+    child_model_name: &str,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let args = serde_json::to_string(&json!({
@@ -3742,6 +3783,20 @@ async fn seed_authorized_subagent_link(
     }))?;
     let mutation = format!(
         r#"mutation {{
+            create_AgentBehavior(input: {{
+                behavior_id: "{child_behavior_id}",
+                agent_did: "{agent_did}",
+                display_name: "reviewer",
+                system_prompt: "",
+                backend_id: "{child_backend_id}",
+                model_name: "{child_model_name}",
+                tool_selection_id: "",
+                inference_profile_id: "",
+                compaction_strategy: "StripThenSummarize",
+                compaction_threshold: 0.75,
+                enabled: false,
+                created_at: "{now}"
+            }}) {{ _docID }}
             create_AgentSession(input: {{
                 session_id: "{child_session_id}",
                 agent_name: "reviewer",
@@ -3789,6 +3844,8 @@ async fn seed_authorized_subagent_link(
         child_session_id = escape_graphql_string(child_session_id),
         agent_did = escape_graphql_string(agent_did),
         child_behavior_id = escape_graphql_string(child_behavior_id),
+        child_backend_id = escape_graphql_string(child_backend_id),
+        child_model_name = escape_graphql_string(child_model_name),
         now = escape_graphql_string(&now),
         child_request_id = escape_graphql_string(child_request_id),
         parent_request_id = escape_graphql_string(parent_request_id),
@@ -4392,7 +4449,7 @@ async fn read_collab_agent_status(
     ws: &mut ShimWebSocket,
     expected_tool_call_key: &str,
     child_thread_id: &str,
-) -> Result<codex::CollabAgentStatus> {
+) -> Result<(codex::CollabAgentStatus, Option<String>, bool)> {
     loop {
         match read_jsonrpc(ws).await? {
             codex::JSONRPCMessage::Notification(notification) => {
@@ -4400,18 +4457,23 @@ async fn read_collab_agent_status(
                     server_notification_from_jsonrpc(notification)?
                 {
                     if let codex::ThreadItem::CollabAgentToolCall {
-                        id, agents_states, ..
+                        id,
+                        model,
+                        reasoning_effort,
+                        agents_states,
+                        ..
                     } = completed.item
                     {
                         if id == expected_tool_call_key {
-                            return agents_states
+                            let status = agents_states
                                 .get(child_thread_id)
                                 .map(|state| state.status.clone())
                                 .with_context(|| {
                                     format!(
                                         "collab item {id} missing child state for {child_thread_id}"
                                     )
-                                });
+                                })?;
+                            return Ok((status, model, reasoning_effort.is_none()));
                         }
                     }
                 }

@@ -229,6 +229,104 @@ theorem receiver_thread_is_child_session (link : SubagentThreadLink) :
     receiverThreadId link = link.childSessionId := rfl
 
 /-!
+### Subagent presentation metadata and discovery
+
+The runtime remains authoritative for optional presentation metadata.  The
+adapter preserves values which DEFRA owns and leaves unavailable values absent;
+it never substitutes Codex defaults.  Authorized DEFRA children are ordinary
+spawned subagent threads in the Codex source vocabulary.
+-/
+
+/-- Runtime-owned metadata carried by a native collaboration item. -/
+structure CollabPresentationMetadata where
+  model : Option String
+  reasoningEffort : Option String
+  deriving DecidableEq, Repr
+
+/-- Projection is intentionally identity: the shim formats runtime facts but
+does not create an independent configuration source. -/
+def projectCollabPresentationMetadata
+    (metadata : CollabPresentationMetadata) : CollabPresentationMetadata :=
+  metadata
+
+theorem collab_model_is_runtime_model (metadata : CollabPresentationMetadata) :
+    (projectCollabPresentationMetadata metadata).model = metadata.model := rfl
+
+theorem absent_runtime_reasoning_effort_stays_absent
+    (model : Option String) :
+    (projectCollabPresentationMetadata
+      { model := model, reasoningEffort := none }).reasoningEffort = none := rfl
+
+/-- Source filters relevant to a DEFRA child created by `spawn_subagent`. -/
+inductive ThreadSourceFilter where
+  | cli
+  | subAgent
+  | subAgentReview
+  | subAgentThreadSpawn
+  | other
+  deriving DecidableEq, Repr
+
+def sourceFilterMatchesSpawnedSubagent : ThreadSourceFilter → Bool
+  | .subAgent | .subAgentThreadSpawn => true
+  | .cli | .subAgentReview | .other => false
+
+def spawnedSubagentListed
+    (authorized : Bool)
+    (filters : List ThreadSourceFilter) : Bool :=
+  authorized && filters.any sourceFilterMatchesSpawnedSubagent
+
+theorem authorized_generic_subagent_filter_lists_child :
+    spawnedSubagentListed true [.subAgent] = true := rfl
+
+theorem authorized_thread_spawn_filter_lists_child :
+    spawnedSubagentListed true [.subAgentThreadSpawn] = true := rfl
+
+theorem cli_filter_does_not_list_spawned_child :
+    spawnedSubagentListed true [.cli] = false := rfl
+
+theorem review_filter_does_not_list_spawned_child :
+    spawnedSubagentListed true [.subAgentReview] = false := rfl
+
+theorem unauthorized_child_never_listed (filters : List ThreadSourceFilter) :
+    spawnedSubagentListed false filters = false := by
+  simp [spawnedSubagentListed]
+
+/-- The pinned Codex `Thread` carries spawn ancestry inside
+`source.subAgent.thread_spawn`; there is no top-level `parentThreadId` field. -/
+structure SubagentThreadParentProjection where
+  nativeSourceParent : Option String
+  legacyTopLevelParent : Option String
+  deriving DecidableEq, Repr
+
+def projectSubagentThreadParent (parentThreadId : String) :
+    SubagentThreadParentProjection :=
+  { nativeSourceParent := some parentThreadId
+  , legacyTopLevelParent := none
+  }
+
+theorem subagent_parent_uses_native_source (parentThreadId : String) :
+    (projectSubagentThreadParent parentThreadId).nativeSourceParent =
+      some parentThreadId := rfl
+
+theorem subagent_parent_omits_legacy_top_level (parentThreadId : String) :
+    (projectSubagentThreadParent parentThreadId).legacyTopLevelParent = none := rfl
+
+/-- Automatic compaction runs after the request is accepted and before the
+owned inference/tool loop, so replay places its item between the user request
+and model-derived items. -/
+inductive RequestReplayStage where
+  | user
+  | compaction
+  | modelItems
+  deriving DecidableEq, Repr
+
+def completedCompactionReplayStages : List RequestReplayStage :=
+  [.user, .compaction, .modelItems]
+
+theorem completed_compaction_replay_matches_runtime_order :
+    completedCompactionReplayStages = [.user, .compaction, .modelItems] := rfl
+
+/-!
 ## Context and compaction presentation
 
 Codex distinguishes cumulative token accounting from the tokens occupying the
