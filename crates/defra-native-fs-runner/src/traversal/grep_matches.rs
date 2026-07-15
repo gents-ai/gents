@@ -5,7 +5,7 @@ use anyhow::Result;
 use crate::context::RunnerContext;
 use crate::model::{Collected, GrepMatch};
 use crate::traversal::common::{
-    should_ignore_path, should_skip_io_error, sorted_children, WalkState,
+    should_ignore_path, sorted_children, GitignoreStack, WalkState,
 };
 
 /// Per-file bound: files larger than this are skipped (and counted) rather
@@ -85,6 +85,7 @@ pub(crate) fn collect_grep_matches(
         path.parent().unwrap_or(path)
     };
     if path.is_dir() {
+        let mut ignores = GitignoreStack::new();
         collect_grep_matches_inner(
             context,
             traversal_root,
@@ -95,6 +96,7 @@ pub(crate) fn collect_grep_matches(
             &mut truncated,
             &mut walk,
             &mut file_stats,
+            &mut ignores,
         )?;
     } else {
         walk.admit_entry(context, path);
@@ -135,24 +137,25 @@ fn collect_grep_matches_inner(
     truncated: &mut bool,
     walk: &mut WalkState,
     file_stats: &mut GrepFileStats,
+    ignores: &mut GitignoreStack,
 ) -> Result<()> {
+    let pushed = ignores.push_dir(dir);
     for entry in sorted_children(context, dir, walk)? {
         if *truncated || walk.exhausted() {
             break;
         }
         let path = entry.path();
-        if should_ignore_path(traversal_root, &path) {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let is_dir = file_type.is_dir();
+        if should_ignore_path(traversal_root, &path) || ignores.is_ignored(&path, is_dir) {
             continue;
         }
         if !walk.admit_entry(context, &path) {
             break;
         }
-        let metadata = match entry.metadata() {
-            Ok(metadata) => metadata,
-            Err(error) if should_skip_io_error(&error) => continue,
-            Err(error) => return Err(error.into()),
-        };
-        if metadata.is_dir() {
+        if is_dir {
             collect_grep_matches_inner(
                 context,
                 traversal_root,
@@ -163,6 +166,7 @@ fn collect_grep_matches_inner(
                 truncated,
                 walk,
                 file_stats,
+                ignores,
             )?;
             continue;
         }
@@ -179,6 +183,7 @@ fn collect_grep_matches_inner(
             false,
         )?;
     }
+    ignores.pop(pushed);
     Ok(())
 }
 

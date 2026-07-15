@@ -198,6 +198,58 @@ pub(super) fn sorted_children(
     Ok(children)
 }
 
+/// Stack of `.gitignore` matchers accumulated while descending, checked
+/// nearest-directory-first so deeper files override shallower ones
+/// (including `!` whitelists). Applied to any `.gitignore` encountered in
+/// the walked tree — nested repos under a home-directory tool root get
+/// their generated junk filtered before it consumes walk budget. Note:
+/// `.gitignore` files ABOVE the walk root (e.g. a repo root above a pruned
+/// glob prefix) are not consulted; walks are filtered by what they can see.
+pub(crate) struct GitignoreStack {
+    stack: Vec<ignore::gitignore::Gitignore>,
+}
+
+impl GitignoreStack {
+    pub(crate) fn new() -> Self {
+        Self { stack: Vec::new() }
+    }
+
+    /// Load `dir/.gitignore` if present. Returns how many matchers were
+    /// pushed so the caller can pop symmetrically when leaving `dir`.
+    pub(crate) fn push_dir(&mut self, dir: &Path) -> usize {
+        let file = dir.join(".gitignore");
+        if !file.is_file() {
+            return 0;
+        }
+        let mut builder = ignore::gitignore::GitignoreBuilder::new(dir);
+        builder.add(&file);
+        match builder.build() {
+            Ok(matcher) => {
+                self.stack.push(matcher);
+                1
+            }
+            Err(_) => 0,
+        }
+    }
+
+    pub(crate) fn pop(&mut self, pushed: usize) {
+        for _ in 0..pushed {
+            self.stack.pop();
+        }
+    }
+
+    pub(crate) fn is_ignored(&self, path: &Path, is_dir: bool) -> bool {
+        for matcher in self.stack.iter().rev() {
+            match matcher.matched(path, is_dir) {
+                ignore::Match::Ignore(_) => return true,
+                ignore::Match::Whitelist(_) => return false,
+                ignore::Match::None => {}
+            }
+        }
+        false
+    }
+}
+
 pub(super) fn should_ignore_path(traversal_root: &Path, path: &Path) -> bool {
     if path == traversal_root {
         return false;

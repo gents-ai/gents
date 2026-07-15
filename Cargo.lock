@@ -6972,6 +6972,7 @@ version = "0.6.12"
 dependencies = [
  "anyhow",
  "globset",
+ "ignore",
  "regex",
  "serde",
  "serde_json",

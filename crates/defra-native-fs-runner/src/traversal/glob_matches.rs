@@ -6,7 +6,7 @@ use globset::GlobMatcher;
 use crate::context::RunnerContext;
 use crate::model::{Collected, FilesystemEntry};
 use crate::traversal::common::{
-    should_ignore_path, should_skip_io_error, sorted_children, WalkState,
+    should_ignore_path, sorted_children, GitignoreStack, WalkState,
 };
 
 pub(crate) fn collect_glob_matches(
@@ -18,6 +18,7 @@ pub(crate) fn collect_glob_matches(
 ) -> Result<Collected<FilesystemEntry>> {
     let mut items = Vec::new();
     let mut truncated = false;
+    let mut ignores = GitignoreStack::new();
     collect_glob_matches_inner(
         context,
         dir,
@@ -27,6 +28,7 @@ pub(crate) fn collect_glob_matches(
         &mut items,
         &mut truncated,
         &mut walk,
+        &mut ignores,
     )?;
     Ok(Collected {
         items,
@@ -45,23 +47,25 @@ fn collect_glob_matches_inner(
     matches: &mut Vec<FilesystemEntry>,
     truncated: &mut bool,
     walk: &mut WalkState,
+    ignores: &mut GitignoreStack,
 ) -> Result<()> {
+    let pushed = ignores.push_dir(dir);
     for entry in sorted_children(context, dir, walk)? {
         if *truncated || walk.exhausted() {
             break;
         }
         let path = entry.path();
-        if should_ignore_path(traversal_root, &path) {
+        // file_type comes straight from the dirent — no stat per entry.
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let is_dir = file_type.is_dir();
+        if should_ignore_path(traversal_root, &path) || ignores.is_ignored(&path, is_dir) {
             continue;
         }
         if !walk.admit_entry(context, &path) {
             break;
         }
-        let metadata = match entry.metadata() {
-            Ok(metadata) => metadata,
-            Err(error) if should_skip_io_error(&error) => continue,
-            Err(error) => return Err(error.into()),
-        };
         let display = context.display_path(&path);
         if pattern.is_match(&display) {
             if matches.len() >= max_matches {
@@ -70,14 +74,10 @@ fn collect_glob_matches_inner(
             }
             matches.push(FilesystemEntry {
                 path: display,
-                entry_type: if metadata.is_dir() {
-                    "directory"
-                } else {
-                    "file"
-                },
+                entry_type: if is_dir { "directory" } else { "file" },
             });
         }
-        if metadata.is_dir() {
+        if is_dir {
             collect_glob_matches_inner(
                 context,
                 traversal_root,
@@ -87,8 +87,10 @@ fn collect_glob_matches_inner(
                 matches,
                 truncated,
                 walk,
+                ignores,
             )?;
         }
     }
+    ignores.pop(pushed);
     Ok(())
 }

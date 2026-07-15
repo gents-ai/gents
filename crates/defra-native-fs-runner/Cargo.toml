@@ -8,6 +8,7 @@ description = "Out-of-process native filesystem runner for defra-agent"
 [dependencies]
 anyhow.workspace = true
 globset = "0.4"
+ignore = "0.4"
 regex = "1"
 serde.workspace = true
 serde_json.workspace = true

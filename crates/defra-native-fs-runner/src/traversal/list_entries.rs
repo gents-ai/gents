@@ -5,7 +5,7 @@ use anyhow::Result;
 use crate::context::RunnerContext;
 use crate::model::{Collected, FilesystemEntry};
 use crate::traversal::common::{
-    should_ignore_path, should_skip_io_error, sorted_children, WalkState,
+    should_ignore_path, sorted_children, GitignoreStack, WalkState,
 };
 
 pub(crate) fn collect_entries(
@@ -17,6 +17,7 @@ pub(crate) fn collect_entries(
 ) -> Result<Collected<FilesystemEntry>> {
     let mut items = Vec::new();
     let mut truncated = false;
+    let mut ignores = GitignoreStack::new();
     collect_entries_inner(
         context,
         dir,
@@ -26,6 +27,7 @@ pub(crate) fn collect_entries(
         &mut items,
         &mut truncated,
         &mut walk,
+        &mut ignores,
     )?;
     Ok(Collected {
         items,
@@ -44,36 +46,33 @@ fn collect_entries_inner(
     entries: &mut Vec<FilesystemEntry>,
     truncated: &mut bool,
     walk: &mut WalkState,
+    ignores: &mut GitignoreStack,
 ) -> Result<()> {
+    let pushed = ignores.push_dir(dir);
     for entry in sorted_children(context, dir, walk)? {
         if *truncated || walk.exhausted() {
             break;
         }
         let path = entry.path();
-        if should_ignore_path(traversal_root, &path) {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let is_dir = file_type.is_dir();
+        if should_ignore_path(traversal_root, &path) || ignores.is_ignored(&path, is_dir) {
             continue;
         }
         if !walk.admit_entry(context, &path) {
             break;
         }
-        let metadata = match entry.metadata() {
-            Ok(metadata) => metadata,
-            Err(error) if should_skip_io_error(&error) => continue,
-            Err(error) => return Err(error.into()),
-        };
         if entries.len() >= max_entries {
             *truncated = true;
             break;
         }
         entries.push(FilesystemEntry {
             path: context.display_path(&path),
-            entry_type: if metadata.is_dir() {
-                "directory"
-            } else {
-                "file"
-            },
+            entry_type: if is_dir { "directory" } else { "file" },
         });
-        if recursive && metadata.is_dir() {
+        if recursive && is_dir {
             collect_entries_inner(
                 context,
                 traversal_root,
@@ -83,8 +82,10 @@ fn collect_entries_inner(
                 entries,
                 truncated,
                 walk,
+                ignores,
             )?;
         }
     }
+    ignores.pop(pushed);
     Ok(())
 }
