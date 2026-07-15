@@ -1,57 +1,9 @@
-//! Fences for #732 stage 1: glob understands brace alternation (globset) and
+//! Fences for #732: glob understands brace alternation (globset) and
 //! grep understands real regex (Rust regex syntax, linear-time) with a
 //! literal fallback — both were silent zero-match traps for agents.
 
-use defra_native_fs_runner::execute_request_with_base;
-use defra_native_fs_runner::protocol::{GlobArgs, GrepArgs, NativeFsRunnerRequest};
-use serde_json::Value;
-
-fn unique_root(tag: &str) -> std::path::PathBuf {
-    let root = std::env::temp_dir().join(format!(
-        "defra-fs-pattern-syntax-{tag}-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    root
-}
-
-fn run_glob(root: &std::path::Path, pattern: &str) -> Value {
-    let output = execute_request_with_base(
-        root.to_path_buf(),
-        None,
-        NativeFsRunnerRequest::Glob(GlobArgs {
-            pattern: pattern.to_string(),
-            path: None,
-            max_matches: 100,
-            raw_json: true,
-            max_entries_visited: None,
-            max_wall_ms: None,
-        }),
-    )
-    .unwrap();
-    serde_json::from_str(&output).unwrap()
-}
-
-fn run_grep(root: &std::path::Path, pattern: &str, case_sensitive: bool) -> Value {
-    let output = execute_request_with_base(
-        root.to_path_buf(),
-        None,
-        NativeFsRunnerRequest::Grep(GrepArgs {
-            pattern: pattern.to_string(),
-            path: None,
-            case_sensitive,
-            max_matches: 100,
-            raw_json: true,
-            max_entries_visited: None,
-            max_bytes_read: None,
-            max_wall_ms: None,
-        }),
-    )
-    .unwrap();
-    serde_json::from_str(&output).unwrap()
-}
+mod support;
+use support::{run_glob, run_grep, unique_root};
 
 #[test]
 fn glob_brace_alternation_matches() {
@@ -98,8 +50,8 @@ fn grep_invalid_regex_falls_back_to_literal() {
 
 #[test]
 fn grep_case_insensitive_folds_unicode_for_ascii_needles() {
-    // Review finding: the ASCII-CI fast path missed lines whose match needs
-    // Unicode simple case folding (Kelvin sign U+212A folds to 'k').
+    // Case-insensitive matching must use Unicode simple case folding, not
+    // ASCII-only folding (the Kelvin sign U+212A folds to 'k').
     let root = unique_root("kelvin");
     std::fs::write(root.join("units.txt"), "\u{212A}elvin scale\n").unwrap();
 

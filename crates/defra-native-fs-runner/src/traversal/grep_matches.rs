@@ -5,17 +5,17 @@ use anyhow::Result;
 use crate::context::RunnerContext;
 use crate::model::{Collected, GrepMatch};
 use crate::traversal::common::{
-    should_ignore_path, sorted_children, GitignoreStack, WalkState,
+    admit_next, should_ignore_path, sorted_children, Admitted, GitignoreStack, WalkState,
 };
 
 /// Per-file bound: files larger than this are skipped (and counted) rather
-/// than read whole into memory. Production greps over a home-directory tool
-/// root were reading multi-GB logs and model files end to end (#729).
+/// than read whole into memory — a home-directory tool root feeds multi-GB
+/// logs and model files to an otherwise unbounded grep (#729).
 const MAX_GREP_FILE_BYTES: u64 = 2 * 1024 * 1024;
 /// A NUL byte in this leading window classifies the file as binary.
 const BINARY_SNIFF_BYTES: usize = 4096;
 
-/// Search needle prepared once per grep (#732 stage 1): the pattern is a
+/// Search needle prepared once per grep (#732): the pattern is a
 /// Rust regex (linear-time finite automata — no catastrophic backtracking;
 /// literal and literal-prefixed patterns get memchr/aho-corasick prefilters,
 /// and case folding is full Unicode simple folding). A pattern that fails to
@@ -42,8 +42,7 @@ impl Needle {
                 syntax: "regex",
             },
             Err(_) => Needle {
-                regex: compile(&regex::escape(pattern))
-                    .expect("escaped literal always compiles"),
+                regex: compile(&regex::escape(pattern)).expect("escaped literal always compiles"),
                 syntax: "literal",
             },
         }
@@ -79,12 +78,13 @@ pub(crate) fn collect_grep_matches(
     let mut truncated = false;
     let mut file_stats = GrepFileStats::default();
     let needle = Needle::new(pattern, case_sensitive);
-    let traversal_root = if path.is_dir() {
+    let path_is_dir = path.is_dir();
+    let traversal_root = if path_is_dir {
         path
     } else {
         path.parent().unwrap_or(path)
     };
-    if path.is_dir() {
+    if path_is_dir {
         let mut ignores = GitignoreStack::new();
         collect_grep_matches_inner(
             context,
@@ -144,17 +144,11 @@ fn collect_grep_matches_inner(
         if *truncated || walk.exhausted() {
             break;
         }
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
+        let (path, is_dir) = match admit_next(context, traversal_root, &entry, walk, ignores) {
+            Admitted::Skip => continue,
+            Admitted::Stop => break,
+            Admitted::Entry { path, is_dir } => (path, is_dir),
         };
-        let is_dir = file_type.is_dir();
-        if should_ignore_path(traversal_root, &path) || ignores.is_ignored(&path, is_dir) {
-            continue;
-        }
-        if !walk.admit_entry(context, &path) {
-            break;
-        }
         if is_dir {
             collect_grep_matches_inner(
                 context,

@@ -6,35 +6,8 @@ use defra_native_fs_runner::execute_request_with_base;
 use defra_native_fs_runner::protocol::{GrepArgs, NativeFsRunnerRequest};
 use serde_json::Value;
 
-fn unique_root(tag: &str) -> std::path::PathBuf {
-    let root = std::env::temp_dir().join(format!(
-        "defra-fs-grep-mechanics-{tag}-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    root
-}
-
-fn run_grep(root: &std::path::Path, pattern: &str, case_sensitive: bool) -> Value {
-    let output = execute_request_with_base(
-        root.to_path_buf(),
-        None,
-        NativeFsRunnerRequest::Grep(GrepArgs {
-            pattern: pattern.to_string(),
-            path: None,
-            case_sensitive,
-            max_matches: 100,
-            raw_json: true,
-            max_entries_visited: None,
-            max_bytes_read: None,
-            max_wall_ms: None,
-        }),
-    )
-    .unwrap();
-    serde_json::from_str(&output).unwrap()
-}
+mod support;
+use support::{run_grep, unique_root};
 
 #[test]
 fn grep_skips_files_over_size_cap_and_counts_them() {
@@ -92,9 +65,9 @@ fn grep_case_insensitive_non_ascii_needle_still_matches() {
 
 #[test]
 fn grep_explicit_single_file_over_size_cap_is_still_searched() {
-    // Review finding: the 2 MiB per-file cap is a tree-walk guard. A file the
-    // caller names explicitly must be searched (the byte budget still bounds
-    // it honestly), not silently skipped with returned_count=0.
+    // The 2 MiB per-file cap is a tree-walk guard. A file the caller names
+    // explicitly must be searched (the byte budget still bounds it honestly),
+    // not silently skipped with returned_count=0.
     let root = unique_root("explicit-large");
     let mut big = String::from("needle at the top\n");
     big.push_str(&"padding\n".repeat(400_000)); // ~3.2 MiB
@@ -152,9 +125,8 @@ fn grep_explicit_file_over_byte_budget_reports_exhaustion_not_silence() {
 
 #[test]
 fn grep_searches_non_utf8_text_files_lossily() {
-    // Deliberate behavior (documented fence): NUL-free non-UTF-8 text (e.g.
-    // Latin-1 logs) is lossily decoded and searched. Previously such files
-    // were silently skipped because read_to_string errored.
+    // NUL-free non-UTF-8 text (e.g. Latin-1 logs) is deliberately decoded
+    // lossily and searched rather than silently skipped.
     let root = unique_root("latin1");
     std::fs::write(root.join("legacy.log"), b"caf\xe9 needle here\n").unwrap();
 

@@ -6724,7 +6724,6 @@ dependencies = [
  "dirs 5.0.1",
  "events",
  "futures",
- "glob",
  "hostname",
  "identity",
  "jsonschema",

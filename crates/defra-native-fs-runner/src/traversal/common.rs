@@ -112,59 +112,6 @@ impl WalkState {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Duration;
-
-    fn test_context_and_dir(entries: usize) -> (RunnerContext, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "defra-fs-common-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for index in 0..entries {
-            std::fs::write(dir.join(format!("f-{index:03}")), "x").unwrap();
-        }
-        let context = RunnerContext::new_with_base(dir.clone(), None).unwrap();
-        (context, std::fs::canonicalize(&dir).unwrap())
-    }
-
-    fn limits(max_entries: usize, max_wall: Duration) -> WalkLimits {
-        WalkLimits {
-            max_entries_visited: max_entries,
-            max_bytes_read: u64::MAX,
-            max_wall,
-        }
-    }
-
-    #[test]
-    fn dir_scan_stops_collecting_at_entry_budget() {
-        let (context, dir) = test_context_and_dir(100);
-        let mut walk = WalkState::new(limits(5, Duration::from_secs(60)));
-        let children = sorted_children(&context, &dir, &mut walk).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(
-            children.len() <= 6,
-            "collected {} dirents past the entry budget",
-            children.len()
-        );
-    }
-
-    #[test]
-    fn dir_scan_stops_on_expired_wall_budget() {
-        let (context, dir) = test_context_and_dir(100);
-        let mut walk = WalkState::new(limits(1000, Duration::ZERO));
-        let children = sorted_children(&context, &dir, &mut walk).unwrap();
-        let stats_exhausted = walk.exhausted();
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(children.is_empty(), "collected {}", children.len());
-        assert!(stats_exhausted);
-    }
-}
-
 pub(super) fn sorted_children(
     context: &RunnerContext,
     dir: &Path,
@@ -250,6 +197,43 @@ impl GitignoreStack {
     }
 }
 
+/// Outcome of admitting one directory entry into a walk.
+pub(super) enum Admitted {
+    /// Filtered out; continue with the next sibling.
+    Skip,
+    /// A walk budget is exhausted; stop scanning this directory.
+    Stop,
+    /// Admitted and charged against the entry budget.
+    Entry {
+        path: std::path::PathBuf,
+        is_dir: bool,
+    },
+}
+
+/// Shared per-entry walk prologue: classify from the dirent (no stat per
+/// entry), apply the name and gitignore filters BEFORE charging the entry
+/// budget (filtered entries are free), then admit against the budgets.
+pub(super) fn admit_next(
+    context: &RunnerContext,
+    traversal_root: &Path,
+    entry: &std::fs::DirEntry,
+    walk: &mut WalkState,
+    ignores: &GitignoreStack,
+) -> Admitted {
+    let path = entry.path();
+    let Ok(file_type) = entry.file_type() else {
+        return Admitted::Skip;
+    };
+    let is_dir = file_type.is_dir();
+    if should_ignore_path(traversal_root, &path) || ignores.is_ignored(&path, is_dir) {
+        return Admitted::Skip;
+    }
+    if !walk.admit_entry(context, &path) {
+        return Admitted::Stop;
+    }
+    Admitted::Entry { path, is_dir }
+}
+
 pub(super) fn should_ignore_path(traversal_root: &Path, path: &Path) -> bool {
     if path == traversal_root {
         return false;
@@ -272,9 +256,61 @@ fn sorted_children_block_for_test(dir: &Path) -> Option<std::time::Duration> {
     Some(std::time::Duration::from_millis(millis))
 }
 
-pub(super) fn should_skip_io_error(error: &std::io::Error) -> bool {
+fn should_skip_io_error(error: &std::io::Error) -> bool {
     matches!(
         error.kind(),
         std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_context_and_dir(entries: usize) -> (RunnerContext, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "defra-fs-common-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for index in 0..entries {
+            std::fs::write(dir.join(format!("f-{index:03}")), "x").unwrap();
+        }
+        let context = RunnerContext::new_with_base(dir.clone(), None).unwrap();
+        (context, std::fs::canonicalize(&dir).unwrap())
+    }
+
+    fn limits(max_entries: usize, max_wall: Duration) -> WalkLimits {
+        WalkLimits {
+            max_entries_visited: max_entries,
+            max_bytes_read: u64::MAX,
+            max_wall,
+        }
+    }
+
+    #[test]
+    fn dir_scan_stops_collecting_at_entry_budget() {
+        let (context, dir) = test_context_and_dir(100);
+        let mut walk = WalkState::new(limits(5, Duration::from_secs(60)));
+        let children = sorted_children(&context, &dir, &mut walk).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            children.len() <= 6,
+            "collected {} dirents past the entry budget",
+            children.len()
+        );
+    }
+
+    #[test]
+    fn dir_scan_stops_on_expired_wall_budget() {
+        let (context, dir) = test_context_and_dir(100);
+        let mut walk = WalkState::new(limits(1000, Duration::ZERO));
+        let children = sorted_children(&context, &dir, &mut walk).unwrap();
+        let stats_exhausted = walk.exhausted();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(children.is_empty(), "collected {}", children.len());
+        assert!(stats_exhausted);
+    }
 }

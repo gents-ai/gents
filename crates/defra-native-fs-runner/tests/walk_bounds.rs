@@ -2,27 +2,10 @@
 //! the walk so a zero-match search over a huge root returns partial results
 //! with explicit exhaustion metadata instead of scanning everything.
 
-use defra_native_fs_runner::execute_request_with_base;
-use defra_native_fs_runner::protocol::{
-    GlobArgs, GrepArgs, ListFilesArgs, NativeFsRunnerRequest,
-};
-use serde_json::Value;
+use defra_native_fs_runner::protocol::{GlobArgs, GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
 
-fn unique_root(tag: &str) -> std::path::PathBuf {
-    let root = std::env::temp_dir().join(format!(
-        "defra-fs-walk-bounds-{tag}-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    root
-}
-
-fn run_json(root: &std::path::Path, request: NativeFsRunnerRequest) -> Value {
-    let output = execute_request_with_base(root.to_path_buf(), None, request).unwrap();
-    serde_json::from_str(&output).unwrap()
-}
+mod support;
+use support::{run_json, unique_root};
 
 #[test]
 fn glob_reports_walk_stats_on_success() {
@@ -165,9 +148,10 @@ fn glob_wall_budget_stops_walk() {
     // never reached.
     let matches = value["matches"].as_array().unwrap();
     assert!(
-        !matches
-            .iter()
-            .any(|entry| entry["path"].as_str().unwrap_or_default().contains("zzz-after")),
+        !matches.iter().any(|entry| entry["path"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("zzz-after")),
         "walk should have stopped before zzz-after: {matches:?}"
     );
 }

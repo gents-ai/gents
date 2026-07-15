@@ -74,14 +74,15 @@ impl RunnerContext {
         &self.base
     }
 
-    /// Resolve a literal pattern-prefix subdirectory for walk pruning. The
+    /// Resolve a literal pattern-prefix subdirectory (base-relative, matching
+    /// the display paths patterns are tested against) for walk pruning. The
     /// prefix components are plain names (never `..`), and the result must
     /// be a directory inside the allowed root. Symlinked prefixes are
     /// rejected (`None`): the walk would traverse the resolved target whose
-    /// display paths can never match the symlink-spelled pattern — the old
-    /// walk never traversed symlinked directories either.
-    pub(crate) fn resolve_prune_subdir(&self, dir: &Path, components: &[&str]) -> Option<PathBuf> {
-        let mut candidate = dir.to_path_buf();
+    /// display paths can never match the symlink-spelled pattern — and the
+    /// walk itself never follows directory symlinks.
+    pub(crate) fn resolve_prune_subdir(&self, components: &[&str]) -> Option<PathBuf> {
+        let mut candidate = self.base.clone();
         for component in components {
             candidate.push(component);
         }

@@ -7,33 +7,8 @@ use defra_native_fs_runner::execute_request_with_base;
 use defra_native_fs_runner::protocol::{GlobArgs, NativeFsRunnerRequest};
 use serde_json::Value;
 
-fn unique_root(tag: &str) -> std::path::PathBuf {
-    let root = std::env::temp_dir().join(format!(
-        "defra-fs-glob-prefix-{tag}-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    root
-}
-
-fn run_glob(root: &std::path::Path, pattern: &str) -> Value {
-    let output = execute_request_with_base(
-        root.to_path_buf(),
-        None,
-        NativeFsRunnerRequest::Glob(GlobArgs {
-            pattern: pattern.to_string(),
-            path: None,
-            max_matches: 100,
-            raw_json: true,
-            max_entries_visited: None,
-            max_wall_ms: None,
-        }),
-    )
-    .unwrap();
-    serde_json::from_str(&output).unwrap()
-}
+mod support;
+use support::{run_glob, unique_root};
 
 #[test]
 fn glob_prunes_walk_to_literal_pattern_prefix() {
@@ -140,18 +115,15 @@ fn glob_prefix_cannot_escape_root() {
 
     let _ = std::fs::remove_dir_all(&root);
     assert_eq!(value["returned_count"], 0, "{value}");
-    assert!(
-        !output.contains("key.pem"),
-        "escaped the root: {output}"
-    );
+    assert!(!output.contains("key.pem"), "escaped the root: {output}");
 }
 
 #[test]
 fn glob_prefix_pruning_composes_with_path_argument() {
-    // Regression fence (review finding): pattern is matched against
-    // base-relative display paths, so the literal prefix must resolve against
-    // the BASE, not the path argument — path="crates" +
-    // pattern="crates/..." used to double-join and return false zero matches.
+    // The pattern is matched against base-relative display paths, so the
+    // literal prefix must resolve against the BASE, not the path argument —
+    // path="crates" + pattern="crates/..." must not double-join into
+    // crates/crates/... and report false zero matches.
     let root = unique_root("prefix-with-path");
     std::fs::create_dir_all(root.join("crates/defra-agent/src")).unwrap();
     std::fs::write(root.join("crates/defra-agent/src/lib.rs"), "x").unwrap();
@@ -213,10 +185,10 @@ fn glob_prefix_disjoint_from_path_returns_empty_without_walk() {
 #[cfg(unix)]
 #[test]
 fn glob_symlinked_prefix_is_reported_missing_without_walk() {
-    // Old walk never traversed symlinked dirs, so a symlink-spelled pattern
-    // matched nothing after a full walk. Pruning must not silently traverse
-    // the resolved target either (display paths could never match the
-    // symlink spelling) — reject the prefix and report it missing.
+    // The walk never follows directory symlinks, so a symlink-spelled
+    // pattern cannot match any walked display path. Pruning must not
+    // silently traverse the resolved target either — reject the prefix and
+    // report it missing.
     let root = unique_root("prefix-symlink");
     std::fs::create_dir_all(root.join("real/src")).unwrap();
     std::fs::write(root.join("real/src/a.rs"), "x").unwrap();

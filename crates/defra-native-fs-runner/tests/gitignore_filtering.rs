@@ -1,41 +1,14 @@
-//! Fences for #732 stage 2: walks respect .gitignore files encountered in
+//! Fences for #732: walks respect .gitignore files encountered in
 //! the walked tree (nested repos under a home-directory tool root get their
 //! generated junk filtered before it consumes walk budget), while dotfiles
 //! stay visible — agents rely on `.github/...` patterns and dotfile listings.
 
 use defra_native_fs_runner::execute_request_with_base;
-use defra_native_fs_runner::protocol::{
-    GlobArgs, GrepArgs, ListFilesArgs, NativeFsRunnerRequest,
-};
+use defra_native_fs_runner::protocol::{GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
 use serde_json::Value;
 
-fn unique_root(tag: &str) -> std::path::PathBuf {
-    let root = std::env::temp_dir().join(format!(
-        "defra-fs-gitignore-{tag}-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    root
-}
-
-fn run_glob(root: &std::path::Path, pattern: &str) -> Value {
-    let output = execute_request_with_base(
-        root.to_path_buf(),
-        None,
-        NativeFsRunnerRequest::Glob(GlobArgs {
-            pattern: pattern.to_string(),
-            path: None,
-            max_matches: 100,
-            raw_json: true,
-            max_entries_visited: None,
-            max_wall_ms: None,
-        }),
-    )
-    .unwrap();
-    serde_json::from_str(&output).unwrap()
-}
+mod support;
+use support::{run_glob, unique_root};
 
 #[test]
 fn walk_respects_gitignore_in_walked_tree() {

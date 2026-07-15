@@ -284,6 +284,19 @@ fn decode_runner_response(stdout: &[u8]) -> Result<NativeFsRunnerResponse, ToolE
         .map_err(Into::into)
 }
 
+fn truncate_error_preview(text: &str) -> String {
+    const MAX_ERROR_PREVIEW_CHARS: usize = 1_000;
+    if text.chars().count() <= MAX_ERROR_PREVIEW_CHARS {
+        return text.to_string();
+    }
+    format!(
+        "{}... [truncated]",
+        text.chars()
+            .take(MAX_ERROR_PREVIEW_CHARS)
+            .collect::<String>()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,7 +317,10 @@ mod tests {
     fn effective_deadline_keeps_shorter_request_deadlines() {
         let now = Utc::now();
         let request_deadline = now + ChronoDuration::seconds(30);
-        assert_eq!(effective_deadline(Some(request_deadline), now), request_deadline);
+        assert_eq!(
+            effective_deadline(Some(request_deadline), now),
+            request_deadline
+        );
     }
 
     #[test]
@@ -323,8 +339,7 @@ mod tests {
     #[test]
     fn cap_expiry_before_request_deadline_is_not_a_lifecycle_timeout() {
         let now = Utc::now();
-        let result =
-            fs_runner_timed_out_result("grep", Some(now + ChronoDuration::hours(12)), now);
+        let result = fs_runner_timed_out_result("grep", Some(now + ChronoDuration::hours(12)), now);
         assert!(
             !result.contains("__defra_agent_tool_lifecycle__"),
             "cap expiry must not carry the lifecycle marker: {result}"
@@ -336,7 +351,10 @@ mod tests {
     fn cap_expiry_without_request_deadline_is_not_a_lifecycle_timeout() {
         let now = Utc::now();
         let result = fs_runner_timed_out_result("grep", None, now);
-        assert!(!result.contains("__defra_agent_tool_lifecycle__"), "{result}");
+        assert!(
+            !result.contains("__defra_agent_tool_lifecycle__"),
+            "{result}"
+        );
     }
 
     #[test]
@@ -349,17 +367,4 @@ mod tests {
             "{result}"
         );
     }
-}
-
-fn truncate_error_preview(text: &str) -> String {
-    const MAX_ERROR_PREVIEW_CHARS: usize = 1_000;
-    if text.chars().count() <= MAX_ERROR_PREVIEW_CHARS {
-        return text.to_string();
-    }
-    format!(
-        "{}... [truncated]",
-        text.chars()
-            .take(MAX_ERROR_PREVIEW_CHARS)
-            .collect::<String>()
-    )
 }

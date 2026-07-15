@@ -4,9 +4,7 @@ use anyhow::Result;
 
 use crate::context::RunnerContext;
 use crate::model::{Collected, FilesystemEntry};
-use crate::traversal::common::{
-    should_ignore_path, sorted_children, GitignoreStack, WalkState,
-};
+use crate::traversal::common::{admit_next, sorted_children, Admitted, GitignoreStack, WalkState};
 
 pub(crate) fn collect_entries(
     context: &RunnerContext,
@@ -53,17 +51,11 @@ fn collect_entries_inner(
         if *truncated || walk.exhausted() {
             break;
         }
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
+        let (path, is_dir) = match admit_next(context, traversal_root, &entry, walk, ignores) {
+            Admitted::Skip => continue,
+            Admitted::Stop => break,
+            Admitted::Entry { path, is_dir } => (path, is_dir),
         };
-        let is_dir = file_type.is_dir();
-        if should_ignore_path(traversal_root, &path) || ignores.is_ignored(&path, is_dir) {
-            continue;
-        }
-        if !walk.admit_entry(context, &path) {
-            break;
-        }
         if entries.len() >= max_entries {
             *truncated = true;
             break;
