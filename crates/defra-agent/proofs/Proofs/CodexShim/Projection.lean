@@ -92,6 +92,47 @@ theorem known_subagent_control_projects_collab
 theorem non_control_tool_stays_mcp :
     projectSubagentControl .other = none := rfl
 
+/-- Whether a subagent control row is ready to be shown to Codex. A reciprocal
+link authorizes the native collaboration item. While that link may still
+replicate, the item stays deferred; once the enclosing projection is settled,
+the durable MCP row is the visibility-preserving fallback. -/
+inductive SubagentItemProjection where
+  | collab (tool : CollabTool)
+  | mcp
+  | deferred
+  deriving DecidableEq, Repr
+
+def projectSubagentItem
+    (tool : SubagentControlTool)
+    (hasReciprocalLink projectionSettled : Bool) : SubagentItemProjection :=
+  match projectSubagentControl tool with
+  | none => .mcp
+  | some collab =>
+      if hasReciprocalLink then .collab collab
+      else if projectionSettled then .mcp
+      else .deferred
+
+theorem linked_subagent_control_projects_native
+    (tool : SubagentControlTool)
+    (collab : CollabTool)
+    (h : projectSubagentControl tool = some collab) :
+    projectSubagentItem tool true false = .collab collab := by
+  simp [projectSubagentItem, h]
+
+theorem unresolved_subagent_control_defers_while_open
+    (tool : SubagentControlTool)
+    (collab : CollabTool)
+    (h : projectSubagentControl tool = some collab) :
+    projectSubagentItem tool false false = .deferred := by
+  simp [projectSubagentItem, h]
+
+theorem settled_unresolved_subagent_control_stays_visible
+    (tool : SubagentControlTool)
+    (collab : CollabTool)
+    (h : projectSubagentControl tool = some collab) :
+    projectSubagentItem tool false true = .mcp := by
+  simp [projectSubagentItem, h]
+
 /-- Codex's per-agent status vocabulary.  `shutdown` and `notFound` are local
 app-server bookkeeping states, so no core request lifecycle maps to them. -/
 inductive CollabAgentPhase where
@@ -125,6 +166,53 @@ theorem subagent_status_terminal_precisely
          , HasTerminal.isTerminal
          , RequestState.instHasTerminal
          ]
+
+/-- The equality key used by the live adapter must carry the projected child
+state and failure message as well as the parent tool status. Otherwise a child
+transition cannot refresh Codex's `agentsStates` after the tool item completes. -/
+structure CollabPresentationFingerprint where
+  childPhase : CollabAgentPhase
+  failureMessage : Option String
+  deriving DecidableEq, Repr
+
+def collabPresentationFingerprint
+    (latestChildState : RequestState)
+    (failureMessage : Option String) : CollabPresentationFingerprint :=
+  { childPhase := projectSubagentState latestChildState
+  , failureMessage := failureMessage
+  }
+
+theorem collab_fingerprint_includes_latest_child_state
+    (state : RequestState)
+    (failureMessage : Option String) :
+    (collabPresentationFingerprint state failureMessage).childPhase =
+      projectSubagentState state := rfl
+
+/-- Authorized child threads remain durable snapshots until the client loads
+them. Loading an authorized child upgrades the projection to the live event
+stream; authorization is required in both modes. -/
+inductive ChildThreadProjection where
+  | hidden
+  | snapshot
+  | live
+  deriving DecidableEq, Repr
+
+def projectChildThread (authorized loaded : Bool) : ChildThreadProjection :=
+  if !authorized then .hidden
+  else if loaded then .live
+  else .snapshot
+
+theorem unauthorized_child_thread_is_hidden (loaded : Bool) :
+    projectChildThread false loaded = .hidden := by
+  simp [projectChildThread]
+
+theorem authorized_unloaded_child_is_snapshot :
+    projectChildThread true false = .snapshot := by
+  simp [projectChildThread]
+
+theorem authorized_loaded_child_is_live :
+    projectChildThread true true = .live := by
+  simp [projectChildThread]
 
 /-- The bridge between a parent tool call and a child request.  Codex thread IDs
 identify sessions, not requests, so `childSessionId` is the only sound receiver
@@ -197,7 +285,10 @@ def initialCompactionEvents : InferenceCallState → List ContextCompactionEvent
   | .completed => [.started, .completed]
   | .failed | .cancelled => []
 
-/-- Events required after a nonterminal compaction call was already observed. -/
+/-- Events required after a nonterminal compaction call was already observed.
+The pinned protocol has no failed-item notification. Failed/cancelled calls
+therefore emit no success event; a client which renders `started` must clear the
+in-progress presentation when the enclosing turn terminates. -/
 def subsequentCompactionEvents
     (previous current : InferenceCallState) : List ContextCompactionEvent :=
   match previous, current with
@@ -215,6 +306,12 @@ theorem completed_first_observation_projects_lifecycle_pair :
 
 theorem running_to_completed_projects_completion :
     subsequentCompactionEvents .running .completed = [.completed] := rfl
+
+theorem running_to_failed_never_claims_completed :
+    subsequentCompactionEvents .running .failed = [] := rfl
+
+theorem running_to_cancelled_never_claims_completed :
+    subsequentCompactionEvents .running .cancelled = [] := rfl
 
 theorem failed_compaction_never_claims_completed :
     initialCompactionEvents .failed = [] := rfl

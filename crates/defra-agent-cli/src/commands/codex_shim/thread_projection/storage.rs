@@ -18,7 +18,10 @@ pub(super) struct SessionRow {
     pub(super) started: Option<String>,
 }
 
-pub(super) async fn ensure_agent_session(state: &ShimState, session_id: &str) -> Result<()> {
+pub(in crate::commands::codex_shim) async fn ensure_agent_session(
+    state: &ShimState,
+    session_id: &str,
+) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let escaped_session_id = escape_graphql_string(session_id);
     let agent_name = agent_name(state);

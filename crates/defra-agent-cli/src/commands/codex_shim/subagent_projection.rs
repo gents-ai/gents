@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
+use defra_agent::graphql::escape_graphql_string;
 use defra_agent::tool_call_lifecycle::MAX_SUBAGENT_DEPTH;
 use serde::Deserialize;
 use serde_json::Value;
@@ -14,6 +15,8 @@ use super::ShimState;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LinkedSubagentThread {
     pub(super) request_id: String,
+    pub(super) latest_request_id: String,
+    pub(super) latest_request_content: String,
     pub(super) session_id: String,
     pub(super) parent_request_id: String,
     pub(super) parent_tool_call_id: String,
@@ -32,11 +35,16 @@ pub(super) struct LinkedSubagentThread {
 pub(super) struct CollabProjection {
     pub(super) status: codex::CollabAgentToolCallStatus,
     pub(super) tool: codex::CollabAgentTool,
+    pub(super) receiver_thread_id: String,
+    pub(super) child_lifecycle_state: String,
+    pub(super) child_failure_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 struct RequestRow {
     request_id: String,
+    #[serde(default)]
+    content: String,
     session_id: String,
     agent_did: String,
     #[serde(default)]
@@ -78,6 +86,40 @@ struct AuthorizedRequest {
     root_session_id: String,
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct RequestContextKey {
+    session_id: String,
+    agent_did: String,
+    behavior_id: Option<String>,
+    depth: u32,
+}
+
+const REQUEST_ROW_FIELDS: &str = r#"
+    request_id
+    content
+    session_id
+    agent_did
+    behavior_id
+    metadata
+    lifecycle_state
+    failure_reason
+    created_at
+    subagent_depth
+    caused_by_parent_request_id
+    caused_by_parent_tool_call_id
+"#;
+
+const TOOL_LINK_ROW_FIELDS: &str = r#"
+    request_id
+    session_id
+    agent_did
+    tool_call_id
+    tool_name
+    child_request_id
+    spawn_target_did
+    args
+"#;
+
 /// Load the subagent request graph reachable from a Codex-shim-owned root.
 ///
 /// ACP still decides which rows are visible.  On top of that boundary, this
@@ -88,36 +130,133 @@ struct AuthorizedRequest {
 pub(super) async fn load_authorized_subagent_threads(
     state: &ShimState,
 ) -> Result<Vec<LinkedSubagentThread>> {
-    let query = r#"{
-        AgentRequest(order: { created_at: ASC }) {
-            request_id
-            session_id
-            agent_did
-            behavior_id
-            metadata
-            lifecycle_state
-            failure_reason
-            created_at
-            subagent_depth
-            caused_by_parent_request_id
-            caused_by_parent_tool_call_id
+    load_authorized_subagent_threads_for_roots(state, None).await
+}
+
+pub(super) async fn load_authorized_subagent_threads_for_root(
+    state: &ShimState,
+    root_session_id: &str,
+) -> Result<Vec<LinkedSubagentThread>> {
+    load_authorized_subagent_threads_for_roots(state, Some(&[root_session_id.to_string()])).await
+}
+
+pub(super) async fn load_authorized_subagent_threads_for_root_ids(
+    state: &ShimState,
+    root_session_ids: &[String],
+) -> Result<Vec<LinkedSubagentThread>> {
+    if root_session_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    load_authorized_subagent_threads_for_roots(state, Some(root_session_ids)).await
+}
+
+async fn load_authorized_subagent_threads_for_roots(
+    state: &ShimState,
+    root_session_ids: Option<&[String]>,
+) -> Result<Vec<LinkedSubagentThread>> {
+    let response = query_node_json(
+        state.node.as_ref(),
+        &root_requests_query(state, root_session_ids),
+    )
+    .await?;
+    let mut requests = decode_rows::<RequestRow>(&response, "AgentRequest")
+        .context("decoding Codex root AgentRequest rows")?;
+    let mut seen_request_ids = requests
+        .iter()
+        .map(|row| row.request_id.clone())
+        .collect::<HashSet<_>>();
+    let mut tools = Vec::<ToolLinkRow>::new();
+    let mut seen_tool_edges = HashSet::<(String, String, String)>::new();
+    let mut scanned_sessions = HashSet::<String>::new();
+    let mut scanned_parent_requests = HashSet::<String>::new();
+
+    // Walk only the graph frontier reachable from scoped, Codex-stamped roots.
+    // Each linked session is scanned once; each request's spawn edges are
+    // scanned once. This keeps the hot path proportional to the visible graph
+    // rather than to every request and tool row on the fleet node.
+    for _ in 0..=MAX_SUBAGENT_DEPTH {
+        let links = resolve_authorized_subagent_threads(
+            &requests,
+            &tools,
+            state.agent_did.as_ref(),
+            state.behavior_id.as_ref(),
+        );
+        let mut frontier_sessions = requests
+            .iter()
+            .filter(|row| is_codex_root(row, &state.agent_did, &state.behavior_id))
+            .map(|row| row.session_id.clone())
+            .chain(links.iter().map(|link| link.session_id.clone()))
+            .filter(|session_id| scanned_sessions.insert(session_id.clone()))
+            .collect::<Vec<_>>();
+        frontier_sessions.sort();
+        frontier_sessions.dedup();
+
+        if !frontier_sessions.is_empty() {
+            let response = query_node_json(
+                state.node.as_ref(),
+                &requests_for_sessions_query(&frontier_sessions),
+            )
+            .await?;
+            let rows = decode_rows::<RequestRow>(&response, "AgentRequest")
+                .context("decoding linked-session AgentRequest rows")?;
+            extend_unique_requests(&mut requests, &mut seen_request_ids, rows);
         }
-        AgentToolCall(filter: { child_request_id: { _ne: "" } }) {
-            request_id
-            session_id
-            agent_did
-            tool_call_id
-            tool_name
-            child_request_id
-            spawn_target_did
-            args
+
+        let mut parent_request_ids = requests
+            .iter()
+            .filter(|row| scanned_sessions.contains(&row.session_id))
+            .map(|row| row.request_id.clone())
+            .filter(|request_id| scanned_parent_requests.insert(request_id.clone()))
+            .collect::<Vec<_>>();
+        parent_request_ids.sort();
+        parent_request_ids.dedup();
+
+        let mut child_request_ids = Vec::<String>::new();
+        if !parent_request_ids.is_empty() {
+            let response = query_node_json(
+                state.node.as_ref(),
+                &spawn_tools_for_requests_query(&parent_request_ids),
+            )
+            .await?;
+            for tool in decode_rows::<ToolLinkRow>(&response, "AgentToolCall")
+                .context("decoding scoped spawn AgentToolCall rows")?
+            {
+                if let Some(child_request_id) = nonempty(tool.child_request_id.as_deref()) {
+                    child_request_ids.push(child_request_id.to_string());
+                }
+                let key = (
+                    tool.request_id.clone(),
+                    tool.tool_call_id.clone(),
+                    tool.child_request_id.clone().unwrap_or_default(),
+                );
+                if seen_tool_edges.insert(key) {
+                    tools.push(tool);
+                }
+            }
         }
-    }"#;
-    let response = query_node_json(state.node.as_ref(), query).await?;
-    let requests = decode_rows::<RequestRow>(&response, "AgentRequest")
-        .context("decoding subagent AgentRequest graph")?;
-    let tools = decode_rows::<ToolLinkRow>(&response, "AgentToolCall")
-        .context("decoding subagent AgentToolCall graph")?;
+
+        child_request_ids.retain(|request_id| !seen_request_ids.contains(request_id));
+        child_request_ids.sort();
+        child_request_ids.dedup();
+        if !child_request_ids.is_empty() {
+            let response = query_node_json(
+                state.node.as_ref(),
+                &requests_by_id_query(&child_request_ids),
+            )
+            .await?;
+            let rows = decode_rows::<RequestRow>(&response, "AgentRequest")
+                .context("decoding child AgentRequest frontier")?;
+            extend_unique_requests(&mut requests, &mut seen_request_ids, rows);
+        }
+
+        if frontier_sessions.is_empty()
+            && parent_request_ids.is_empty()
+            && child_request_ids.is_empty()
+        {
+            break;
+        }
+    }
+
     Ok(resolve_authorized_subagent_threads(
         &requests,
         &tools,
@@ -126,13 +265,94 @@ pub(super) async fn load_authorized_subagent_threads(
     ))
 }
 
+fn root_requests_query(state: &ShimState, root_session_ids: Option<&[String]>) -> String {
+    let session_filter = root_session_ids
+        .filter(|ids| !ids.is_empty())
+        .map(|ids| {
+            format!(
+                ", session_id: {{ _in: [{}] }}",
+                graphql_string_list(ids.iter().map(String::as_str))
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    agent_did: {{ _eq: "{agent_did}" }},
+                    behavior_id: {{ _eq: "{behavior_id}" }},
+                    execution_origin: {{ _eq: "interactive" }}{session_filter}
+                }},
+                order: {{ created_at: ASC }}
+            ) {{ {REQUEST_ROW_FIELDS} }}
+        }}"#,
+        agent_did = escape_graphql_string(&state.agent_did),
+        behavior_id = escape_graphql_string(&state.behavior_id),
+    )
+}
+
+fn requests_for_sessions_query(session_ids: &[String]) -> String {
+    format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ session_id: {{ _in: [{}] }} }},
+                order: {{ created_at: ASC }}
+            ) {{ {REQUEST_ROW_FIELDS} }}
+        }}"#,
+        graphql_string_list(session_ids.iter().map(String::as_str)),
+    )
+}
+
+fn spawn_tools_for_requests_query(request_ids: &[String]) -> String {
+    format!(
+        r#"{{
+            AgentToolCall(filter: {{
+                request_id: {{ _in: [{}] }},
+                tool_name: {{ _eq: "spawn_subagent" }},
+                child_request_id: {{ _ne: "" }}
+            }}) {{ {TOOL_LINK_ROW_FIELDS} }}
+        }}"#,
+        graphql_string_list(request_ids.iter().map(String::as_str)),
+    )
+}
+
+fn requests_by_id_query(request_ids: &[String]) -> String {
+    format!(
+        r#"{{
+            AgentRequest(filter: {{ request_id: {{ _in: [{}] }} }}) {{
+                {REQUEST_ROW_FIELDS}
+            }}
+        }}"#,
+        graphql_string_list(request_ids.iter().map(String::as_str)),
+    )
+}
+
+fn graphql_string_list<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
+    values
+        .into_iter()
+        .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn extend_unique_requests(
+    requests: &mut Vec<RequestRow>,
+    seen_request_ids: &mut HashSet<String>,
+    rows: Vec<RequestRow>,
+) {
+    requests.extend(
+        rows.into_iter()
+            .filter(|row| seen_request_ids.insert(row.request_id.clone())),
+    );
+}
+
 fn resolve_authorized_subagent_threads(
     requests: &[RequestRow],
     tools: &[ToolLinkRow],
     shim_agent_did: &str,
     shim_behavior_id: &str,
 ) -> Vec<LinkedSubagentThread> {
-    let mut authorized = requests
+    let roots = requests
         .iter()
         .enumerate()
         .filter(|(_, row)| is_codex_root(row, shim_agent_did, shim_behavior_id))
@@ -141,6 +361,41 @@ fn resolve_authorized_subagent_threads(
             root_session_id: row.session_id.clone(),
         })
         .collect::<Vec<_>>();
+    let mut authorized = roots
+        .iter()
+        .map(|entry| (entry.row_index, entry.root_session_id.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut authorized_contexts = roots
+        .iter()
+        .map(|entry| {
+            (
+                request_context_key(&requests[entry.row_index]),
+                entry.root_session_id.clone(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let request_indices_by_id = requests.iter().enumerate().fold(
+        HashMap::<String, Vec<usize>>::new(),
+        |mut by_id, (index, row)| {
+            by_id.entry(row.request_id.clone()).or_default().push(index);
+            by_id
+        },
+    );
+    let tools_by_parent_call = tools.iter().fold(
+        HashMap::<(String, String, String, String), Vec<&ToolLinkRow>>::new(),
+        |mut by_call, tool| {
+            by_call
+                .entry((
+                    tool.request_id.clone(),
+                    tool.session_id.clone(),
+                    tool.agent_did.clone(),
+                    tool.tool_call_id.clone(),
+                ))
+                .or_default()
+                .push(tool);
+            by_call
+        },
+    );
     let mut links = Vec::new();
 
     for _ in 0..MAX_SUBAGENT_DEPTH {
@@ -150,33 +405,20 @@ fn resolve_authorized_subagent_threads(
         // requests in the same session. Once the spawn edge authorizes that
         // session, those same-principal requests are valid parent contexts for
         // nested spawns too.
-        let session_requests = requests
-            .iter()
-            .enumerate()
-            .filter(|(row_index, row)| {
-                !authorized.iter().any(|entry| entry.row_index == *row_index)
-                    && authorized
-                        .iter()
-                        .any(|entry| same_session_context(&requests[entry.row_index], row))
-            })
-            .map(|(row_index, row)| {
-                let root_session_id = authorized
-                    .iter()
-                    .find(|entry| same_session_context(&requests[entry.row_index], row))
-                    .expect("authorized session context")
-                    .root_session_id
-                    .clone();
-                AuthorizedRequest {
-                    row_index,
-                    root_session_id,
-                }
-            })
-            .collect::<Vec<_>>();
-        added |= !session_requests.is_empty();
-        authorized.extend(session_requests);
+        for (row_index, row) in requests.iter().enumerate() {
+            if authorized.contains_key(&row_index) {
+                continue;
+            }
+            if let Some(root_session_id) =
+                authorized_contexts.get(&request_context_key(row)).cloned()
+            {
+                authorized.insert(row_index, root_session_id);
+                added = true;
+            }
+        }
 
         for (row_index, child) in requests.iter().enumerate() {
-            if authorized.iter().any(|entry| entry.row_index == row_index) {
+            if authorized.contains_key(&row_index) {
                 continue;
             }
             let Some(parent_request_id) = nonempty(child.caused_by_parent_request_id.as_deref())
@@ -196,45 +438,46 @@ fn resolve_authorized_subagent_threads(
                 continue;
             }
 
-            let Some(parent_auth) = authorized.iter().find(|entry| {
-                let parent = &requests[entry.row_index];
-                parent.request_id == parent_request_id
-                    && parent.subagent_depth.unwrap_or_default() + 1 == child_depth
-                    && tools.iter().any(|tool| {
-                        tool.request_id == parent.request_id
-                            && tool.session_id == parent.session_id
-                            && tool.agent_did == parent.agent_did
-                            && tool.tool_call_id == parent_tool_call_id
-                            && tool.tool_name == "spawn_subagent"
+            let Some((parent_index, root_session_id, tool)) = request_indices_by_id
+                .get(parent_request_id)
+                .into_iter()
+                .flatten()
+                .find_map(|parent_index| {
+                    let root_session_id = authorized.get(parent_index)?;
+                    let parent = &requests[*parent_index];
+                    (parent.subagent_depth.unwrap_or_default() + 1 == child_depth).then_some(())?;
+                    let key = (
+                        parent.request_id.clone(),
+                        parent.session_id.clone(),
+                        parent.agent_did.clone(),
+                        parent_tool_call_id.to_string(),
+                    );
+                    let tool = tools_by_parent_call.get(&key)?.iter().find(|tool| {
+                        tool.tool_name == "spawn_subagent"
                             && nonempty(tool.child_request_id.as_deref())
                                 == Some(child.request_id.as_str())
                             && nonempty(tool.spawn_target_did.as_deref())
                                 .is_none_or(|target| target == child.agent_did)
-                    })
-            }) else {
+                    })?;
+                    Some((*parent_index, root_session_id.clone(), *tool))
+                })
+            else {
                 continue;
             };
-            let parent = &requests[parent_auth.row_index];
-            let Some(tool) = tools.iter().find(|tool| {
-                tool.request_id == parent.request_id
-                    && tool.session_id == parent.session_id
-                    && tool.agent_did == parent.agent_did
-                    && tool.tool_call_id == parent_tool_call_id
-                    && nonempty(tool.child_request_id.as_deref()) == Some(child.request_id.as_str())
-            }) else {
-                continue;
-            };
+            let parent = &requests[parent_index];
             let behavior_id = nonempty(child.behavior_id.as_deref())
                 .unwrap_or("subagent")
                 .to_string();
             let nickname = spawn_nickname(&tool.args).unwrap_or_else(|| behavior_id.clone());
             links.push(LinkedSubagentThread {
                 request_id: child.request_id.clone(),
+                latest_request_id: child.request_id.clone(),
+                latest_request_content: child.content.clone(),
                 session_id: child.session_id.clone(),
                 parent_request_id: parent.request_id.clone(),
                 parent_tool_call_id: parent_tool_call_id.to_string(),
                 parent_session_id: parent.session_id.clone(),
-                root_session_id: parent_auth.root_session_id.clone(),
+                root_session_id: root_session_id.clone(),
                 depth: child_depth,
                 agent_did: child.agent_did.clone(),
                 behavior_id,
@@ -249,10 +492,8 @@ fn resolve_authorized_subagent_threads(
                     .map(ToOwned::to_owned),
                 created_at: child.created_at.clone(),
             });
-            authorized.push(AuthorizedRequest {
-                row_index,
-                root_session_id: parent_auth.root_session_id.clone(),
-            });
+            authorized.insert(row_index, root_session_id.clone());
+            authorized_contexts.insert(request_context_key(child), root_session_id);
             added = true;
         }
         if !added {
@@ -268,14 +509,53 @@ fn resolve_authorized_subagent_threads(
     });
     let mut seen_sessions = HashSet::new();
     links.retain(|link| seen_sessions.insert(link.session_id.clone()));
+    let latest_by_context = requests.iter().enumerate().fold(
+        HashMap::<RequestContextKey, usize>::new(),
+        |mut latest, (index, row)| {
+            let key = request_context_key(row);
+            let replace = latest.get(&key).is_none_or(|previous| {
+                let previous = &requests[*previous];
+                (&row.created_at, &row.request_id) > (&previous.created_at, &previous.request_id)
+            });
+            if replace {
+                latest.insert(key, index);
+            }
+            latest
+        },
+    );
+    let requests_by_id = requests
+        .iter()
+        .map(|row| (row.request_id.as_str(), row))
+        .collect::<HashMap<_, _>>();
+    for link in &mut links {
+        let Some(spawn_request) = requests_by_id.get(link.request_id.as_str()) else {
+            continue;
+        };
+        let Some(latest_index) = latest_by_context.get(&request_context_key(spawn_request)) else {
+            continue;
+        };
+        let latest = &requests[*latest_index];
+        link.latest_request_id = latest.request_id.clone();
+        link.latest_request_content = latest.content.clone();
+        link.lifecycle_state = nonempty(latest.lifecycle_state.as_deref())
+            .unwrap_or("pending")
+            .to_string();
+        link.failure_reason = latest
+            .failure_reason
+            .as_deref()
+            .and_then(|value| nonempty(Some(value)))
+            .map(ToOwned::to_owned);
+    }
     links
 }
 
-fn same_session_context(left: &RequestRow, right: &RequestRow) -> bool {
-    left.session_id == right.session_id
-        && left.agent_did == right.agent_did
-        && nonempty(left.behavior_id.as_deref()) == nonempty(right.behavior_id.as_deref())
-        && left.subagent_depth.unwrap_or_default() == right.subagent_depth.unwrap_or_default()
+fn request_context_key(row: &RequestRow) -> RequestContextKey {
+    RequestContextKey {
+        session_id: row.session_id.clone(),
+        agent_did: row.agent_did.clone(),
+        behavior_id: nonempty(row.behavior_id.as_deref()).map(ToOwned::to_owned),
+        depth: row.subagent_depth.unwrap_or_default(),
+    }
 }
 
 fn is_codex_root(row: &RequestRow, agent_did: &str, behavior_id: &str) -> bool {
@@ -360,7 +640,7 @@ fn tool_child_request_id(tool: &DefraToolCallProgress) -> Option<String> {
 
 pub(super) fn collab_projection(tool: &DefraToolCallProgress) -> Option<CollabProjection> {
     let collab_tool = collab_tool(&tool.tool_name)?;
-    tool.subagent_link.as_ref()?;
+    let link = tool.subagent_link.as_ref()?;
     let status = match defra_tool_call_status(tool) {
         codex::McpToolCallStatus::InProgress => codex::CollabAgentToolCallStatus::InProgress,
         codex::McpToolCallStatus::Completed => codex::CollabAgentToolCallStatus::Completed,
@@ -369,6 +649,9 @@ pub(super) fn collab_projection(tool: &DefraToolCallProgress) -> Option<CollabPr
     Some(CollabProjection {
         status,
         tool: collab_tool,
+        receiver_thread_id: link.session_id.clone(),
+        child_lifecycle_state: link.lifecycle_state.clone(),
+        child_failure_reason: link.failure_reason.clone(),
     })
 }
 
@@ -388,10 +671,6 @@ pub(super) fn collab_tool_item(
     tool: &DefraToolCallProgress,
     projection: &CollabProjection,
 ) -> codex::ThreadItem {
-    let link = tool
-        .subagent_link
-        .as_ref()
-        .expect("collab projection requires an authorized subagent link");
     let prompt = serde_json::from_str::<Value>(&tool.args)
         .ok()
         .and_then(|args| match projection.tool {
@@ -407,10 +686,10 @@ pub(super) fn collab_tool_item(
         });
     let mut agents_states = HashMap::new();
     agents_states.insert(
-        link.session_id.clone(),
+        projection.receiver_thread_id.clone(),
         codex::CollabAgentState {
-            status: collab_agent_status(&link.lifecycle_state),
-            message: link.failure_reason.clone(),
+            status: collab_agent_status(&projection.child_lifecycle_state),
+            message: projection.child_failure_reason.clone(),
         },
     );
     codex::ThreadItem::CollabAgentToolCall {
@@ -418,7 +697,7 @@ pub(super) fn collab_tool_item(
         tool: projection.tool.clone(),
         status: projection.status.clone(),
         sender_thread_id: sender_thread_id.to_string(),
-        receiver_thread_ids: vec![link.session_id.clone()],
+        receiver_thread_ids: vec![projection.receiver_thread_id.clone()],
         prompt,
         model: None,
         reasoning_effort: None,
@@ -440,6 +719,7 @@ mod tests {
     ) -> RequestRow {
         RequestRow {
             request_id: request_id.to_string(),
+            content: format!("content for {request_id}"),
             session_id: session_id.to_string(),
             agent_did: if depth == 0 { "did:root" } else { "did:child" }.to_string(),
             behavior_id: Some(if depth == 0 { "root" } else { "reviewer" }.to_string()),
@@ -557,6 +837,64 @@ mod tests {
     }
 
     #[test]
+    fn link_status_tracks_latest_request_in_authorized_child_session() {
+        let root_session = Uuid::new_v4().to_string();
+        let child_session = Uuid::new_v4().to_string();
+        let mut child = request(
+            "child-request",
+            &child_session,
+            1,
+            Some("root-request"),
+            Some("spawn-call"),
+        );
+        child.created_at = Some("2026-01-01T00:00:01Z".to_string());
+        child.lifecycle_state = Some("completed".to_string());
+        let mut followup = request("child-followup", &child_session, 1, None, None);
+        followup.created_at = Some("2026-01-01T00:00:02Z".to_string());
+        followup.lifecycle_state = Some("processing".to_string());
+        let requests = vec![
+            request("root-request", &root_session, 0, None, None),
+            child,
+            followup,
+        ];
+        let tools = vec![ToolLinkRow {
+            request_id: "root-request".to_string(),
+            session_id: root_session,
+            agent_did: "did:root".to_string(),
+            tool_call_id: "spawn-call".to_string(),
+            tool_name: "spawn_subagent".to_string(),
+            child_request_id: Some("child-request".to_string()),
+            spawn_target_did: Some("did:child".to_string()),
+            args: r#"{"name":"reviewer"}"#.to_string(),
+        }];
+
+        let links = resolve_authorized_subagent_threads(&requests, &tools, "did:root", "root");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].request_id, "child-request");
+        assert_eq!(links[0].latest_request_id, "child-followup");
+        assert_eq!(
+            links[0].latest_request_content,
+            "content for child-followup"
+        );
+        assert_eq!(links[0].lifecycle_state, "processing");
+    }
+
+    #[test]
+    fn graph_frontier_queries_are_scoped_and_escape_values() {
+        let sessions = vec!["session-a".to_string(), "session-\"b".to_string()];
+        let requests = vec!["request-a".to_string(), "request-\"b".to_string()];
+        let session_query = requests_for_sessions_query(&sessions);
+        assert!(session_query.contains("session_id: { _in:"));
+        assert!(session_query.contains(r#""session-\"b""#));
+
+        let tool_query = spawn_tools_for_requests_query(&requests);
+        assert!(tool_query.contains("request_id: { _in:"));
+        assert!(tool_query.contains(r#"tool_name: { _eq: "spawn_subagent" }"#));
+        assert!(tool_query.contains(r#"child_request_id: { _ne: "" }"#));
+        assert!(tool_query.contains(r#""request-\"b""#));
+    }
+
+    #[test]
     fn lean_fenced_tool_and_status_mappings_match_codex_protocol() {
         assert_eq!(
             collab_tool("spawn_subagent"),
@@ -615,6 +953,8 @@ mod tests {
         };
         tool.subagent_link = Some(LinkedSubagentThread {
             request_id: "child-request".to_string(),
+            latest_request_id: "child-request".to_string(),
+            latest_request_content: "Inspect the patch".to_string(),
             session_id: child_session_id.clone(),
             parent_request_id: "parent-request".to_string(),
             parent_tool_call_id: "spawn-call".to_string(),
@@ -650,6 +990,15 @@ mod tests {
                     .replace('/', "~1")
             )),
             Some(&Value::String("running".to_string()))
+        );
+
+        let mut completed = tool.clone();
+        let link = completed.subagent_link.as_mut().expect("link");
+        link.lifecycle_state = "completed".to_string();
+        let completed_projection = collab_projection(&completed).expect("completed projection");
+        assert_ne!(
+            projection, completed_projection,
+            "child lifecycle changes must refresh agentsStates even after the tool status settles"
         );
     }
 }

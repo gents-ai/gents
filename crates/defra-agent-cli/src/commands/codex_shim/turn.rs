@@ -12,7 +12,7 @@ use active::{
     cancel_abandoned_steering_request, clear_stream_control_if_current, install_stream_control,
     load_active_codex_turn,
 };
-use stream::stream_defra_turn;
+pub(super) use stream::{stream_defra_turn, TurnStreamOptions};
 use submission::create_agent_request_with_retry;
 
 use super::protocol::{
@@ -121,23 +121,31 @@ pub(super) async fn start_defra_turn(
     send_committed_user_message(&connection.outbound, state, &thread_id, &turn_id, &input).await?;
 
     let mut projection = TurnProjection::new(state, &thread_id, &turn_id, cwd.clone());
-    let result =
-        match stream_defra_turn(connection, state, &submitted, &mut projection, cancel_rx).await {
-            Ok(()) => Ok(()),
-            Err(err) => {
-                let message = format!("DEFRA turn failed: {err}");
-                projection
-                    .append_agent_delta(&connection.outbound, &format!("[agent error] {message}\n"))
-                    .await?;
-                projection
-                    .finish_turn(
-                        &connection.outbound,
-                        codex::TurnStatus::Failed,
-                        Some(message),
-                    )
-                    .await
-            }
-        };
+    let result = match stream_defra_turn(
+        connection,
+        state,
+        &submitted,
+        &mut projection,
+        cancel_rx,
+        TurnStreamOptions::fresh(thread_id.clone()),
+    )
+    .await
+    {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let message = format!("DEFRA turn failed: {err}");
+            projection
+                .append_agent_delta(&connection.outbound, &format!("[agent error] {message}\n"))
+                .await?;
+            projection
+                .finish_turn(
+                    &connection.outbound,
+                    codex::TurnStatus::Failed,
+                    Some(message),
+                )
+                .await
+        }
+    };
 
     clear_stream_control_if_current(connection, &thread_id, &turn_id).await;
     result

@@ -2152,6 +2152,252 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_thread() -> Result<()>
+{
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-codex-shim-subagent-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start_hanging(&model_name)?;
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-codex-shim-subagent-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let behavior_id = format!("{agent_did}:default");
+    let child_behavior_id = format!("{behavior_id}:reviewer");
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim",
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "50",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+        .await
+        .context("connecting to codex-shim websocket")?;
+    initialize_config_and_thread(&mut ws, &home_dir).await?;
+    let parent_thread_id = start_thread(&mut ws, &home_dir).await?;
+    let prompt = format!("hold subagent projection {}", Uuid::new_v4().simple());
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnStart {
+            request_id: request_id(230),
+            params: codex::TurnStartParams {
+                thread_id: parent_thread_id.clone(),
+                input: vec![codex::UserInput::Text {
+                    text: prompt.clone(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let turn_start: codex::TurnStartResponse =
+        read_typed_response(&mut ws, request_id(230)).await?;
+    let started = read_turn_started(&mut ws).await?;
+    assert_eq!(started.turn.id, turn_start.turn.id);
+    let (parent_request_id, session_id, _) =
+        wait_for_request(&graphql, &agent_did, &prompt).await?;
+    assert_eq!(session_id, parent_thread_id);
+
+    let child_thread_id = Uuid::new_v4().to_string();
+    let child_request_id = Uuid::new_v4().to_string();
+    let tool_call_id = format!("spawn-{}", Uuid::new_v4().simple());
+    let tool_call_key = format!("{parent_thread_id}:{tool_call_id}");
+    seed_authorized_subagent_link(
+        &graphql,
+        &agent_did,
+        &child_behavior_id,
+        &parent_request_id,
+        &parent_thread_id,
+        &child_request_id,
+        &child_thread_id,
+        &tool_call_id,
+        &tool_call_key,
+    )
+    .await?;
+
+    let running = tokio::time::timeout(
+        Duration::from_secs(15),
+        read_collab_agent_status(&mut ws, &tool_call_key, &child_thread_id),
+    )
+    .await
+    .context("timed out waiting for native subagent projection")??;
+    assert_eq!(running, codex::CollabAgentStatus::Running);
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadRead {
+            request_id: request_id(231),
+            params: codex::ThreadReadParams {
+                thread_id: child_thread_id.clone(),
+                include_turns: true,
+            },
+        },
+    )
+    .await?;
+    let child_read: codex::ThreadReadResponse =
+        read_typed_response(&mut ws, request_id(231)).await?;
+    assert_eq!(child_read.thread.id, child_thread_id);
+    assert_eq!(child_read.thread.turns.len(), 1);
+    assert_eq!(
+        child_read.thread.turns[0].status,
+        codex::TurnStatus::InProgress
+    );
+    let child_json = serde_json::to_value(&child_read.thread)?;
+    assert_eq!(
+        child_json.pointer("/source/subAgent/thread_spawn/parent_thread_id"),
+        Some(&Value::String(parent_thread_id.clone()))
+    );
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadResume {
+            request_id: request_id(232),
+            params: codex::ThreadResumeParams {
+                thread_id: child_thread_id.clone(),
+                cwd: None,
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let child_resume: codex::ThreadResumeResponse =
+        read_typed_response(&mut ws, request_id(232)).await?;
+    assert_eq!(child_resume.thread.id, child_thread_id);
+
+    let live_child_text = format!("live child output {}", Uuid::new_v4().simple());
+    seed_child_streaming_response(
+        &graphql,
+        &agent_did,
+        &child_behavior_id,
+        &child_request_id,
+        &child_thread_id,
+        &live_child_text,
+    )
+    .await?;
+    let projected_text = match tokio::time::timeout(
+        Duration::from_secs(15),
+        read_child_agent_delta(&mut ws, &child_thread_id, &child_request_id),
+    )
+    .await
+    {
+        Ok(result) => result?,
+        Err(_) => {
+            let (stdout, stderr) = serve.captured_output()?;
+            bail!(
+                "timed out waiting for live loaded-child delta\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+        }
+    };
+    assert_eq!(projected_text, live_child_text);
+
+    update_request_lifecycle(&graphql, &child_request_id, "completed").await?;
+    let completed = tokio::time::timeout(
+        Duration::from_secs(15),
+        read_collab_agent_status(&mut ws, &tool_call_key, &child_thread_id),
+    )
+    .await
+    .context("timed out waiting for refreshed subagent agentsStates")??;
+    assert_eq!(completed, codex::CollabAgentStatus::Completed);
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnStart {
+            request_id: request_id(233),
+            params: codex::TurnStartParams {
+                thread_id: child_thread_id.clone(),
+                input: vec![codex::UserInput::Text {
+                    text: "must be rejected".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let start_error = read_error_response(&mut ws, request_id(233)).await?;
+    assert!(start_error.message.contains("read-only"));
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnSteer {
+            request_id: request_id(234),
+            params: codex::TurnSteerParams {
+                thread_id: child_thread_id.clone(),
+                input: vec![codex::UserInput::Text {
+                    text: "must also be rejected".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                responsesapi_client_metadata: None,
+                expected_turn_id: child_request_id.clone(),
+            },
+        },
+    )
+    .await?;
+    let steer_error = read_error_response(&mut ws, request_id(234)).await?;
+    assert!(steer_error.message.contains("read-only"));
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnInterrupt {
+            request_id: request_id(235),
+            params: codex::TurnInterruptParams {
+                thread_id: child_thread_id,
+                turn_id: child_request_id,
+            },
+        },
+    )
+    .await?;
+    let interrupt_error = read_error_response(&mut ws, request_id(235)).await?;
+    assert!(interrupt_error.message.contains("read-only"));
+
+    let unresolved_tool_call_key = format!("{parent_thread_id}:unresolved-spawn");
+    seed_unresolved_completed_subagent_tool(
+        &graphql,
+        &agent_did,
+        &parent_request_id,
+        &parent_thread_id,
+        &unresolved_tool_call_key,
+    )
+    .await?;
+    update_request_lifecycle(&graphql, &parent_request_id, "completed").await?;
+    tokio::time::timeout(
+        Duration::from_secs(15),
+        read_mcp_tool_completion(&mut ws, &unresolved_tool_call_key),
+    )
+    .await
+    .context("timed out waiting for terminal unresolved subagent MCP fallback")??;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -3473,6 +3719,200 @@ async fn seed_running_background_tool(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn seed_authorized_subagent_link(
+    graphql: &str,
+    agent_did: &str,
+    child_behavior_id: &str,
+    parent_request_id: &str,
+    parent_session_id: &str,
+    child_request_id: &str,
+    child_session_id: &str,
+    tool_call_id: &str,
+    tool_call_key: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let args = serde_json::to_string(&json!({
+        "name": "reviewer",
+        "prompt": "Inspect the parent change"
+    }))?;
+    let result = serde_json::to_string(&json!({
+        "child_request_id": child_request_id,
+        "child_session_id": child_session_id
+    }))?;
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentSession(input: {{
+                session_id: "{child_session_id}",
+                agent_name: "reviewer",
+                agent_did: "{agent_did}",
+                behavior_id: "{child_behavior_id}",
+                started: "{now}",
+                status: "active"
+            }}) {{ _docID }}
+            create_AgentRequest(input: {{
+                request_id: "{child_request_id}",
+                agent_did: "{agent_did}",
+                behavior_id: "{child_behavior_id}",
+                session_id: "{child_session_id}",
+                content: "Inspect the parent change",
+                metadata: "{{}}",
+                status: "processing",
+                lifecycle_state: "processing",
+                execution_origin: "subagent",
+                failure_reason: "",
+                created_at: "{now}",
+                retry_count: 0,
+                max_retries: 3,
+                subagent_depth: 1,
+                caused_by_parent_request_id: "{parent_request_id}",
+                caused_by_parent_tool_call_id: "{tool_call_id}"
+            }}) {{ _docID }}
+            create_AgentToolCall(input: {{
+                tool_call_key: "{tool_call_key}",
+                request_id: "{parent_request_id}",
+                session_id: "{parent_session_id}",
+                agent_did: "{agent_did}",
+                message_sequence: 1,
+                tool_name: "spawn_subagent",
+                tool_call_id: "{tool_call_id}",
+                args: "{args}",
+                result: "{result}",
+                status: "completed",
+                lifecycle_state: "completed",
+                child_request_id: "{child_request_id}",
+                spawn_target_did: "{agent_did}",
+                started_at: "{now}",
+                completed_at: "{now}"
+            }}) {{ _docID }}
+        }}"#,
+        child_session_id = escape_graphql_string(child_session_id),
+        agent_did = escape_graphql_string(agent_did),
+        child_behavior_id = escape_graphql_string(child_behavior_id),
+        now = escape_graphql_string(&now),
+        child_request_id = escape_graphql_string(child_request_id),
+        parent_request_id = escape_graphql_string(parent_request_id),
+        tool_call_id = escape_graphql_string(tool_call_id),
+        tool_call_key = escape_graphql_string(tool_call_key),
+        parent_session_id = escape_graphql_string(parent_session_id),
+        args = escape_graphql_string(&args),
+        result = escape_graphql_string(&result),
+    );
+    graphql_query(graphql, &mutation).await?;
+    Ok(())
+}
+
+async fn seed_unresolved_completed_subagent_tool(
+    graphql: &str,
+    agent_did: &str,
+    parent_request_id: &str,
+    parent_session_id: &str,
+    tool_call_key: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let missing_child_request_id = Uuid::new_v4().to_string();
+    let args = serde_json::to_string(&json!({
+        "name": "replication-lagged",
+        "prompt": "This child edge is intentionally unavailable"
+    }))?;
+    let result = serde_json::to_string(&json!({
+        "child_request_id": missing_child_request_id
+    }))?;
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentToolCall(input: {{
+                tool_call_key: "{tool_call_key}",
+                request_id: "{parent_request_id}",
+                session_id: "{parent_session_id}",
+                agent_did: "{agent_did}",
+                message_sequence: 2,
+                tool_name: "spawn_subagent",
+                tool_call_id: "unresolved-spawn",
+                args: "{args}",
+                result: "{result}",
+                status: "completed",
+                lifecycle_state: "completed",
+                child_request_id: "{missing_child_request_id}",
+                spawn_target_did: "{agent_did}",
+                started_at: "{now}",
+                completed_at: "{now}"
+            }}) {{ _docID }}
+        }}"#,
+        tool_call_key = escape_graphql_string(tool_call_key),
+        parent_request_id = escape_graphql_string(parent_request_id),
+        parent_session_id = escape_graphql_string(parent_session_id),
+        agent_did = escape_graphql_string(agent_did),
+        args = escape_graphql_string(&args),
+        result = escape_graphql_string(&result),
+        missing_child_request_id = escape_graphql_string(&missing_child_request_id),
+        now = escape_graphql_string(&now),
+    );
+    graphql_query(graphql, &mutation).await?;
+    Ok(())
+}
+
+async fn seed_child_streaming_response(
+    graphql: &str,
+    agent_did: &str,
+    behavior_id: &str,
+    request_id: &str,
+    session_id: &str,
+    content: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentResponse(input: {{
+                response_key: "{request_id}",
+                request_id: "{request_id}",
+                agent_did: "{agent_did}",
+                behavior_id: "{behavior_id}",
+                session_id: "{session_id}",
+                content: "{content}",
+                reasoning: "",
+                status: "streaming",
+                error_message: "",
+                token_count: 0,
+                progress_seq: 1,
+                reasoning_progress_seq: 0,
+                created_at: "{now}",
+                completed_at: ""
+            }}) {{ _docID }}
+        }}"#,
+        request_id = escape_graphql_string(request_id),
+        agent_did = escape_graphql_string(agent_did),
+        behavior_id = escape_graphql_string(behavior_id),
+        session_id = escape_graphql_string(session_id),
+        content = escape_graphql_string(content),
+        now = escape_graphql_string(&now),
+    );
+    graphql_query(graphql, &mutation).await?;
+    Ok(())
+}
+
+async fn update_request_lifecycle(
+    graphql: &str,
+    request_id: &str,
+    lifecycle_state: &str,
+) -> Result<()> {
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                input: {{
+                    status: "{lifecycle_state}",
+                    lifecycle_state: "{lifecycle_state}",
+                    failure_reason: ""
+                }}
+            ) {{ _docID }}
+        }}"#,
+        request_id = escape_graphql_string(request_id),
+        lifecycle_state = escape_graphql_string(lifecycle_state),
+    );
+    graphql_query(graphql, &mutation).await?;
+    Ok(())
+}
+
 fn require_command(name: &str) -> Result<()> {
     if which(name).is_some() {
         Ok(())
@@ -3934,6 +4374,101 @@ async fn read_background_command_started(
                         {
                             return Ok(id);
                         }
+                    }
+                }
+            }
+            codex::JSONRPCMessage::Error(error) => {
+                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+            }
+            codex::JSONRPCMessage::Request(request) => {
+                bail!("Codex shim sent unexpected server request: {request:?}");
+            }
+            codex::JSONRPCMessage::Response(_) => {}
+        }
+    }
+}
+
+async fn read_collab_agent_status(
+    ws: &mut ShimWebSocket,
+    expected_tool_call_key: &str,
+    child_thread_id: &str,
+) -> Result<codex::CollabAgentStatus> {
+    loop {
+        match read_jsonrpc(ws).await? {
+            codex::JSONRPCMessage::Notification(notification) => {
+                if let codex::ServerNotification::ItemCompleted(completed) =
+                    server_notification_from_jsonrpc(notification)?
+                {
+                    if let codex::ThreadItem::CollabAgentToolCall {
+                        id, agents_states, ..
+                    } = completed.item
+                    {
+                        if id == expected_tool_call_key {
+                            return agents_states
+                                .get(child_thread_id)
+                                .map(|state| state.status.clone())
+                                .with_context(|| {
+                                    format!(
+                                        "collab item {id} missing child state for {child_thread_id}"
+                                    )
+                                });
+                        }
+                    }
+                }
+            }
+            codex::JSONRPCMessage::Error(error) => {
+                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+            }
+            codex::JSONRPCMessage::Request(request) => {
+                bail!("Codex shim sent unexpected server request: {request:?}");
+            }
+            codex::JSONRPCMessage::Response(_) => {}
+        }
+    }
+}
+
+async fn read_mcp_tool_completion(
+    ws: &mut ShimWebSocket,
+    expected_tool_call_key: &str,
+) -> Result<()> {
+    loop {
+        match read_jsonrpc(ws).await? {
+            codex::JSONRPCMessage::Notification(notification) => {
+                if let codex::ServerNotification::ItemCompleted(completed) =
+                    server_notification_from_jsonrpc(notification)?
+                {
+                    if let codex::ThreadItem::McpToolCall { id, status, .. } = completed.item {
+                        if id == expected_tool_call_key {
+                            assert_eq!(status, codex::McpToolCallStatus::Completed);
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+            codex::JSONRPCMessage::Error(error) => {
+                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+            }
+            codex::JSONRPCMessage::Request(request) => {
+                bail!("Codex shim sent unexpected server request: {request:?}");
+            }
+            codex::JSONRPCMessage::Response(_) => {}
+        }
+    }
+}
+
+async fn read_child_agent_delta(
+    ws: &mut ShimWebSocket,
+    child_thread_id: &str,
+    child_turn_id: &str,
+) -> Result<String> {
+    loop {
+        match read_jsonrpc(ws).await? {
+            codex::JSONRPCMessage::Notification(notification) => {
+                if let codex::ServerNotification::AgentMessageDelta(delta) =
+                    server_notification_from_jsonrpc(notification)?
+                {
+                    if delta.thread_id == child_thread_id && delta.turn_id == child_turn_id {
+                        return Ok(delta.delta);
                     }
                 }
             }

@@ -101,6 +101,12 @@ impl<'a> TurnProjection<'a> {
         .await
     }
 
+    pub(super) fn resume_agent_message(&mut self, item_id: String, text: &str) {
+        self.active_agent_item_id = Some(item_id);
+        self.active_agent_text = text.to_string();
+        self.rendered_agent_text = text.to_string();
+    }
+
     pub(super) async fn finish_agent_message_with_phase(
         &mut self,
         outbound: &Outbound,
@@ -299,7 +305,15 @@ impl<'a> TurnProjection<'a> {
             }),
         )
         .await?;
-        self.completed_items.push(item);
+        if let Some(existing) = self
+            .completed_items
+            .iter()
+            .position(|existing| existing.id() == item.id())
+        {
+            self.completed_items[existing] = item;
+        } else {
+            self.completed_items.push(item);
+        }
         Ok(())
     }
 
@@ -360,6 +374,13 @@ impl<'a> TurnProjection<'a> {
                 }
             }
             (None, ToolProjectionStatus::Mcp(status))
+                if *status != codex::McpToolCallStatus::InProgress =>
+            {
+                self.send_tool_started(outbound, tool).await?;
+                self.send_tool_completed(outbound, tool, status.clone())
+                    .await
+            }
+            (Some(ToolProjectionStatus::DeferredCollab), ToolProjectionStatus::Mcp(status))
                 if *status != codex::McpToolCallStatus::InProgress =>
             {
                 self.send_tool_started(outbound, tool).await?;

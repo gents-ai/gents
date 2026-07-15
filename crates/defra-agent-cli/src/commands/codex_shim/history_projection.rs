@@ -9,7 +9,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::command_projection::{
-    command_execution_item, file_change_item, tool_projection_status, ToolProjectionStatus,
+    command_execution_item, file_change_item, tool_projection_status_with_settled,
+    ToolProjectionStatus,
 };
 use super::compaction_projection::context_compaction_item;
 use super::progress::{
@@ -19,7 +20,7 @@ use super::progress::{
 use super::protocol::{absolute_path, agent_message_item_with_phase, turn_value};
 use super::store::{hydrate_materialized_response_content, query_node_json};
 use super::subagent_projection::{
-    attach_subagent_link, collab_tool_item, load_authorized_subagent_threads,
+    attach_subagent_link, collab_tool_item, load_authorized_subagent_threads_for_root,
 };
 use super::thread_projection::CodexThreadRecord;
 use super::ShimState;
@@ -160,7 +161,12 @@ pub(super) async fn load_thread_turns(
         .context("decoding AgentRequest history rows")?;
     let responses = decode_response_rows(state, &response).await?;
     let mut tools = decode_tool_rows(&response).context("decoding AgentToolCall history rows")?;
-    let subagent_links = load_authorized_subagent_threads(state).await?;
+    let root_session_id = record
+        .subagent
+        .as_ref()
+        .map(|link| link.root_session_id.as_str())
+        .unwrap_or(record.session_id.as_str());
+    let subagent_links = load_authorized_subagent_threads_for_root(state, root_session_id).await?;
     for tool in &mut tools {
         attach_subagent_link(&mut tool.progress, &subagent_links);
     }
@@ -324,7 +330,7 @@ fn project_request_turns(
 ) -> Result<Vec<codex::Turn>> {
     let requests = requests
         .into_iter()
-        .filter(is_codex_visible_request)
+        .filter(|request| record.is_subagent() || is_codex_visible_request(request))
         .collect::<Vec<_>>();
     let requests_by_id = requests
         .iter()
@@ -568,6 +574,12 @@ fn append_request_items(
     compactions: &[CompactionRow],
     messages_by_sequence: &BTreeMap<i64, MessageRow>,
 ) {
+    let projection_settled = matches!(
+        request.lifecycle_state.trim(),
+        "completed" | "failed" | "dead" | "interrupted" | "superseded"
+    ) || response.is_some_and(|response| {
+        matches!(response.status.trim(), "complete" | "completed" | "error")
+    });
     tools.sort_by(|left, right| {
         left.message_sequence
             .cmp(&right.message_sequence)
@@ -599,7 +611,7 @@ fn append_request_items(
                 rendered_assistant_sequences.insert(tool.message_sequence);
             }
         }
-        if let Some(item) = project_tool(record, &tool.progress) {
+        if let Some(item) = project_tool(record, &tool.progress, projection_settled) {
             items.push(item);
         }
     }
@@ -674,8 +686,9 @@ fn append_assistant_message_items(
 fn project_tool(
     record: &CodexThreadRecord,
     tool: &DefraToolCallProgress,
+    projection_settled: bool,
 ) -> Option<codex::ThreadItem> {
-    match tool_projection_status(tool) {
+    match tool_projection_status_with_settled(tool, projection_settled) {
         ToolProjectionStatus::Mcp(status) => Some(defra_tool_item(tool, status)),
         ToolProjectionStatus::Command(status) => {
             Some(command_execution_item(&record.cwd, tool, status))

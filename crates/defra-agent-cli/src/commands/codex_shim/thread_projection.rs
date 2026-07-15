@@ -5,7 +5,10 @@ use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use super::host_runtime::thread_git_info;
-use super::subagent_projection::{load_authorized_subagent_threads, LinkedSubagentThread};
+use super::subagent_projection::{
+    load_authorized_subagent_threads, load_authorized_subagent_threads_for_root_ids,
+    LinkedSubagentThread,
+};
 use super::ShimState;
 
 mod goal;
@@ -25,8 +28,8 @@ pub(super) use mutations::{
     set_codex_thread_memory_mode, set_codex_thread_name, set_codex_thread_settings,
 };
 
-pub(super) use storage::ensure_agent_session_pinning;
-use storage::{ensure_agent_session, list_scoped_sessions, load_conversation, load_scoped_session};
+pub(super) use storage::{ensure_agent_session, ensure_agent_session_pinning};
+use storage::{list_scoped_sessions, load_conversation, load_scoped_session};
 pub(super) use usage::{
     latest_inference_usage_observation, latest_requests_token_usage, session_token_usage,
     thread_record_token_usage, thread_token_usage, TokenTotals,
@@ -95,27 +98,24 @@ pub(super) async fn create_codex_thread(
         .with_context(|| format!("loading newly-created Codex thread {thread_id}"))
 }
 
-pub(super) async fn resume_codex_thread(
+pub(super) async fn resume_loaded_codex_thread(
     state: &ShimState,
     thread_id: &str,
     cwd_override: Option<&str>,
+    record: Option<CodexThreadRecord>,
 ) -> Result<Option<CodexThreadRecord>> {
-    if load_codex_thread(state, thread_id).await?.is_none() {
-        storage::ensure_agent_session_pinning(state, thread_id).await?;
-        ensure_agent_session(state, thread_id).await?;
-    }
+    let Some(mut record) = record else {
+        return Ok(None);
+    };
     if let Some(cwd) = cwd_override.filter(|value| !value.trim().is_empty()) {
-        state.set_thread_cwd(thread_id, PathBuf::from(cwd)).await;
+        let cwd = PathBuf::from(cwd);
+        state.set_thread_cwd(thread_id, cwd.clone()).await;
+        record.git_info = thread_git_info(&cwd).await;
+        record.cwd = cwd;
     }
     state.set_thread_loaded(thread_id, true).await;
-
-    // Reload after applying sidecar overrides so the resume response reflects
-    // the requested cwd and loaded state rather than the pre-resume snapshot.
-    let record = load_codex_thread(state, thread_id).await?;
-    if record.is_none() {
-        state.set_thread_loaded(thread_id, false).await;
-    }
-    Ok(record)
+    record.loaded = true;
+    Ok(Some(record))
 }
 
 pub(super) async fn load_codex_thread(
@@ -141,7 +141,7 @@ pub(super) async fn loaded_codex_thread_ids(state: &ShimState) -> Result<Vec<Str
         .iter()
         .cloned()
         .collect::<std::collections::HashSet<_>>();
-    for link in load_authorized_subagent_threads(state).await? {
+    for link in load_authorized_subagent_threads_for_root_ids(state, &loaded).await? {
         if root_ids.contains(&link.root_session_id) && !loaded.contains(&link.session_id) {
             loaded.push(link.session_id);
         }

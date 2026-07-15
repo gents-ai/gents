@@ -341,6 +341,7 @@ mod tests {
             turn_streams: Arc::new(Mutex::new(BTreeMap::new())),
             fuzzy_file_search_sessions: Arc::new(Mutex::new(BTreeMap::new())),
             pending_steering_inputs: Arc::new(Mutex::new(BTreeMap::new())),
+            child_thread_streams: Arc::new(Mutex::new(BTreeMap::new())),
         };
         let state = ShimState {
             codex_home: tempdir.path().join("codex-home"),

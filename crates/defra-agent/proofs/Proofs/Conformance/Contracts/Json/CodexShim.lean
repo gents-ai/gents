@@ -231,6 +231,8 @@ structure CodexShimSubagentToolCase where
   toolName : String
   projectedItemKind : String
   collabTool : Option String
+  reciprocalLink : Bool
+  projectionSettled : Bool
 
 def codexShimSubagentToolCaseJson
     (witness : CodexShimSubagentToolCase) : String :=
@@ -239,7 +241,9 @@ def codexShimSubagentToolCaseJson
     ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
     ++ "\"tool_name\":" ++ jsonString witness.toolName ++ ","
     ++ "\"projected_item_kind\":" ++ jsonString witness.projectedItemKind ++ ","
-    ++ "\"collab_tool\":" ++ jsonOptionalString witness.collabTool
+    ++ "\"collab_tool\":" ++ jsonOptionalString witness.collabTool ++ ","
+    ++ "\"reciprocal_link\":" ++ boolString witness.reciprocalLink ++ ","
+    ++ "\"projection_settled\":" ++ boolString witness.projectionSettled
     ++ "}"
 
 def codexShimSubagentToolCases : List CodexShimSubagentToolCase :=
@@ -248,36 +252,65 @@ def codexShimSubagentToolCases : List CodexShimSubagentToolCase :=
     , toolName := "spawn_subagent"
     , projectedItemKind := "collabAgentToolCall"
     , collabTool := some "spawnAgent"
+    , reciprocalLink := true
+    , projectionSettled := false
     }
   , { witness := "codex_shim.subagent_tool.wait"
     , leanTheorems := [ "CodexShim.known_subagent_control_projects_collab" ]
     , toolName := "wait_subagent"
     , projectedItemKind := "collabAgentToolCall"
     , collabTool := some "wait"
+    , reciprocalLink := true
+    , projectionSettled := false
     }
   , { witness := "codex_shim.subagent_tool.steer"
     , leanTheorems := [ "CodexShim.known_subagent_control_projects_collab" ]
     , toolName := "steer_subagent"
     , projectedItemKind := "collabAgentToolCall"
     , collabTool := some "sendInput"
+    , reciprocalLink := true
+    , projectionSettled := false
     }
   , { witness := "codex_shim.subagent_tool.cancel"
     , leanTheorems := [ "CodexShim.known_subagent_control_projects_collab" ]
     , toolName := "cancel_subagent"
     , projectedItemKind := "collabAgentToolCall"
     , collabTool := some "closeAgent"
+    , reciprocalLink := true
+    , projectionSettled := false
     }
   , { witness := "codex_shim.subagent_tool.list"
     , leanTheorems := [ "CodexShim.non_control_tool_stays_mcp" ]
     , toolName := "list_subagents"
     , projectedItemKind := "mcpToolCall"
     , collabTool := none
+    , reciprocalLink := false
+    , projectionSettled := false
     }
   , { witness := "codex_shim.subagent_tool.read"
     , leanTheorems := [ "CodexShim.non_control_tool_stays_mcp" ]
     , toolName := "read_subagent"
     , projectedItemKind := "mcpToolCall"
     , collabTool := none
+    , reciprocalLink := false
+    , projectionSettled := false
+    }
+  , { witness := "codex_shim.subagent_tool.unresolved_open"
+    , leanTheorems := [ "CodexShim.unresolved_subagent_control_defers_while_open" ]
+    , toolName := "spawn_subagent"
+    , projectedItemKind := "deferred"
+    , collabTool := none
+    , reciprocalLink := false
+    , projectionSettled := false
+    }
+  , { witness := "codex_shim.subagent_tool.unresolved_settled"
+    , leanTheorems :=
+        [ "CodexShim.settled_unresolved_subagent_control_stays_visible" ]
+    , toolName := "spawn_subagent"
+    , projectedItemKind := "mcpToolCall"
+    , collabTool := none
+    , reciprocalLink := false
+    , projectionSettled := true
     }
   ]
 
@@ -334,6 +367,54 @@ def codexShimSubagentStatusCases : List CodexShimSubagentStatusCase :=
 
 def codexShimSubagentStatusCasesJson : String :=
   jsonArray (codexShimSubagentStatusCases.map codexShimSubagentStatusCaseJson)
+
+structure CodexShimSubagentVisibilityCase where
+  witness : String
+  leanTheorems : List String
+  authorized : Bool
+  loaded : Bool
+  projectionMode : String
+
+def codexShimSubagentVisibilityCaseJson
+    (witness : CodexShimSubagentVisibilityCase) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString witness.witness ++ ","
+    ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
+    ++ "\"authorized\":" ++ boolString witness.authorized ++ ","
+    ++ "\"loaded\":" ++ boolString witness.loaded ++ ","
+    ++ "\"projection_mode\":" ++ jsonString witness.projectionMode
+    ++ "}"
+
+def codexShimSubagentVisibilityCases : List CodexShimSubagentVisibilityCase :=
+  [ { witness := "codex_shim.subagent_visibility.unauthorized_unloaded"
+    , leanTheorems := [ "CodexShim.unauthorized_child_thread_is_hidden" ]
+    , authorized := false
+    , loaded := false
+    , projectionMode := "hidden"
+    }
+  , { witness := "codex_shim.subagent_visibility.unauthorized_loaded"
+    , leanTheorems := [ "CodexShim.unauthorized_child_thread_is_hidden" ]
+    , authorized := false
+    , loaded := true
+    , projectionMode := "hidden"
+    }
+  , { witness := "codex_shim.subagent_visibility.authorized_unloaded"
+    , leanTheorems := [ "CodexShim.authorized_unloaded_child_is_snapshot" ]
+    , authorized := true
+    , loaded := false
+    , projectionMode := "snapshot"
+    }
+  , { witness := "codex_shim.subagent_visibility.authorized_loaded"
+    , leanTheorems := [ "CodexShim.authorized_loaded_child_is_live" ]
+    , authorized := true
+    , loaded := true
+    , projectionMode := "live"
+    }
+  ]
+
+def codexShimSubagentVisibilityCasesJson : String :=
+  jsonArray
+    (codexShimSubagentVisibilityCases.map codexShimSubagentVisibilityCaseJson)
 
 structure CodexShimContextUsageCase where
   witness : String
@@ -458,6 +539,20 @@ def codexShimCompactionProjectionCases : List CodexShimCompactionProjectionCase 
   , { witness := "codex_shim.compaction.cancelled_first_observation"
     , leanTheorems := [ "CodexShim.cancelled_compaction_never_claims_completed" ]
     , previousCallState := none
+    , callState := "cancelled"
+    , projectedEvents := []
+    , claimsCompacted := false
+    }
+  , { witness := "codex_shim.compaction.running_to_failed"
+    , leanTheorems := [ "CodexShim.running_to_failed_never_claims_completed" ]
+    , previousCallState := some "running"
+    , callState := "failed"
+    , projectedEvents := []
+    , claimsCompacted := false
+    }
+  , { witness := "codex_shim.compaction.running_to_cancelled"
+    , leanTheorems := [ "CodexShim.running_to_cancelled_never_claims_completed" ]
+    , previousCallState := some "running"
     , callState := "cancelled"
     , projectedEvents := []
     , claimsCompacted := false

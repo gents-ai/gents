@@ -770,6 +770,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CodexShimSubagentStatusCases".to_string(),
         ));
     }
+    if !lean_codex_shim_subagent_visibility_cases().is_empty() {
+        emitted.insert((
+            "codex_shim_subagent_visibility_cases".to_string(),
+            "CodexShimSubagentVisibilityCases".to_string(),
+        ));
+    }
     if !lean_codex_shim_context_usage_cases().is_empty() {
         emitted.insert((
             "codex_shim_context_usage_cases".to_string(),
@@ -886,6 +892,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "codex_shim_projection_cases",
         "codex_shim_subagent_tool_cases",
         "codex_shim_subagent_status_cases",
+        "codex_shim_subagent_visibility_cases",
         "codex_shim_context_usage_cases",
         "codex_shim_compaction_projection_cases",
         "codex_shim_binding_cases",

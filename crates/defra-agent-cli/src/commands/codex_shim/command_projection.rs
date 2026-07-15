@@ -31,13 +31,24 @@ impl ToolProjectionStatus {
 }
 
 pub(super) fn tool_projection_status(tool: &DefraToolCallProgress) -> ToolProjectionStatus {
+    tool_projection_status_with_settled(tool, false)
+}
+
+pub(super) fn tool_projection_status_with_settled(
+    tool: &DefraToolCallProgress,
+    projection_settled: bool,
+) -> ToolProjectionStatus {
     let status = defra_tool_call_status(tool);
     if is_subagent_control_tool(&tool.tool_name) {
         if let Some(projection) = collab_projection(tool) {
             ToolProjectionStatus::Collab(projection)
-        } else if status == codex::McpToolCallStatus::Failed {
-            // A rejected control call may never create a child edge. Keep its
-            // error visible as an ordinary tool failure.
+        } else if status == codex::McpToolCallStatus::Failed
+            || (projection_settled && status == codex::McpToolCallStatus::Completed)
+        {
+            // A rejected control call may never create a child edge. Likewise,
+            // once the enclosing projection is terminal, an unresolved but
+            // completed bridge has no remaining retry window. Preserve the
+            // durable tool result as MCP instead of hiding it forever.
             ToolProjectionStatus::Mcp(status)
         } else {
             // The child request and its reciprocal bridge may replicate just
@@ -421,6 +432,25 @@ fn shell_join(argv: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settled_unresolved_subagent_control_falls_back_to_visible_mcp() {
+        let tool = test_tool(
+            "spawn_subagent",
+            "completed",
+            r#"{"name":"reviewer","prompt":"inspect"}"#,
+        )
+        .with_result(r#"{"child_request_id":"child-request"}"#);
+
+        assert_eq!(
+            tool_projection_status(&tool),
+            ToolProjectionStatus::DeferredCollab
+        );
+        assert_eq!(
+            tool_projection_status_with_settled(&tool, true),
+            ToolProjectionStatus::Mcp(codex::McpToolCallStatus::Completed)
+        );
+    }
 
     #[test]
     fn background_tool_projects_as_codex_unified_exec_startup() {

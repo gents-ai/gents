@@ -11,7 +11,7 @@ use tokio::sync::watch;
 use super::super::background::spawn_background_tool_watcher;
 use super::super::bound_behavior::load_bound_context_window;
 use super::super::command_projection::{
-    tool_projection_status, update_running_background_tools, ToolProjectionStatus,
+    tool_projection_status_with_settled, update_running_background_tools, ToolProjectionStatus,
 };
 use super::super::compaction_projection::decode_defra_compaction_progress;
 use super::super::progress::{
@@ -21,7 +21,7 @@ use super::super::progress::{
 use super::super::protocol::{send_committed_user_message, send_notification};
 use super::super::store::{hydrate_materialized_response_content, query_node_json};
 use super::super::subagent_projection::{
-    attach_subagent_link, is_subagent_control_tool, load_authorized_subagent_threads,
+    attach_subagent_link, is_subagent_control_tool, load_authorized_subagent_threads_for_root,
 };
 use super::super::thread_projection::{
     latest_inference_usage_observation, latest_requests_token_usage, session_token_usage,
@@ -86,12 +86,55 @@ struct ContentCursor {
     tail: String,
 }
 
-pub(super) async fn stream_defra_turn(
+#[derive(Clone, Debug)]
+pub(in crate::commands::codex_shim) struct TurnStreamOptions {
+    pub(super) projection_root_session_id: String,
+    pub(super) baseline_turn: Option<codex::Turn>,
+    pub(super) follow_steering: bool,
+    pub(super) enforce_timeout: bool,
+}
+
+impl TurnStreamOptions {
+    pub(in crate::commands::codex_shim) fn fresh(root_session_id: impl Into<String>) -> Self {
+        Self {
+            projection_root_session_id: root_session_id.into(),
+            baseline_turn: None,
+            follow_steering: true,
+            enforce_timeout: true,
+        }
+    }
+
+    pub(in crate::commands::codex_shim) fn resumed_subagent(
+        root_session_id: impl Into<String>,
+        baseline_turn: codex::Turn,
+    ) -> Self {
+        Self {
+            projection_root_session_id: root_session_id.into(),
+            baseline_turn: Some(baseline_turn),
+            follow_steering: false,
+            enforce_timeout: false,
+        }
+    }
+
+    pub(in crate::commands::codex_shim) fn fresh_subagent(
+        root_session_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            projection_root_session_id: root_session_id.into(),
+            baseline_turn: None,
+            follow_steering: false,
+            enforce_timeout: false,
+        }
+    }
+}
+
+pub(in crate::commands::codex_shim) async fn stream_defra_turn(
     connection: &ConnectionState,
     state: &ShimState,
     submitted: &SubmittedRequest,
     projection: &mut TurnProjection<'_>,
     mut cancel_rx: watch::Receiver<bool>,
+    mut options: TurnStreamOptions,
 ) -> Result<()> {
     let outbound = &connection.outbound;
     let mut current = submitted.clone();
@@ -103,10 +146,23 @@ pub(super) async fn stream_defra_turn(
     let mut running_background_tools: BTreeMap<String, codex::CommandExecutionStatus> =
         BTreeMap::new();
     let mut updates = state.node.subscribe_updates();
+    let mut updates_closed = false;
+    let mut subagent_links = Vec::new();
+    let mut subagent_links_dirty = true;
     let mut latest_content_cursor = ContentCursor::default();
     let mut latest_error_message: Option<String> = None;
     let mut latest_progress_marker: Option<ProgressMarker> = None;
     let mut last_progress_at = tokio::time::Instant::now();
+    if let Some(baseline_turn) = options.baseline_turn.take() {
+        prime_projection_from_turn(
+            projection,
+            &baseline_turn,
+            &current.request_id,
+            &mut latest_content_cursor,
+            &mut known_tool_calls,
+            &mut known_compaction_states,
+        );
+    }
 
     loop {
         if *cancel_rx.borrow() {
@@ -155,6 +211,17 @@ pub(super) async fn stream_defra_turn(
             .and_then(Value::as_array)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
+        let response_status = response_row
+            .and_then(|row| row.get("status"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let lifecycle_state = request_row
+            .as_ref()
+            .and_then(|row| row.get("lifecycle_state"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let projection_settled = is_terminal_lifecycle_state(lifecycle_state)
+            || matches!(response_status, "complete" | "completed" | "error");
 
         let marker = progress_marker(request_row, response_row, tool_rows, inference_call_rows);
         let marker_changed = latest_progress_marker.as_ref() != Some(&marker);
@@ -186,19 +253,43 @@ pub(super) async fn stream_defra_turn(
                     usage.totals,
                 )
                 .await?;
-                known_inference_usage_call_id = Some(usage.call_id);
             }
+            known_inference_usage_call_id = Some(usage.call_id);
         }
 
-        let subagent_links = if tool_rows.iter().any(|row| {
+        let has_subagent_control = tool_rows.iter().any(|row| {
             row.get("tool_name")
                 .and_then(Value::as_str)
                 .is_some_and(is_subagent_control_tool)
-        }) {
-            Some(load_authorized_subagent_threads(state).await?)
-        } else {
-            None
-        };
+        });
+        let subagent_tool_marker_changed = tool_rows.iter().any(|row| {
+            let marker = tool_progress_marker(row);
+            marker
+                .tool_name
+                .as_deref()
+                .is_some_and(is_subagent_control_tool)
+                && marker
+                    .tool_call_key
+                    .as_deref()
+                    .is_some_and(|tool_key| known_tool_markers.get(tool_key) != Some(&marker))
+        });
+        let settling_deferred_control = projection_settled
+            && known_tool_calls
+                .values()
+                .any(|status| status == &ToolProjectionStatus::DeferredCollab);
+        if subagent_tool_marker_changed || settling_deferred_control || updates_closed {
+            subagent_links_dirty = true;
+        }
+        let mut subagent_links_refreshed = false;
+        if has_subagent_control && subagent_links_dirty {
+            subagent_links = load_authorized_subagent_threads_for_root(
+                state,
+                &options.projection_root_session_id,
+            )
+            .await?;
+            subagent_links_dirty = false;
+            subagent_links_refreshed = true;
+        }
 
         for row in tool_rows {
             let tool_marker = tool_progress_marker(row);
@@ -208,7 +299,8 @@ pub(super) async fn stream_defra_turn(
             let retry_subagent_projection = tool_marker
                 .tool_name
                 .as_deref()
-                .is_some_and(is_subagent_control_tool);
+                .is_some_and(is_subagent_control_tool)
+                && subagent_links_refreshed;
             if known_tool_markers.get(tool_key) == Some(&tool_marker) && !retry_subagent_projection
             {
                 continue;
@@ -216,11 +308,16 @@ pub(super) async fn stream_defra_turn(
             let Some(mut tool) = decode_defra_tool_call_progress(row) else {
                 continue;
             };
-            if let Some(links) = subagent_links.as_deref() {
-                attach_subagent_link(&mut tool, links);
+            if has_subagent_control {
+                attach_subagent_link(&mut tool, &subagent_links);
             }
-            let projection_status = tool_projection_status(&tool);
+            let projection_status = tool_projection_status_with_settled(&tool, projection_settled);
             let previous_status = known_tool_calls.get(&tool.tool_call_key).cloned();
+            update_running_background_tools(
+                &mut running_background_tools,
+                &tool,
+                &projection_status,
+            );
             if previous_status.as_ref() == Some(&projection_status) {
                 known_tool_markers.insert(tool.tool_call_key.clone(), tool_marker);
                 continue;
@@ -234,20 +331,12 @@ pub(super) async fn stream_defra_turn(
                     &projection_status,
                 )
                 .await?;
+            last_progress_at = tokio::time::Instant::now();
 
-            update_running_background_tools(
-                &mut running_background_tools,
-                &tool,
-                &projection_status,
-            );
             known_tool_calls.insert(tool.tool_call_key.clone(), projection_status);
             known_tool_markers.insert(tool.tool_call_key.clone(), tool_marker);
         }
 
-        let response_status = response_row
-            .and_then(|row| row.get("status"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
         if marker_changed {
             if let Some(content) = response_row
                 .and_then(|row| row.get("content"))
@@ -263,11 +352,6 @@ pub(super) async fn stream_defra_turn(
                 .map(ToOwned::to_owned);
         }
 
-        let lifecycle_state = request_row
-            .as_ref()
-            .and_then(|row| row.get("lifecycle_state"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
         let failure_reason = request_row
             .as_ref()
             .and_then(|row| row.get("failure_reason"))
@@ -295,7 +379,7 @@ pub(super) async fn stream_defra_turn(
                     .await
                     .context("hydrating materialized response content for terminal Codex turn")?;
             if should_wait_for_materialized_content && !hydrated {
-                if last_progress_at.elapsed() >= state.timeout {
+                if options.enforce_timeout && last_progress_at.elapsed() >= state.timeout {
                     anyhow::bail!(
                         "timed out waiting for materialized AgentMessage {} after {}s of inactivity\n{}",
                         current.request_id,
@@ -330,7 +414,7 @@ pub(super) async fn stream_defra_turn(
                         .await?;
                 }
             }
-            if turn_status == codex::TurnStatus::Completed {
+            if options.follow_steering && turn_status == codex::TurnStatus::Completed {
                 if let Some(next_request) =
                     next_steering_request_after(state, &current.session_id, &current.request_id)
                         .await
@@ -398,6 +482,7 @@ pub(super) async fn stream_defra_turn(
                     known_tool_markers.clear();
                     known_compaction_states.clear();
                     known_inference_usage_call_id = None;
+                    subagent_links_dirty = true;
                     latest_content_cursor.reset();
                     latest_error_message = None;
                     latest_progress_marker = None;
@@ -434,7 +519,7 @@ pub(super) async fn stream_defra_turn(
             return Ok(());
         }
 
-        if last_progress_at.elapsed() >= state.timeout {
+        if options.enforce_timeout && last_progress_at.elapsed() >= state.timeout {
             anyhow::bail!(
                 "timed out waiting for AgentResponse {} after {}s of inactivity\n{}",
                 current.request_id,
@@ -444,11 +529,17 @@ pub(super) async fn stream_defra_turn(
         }
 
         tokio::select! {
-            _ = tokio::time::sleep(state.poll_interval) => {}
-            msg = updates.recv() => {
+            _ = tokio::time::sleep(state.poll_interval) => {
+                if updates_closed {
+                    subagent_links_dirty = true;
+                }
+            }
+            msg = updates.recv(), if !updates_closed => {
                 if msg.is_none() {
                     tracing::warn!("Codex shim embedded-node update subscription closed");
+                    updates_closed = true;
                 }
+                subagent_links_dirty = true;
                 let dropped = updates.check_and_reset_dropped();
                 if dropped > 0 {
                     tracing::warn!(dropped, "Codex shim update subscription dropped messages");
@@ -503,6 +594,87 @@ fn progress_marker(
     }
 }
 
+fn prime_projection_from_turn(
+    projection: &mut TurnProjection<'_>,
+    turn: &codex::Turn,
+    request_id: &str,
+    content_cursor: &mut ContentCursor,
+    known_tool_calls: &mut BTreeMap<String, ToolProjectionStatus>,
+    known_compaction_states: &mut BTreeMap<String, String>,
+) {
+    let preferred_agent_id = format!("defra-agent-{request_id}");
+    let mut resumed_agent = None;
+    let mut found_preferred_agent = false;
+    for item in &turn.items {
+        match item {
+            codex::ThreadItem::AgentMessage { id, text, .. } => {
+                if id == &preferred_agent_id {
+                    resumed_agent = Some((id.clone(), text.clone()));
+                    found_preferred_agent = true;
+                } else if !found_preferred_agent {
+                    resumed_agent = Some((id.clone(), text.clone()));
+                }
+            }
+            codex::ThreadItem::McpToolCall { id, status, .. } => {
+                known_tool_calls.insert(id.clone(), ToolProjectionStatus::Mcp(status.clone()));
+            }
+            codex::ThreadItem::CommandExecution { id, status, .. } => {
+                known_tool_calls.insert(id.clone(), ToolProjectionStatus::Command(status.clone()));
+            }
+            codex::ThreadItem::FileChange { id, status, .. } => {
+                known_tool_calls
+                    .insert(id.clone(), ToolProjectionStatus::FileChange(status.clone()));
+            }
+            codex::ThreadItem::CollabAgentToolCall {
+                id,
+                tool,
+                status,
+                receiver_thread_ids,
+                agents_states,
+                ..
+            } => {
+                let Some(receiver_thread_id) = receiver_thread_ids.first() else {
+                    continue;
+                };
+                let child = agents_states.get(receiver_thread_id);
+                known_tool_calls.insert(
+                    id.clone(),
+                    ToolProjectionStatus::Collab(
+                        super::super::subagent_projection::CollabProjection {
+                            status: status.clone(),
+                            tool: tool.clone(),
+                            receiver_thread_id: receiver_thread_id.clone(),
+                            child_lifecycle_state: child
+                                .map(|state| collab_lifecycle_state(&state.status))
+                                .unwrap_or("pending")
+                                .to_string(),
+                            child_failure_reason: child.and_then(|state| state.message.clone()),
+                        },
+                    ),
+                );
+            }
+            codex::ThreadItem::ContextCompaction { id } => {
+                known_compaction_states.insert(id.clone(), "completed".to_string());
+            }
+            _ => {}
+        }
+    }
+    if let Some((item_id, text)) = resumed_agent.filter(|(_, text)| !text.trim().is_empty()) {
+        content_cursor.prime(&text);
+        projection.resume_agent_message(item_id, &text);
+    }
+}
+
+fn collab_lifecycle_state(status: &codex::CollabAgentStatus) -> &'static str {
+    match status {
+        codex::CollabAgentStatus::PendingInit => "pending",
+        codex::CollabAgentStatus::Running => "processing",
+        codex::CollabAgentStatus::Completed | codex::CollabAgentStatus::Shutdown => "completed",
+        codex::CollabAgentStatus::Errored | codex::CollabAgentStatus::NotFound => "failed",
+        codex::CollabAgentStatus::Interrupted => "interrupted",
+    }
+}
+
 fn content_delta_from_cursor(cursor: &mut ContentCursor, current: &str) -> String {
     if current.is_empty() {
         cursor.reset();
@@ -531,6 +703,10 @@ impl ContentCursor {
         self.rendered_len = current.len();
         self.head = head_window(current, Self::TAIL_BYTES).to_string();
         self.tail = tail_window(current, Self::TAIL_BYTES).to_string();
+    }
+
+    fn prime(&mut self, current: &str) {
+        self.observe(current);
     }
 
     fn reset(&mut self) {
@@ -780,6 +956,17 @@ mod tests {
         assert_eq!(
             content_delta_from_cursor(&mut cursor, "first chunk and second"),
             ""
+        );
+    }
+
+    #[test]
+    fn primed_content_cursor_emits_updates_after_resume_snapshot() {
+        let mut cursor = ContentCursor::default();
+        cursor.prime("visible in thread/resume");
+
+        assert_eq!(
+            content_delta_from_cursor(&mut cursor, "visible in thread/resume plus live delta"),
+            " plus live delta"
         );
     }
 

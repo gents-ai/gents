@@ -200,6 +200,8 @@ mod tests {
             conversation: None,
             subagent: Some(LinkedSubagentThread {
                 request_id: "child-request".to_string(),
+                latest_request_id: "child-request".to_string(),
+                latest_request_content: "Inspect the patch".to_string(),
                 session_id: child_session_id.clone(),
                 parent_request_id: "parent-request".to_string(),
                 parent_tool_call_id: "spawn-call".to_string(),

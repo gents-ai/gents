@@ -20,6 +20,8 @@ pub(crate) struct LeanCodexShimSubagentToolCase {
     pub(crate) tool_name: String,
     pub(crate) projected_item_kind: String,
     pub(crate) collab_tool: Option<String>,
+    pub(crate) reciprocal_link: bool,
+    pub(crate) projection_settled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -29,6 +31,15 @@ pub(crate) struct LeanCodexShimSubagentStatusCase {
     pub(crate) request_state: String,
     pub(crate) projected_agent_status: String,
     pub(crate) terminal: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanCodexShimSubagentVisibilityCase {
+    pub(crate) witness: String,
+    pub(crate) lean_theorems: Vec<String>,
+    pub(crate) authorized: bool,
+    pub(crate) loaded: bool,
+    pub(crate) projection_mode: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

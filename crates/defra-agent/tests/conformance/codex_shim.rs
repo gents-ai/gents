@@ -169,18 +169,28 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
         .contains(&"CodexShim.interrupt_step_is_terminal".to_string()));
 
     let tool_cases = lean_codex_shim_subagent_tool_cases();
-    assert_eq!(tool_cases.len(), 6);
+    assert_eq!(tool_cases.len(), 8);
     for case in tool_cases {
-        let expected = match case.tool_name.as_str() {
-            "spawn_subagent" => ("collabAgentToolCall", Some("spawnAgent")),
-            "wait_subagent" => ("collabAgentToolCall", Some("wait")),
-            "steer_subagent" => ("collabAgentToolCall", Some("sendInput")),
-            "cancel_subagent" => ("collabAgentToolCall", Some("closeAgent")),
-            "list_subagents" | "read_subagent" => ("mcpToolCall", None),
-            other => panic!("{}: unmodeled subagent tool {other:?}", case.witness),
+        let expected = match case.witness.as_str() {
+            "codex_shim.subagent_tool.spawn" => ("collabAgentToolCall", Some("spawnAgent")),
+            "codex_shim.subagent_tool.wait" => ("collabAgentToolCall", Some("wait")),
+            "codex_shim.subagent_tool.steer" => ("collabAgentToolCall", Some("sendInput")),
+            "codex_shim.subagent_tool.cancel" => ("collabAgentToolCall", Some("closeAgent")),
+            "codex_shim.subagent_tool.list" | "codex_shim.subagent_tool.read" => {
+                ("mcpToolCall", None)
+            }
+            "codex_shim.subagent_tool.unresolved_open" => ("deferred", None),
+            "codex_shim.subagent_tool.unresolved_settled" => ("mcpToolCall", None),
+            other => panic!("unmodeled subagent tool witness {other:?}"),
         };
         assert_eq!(case.projected_item_kind, expected.0, "{}", case.witness);
         assert_eq!(case.collab_tool.as_deref(), expected.1, "{}", case.witness);
+        if case.projected_item_kind == "collabAgentToolCall" {
+            assert!(case.reciprocal_link, "{}", case.witness);
+        }
+        if case.witness == "codex_shim.subagent_tool.unresolved_settled" {
+            assert!(case.projection_settled, "{}", case.witness);
+        }
     }
 
     let status_cases = lean_codex_shim_subagent_status_cases();
@@ -199,6 +209,19 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
         assert!(case
             .lean_theorems
             .contains(&"CodexShim.subagent_status_terminal_precisely".to_string()));
+    }
+
+    let visibility_cases = lean_codex_shim_subagent_visibility_cases();
+    assert_eq!(visibility_cases.len(), 4);
+    for case in visibility_cases {
+        let expected = if !case.authorized {
+            "hidden"
+        } else if case.loaded {
+            "live"
+        } else {
+            "snapshot"
+        };
+        assert_eq!(case.projection_mode, expected, "{}", case.witness);
     }
 
     let context_cases = lean_codex_shim_context_usage_cases();
@@ -229,7 +252,7 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     }
 
     let compaction_cases = lean_codex_shim_compaction_projection_cases();
-    assert_eq!(compaction_cases.len(), 6);
+    assert_eq!(compaction_cases.len(), 8);
     for case in compaction_cases {
         assert_eq!(
             case.claims_compacted,
@@ -251,6 +274,9 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
             }
             (Some("running"), "completed") => {
                 assert_eq!(case.projected_events, ["completed"])
+            }
+            (Some("running"), "failed" | "cancelled") => {
+                assert!(case.projected_events.is_empty())
             }
             (None, "failed" | "cancelled") => assert!(case.projected_events.is_empty()),
             other => panic!(

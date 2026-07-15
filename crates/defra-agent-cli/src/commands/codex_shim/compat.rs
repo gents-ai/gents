@@ -172,7 +172,7 @@ pub(super) fn compat_gap_for_request(request: &codex::ClientRequest) -> Option<C
         codex::ClientRequest::ThreadCompactStart { .. } => Some(CompatGap {
             difficulty: CompatDifficulty::DefraBackedWorkflow,
             area: "thread compaction workflow",
-            plan: "manual Codex compaction remains unsupported; automatic DEFRA compaction lifecycle is projected as native contextCompaction items",
+            plan: "manual Codex compaction remains unsupported; automatic DEFRA compaction lifecycle is projected as native contextCompaction items. The pinned protocol has no failed-item event, so clients showing an in-progress compaction must clear it at turn end when no completion arrives",
         }),
 
         codex::ClientRequest::ReviewStart { .. } => Some(CompatGap {

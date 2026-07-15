@@ -692,6 +692,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "codex_shim_subagent_visibility_cases"
+      "CodexShimSubagentVisibilityCases"
+      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "codex-shim" [Surface.api, Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "codex_shim_context_usage_cases"
       "CodexShimContextUsageCases"
       "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")

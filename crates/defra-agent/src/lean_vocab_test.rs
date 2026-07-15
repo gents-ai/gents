@@ -80,6 +80,8 @@ pub(crate) struct LeanContractSnapshot {
     #[serde(default)]
     pub(crate) codex_shim_subagent_status_cases: Vec<LeanCodexShimSubagentStatusCase>,
     #[serde(default)]
+    pub(crate) codex_shim_subagent_visibility_cases: Vec<LeanCodexShimSubagentVisibilityCase>,
+    #[serde(default)]
     pub(crate) codex_shim_context_usage_cases: Vec<LeanCodexShimContextUsageCase>,
     #[serde(default)]
     pub(crate) codex_shim_compaction_projection_cases: Vec<LeanCodexShimCompactionProjectionCase>,
@@ -539,6 +541,11 @@ pub(crate) fn lean_codex_shim_subagent_tool_cases() -> &'static [LeanCodexShimSu
 pub(crate) fn lean_codex_shim_subagent_status_cases() -> &'static [LeanCodexShimSubagentStatusCase]
 {
     &lean_contract_snapshot().codex_shim_subagent_status_cases
+}
+
+pub(crate) fn lean_codex_shim_subagent_visibility_cases(
+) -> &'static [LeanCodexShimSubagentVisibilityCase] {
+    &lean_contract_snapshot().codex_shim_subagent_visibility_cases
 }
 
 pub(crate) fn lean_codex_shim_context_usage_cases() -> &'static [LeanCodexShimContextUsageCase] {

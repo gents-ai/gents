@@ -2,9 +2,10 @@ use anyhow::Result;
 use codex_app_server_protocol as codex;
 use serde_json::json;
 
-use super::super::protocol::send_result;
+use super::super::protocol::{send_error, send_result};
+use super::super::thread_projection::load_codex_thread;
 use super::super::turn::{interrupt_active_turn, start_defra_turn, steer_defra_turn};
-use super::super::{trace, ConnectionState, Outbound, ShimState};
+use super::super::{trace, ConnectionState, Outbound, ShimState, JSONRPC_INVALID_PARAMS};
 
 pub(super) async fn handle_turn_request(
     connection: &ConnectionState,
@@ -39,6 +40,19 @@ pub(super) async fn handle_turn_request(
         codex::ClientRequest::TurnInterrupt {
             request_id, params, ..
         } => {
+            if load_codex_thread(state, &params.thread_id)
+                .await?
+                .is_some_and(|record| record.is_subagent())
+            {
+                return send_error(
+                    outbound,
+                    request_id,
+                    JSONRPC_INVALID_PARAMS,
+                    "linked DEFRA subagent threads are read-only; interrupt them from the parent thread"
+                        .to_string(),
+                )
+                .await;
+            }
             trace::shim_event_fields(
                 &state.trace_path,
                 "turn_interrupt_received",
