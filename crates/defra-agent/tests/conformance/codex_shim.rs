@@ -167,6 +167,163 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     assert!(interrupt
         .lean_theorems
         .contains(&"CodexShim.interrupt_step_is_terminal".to_string()));
+
+    let tool_cases = lean_codex_shim_subagent_tool_cases();
+    assert_eq!(tool_cases.len(), 8);
+    for case in tool_cases {
+        let expected = match case.witness.as_str() {
+            "codex_shim.subagent_tool.spawn" => ("collabAgentToolCall", Some("spawnAgent")),
+            "codex_shim.subagent_tool.wait" => ("collabAgentToolCall", Some("wait")),
+            "codex_shim.subagent_tool.steer" => ("collabAgentToolCall", Some("sendInput")),
+            "codex_shim.subagent_tool.cancel" => ("collabAgentToolCall", Some("closeAgent")),
+            "codex_shim.subagent_tool.list" | "codex_shim.subagent_tool.read" => {
+                ("mcpToolCall", None)
+            }
+            "codex_shim.subagent_tool.unresolved_open" => ("deferred", None),
+            "codex_shim.subagent_tool.unresolved_settled" => ("mcpToolCall", None),
+            other => panic!("unmodeled subagent tool witness {other:?}"),
+        };
+        assert_eq!(case.projected_item_kind, expected.0, "{}", case.witness);
+        assert_eq!(case.collab_tool.as_deref(), expected.1, "{}", case.witness);
+        if case.projected_item_kind == "collabAgentToolCall" {
+            assert!(case.reciprocal_link, "{}", case.witness);
+        }
+        if case.witness == "codex_shim.subagent_tool.unresolved_settled" {
+            assert!(case.projection_settled, "{}", case.witness);
+        }
+    }
+
+    let status_cases = lean_codex_shim_subagent_status_cases();
+    assert_eq!(status_cases.len(), 9);
+    for case in status_cases {
+        let expected = match case.request_state.as_str() {
+            "pending" => ("pendingInit", false),
+            "claimed" | "processing" | "inputRequired" => ("running", false),
+            "completed" => ("completed", true),
+            "failed" | "dead" => ("errored", true),
+            "superseded" | "interrupted" => ("interrupted", true),
+            other => panic!("{}: unmodeled child request state {other:?}", case.witness),
+        };
+        assert_eq!(case.projected_agent_status, expected.0, "{}", case.witness);
+        assert_eq!(case.terminal, expected.1, "{}", case.witness);
+        assert!(case
+            .lean_theorems
+            .contains(&"CodexShim.subagent_status_terminal_precisely".to_string()));
+    }
+
+    let visibility_cases = lean_codex_shim_subagent_visibility_cases();
+    assert_eq!(visibility_cases.len(), 4);
+    for case in visibility_cases {
+        let expected = if !case.authorized {
+            "hidden"
+        } else if case.loaded {
+            "live"
+        } else {
+            "snapshot"
+        };
+        assert_eq!(case.projection_mode, expected, "{}", case.witness);
+    }
+
+    let metadata_cases = lean_codex_shim_subagent_metadata_cases();
+    assert_eq!(metadata_cases.len(), 2);
+    for case in metadata_cases {
+        assert_eq!(case.projected_model, case.runtime_model, "{}", case.witness);
+        assert_eq!(
+            case.projected_reasoning_effort, case.runtime_reasoning_effort,
+            "{}: adapter must not invent reasoning effort",
+            case.witness
+        );
+        assert!(case
+            .lean_theorems
+            .contains(&"CodexShim.collab_model_is_runtime_model".to_string()));
+    }
+
+    let listing_cases = lean_codex_shim_subagent_listing_cases();
+    assert_eq!(listing_cases.len(), 5);
+    for case in listing_cases {
+        let source_matches = matches!(
+            case.source_kind.as_str(),
+            "subAgent" | "subAgentThreadSpawn"
+        );
+        assert_eq!(
+            case.listed,
+            case.authorized && source_matches,
+            "{}: listing must require authorization and a spawned-subagent source filter",
+            case.witness
+        );
+    }
+
+    let shape_cases = lean_codex_shim_subagent_thread_shape_cases();
+    assert_eq!(shape_cases.len(), 1);
+    let shape = &shape_cases[0];
+    assert_eq!(
+        shape.native_source_parent.as_deref(),
+        Some(shape.parent_thread_id.as_str())
+    );
+    assert_eq!(shape.legacy_top_level_parent, None);
+    assert_eq!(shape.replay_stages, ["user", "compaction", "modelItems"]);
+
+    let context_cases = lean_codex_shim_context_usage_cases();
+    assert_eq!(context_cases.len(), 2);
+    for case in context_cases {
+        assert_eq!(
+            case.total_tokens,
+            case.cumulative_input + case.cumulative_output,
+            "{}: cumulative accounting drifted",
+            case.witness
+        );
+        assert_eq!(
+            case.current_context_tokens,
+            case.latest_prompt + case.latest_completion,
+            "{}: current context must come from the latest inference call",
+            case.witness
+        );
+        assert_eq!(
+            case.remaining_tokens,
+            case.model_window
+                .saturating_sub(case.current_context_tokens),
+            "{}: remaining context must saturate at zero",
+            case.witness
+        );
+        assert!(case
+            .lean_theorems
+            .contains(&"CodexShim.current_context_uses_latest_call".to_string()));
+    }
+
+    let compaction_cases = lean_codex_shim_compaction_projection_cases();
+    assert_eq!(compaction_cases.len(), 8);
+    for case in compaction_cases {
+        assert_eq!(
+            case.claims_compacted,
+            case.projected_events
+                .iter()
+                .any(|event| event == "completed"),
+            "{}: only a completed item may claim context was compacted",
+            case.witness
+        );
+        match (
+            case.previous_call_state.as_deref(),
+            case.call_state.as_str(),
+        ) {
+            (None, "queued" | "running") => {
+                assert_eq!(case.projected_events, ["started"])
+            }
+            (None, "completed") => {
+                assert_eq!(case.projected_events, ["started", "completed"])
+            }
+            (Some("running"), "completed") => {
+                assert_eq!(case.projected_events, ["completed"])
+            }
+            (Some("running"), "failed" | "cancelled") => {
+                assert!(case.projected_events.is_empty())
+            }
+            (None, "failed" | "cancelled") => assert!(case.projected_events.is_empty()),
+            other => panic!(
+                "{}: unmodeled compaction projection {other:?}",
+                case.witness
+            ),
+        }
+    }
 }
 
 /// Fence for the runnable-gated shim binding (#699).

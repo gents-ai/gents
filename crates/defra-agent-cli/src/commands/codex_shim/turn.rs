@@ -12,7 +12,7 @@ use active::{
     cancel_abandoned_steering_request, clear_stream_control_if_current, install_stream_control,
     load_active_codex_turn,
 };
-use stream::stream_defra_turn;
+pub(super) use stream::{stream_defra_turn, TurnStreamOptions};
 use submission::create_agent_request_with_retry;
 
 use super::protocol::{
@@ -20,6 +20,7 @@ use super::protocol::{
     send_committed_user_message, send_error, send_notification, send_result, turn_value,
     user_text_from_input,
 };
+use super::thread_projection::load_codex_thread;
 use super::turn_projection::TurnProjection;
 use super::{
     ConnectionState, ShimState, JSONRPC_INTERNAL_ERROR, JSONRPC_INVALID_PARAMS,
@@ -34,6 +35,19 @@ pub(super) async fn start_defra_turn(
     thread_id: String,
     input: Vec<codex::UserInput>,
 ) -> Result<()> {
+    if load_codex_thread(state, &thread_id)
+        .await?
+        .is_some_and(|record| record.is_subagent())
+    {
+        return send_error(
+            &connection.outbound,
+            request_id,
+            JSONRPC_INVALID_PARAMS,
+            "linked DEFRA subagent threads are read-only; steer them from the parent thread"
+                .to_string(),
+        )
+        .await;
+    }
     let user_text = user_text_from_input(&input);
     // Explicitly-selected skills (the Codex "pill") are forwarded as id
     // REFERENCES on the request; the runtime resolves + injects their bodies
@@ -107,23 +121,31 @@ pub(super) async fn start_defra_turn(
     send_committed_user_message(&connection.outbound, state, &thread_id, &turn_id, &input).await?;
 
     let mut projection = TurnProjection::new(state, &thread_id, &turn_id, cwd.clone());
-    let result =
-        match stream_defra_turn(connection, state, &submitted, &mut projection, cancel_rx).await {
-            Ok(()) => Ok(()),
-            Err(err) => {
-                let message = format!("DEFRA turn failed: {err}");
-                projection
-                    .append_agent_delta(&connection.outbound, &format!("[agent error] {message}\n"))
-                    .await?;
-                projection
-                    .finish_turn(
-                        &connection.outbound,
-                        codex::TurnStatus::Failed,
-                        Some(message),
-                    )
-                    .await
-            }
-        };
+    let result = match stream_defra_turn(
+        connection,
+        state,
+        &submitted,
+        &mut projection,
+        cancel_rx,
+        TurnStreamOptions::fresh(thread_id.clone()),
+    )
+    .await
+    {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let message = format!("DEFRA turn failed: {err}");
+            projection
+                .append_agent_delta(&connection.outbound, &format!("[agent error] {message}\n"))
+                .await?;
+            projection
+                .finish_turn(
+                    &connection.outbound,
+                    codex::TurnStatus::Failed,
+                    Some(message),
+                )
+                .await
+        }
+    };
 
     clear_stream_control_if_current(connection, &thread_id, &turn_id).await;
     result
@@ -135,6 +157,19 @@ pub(super) async fn steer_defra_turn(
     request_id: codex::RequestId,
     params: codex::TurnSteerParams,
 ) -> Result<()> {
+    if load_codex_thread(state, &params.thread_id)
+        .await?
+        .is_some_and(|record| record.is_subagent())
+    {
+        return send_error(
+            &connection.outbound,
+            request_id,
+            JSONRPC_INVALID_PARAMS,
+            "linked DEFRA subagent threads are read-only; steer them from the parent thread"
+                .to_string(),
+        )
+        .await;
+    }
     if params.expected_turn_id.trim().is_empty() {
         return send_error(
             &connection.outbound,

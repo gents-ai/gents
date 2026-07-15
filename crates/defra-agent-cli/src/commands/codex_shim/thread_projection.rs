@@ -5,6 +5,10 @@ use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use super::host_runtime::thread_git_info;
+use super::subagent_projection::{
+    load_authorized_subagent_threads, load_authorized_subagent_threads_for_root_ids,
+    LinkedSubagentThread,
+};
 use super::ShimState;
 
 mod goal;
@@ -20,14 +24,16 @@ pub(super) use json::{
     thread_resume_response_json, thread_start_response_json,
 };
 pub(super) use mutations::{
-    loaded_codex_thread_ids, set_codex_thread_archived, set_codex_thread_git_info,
-    set_codex_thread_loaded, set_codex_thread_memory_mode, set_codex_thread_name,
-    set_codex_thread_settings,
+    set_codex_thread_archived, set_codex_thread_git_info, set_codex_thread_loaded,
+    set_codex_thread_memory_mode, set_codex_thread_name, set_codex_thread_settings,
 };
 
-pub(super) use storage::ensure_agent_session_pinning;
-use storage::{ensure_agent_session, list_scoped_sessions, load_conversation, load_scoped_session};
-pub(super) use usage::{requests_token_usage, session_token_usage, thread_token_usage};
+pub(super) use storage::{ensure_agent_session, ensure_agent_session_pinning};
+use storage::{list_scoped_sessions, load_conversation, load_scoped_session};
+pub(super) use usage::{
+    latest_inference_usage_observation, latest_requests_token_usage, session_token_usage,
+    thread_record_token_usage, thread_token_usage, TokenTotals,
+};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -42,6 +48,13 @@ pub(super) struct CodexThreadRecord {
     pub(super) git_info: Option<Value>,
     pub(super) projection_started: Option<String>,
     pub(super) conversation: Option<ConversationRow>,
+    pub(super) subagent: Option<LinkedSubagentThread>,
+}
+
+impl CodexThreadRecord {
+    pub(super) fn is_subagent(&self) -> bool {
+        self.subagent.is_some()
+    }
 }
 
 #[allow(dead_code)]
@@ -85,35 +98,55 @@ pub(super) async fn create_codex_thread(
         .with_context(|| format!("loading newly-created Codex thread {thread_id}"))
 }
 
-pub(super) async fn resume_codex_thread(
+pub(super) async fn resume_loaded_codex_thread(
     state: &ShimState,
     thread_id: &str,
     cwd_override: Option<&str>,
+    record: Option<CodexThreadRecord>,
 ) -> Result<Option<CodexThreadRecord>> {
-    ensure_agent_session(state, thread_id).await?;
+    let Some(mut record) = record else {
+        return Ok(None);
+    };
     if let Some(cwd) = cwd_override.filter(|value| !value.trim().is_empty()) {
-        state.set_thread_cwd(thread_id, PathBuf::from(cwd)).await;
+        let cwd = PathBuf::from(cwd);
+        state.set_thread_cwd(thread_id, cwd.clone()).await;
+        record.git_info = thread_git_info(&cwd).await;
+        record.cwd = cwd;
     }
     state.set_thread_loaded(thread_id, true).await;
-
-    let record = load_codex_thread(state, thread_id).await?;
-    if record.is_none() {
-        state.set_thread_loaded(thread_id, false).await;
-    }
-    Ok(record)
+    record.loaded = true;
+    Ok(Some(record))
 }
 
 pub(super) async fn load_codex_thread(
     state: &ShimState,
     thread_id: &str,
 ) -> Result<Option<CodexThreadRecord>> {
-    let Some(session) = load_scoped_session(state, thread_id).await? else {
+    if let Some(session) = load_scoped_session(state, thread_id).await? {
+        let conversation = load_conversation(state, thread_id).await?;
+        return Ok(Some(
+            assemble_record(state, thread_id, session.started, conversation).await?,
+        ));
+    }
+    let links = load_authorized_subagent_threads(state).await?;
+    let Some(link) = links.into_iter().find(|link| link.session_id == thread_id) else {
         return Ok(None);
     };
-    let conversation = load_conversation(state, thread_id).await?;
-    Ok(Some(
-        assemble_record(state, thread_id, session.started, conversation).await?,
-    ))
+    Ok(Some(assemble_subagent_record(state, link).await?))
+}
+
+pub(super) async fn loaded_codex_thread_ids(state: &ShimState) -> Result<Vec<String>> {
+    let mut loaded = state.loaded_thread_ids().await;
+    let root_ids = loaded
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+    for link in load_authorized_subagent_threads_for_root_ids(state, &loaded).await? {
+        if root_ids.contains(&link.root_session_id) && !loaded.contains(&link.session_id) {
+            loaded.push(link.session_id);
+        }
+    }
+    Ok(loaded)
 }
 
 pub(super) async fn list_codex_threads_by_archived(
@@ -141,6 +174,34 @@ pub(super) async fn list_codex_threads_by_archived(
         records.push(
             assemble_record(state, &session.session_id, session.started, conversation).await?,
         );
+    }
+    Ok(records)
+}
+
+pub(super) async fn list_codex_subagent_threads_by_archived(
+    state: &ShimState,
+    archived: bool,
+) -> Result<Vec<CodexThreadRecord>> {
+    if archived {
+        return Ok(Vec::new());
+    }
+
+    // Start from durable Codex roots, then walk only their authorized bridge
+    // graph. This keeps thread/list scoped to the same DEFRA authority as
+    // thread/read and avoids a fleet-wide child scan.
+    let mut roots = list_codex_threads_by_archived(state, false).await?;
+    roots.extend(list_codex_threads_by_archived(state, true).await?);
+    let root_ids = roots
+        .into_iter()
+        .map(|record| record.session_id)
+        .collect::<Vec<_>>();
+    let links = load_authorized_subagent_threads_for_root_ids(state, &root_ids).await?;
+    let mut seen = std::collections::HashSet::<String>::new();
+    let mut records = Vec::with_capacity(links.len());
+    for link in links {
+        if seen.insert(link.session_id.clone()) {
+            records.push(assemble_subagent_record(state, link).await?);
+        }
     }
     Ok(records)
 }
@@ -188,5 +249,28 @@ async fn assemble_record(
         git_info,
         projection_started: started,
         conversation,
+        subagent: None,
+    })
+}
+
+async fn assemble_subagent_record(
+    state: &ShimState,
+    link: LinkedSubagentThread,
+) -> Result<CodexThreadRecord> {
+    let cwd = storage::derive_thread_cwd(state, &link.root_session_id).await?;
+    state.set_thread_cwd(&link.session_id, cwd.clone()).await;
+    let git_info = thread_git_info(&cwd).await;
+    Ok(CodexThreadRecord {
+        session_id: link.session_id.clone(),
+        cwd,
+        archived: false,
+        loaded: state.is_thread_loaded(&link.session_id).await,
+        memory_mode: "disabled".to_string(),
+        name: link.nickname.clone(),
+        settings_json: String::new(),
+        git_info,
+        projection_started: link.created_at.clone(),
+        conversation: None,
+        subagent: Some(link),
     })
 }

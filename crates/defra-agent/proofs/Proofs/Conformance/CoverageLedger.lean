@@ -682,6 +682,46 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "codex_shim_subagent_tool_cases"
+      "CodexShimSubagentToolCases"
+      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "codex-shim" [Surface.api, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "codex_shim_subagent_status_cases"
+      "CodexShimSubagentStatusCases"
+      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "codex-shim" [Surface.api, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "codex_shim_subagent_visibility_cases"
+      "CodexShimSubagentVisibilityCases"
+      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "codex-shim" [Surface.api, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "codex_shim_subagent_metadata_cases"
+      "CodexShimSubagentMetadataCases"
+      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "codex-shim" [Surface.api, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "codex_shim_subagent_listing_cases"
+      "CodexShimSubagentListingCases"
+      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "codex-shim" [Surface.api, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "codex_shim_subagent_thread_shape_cases"
+      "CodexShimSubagentThreadShapeCases"
+      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "codex-shim" [Surface.api, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "codex_shim_context_usage_cases"
+      "CodexShimContextUsageCases"
+      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "codex-shim" [Surface.api, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "codex_shim_compaction_projection_cases"
+      "CodexShimCompactionProjectionCases"
+      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "codex-shim" [Surface.api, Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "codex_shim_turn_lifecycle_cases"
       "CodexShimTurnLifecycleCases"
       "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")

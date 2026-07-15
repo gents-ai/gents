@@ -2,7 +2,10 @@ use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
 use serde_json::json;
 
-use super::super::bound_behavior::load_bound_model_selection_id_for_state;
+use super::super::bound_behavior::{
+    load_bound_context_window, load_bound_model_selection_id_for_state,
+};
+use super::super::child_stream::ensure_loaded_subagent_stream;
 use super::super::history_projection::{
     conversation_summary_json, load_thread_turns, thread_turn_items_list_response,
     thread_turns_list_response,
@@ -12,17 +15,18 @@ use super::super::protocol::{
 };
 use super::super::thread_projection::{
     clear_codex_thread_goal, codex_thread_json, codex_thread_json_with_turns, create_codex_thread,
-    ensure_agent_session_pinning, get_codex_thread_goal, load_codex_thread,
-    loaded_codex_thread_ids, resume_codex_thread, session_token_usage, set_codex_thread_archived,
+    ensure_agent_session, ensure_agent_session_pinning, get_codex_thread_goal, load_codex_thread,
+    loaded_codex_thread_ids, resume_loaded_codex_thread, set_codex_thread_archived,
     set_codex_thread_git_info, set_codex_thread_goal, set_codex_thread_loaded,
     set_codex_thread_memory_mode, set_codex_thread_name, set_codex_thread_settings,
-    thread_resume_response_json, thread_start_response_json, thread_token_usage,
+    thread_record_token_usage, thread_resume_response_json, thread_start_response_json,
+    thread_token_usage,
 };
 use super::super::thread_routes;
 use super::super::{ConnectionState, Outbound, ShimState, JSONRPC_INVALID_PARAMS};
 
 pub(super) async fn handle_thread_request(
-    _connection: &ConnectionState,
+    connection: &ConnectionState,
     state: &ShimState,
     outbound: &Outbound,
     request: codex::ClientRequest,
@@ -49,17 +53,23 @@ pub(super) async fn handle_thread_request(
         codex::ClientRequest::ThreadResume {
             request_id, params, ..
         } => {
-            if let Err(err) = ensure_agent_session_pinning(state, &params.thread_id).await {
-                return send_error(
-                    outbound,
-                    request_id,
-                    JSONRPC_INVALID_PARAMS,
-                    err.to_string(),
-                )
-                .await;
+            let mut record = load_codex_thread(state, &params.thread_id).await?;
+            if record.is_none() {
+                if let Err(err) = ensure_agent_session_pinning(state, &params.thread_id).await {
+                    return send_error(
+                        outbound,
+                        request_id,
+                        JSONRPC_INVALID_PARAMS,
+                        err.to_string(),
+                    )
+                    .await;
+                }
+                ensure_agent_session(state, &params.thread_id).await?;
+                record = load_codex_thread(state, &params.thread_id).await?;
             }
             let Some(record) =
-                resume_codex_thread(state, &params.thread_id, params.cwd.as_deref()).await?
+                resume_loaded_codex_thread(state, &params.thread_id, params.cwd.as_deref(), record)
+                    .await?
             else {
                 return send_error(
                     outbound,
@@ -77,6 +87,18 @@ pub(super) async fn handle_thread_request(
             } else {
                 load_thread_turns(state, &record).await?
             };
+            let child_stream_baseline = record.subagent.as_ref().and_then(|link| {
+                turns
+                    .iter()
+                    .find(|turn| turn.id == link.latest_request_id)
+                    .or_else(|| {
+                        turns
+                            .iter()
+                            .rev()
+                            .find(|turn| turn.status == codex::TurnStatus::InProgress)
+                    })
+                    .cloned()
+            });
             let bound_model_id =
                 load_bound_model_selection_id_for_state(state.node.as_ref(), &state.behavior_id)
                     .await
@@ -87,9 +109,27 @@ pub(super) async fn handle_thread_request(
                 thread_resume_response_json(&record, turns, &bound_model_id),
             )
             .await?;
-            let total_usage = session_token_usage(state, &record.session_id)
+            let (total_usage, last_usage) = thread_record_token_usage(state, &record)
                 .await
                 .unwrap_or_default();
+            let context_behavior_id = record
+                .subagent
+                .as_ref()
+                .map(|link| link.behavior_id.as_str())
+                .unwrap_or(state.behavior_id.as_ref());
+            let model_context_window = load_bound_context_window(
+                state.node.as_ref(),
+                context_behavior_id,
+            )
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(
+                    %error,
+                    behavior_id = context_behavior_id,
+                    "Codex shim could not load the effective context window; using the runtime default"
+                );
+                defra_agent::DEFAULT_CONTEXT_WINDOW as i64
+            });
             send_notification(
                 outbound,
                 state,
@@ -97,11 +137,17 @@ pub(super) async fn handle_thread_request(
                     codex::ThreadTokenUsageUpdatedNotification {
                         thread_id: record.session_id.clone(),
                         turn_id: String::new(),
-                        token_usage: thread_token_usage(total_usage, total_usage),
+                        token_usage: thread_token_usage(
+                            total_usage,
+                            last_usage,
+                            model_context_window,
+                        ),
                     },
                 ),
             )
-            .await
+            .await?;
+            ensure_loaded_subagent_stream(connection, state, &record, child_stream_baseline).await;
+            Ok(())
         }
         codex::ClientRequest::ThreadList {
             request_id, params, ..
@@ -246,6 +292,7 @@ pub(super) async fn handle_thread_request(
             request_id, params, ..
         } => {
             set_codex_thread_loaded(state, &params.thread_id, false).await?;
+            connection.stop_child_stream(&params.thread_id).await;
             send_result(
                 outbound,
                 request_id,
@@ -259,13 +306,17 @@ pub(super) async fn handle_thread_request(
             request_id, params, ..
         } => {
             set_codex_thread_archived(state, &params.thread_id, true).await?;
+            connection.stop_child_stream(&params.thread_id).await;
             send_result(outbound, request_id, codex::ThreadArchiveResponse {}).await
         }
         codex::ClientRequest::ThreadUnarchive {
             request_id, params, ..
         } => {
             set_codex_thread_archived(state, &params.thread_id, false).await?;
-            let Some(record) = resume_codex_thread(state, &params.thread_id, None).await? else {
+            let loaded = load_codex_thread(state, &params.thread_id).await?;
+            let Some(record) =
+                resume_loaded_codex_thread(state, &params.thread_id, None, loaded).await?
+            else {
                 return send_error(
                     outbound,
                     request_id,
@@ -279,7 +330,9 @@ pub(super) async fn handle_thread_request(
                 request_id,
                 json!({ "thread": codex_thread_json(&record, false) }),
             )
-            .await
+            .await?;
+            ensure_loaded_subagent_stream(connection, state, &record, None).await;
+            Ok(())
         }
         codex::ClientRequest::ThreadSetName {
             request_id, params, ..

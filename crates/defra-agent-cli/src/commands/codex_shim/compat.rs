@@ -169,11 +169,16 @@ pub(super) fn compat_gap_for_request(request: &codex::ClientRequest) -> Option<C
             plan: "keep same-thread rollback unsupported; if needed, expose Codex rollback UX as a DEFRA-backed fork-at-turn workflow",
         }),
 
-        codex::ClientRequest::ThreadCompactStart { .. }
-        | codex::ClientRequest::ReviewStart { .. } => Some(CompatGap {
+        codex::ClientRequest::ThreadCompactStart { .. } => Some(CompatGap {
+            difficulty: CompatDifficulty::DefraBackedWorkflow,
+            area: "thread compaction workflow",
+            plan: "manual Codex compaction remains unsupported; automatic DEFRA compaction lifecycle is projected as native contextCompaction items. The pinned protocol has no failed-item event, so clients showing an in-progress compaction must clear it at turn end when no completion arrives",
+        }),
+
+        codex::ClientRequest::ReviewStart { .. } => Some(CompatGap {
             difficulty: CompatDifficulty::DefraBackedWorkflow,
             area: "turn workflow",
-            plan: "leave unsupported unless stock Codex starts requiring it; DEFRA has its own compaction and review policy primitives",
+            plan: "leave unsupported unless stock Codex starts requiring it; DEFRA has its own review policy primitives",
         }),
 
         codex::ClientRequest::ThreadInjectItems { .. } => Some(CompatGap {

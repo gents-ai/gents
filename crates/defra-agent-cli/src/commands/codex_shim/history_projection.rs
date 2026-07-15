@@ -9,14 +9,19 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::command_projection::{
-    command_execution_item, file_change_item, tool_projection_status, ToolProjectionStatus,
+    command_execution_item, file_change_item, tool_projection_status_with_settled,
+    ToolProjectionStatus,
 };
+use super::compaction_projection::context_compaction_item;
 use super::progress::{
     decode_defra_tool_call_progress, defra_tool_item, terminal_error_message, terminal_turn_status,
     DefraToolCallProgress,
 };
 use super::protocol::{absolute_path, agent_message_item_with_phase, turn_value};
 use super::store::{hydrate_materialized_response_content, query_node_json};
+use super::subagent_projection::{
+    attach_subagent_link, collab_tool_item, load_authorized_subagent_threads_for_root,
+};
 use super::thread_projection::CodexThreadRecord;
 use super::ShimState;
 
@@ -66,6 +71,16 @@ struct ToolRow {
     message_sequence: i64,
     started_at: Option<String>,
     progress: DefraToolCallProgress,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CompactionRow {
+    request_id: String,
+    call_id: String,
+    #[serde(default)]
+    call_state: String,
+    #[serde(default)]
+    call_seq: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -145,9 +160,19 @@ pub(super) async fn load_thread_turns(
     let requests = decode_rows::<RequestRow>(&response, "AgentRequest")
         .context("decoding AgentRequest history rows")?;
     let responses = decode_response_rows(state, &response).await?;
-    let tools = decode_tool_rows(&response).context("decoding AgentToolCall history rows")?;
+    let mut tools = decode_tool_rows(&response).context("decoding AgentToolCall history rows")?;
+    let root_session_id = record
+        .subagent
+        .as_ref()
+        .map(|link| link.root_session_id.as_str())
+        .unwrap_or(record.session_id.as_str());
+    let subagent_links = load_authorized_subagent_threads_for_root(state, root_session_id).await?;
+    for tool in &mut tools {
+        attach_subagent_link(&mut tool.progress, &subagent_links);
+    }
     let messages = decode_rows::<MessageRow>(&response, "AgentMessage")
         .context("decoding AgentMessage rows")?;
+    let compactions = load_completed_compactions(state, &requests).await?;
 
     let mut responses_by_request = BTreeMap::<String, ResponseRow>::new();
     for response in responses {
@@ -158,6 +183,20 @@ pub(super) async fn load_thread_turns(
     for tool in tools {
         let request_id = tool.request_id.clone();
         tools_by_request.entry(request_id).or_default().push(tool);
+    }
+
+    let mut compactions_by_request = BTreeMap::<String, Vec<CompactionRow>>::new();
+    for compaction in compactions
+        .into_iter()
+        .filter(|row| row.call_state.trim() == "completed")
+    {
+        compactions_by_request
+            .entry(compaction.request_id.clone())
+            .or_default()
+            .push(compaction);
+    }
+    for rows in compactions_by_request.values_mut() {
+        rows.sort_by_key(|row| row.call_seq);
     }
 
     let messages_by_sequence = messages
@@ -171,6 +210,7 @@ pub(super) async fn load_thread_turns(
         requests,
         &responses_by_request,
         &tools_by_request,
+        &compactions_by_request,
         &messages_by_sequence,
     )?;
 
@@ -179,6 +219,45 @@ pub(super) async fn load_thread_turns(
     }
 
     Ok(turns)
+}
+
+async fn load_completed_compactions(
+    state: &ShimState,
+    requests: &[RequestRow],
+) -> Result<Vec<CompactionRow>> {
+    let request_ids = requests
+        .iter()
+        .map(|request| request.request_id.trim())
+        .filter(|request_id| !request_id.is_empty())
+        .collect::<BTreeSet<_>>();
+    if request_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let id_list = request_ids
+        .into_iter()
+        .map(|request_id| format!(r#""{}""#, escape_graphql_string(request_id)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query = format!(
+        r#"{{
+            InferenceCall(
+                filter: {{
+                    request_id: {{ _in: [{id_list}] }},
+                    call_kind: {{ _eq: "compaction" }},
+                    call_state: {{ _eq: "completed" }}
+                }},
+                order: {{ call_seq: ASC }}
+            ) {{
+                request_id
+                call_id
+                call_state
+                call_seq
+            }}
+        }}"#
+    );
+    let response = query_node_json(&state.node, &query).await?;
+    decode_rows::<CompactionRow>(&response, "InferenceCall")
+        .context("decoding completed InferenceCall compaction history rows")
 }
 
 fn project_message_turns(messages: Vec<MessageRow>) -> Vec<codex::Turn> {
@@ -246,11 +325,12 @@ fn project_request_turns(
     requests: Vec<RequestRow>,
     responses_by_request: &BTreeMap<String, ResponseRow>,
     tools_by_request: &BTreeMap<String, Vec<ToolRow>>,
+    compactions_by_request: &BTreeMap<String, Vec<CompactionRow>>,
     messages_by_sequence: &BTreeMap<i64, MessageRow>,
 ) -> Result<Vec<codex::Turn>> {
     let requests = requests
         .into_iter()
-        .filter(is_codex_visible_request)
+        .filter(|request| record.is_subagent() || is_codex_visible_request(request))
         .collect::<Vec<_>>();
     let requests_by_id = requests
         .iter()
@@ -278,6 +358,7 @@ fn project_request_turns(
             &group,
             responses_by_request,
             tools_by_request,
+            compactions_by_request,
             messages_by_sequence,
         ));
     }
@@ -428,6 +509,7 @@ fn project_turn_group(
     requests: &[RequestRow],
     responses_by_request: &BTreeMap<String, ResponseRow>,
     tools_by_request: &BTreeMap<String, Vec<ToolRow>>,
+    compactions_by_request: &BTreeMap<String, Vec<CompactionRow>>,
     messages_by_sequence: &BTreeMap<i64, MessageRow>,
 ) -> codex::Turn {
     let Some(first_request) = requests.first() else {
@@ -443,12 +525,17 @@ fn project_turn_group(
             .get(&request.request_id)
             .cloned()
             .unwrap_or_default();
+        let compactions = compactions_by_request
+            .get(&request.request_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         append_request_items(
             record,
             &mut items,
             request,
             response,
             tools,
+            compactions,
             messages_by_sequence,
         );
     }
@@ -484,8 +571,15 @@ fn append_request_items(
     request: &RequestRow,
     response: Option<&ResponseRow>,
     mut tools: Vec<ToolRow>,
+    compactions: &[CompactionRow],
     messages_by_sequence: &BTreeMap<i64, MessageRow>,
 ) {
+    let projection_settled = matches!(
+        request.lifecycle_state.trim(),
+        "completed" | "failed" | "dead" | "interrupted" | "superseded"
+    ) || response.is_some_and(|response| {
+        matches!(response.status.trim(), "complete" | "completed" | "error")
+    });
     tools.sort_by(|left, right| {
         left.message_sequence
             .cmp(&right.message_sequence)
@@ -502,6 +596,15 @@ fn append_request_items(
         });
     }
 
+    // The runtime performs automatic compaction after accepting this request
+    // and before entering the owned inference/tool loop. Preserve that durable
+    // order in replay: user request, compaction, then model-derived items.
+    items.extend(
+        compactions
+            .iter()
+            .map(|compaction| context_compaction_item(&compaction.call_id)),
+    );
+
     let mut rendered_assistant_sequences = BTreeSet::<i64>::new();
     for tool in tools {
         if let Some(message) = messages_by_sequence.get(&tool.message_sequence) {
@@ -511,7 +614,7 @@ fn append_request_items(
                 rendered_assistant_sequences.insert(tool.message_sequence);
             }
         }
-        if let Some(item) = project_tool(record, &tool.progress) {
+        if let Some(item) = project_tool(record, &tool.progress, projection_settled) {
             items.push(item);
         }
     }
@@ -586,12 +689,17 @@ fn append_assistant_message_items(
 fn project_tool(
     record: &CodexThreadRecord,
     tool: &DefraToolCallProgress,
+    projection_settled: bool,
 ) -> Option<codex::ThreadItem> {
-    match tool_projection_status(tool) {
+    match tool_projection_status_with_settled(tool, projection_settled) {
         ToolProjectionStatus::Mcp(status) => Some(defra_tool_item(tool, status)),
         ToolProjectionStatus::Command(status) => {
             Some(command_execution_item(&record.cwd, tool, status))
         }
+        ToolProjectionStatus::Collab(projection) => {
+            Some(collab_tool_item(&record.session_id, tool, &projection))
+        }
+        ToolProjectionStatus::DeferredCollab => None,
         ToolProjectionStatus::DeferredFileChange => None,
         ToolProjectionStatus::FileChange(status) => file_change_item(tool, status),
     }
@@ -831,6 +939,7 @@ mod tests {
             git_info: None,
             projection_started: None,
             conversation: None,
+            subagent: None,
         };
         let request = RequestRow {
             request_id: "request-1".to_string(),
@@ -866,6 +975,7 @@ mod tests {
                 child_request_id: None,
                 args: r#"{"path":"."}"#.to_string(),
                 result: "Cargo.toml\nsrc".to_string(),
+                subagent_link: None,
             },
         };
         let second_tool = ToolRow {
@@ -881,6 +991,7 @@ mod tests {
                 child_request_id: None,
                 args: r#"{"path":"Cargo.toml"}"#.to_string(),
                 result: "[package]".to_string(),
+                subagent_link: None,
             },
         };
         let messages_by_sequence = BTreeMap::from([
@@ -909,6 +1020,7 @@ mod tests {
             &request,
             Some(&response),
             vec![first_tool, second_tool],
+            &[],
             &messages_by_sequence,
         );
 
@@ -949,6 +1061,67 @@ mod tests {
                     && *phase == Some(MessagePhase::FinalAnswer)),
             "final materialized assistant text should be replayed; items={items:?}"
         );
+    }
+
+    #[test]
+    fn append_request_items_replays_only_successful_context_compactions() {
+        let record = CodexThreadRecord {
+            session_id: "thread-1".to_string(),
+            cwd: PathBuf::from("/tmp/project"),
+            archived: false,
+            loaded: true,
+            memory_mode: "disabled".to_string(),
+            name: String::new(),
+            settings_json: String::new(),
+            git_info: None,
+            projection_started: None,
+            conversation: None,
+            subagent: None,
+        };
+        let request = RequestRow {
+            request_id: "request-1".to_string(),
+            content: "Continue".to_string(),
+            status: "completed".to_string(),
+            lifecycle_state: "completed".to_string(),
+            failure_reason: String::new(),
+            created_at: None,
+            metadata: r#"{"codex_shim":{}}"#.to_string(),
+            execution_origin: "interactive".to_string(),
+        };
+        let compactions = vec![CompactionRow {
+            request_id: request.request_id.clone(),
+            call_id: "compact-1".to_string(),
+            call_state: "completed".to_string(),
+            call_seq: 1,
+        }];
+        let response = ResponseRow {
+            request_id: request.request_id.clone(),
+            content: "Done".to_string(),
+            reasoning: String::new(),
+            status: "complete".to_string(),
+            error_message: None,
+            materialized_message_sequence: None,
+            created_at: None,
+            completed_at: None,
+            interrupted_at: None,
+        };
+        let mut items = Vec::new();
+        append_request_items(
+            &record,
+            &mut items,
+            &request,
+            Some(&response),
+            Vec::new(),
+            &compactions,
+            &BTreeMap::new(),
+        );
+
+        assert!(matches!(items[0], codex::ThreadItem::UserMessage { .. }));
+        assert!(matches!(
+            &items[1],
+            codex::ThreadItem::ContextCompaction { id } if id == "compact-1"
+        ));
+        assert!(matches!(items[2], codex::ThreadItem::AgentMessage { .. }));
     }
 
     #[test]

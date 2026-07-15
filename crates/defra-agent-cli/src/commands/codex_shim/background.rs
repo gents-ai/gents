@@ -130,7 +130,9 @@ fn spawn_background_tool_watcher_handle(
                         }
                         running.remove(&tool_key);
                     }
-                    ToolProjectionStatus::DeferredFileChange
+                    ToolProjectionStatus::Collab(_)
+                    | ToolProjectionStatus::DeferredCollab
+                    | ToolProjectionStatus::DeferredFileChange
                     | ToolProjectionStatus::FileChange(_) => {
                         running.remove(&tool_key);
                     }
@@ -339,6 +341,7 @@ mod tests {
             turn_streams: Arc::new(Mutex::new(BTreeMap::new())),
             fuzzy_file_search_sessions: Arc::new(Mutex::new(BTreeMap::new())),
             pending_steering_inputs: Arc::new(Mutex::new(BTreeMap::new())),
+            child_thread_streams: Arc::new(Mutex::new(BTreeMap::new())),
         };
         let state = ShimState {
             codex_home: tempdir.path().join("codex-home"),

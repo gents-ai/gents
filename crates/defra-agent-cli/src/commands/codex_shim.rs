@@ -21,7 +21,9 @@ use tokio::task::JoinHandle;
 
 mod background;
 mod bound_behavior;
+mod child_stream;
 mod command_projection;
+mod compaction_projection;
 mod compat;
 mod handlers;
 mod history_projection;
@@ -29,6 +31,7 @@ mod host_runtime;
 mod progress;
 mod protocol;
 mod store;
+mod subagent_projection;
 mod thread_projection;
 mod thread_routes;
 mod trace;
@@ -95,11 +98,18 @@ struct ConnectionState {
     turn_streams: Arc<Mutex<BTreeMap<String, TurnStreamControl>>>,
     fuzzy_file_search_sessions: Arc<Mutex<BTreeMap<String, Vec<String>>>>,
     pending_steering_inputs: Arc<Mutex<BTreeMap<String, Vec<codex::UserInput>>>>,
+    child_thread_streams: Arc<Mutex<BTreeMap<String, ChildThreadStreamControl>>>,
 }
 
 #[derive(Clone, Debug)]
 struct TurnStreamControl {
     cancel_tx: watch::Sender<bool>,
+}
+
+#[derive(Clone, Debug)]
+struct ChildThreadStreamControl {
+    watcher_id: String,
+    abort_handle: tokio::task::AbortHandle,
 }
 
 #[derive(Clone)]
@@ -275,6 +285,7 @@ async fn handle_socket(socket: WebSocket, state: ShimState) {
         turn_streams: Arc::new(Mutex::new(BTreeMap::new())),
         fuzzy_file_search_sessions: Arc::new(Mutex::new(BTreeMap::new())),
         pending_steering_inputs: Arc::new(Mutex::new(BTreeMap::new())),
+        child_thread_streams: Arc::new(Mutex::new(BTreeMap::new())),
     };
 
     while let Some(message) = receiver.next().await {
@@ -316,6 +327,7 @@ async fn handle_socket(socket: WebSocket, state: ShimState) {
 
     connection.fuzzy_file_search_sessions.lock().await.clear();
     connection.pending_steering_inputs.lock().await.clear();
+    connection.stop_all_child_streams().await;
     writer.abort();
 }
 
@@ -455,6 +467,47 @@ impl ShimState {
 }
 
 impl ConnectionState {
+    async fn replace_child_stream(
+        &self,
+        thread_id: String,
+        watcher_id: String,
+        abort_handle: tokio::task::AbortHandle,
+    ) {
+        let previous = self.child_thread_streams.lock().await.insert(
+            thread_id,
+            ChildThreadStreamControl {
+                watcher_id,
+                abort_handle,
+            },
+        );
+        if let Some(previous) = previous {
+            previous.abort_handle.abort();
+        }
+    }
+
+    async fn clear_child_stream_if_current(&self, thread_id: &str, watcher_id: &str) {
+        let mut streams = self.child_thread_streams.lock().await;
+        if streams
+            .get(thread_id)
+            .is_some_and(|control| control.watcher_id == watcher_id)
+        {
+            streams.remove(thread_id);
+        }
+    }
+
+    async fn stop_child_stream(&self, thread_id: &str) {
+        if let Some(control) = self.child_thread_streams.lock().await.remove(thread_id) {
+            control.abort_handle.abort();
+        }
+    }
+
+    async fn stop_all_child_streams(&self) {
+        let controls = std::mem::take(&mut *self.child_thread_streams.lock().await);
+        for control in controls.into_values() {
+            control.abort_handle.abort();
+        }
+    }
+
     async fn remember_steering_input(&self, request_id: String, input: Vec<codex::UserInput>) {
         self.pending_steering_inputs
             .lock()

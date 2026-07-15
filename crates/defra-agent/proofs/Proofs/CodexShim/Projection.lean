@@ -1,5 +1,6 @@
 import Proofs.Client.Types
 import Proofs.CodexShim.TurnLifecycle
+import Proofs.InferenceCall.State
 import Proofs.Request.Transition
 
 /-!
@@ -44,6 +45,377 @@ def projectRequestState : RequestState → TurnPhase
   | .dead => .failed
   | .superseded => .interrupted
   | .interrupted => .interrupted
+
+/-!
+## First-class subagent projection
+
+DEFRA's subagent tools and request lifecycle are projected into Codex's
+`collabAgentToolCall` vocabulary.  This is deliberately an adapter mapping: it
+does not introduce a second subagent lifecycle.
+-/
+
+/-- DEFRA tools which have a first-class Codex collaboration equivalent. -/
+inductive SubagentControlTool where
+  | spawn
+  | wait
+  | steer
+  | cancel
+  | other
+  deriving DecidableEq, Repr
+
+/-- The Codex collaboration tool variants supported by the pinned app-server
+protocol. -/
+inductive CollabTool where
+  | spawnAgent
+  | wait
+  | sendInput
+  | closeAgent
+  deriving DecidableEq, Repr
+
+/-- Project native DEFRA subagent controls into first-class Codex collaboration
+items.  Inspection tools (`list_subagents` and `read_subagent`) remain ordinary
+MCP calls and enter this model as `other`. -/
+def projectSubagentControl : SubagentControlTool → Option CollabTool
+  | .spawn => some .spawnAgent
+  | .wait => some .wait
+  | .steer => some .sendInput
+  | .cancel => some .closeAgent
+  | .other => none
+
+theorem known_subagent_control_projects_collab
+    {tool : SubagentControlTool}
+    (h : tool = .spawn ∨ tool = .wait ∨ tool = .steer ∨ tool = .cancel) :
+    ∃ collab, projectSubagentControl tool = some collab := by
+  rcases h with h | h | h | h <;> subst tool
+  all_goals simp [projectSubagentControl]
+
+theorem non_control_tool_stays_mcp :
+    projectSubagentControl .other = none := rfl
+
+/-- Whether a subagent control row is ready to be shown to Codex. A reciprocal
+link authorizes the native collaboration item. While that link may still
+replicate, the item stays deferred; once the enclosing projection is settled,
+the durable MCP row is the visibility-preserving fallback. -/
+inductive SubagentItemProjection where
+  | collab (tool : CollabTool)
+  | mcp
+  | deferred
+  deriving DecidableEq, Repr
+
+def projectSubagentItem
+    (tool : SubagentControlTool)
+    (hasReciprocalLink projectionSettled : Bool) : SubagentItemProjection :=
+  match projectSubagentControl tool with
+  | none => .mcp
+  | some collab =>
+      if hasReciprocalLink then .collab collab
+      else if projectionSettled then .mcp
+      else .deferred
+
+theorem linked_subagent_control_projects_native
+    (tool : SubagentControlTool)
+    (collab : CollabTool)
+    (h : projectSubagentControl tool = some collab) :
+    projectSubagentItem tool true false = .collab collab := by
+  simp [projectSubagentItem, h]
+
+theorem unresolved_subagent_control_defers_while_open
+    (tool : SubagentControlTool)
+    (collab : CollabTool)
+    (h : projectSubagentControl tool = some collab) :
+    projectSubagentItem tool false false = .deferred := by
+  simp [projectSubagentItem, h]
+
+theorem settled_unresolved_subagent_control_stays_visible
+    (tool : SubagentControlTool)
+    (collab : CollabTool)
+    (h : projectSubagentControl tool = some collab) :
+    projectSubagentItem tool false true = .mcp := by
+  simp [projectSubagentItem, h]
+
+/-- Codex's per-agent status vocabulary.  `shutdown` and `notFound` are local
+app-server bookkeeping states, so no core request lifecycle maps to them. -/
+inductive CollabAgentPhase where
+  | pendingInit
+  | running
+  | completed
+  | errored
+  | interrupted
+  deriving DecidableEq, Repr
+
+/-- A child agent is terminal exactly when its DEFRA request is terminal. -/
+def CollabAgentPhase.terminal : CollabAgentPhase → Prop
+  | .completed | .errored | .interrupted => True
+  | .pendingInit | .running => False
+
+/-- Project the authoritative child request lifecycle into Codex's agent status. -/
+def projectSubagentState : RequestState → CollabAgentPhase
+  | .pending => .pendingInit
+  | .claimed | .processing | .inputRequired => .running
+  | .completed => .completed
+  | .failed | .dead => .errored
+  | .superseded | .interrupted => .interrupted
+
+theorem subagent_status_terminal_precisely
+    (state : RequestState) :
+    CollabAgentPhase.terminal (projectSubagentState state) ↔
+      isTerminal state := by
+  cases state <;>
+    simp [ projectSubagentState
+         , CollabAgentPhase.terminal
+         , HasTerminal.isTerminal
+         , RequestState.instHasTerminal
+         ]
+
+/-- The equality key used by the live adapter must carry the projected child
+state and failure message as well as the parent tool status. Otherwise a child
+transition cannot refresh Codex's `agentsStates` after the tool item completes. -/
+structure CollabPresentationFingerprint where
+  childPhase : CollabAgentPhase
+  failureMessage : Option String
+  deriving DecidableEq, Repr
+
+def collabPresentationFingerprint
+    (latestChildState : RequestState)
+    (failureMessage : Option String) : CollabPresentationFingerprint :=
+  { childPhase := projectSubagentState latestChildState
+  , failureMessage := failureMessage
+  }
+
+theorem collab_fingerprint_includes_latest_child_state
+    (state : RequestState)
+    (failureMessage : Option String) :
+    (collabPresentationFingerprint state failureMessage).childPhase =
+      projectSubagentState state := rfl
+
+/-- Authorized child threads remain durable snapshots until the client loads
+them. Loading an authorized child upgrades the projection to the live event
+stream; authorization is required in both modes. -/
+inductive ChildThreadProjection where
+  | hidden
+  | snapshot
+  | live
+  deriving DecidableEq, Repr
+
+def projectChildThread (authorized loaded : Bool) : ChildThreadProjection :=
+  if !authorized then .hidden
+  else if loaded then .live
+  else .snapshot
+
+theorem unauthorized_child_thread_is_hidden (loaded : Bool) :
+    projectChildThread false loaded = .hidden := by
+  simp [projectChildThread]
+
+theorem authorized_unloaded_child_is_snapshot :
+    projectChildThread true false = .snapshot := by
+  simp [projectChildThread]
+
+theorem authorized_loaded_child_is_live :
+    projectChildThread true true = .live := by
+  simp [projectChildThread]
+
+/-- The bridge between a parent tool call and a child request.  Codex thread IDs
+identify sessions, not requests, so `childSessionId` is the only sound receiver
+identifier for TUI navigation. -/
+structure SubagentThreadLink where
+  childRequestId : String
+  childSessionId : String
+  deriving DecidableEq, Repr
+
+def receiverThreadId (link : SubagentThreadLink) : String :=
+  link.childSessionId
+
+theorem receiver_thread_is_child_session (link : SubagentThreadLink) :
+    receiverThreadId link = link.childSessionId := rfl
+
+/-!
+### Subagent presentation metadata and discovery
+
+The runtime remains authoritative for optional presentation metadata.  The
+adapter preserves values which DEFRA owns and leaves unavailable values absent;
+it never substitutes Codex defaults.  Authorized DEFRA children are ordinary
+spawned subagent threads in the Codex source vocabulary.
+-/
+
+/-- Runtime-owned metadata carried by a native collaboration item. -/
+structure CollabPresentationMetadata where
+  model : Option String
+  reasoningEffort : Option String
+  deriving DecidableEq, Repr
+
+/-- Projection is intentionally identity: the shim formats runtime facts but
+does not create an independent configuration source. -/
+def projectCollabPresentationMetadata
+    (metadata : CollabPresentationMetadata) : CollabPresentationMetadata :=
+  metadata
+
+theorem collab_model_is_runtime_model (metadata : CollabPresentationMetadata) :
+    (projectCollabPresentationMetadata metadata).model = metadata.model := rfl
+
+theorem absent_runtime_reasoning_effort_stays_absent
+    (model : Option String) :
+    (projectCollabPresentationMetadata
+      { model := model, reasoningEffort := none }).reasoningEffort = none := rfl
+
+/-- Source filters relevant to a DEFRA child created by `spawn_subagent`. -/
+inductive ThreadSourceFilter where
+  | cli
+  | subAgent
+  | subAgentReview
+  | subAgentThreadSpawn
+  | other
+  deriving DecidableEq, Repr
+
+def sourceFilterMatchesSpawnedSubagent : ThreadSourceFilter → Bool
+  | .subAgent | .subAgentThreadSpawn => true
+  | .cli | .subAgentReview | .other => false
+
+def spawnedSubagentListed
+    (authorized : Bool)
+    (filters : List ThreadSourceFilter) : Bool :=
+  authorized && filters.any sourceFilterMatchesSpawnedSubagent
+
+theorem authorized_generic_subagent_filter_lists_child :
+    spawnedSubagentListed true [.subAgent] = true := rfl
+
+theorem authorized_thread_spawn_filter_lists_child :
+    spawnedSubagentListed true [.subAgentThreadSpawn] = true := rfl
+
+theorem cli_filter_does_not_list_spawned_child :
+    spawnedSubagentListed true [.cli] = false := rfl
+
+theorem review_filter_does_not_list_spawned_child :
+    spawnedSubagentListed true [.subAgentReview] = false := rfl
+
+theorem unauthorized_child_never_listed (filters : List ThreadSourceFilter) :
+    spawnedSubagentListed false filters = false := by
+  simp [spawnedSubagentListed]
+
+/-- The pinned Codex `Thread` carries spawn ancestry inside
+`source.subAgent.thread_spawn`; there is no top-level `parentThreadId` field. -/
+structure SubagentThreadParentProjection where
+  nativeSourceParent : Option String
+  legacyTopLevelParent : Option String
+  deriving DecidableEq, Repr
+
+def projectSubagentThreadParent (parentThreadId : String) :
+    SubagentThreadParentProjection :=
+  { nativeSourceParent := some parentThreadId
+  , legacyTopLevelParent := none
+  }
+
+theorem subagent_parent_uses_native_source (parentThreadId : String) :
+    (projectSubagentThreadParent parentThreadId).nativeSourceParent =
+      some parentThreadId := rfl
+
+theorem subagent_parent_omits_legacy_top_level (parentThreadId : String) :
+    (projectSubagentThreadParent parentThreadId).legacyTopLevelParent = none := rfl
+
+/-- Automatic compaction runs after the request is accepted and before the
+owned inference/tool loop, so replay places its item between the user request
+and model-derived items. -/
+inductive RequestReplayStage where
+  | user
+  | compaction
+  | modelItems
+  deriving DecidableEq, Repr
+
+def completedCompactionReplayStages : List RequestReplayStage :=
+  [.user, .compaction, .modelItems]
+
+theorem completed_compaction_replay_matches_runtime_order :
+    completedCompactionReplayStages = [.user, .compaction, .modelItems] := rfl
+
+/-!
+## Context and compaction presentation
+
+Codex distinguishes cumulative token accounting from the tokens occupying the
+current model context.  DEFRA persists both views in `InferenceCall`: the sum of
+all terminal calls is cumulative accounting, while the newest inference call is
+the context observation.  The effective inference-profile window supplies the
+capacity.
+
+Compaction presentation is likewise derived from the persisted compaction
+`InferenceCall`; the shim does not introduce a second compaction lifecycle.
+-/
+
+structure ContextUsageObservation where
+  cumulativeInput : Nat
+  cumulativeOutput : Nat
+  latestPrompt : Nat
+  latestCompletion : Nat
+  modelWindow : Nat
+  deriving DecidableEq, Repr
+
+def cumulativeTokens (obs : ContextUsageObservation) : Nat :=
+  obs.cumulativeInput + obs.cumulativeOutput
+
+def currentContextTokens (obs : ContextUsageObservation) : Nat :=
+  obs.latestPrompt + obs.latestCompletion
+
+def contextRemaining (obs : ContextUsageObservation) : Nat :=
+  obs.modelWindow - min obs.modelWindow (currentContextTokens obs)
+
+theorem current_context_uses_latest_call (obs : ContextUsageObservation) :
+    currentContextTokens obs = obs.latestPrompt + obs.latestCompletion := rfl
+
+theorem context_remaining_le_window (obs : ContextUsageObservation) :
+    contextRemaining obs ≤ obs.modelWindow := by
+  simp [contextRemaining]
+
+theorem context_remaining_saturates_at_zero
+    (obs : ContextUsageObservation)
+    (h : obs.modelWindow ≤ currentContextTokens obs) :
+    contextRemaining obs = 0 := by
+  simp [contextRemaining, Nat.min_eq_left h]
+
+/-- Codex item notifications emitted for a persisted compaction call. -/
+inductive ContextCompactionEvent where
+  | started
+  | completed
+  deriving DecidableEq, Repr
+
+/-- Events required when the first observation of a compaction call arrives.
+A completed row can win the replication race, so it emits the pair needed for
+a well-formed Codex item lifecycle. Failed/cancelled rows never claim success. -/
+def initialCompactionEvents : InferenceCallState → List ContextCompactionEvent
+  | .queued | .running => [.started]
+  | .completed => [.started, .completed]
+  | .failed | .cancelled => []
+
+/-- Events required after a nonterminal compaction call was already observed.
+The pinned protocol has no failed-item notification. Failed/cancelled calls
+therefore emit no success event; a client which renders `started` must clear the
+in-progress presentation when the enclosing turn terminates. -/
+def subsequentCompactionEvents
+    (previous current : InferenceCallState) : List ContextCompactionEvent :=
+  match previous, current with
+  | .queued, .completed | .running, .completed => [.completed]
+  | _, _ => []
+
+theorem running_compaction_projects_started :
+    initialCompactionEvents .running = [.started] := rfl
+
+theorem queued_compaction_projects_started :
+    initialCompactionEvents .queued = [.started] := rfl
+
+theorem completed_first_observation_projects_lifecycle_pair :
+    initialCompactionEvents .completed = [.started, .completed] := rfl
+
+theorem running_to_completed_projects_completion :
+    subsequentCompactionEvents .running .completed = [.completed] := rfl
+
+theorem running_to_failed_never_claims_completed :
+    subsequentCompactionEvents .running .failed = [] := rfl
+
+theorem running_to_cancelled_never_claims_completed :
+    subsequentCompactionEvents .running .cancelled = [] := rfl
+
+theorem failed_compaction_never_claims_completed :
+    initialCompactionEvents .failed = [] := rfl
+
+theorem cancelled_compaction_never_claims_completed :
+    initialCompactionEvents .cancelled = [] := rfl
 
 /-- Observation available to the shim while streaming a Codex turn. -/
 structure ProjectionObservation where
