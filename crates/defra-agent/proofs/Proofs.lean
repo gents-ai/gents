@@ -48,5 +48,6 @@ import Proofs.SelfConfig
 import Proofs.ReversePairingHandlers
 import Proofs.Identity
 import Proofs.Skills
+import Proofs.EditMatch
 import Proofs.EventDelivery
 import Proofs.Conformance.EventDelivery
