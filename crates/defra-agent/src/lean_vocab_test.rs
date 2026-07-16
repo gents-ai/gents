@@ -90,6 +90,12 @@ pub(crate) struct LeanContractSnapshot {
     #[serde(default)]
     pub(crate) codex_shim_reasoning_projection_cases: Vec<LeanCodexShimReasoningProjectionCase>,
     #[serde(default)]
+    pub(crate) codex_shim_thread_status_cases: Vec<LeanCodexShimThreadStatusCase>,
+    #[serde(default)]
+    pub(crate) codex_shim_behavior_selection_cases: Vec<LeanCodexShimBehaviorSelectionCase>,
+    #[serde(default)]
+    pub(crate) codex_shim_tool_metadata_cases: Vec<LeanCodexShimToolMetadataCase>,
+    #[serde(default)]
     pub(crate) codex_shim_context_usage_cases: Vec<LeanCodexShimContextUsageCase>,
     #[serde(default)]
     pub(crate) codex_shim_compaction_projection_cases: Vec<LeanCodexShimCompactionProjectionCase>,
@@ -574,6 +580,19 @@ pub(crate) fn lean_codex_shim_subagent_thread_shape_cases(
 pub(crate) fn lean_codex_shim_reasoning_projection_cases(
 ) -> &'static [LeanCodexShimReasoningProjectionCase] {
     &lean_contract_snapshot().codex_shim_reasoning_projection_cases
+}
+
+pub(crate) fn lean_codex_shim_thread_status_cases() -> &'static [LeanCodexShimThreadStatusCase] {
+    &lean_contract_snapshot().codex_shim_thread_status_cases
+}
+
+pub(crate) fn lean_codex_shim_behavior_selection_cases(
+) -> &'static [LeanCodexShimBehaviorSelectionCase] {
+    &lean_contract_snapshot().codex_shim_behavior_selection_cases
+}
+
+pub(crate) fn lean_codex_shim_tool_metadata_cases() -> &'static [LeanCodexShimToolMetadataCase] {
+    &lean_contract_snapshot().codex_shim_tool_metadata_cases
 }
 
 pub(crate) fn lean_codex_shim_context_usage_cases() -> &'static [LeanCodexShimContextUsageCase] {

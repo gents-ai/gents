@@ -4,7 +4,9 @@ use std::path::Path;
 use codex_app_server_protocol as codex;
 use serde_json::Value;
 
-use super::progress::{defra_exec_metadata, defra_tool_call_status, DefraToolCallProgress};
+use super::progress::{
+    defra_exec_metadata, defra_tool_call_status, tool_duration_ms, DefraToolCallProgress,
+};
 use super::subagent_projection::{collab_projection, is_subagent_control_tool, CollabProjection};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -287,7 +289,7 @@ pub(super) fn command_execution_item(
         command_actions,
         aggregated_output,
         exit_code,
-        duration_ms: None,
+        duration_ms: tool_duration_ms(tool),
     }
 }
 
@@ -489,9 +491,10 @@ mod tests {
 
     #[test]
     fn completed_background_tool_carries_output_delta_payload() {
-        let tool = test_tool("slow_tool", "completed", "{}")
+        let mut tool = test_tool("slow_tool", "completed", "{}")
             .with_await_mode("background")
             .with_result("done");
+        tool.latency_ms = Some(41);
 
         assert_eq!(
             tool_projection_status(&tool),
@@ -507,6 +510,7 @@ mod tests {
             status,
             aggregated_output,
             exit_code,
+            duration_ms,
             ..
         } = item
         else {
@@ -515,6 +519,7 @@ mod tests {
         assert_eq!(status, codex::CommandExecutionStatus::Completed);
         assert_eq!(aggregated_output.as_deref(), Some("done"));
         assert_eq!(exit_code, Some(0));
+        assert_eq!(duration_ms, Some(41));
     }
 
     #[test]
@@ -755,6 +760,7 @@ mod tests {
             args: args.to_string(),
             result: String::new(),
             subagent_link: None,
+            ..Default::default()
         }
     }
 

@@ -18,6 +18,7 @@ pub(super) struct ActiveCodexTurn {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct NextSteeringRequest {
     pub(super) request_id: String,
+    pub(super) created_at: String,
     lifecycle_state: String,
 }
 
@@ -105,6 +106,7 @@ fn next_steering_request_after_from_rows(
         })
         .map(|row| NextSteeringRequest {
             request_id: row.request_id.clone(),
+            created_at: row.created_at.clone(),
             lifecycle_state: row.lifecycle_state.clone(),
         })
 }

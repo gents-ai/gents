@@ -472,6 +472,120 @@ theorem terminal_durable_suffix_projects_before_completion :
       , terminal := true } =
       [.rawTextDelta "; durable suffix", .completed] := rfl
 
+/-!
+## Runtime metadata hydration
+
+The runtime documents remain authoritative for thread liveness, behavior/model
+binding, tool identity and diagnostics, and timestamps. These functions define
+the loss-minimizing choices the stateless shim makes when Codex has fewer
+fields than DEFRA.
+-/
+
+inductive ThreadPresentationStatus where
+  | active
+  | idle
+  | systemError
+  deriving DecidableEq, Repr
+
+def projectThreadStatus
+    (requestState : Option RequestState)
+    (conversationStatus : String) : ThreadPresentationStatus :=
+  match requestState with
+  | some .pending | some .claimed | some .processing | some .inputRequired => .active
+  | some .failed | some .dead => .systemError
+  | some .completed | some .superseded | some .interrupted => .idle
+  | none => if conversationStatus = "error" then .systemError else .idle
+
+def projectionBehaviorId (rootBehaviorId : String)
+    (threadBehaviorId : Option String) : String :=
+  match nonemptyReasoningText threadBehaviorId with
+  | some behaviorId => behaviorId
+  | none => rootBehaviorId
+
+def projectedToolIdentity (fallback : String) (selected : Option String) : String :=
+  match nonemptyReasoningText selected with
+  | some value => value
+  | none => fallback
+
+def projectedToolFailure
+    (denialReason cancelCause failureClass result : Option String) : Option String :=
+  match nonemptyReasoningText denialReason with
+  | some value => some value
+  | none =>
+      match nonemptyReasoningText cancelCause with
+      | some value => some value
+      | none =>
+          match nonemptyReasoningText failureClass with
+          | some value => some value
+          | none => nonemptyReasoningText result
+
+def projectedDurationMs
+    (latencyMs startedAtMs completedAtMs : Option Nat) : Option Nat :=
+  match latencyMs with
+  | some latency => some latency
+  | none =>
+      match startedAtMs, completedAtMs with
+      | some started, some completed => some (completed - started)
+      | _, _ => none
+
+def projectedEventTimestampMs (persisted : Option Nat) (observed : Nat) : Nat :=
+  persisted.getD observed
+
+theorem active_request_projects_active_thread :
+    projectThreadStatus (some .processing) "completed" = .active := rfl
+
+theorem failed_request_projects_system_error_thread :
+    projectThreadStatus (some .failed) "active" = .systemError := rfl
+
+theorem completed_request_projects_idle_thread :
+    projectThreadStatus (some .completed) "error" = .idle := rfl
+
+theorem missing_request_error_conversation_projects_system_error :
+    projectThreadStatus none "error" = .systemError := rfl
+
+theorem missing_request_active_conversation_is_quiescent :
+    projectThreadStatus none "active" = .idle := rfl
+
+theorem child_behavior_overrides_root_for_response_metadata :
+    projectionBehaviorId "root" (some "child") = "child" := rfl
+
+theorem absent_child_behavior_keeps_root_response_metadata :
+    projectionBehaviorId "root" none = "root" := rfl
+
+theorem selected_tool_identity_overrides_model_facing_name :
+    projectedToolIdentity "defra" (some "service-a") = "service-a" := rfl
+
+theorem absent_selected_tool_identity_keeps_fallback :
+    projectedToolIdentity "defra" none = "defra" := rfl
+
+theorem denial_diagnostic_has_priority :
+    projectedToolFailure
+      (some "policy denied") (some "interrupted") (some "policyDenied")
+      (some "generic result") = some "policy denied" := rfl
+
+theorem cancellation_diagnostic_precedes_failure_class :
+    projectedToolFailure none (some "deadline") (some "timedOut") none =
+      some "deadline" := rfl
+
+theorem failure_class_precedes_result_fallback :
+    projectedToolFailure none none (some "argumentInvalid") (some "generic result") =
+      some "argumentInvalid" := rfl
+
+theorem persisted_latency_precedes_timestamp_duration :
+    projectedDurationMs (some 7) (some 100) (some 125) = some 7 := rfl
+
+theorem timestamp_duration_fills_absent_latency :
+    projectedDurationMs none (some 100) (some 125) = some 25 := rfl
+
+theorem incomplete_timestamps_do_not_invent_duration :
+    projectedDurationMs none (some 100) none = none := rfl
+
+theorem persisted_event_timestamp_precedes_observation :
+    projectedEventTimestampMs (some 100) 200 = 100 := rfl
+
+theorem absent_event_timestamp_uses_observation :
+    projectedEventTimestampMs none 200 = 200 := rfl
+
 /-- Automatic compaction runs after the request is accepted and before the
 owned inference/tool loop, so replay places its item between the user request
 and model-derived items. -/

@@ -71,6 +71,23 @@ pub(super) async fn send_notification(
     send_json(outbound, &notification).await
 }
 
+pub(super) async fn send_thread_status_changed(
+    outbound: &Outbound,
+    state: &ShimState,
+    thread_id: &str,
+    status: codex::ThreadStatus,
+) -> Result<()> {
+    send_notification(
+        outbound,
+        state,
+        codex::ServerNotification::ThreadStatusChanged(codex::ThreadStatusChangedNotification {
+            thread_id: thread_id.to_string(),
+            status,
+        }),
+    )
+    .await
+}
+
 async fn send_json<T>(outbound: &Outbound, value: &T) -> Result<()>
 where
     T: Serialize,
@@ -161,6 +178,21 @@ pub(super) fn turn_value(
 ) -> codex::Turn {
     let now = now_seconds();
     let completed_at = (!matches!(status, codex::TurnStatus::InProgress)).then_some(now);
+    let mut turn = turn_value_with_timing(turn_id, status, items, error, Some(now), completed_at);
+    // Message-only compatibility turns do not have a durable runtime interval.
+    // Keep the historical absence instead of presenting an invented zero latency.
+    turn.duration_ms = None;
+    turn
+}
+
+pub(super) fn turn_value_with_timing(
+    turn_id: &str,
+    status: codex::TurnStatus,
+    items: Vec<codex::ThreadItem>,
+    error: Option<codex::TurnError>,
+    started_at: Option<i64>,
+    completed_at: Option<i64>,
+) -> codex::Turn {
     let items_view = if items.is_empty() {
         codex::TurnItemsView::NotLoaded
     } else {
@@ -172,10 +204,18 @@ pub(super) fn turn_value(
         items_view,
         status,
         error,
-        started_at: Some(now),
+        started_at,
         completed_at,
-        duration_ms: None,
+        duration_ms: started_at
+            .zip(completed_at)
+            .map(|(started, completed)| completed.saturating_sub(started).max(0) * 1000),
     }
+}
+
+pub(super) fn timestamp_seconds(raw: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|timestamp| timestamp.timestamp())
 }
 
 pub(super) fn agent_message_item(item_id: &str, text: &str) -> codex::ThreadItem {
@@ -201,6 +241,7 @@ pub(super) async fn send_committed_user_message(
     thread_id: &str,
     turn_id: &str,
     input: &[codex::UserInput],
+    completed_at_ms: Option<i64>,
 ) -> Result<()> {
     send_notification(
         outbound,
@@ -212,7 +253,7 @@ pub(super) async fn send_committed_user_message(
             },
             thread_id: thread_id.to_string(),
             turn_id: turn_id.to_string(),
-            completed_at_ms: now_millis(),
+            completed_at_ms: completed_at_ms.unwrap_or_else(now_millis),
         }),
     )
     .await
@@ -416,5 +457,30 @@ mod tests {
 
         assert_eq!(serialized.pointer("/status/type"), Some(&json!("idle")));
         assert_eq!(serialized.pointer("/source"), Some(&json!("cli")));
+    }
+
+    #[test]
+    fn turn_timing_uses_durable_seconds_and_derives_duration() {
+        let turn = turn_value_with_timing(
+            "turn-1",
+            codex::TurnStatus::Completed,
+            Vec::new(),
+            None,
+            Some(100),
+            Some(125),
+        );
+        assert_eq!(turn.started_at, Some(100));
+        assert_eq!(turn.completed_at, Some(125));
+        assert_eq!(turn.duration_ms, Some(25_000));
+
+        let incomplete = turn_value_with_timing(
+            "turn-2",
+            codex::TurnStatus::InProgress,
+            Vec::new(),
+            None,
+            Some(100),
+            None,
+        );
+        assert_eq!(incomplete.duration_ms, None);
     }
 }

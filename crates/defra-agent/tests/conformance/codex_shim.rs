@@ -335,6 +335,79 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
         Some("; durable suffix")
     );
 
+    let thread_status_cases = lean_codex_shim_thread_status_cases();
+    assert_eq!(thread_status_cases.len(), 11);
+    for case in thread_status_cases {
+        let expected = match case.request_state.as_deref() {
+            Some("pending" | "claimed" | "processing" | "inputRequired") => "active",
+            Some("failed" | "dead") => "systemError",
+            Some("completed" | "superseded" | "interrupted") => "idle",
+            None if case.conversation_status == "error" => "systemError",
+            None => "idle",
+            Some(other) => panic!("{}: unknown request state {other}", case.witness),
+        };
+        assert_eq!(case.projected_status, expected, "{}", case.witness);
+    }
+
+    let behavior_cases = lean_codex_shim_behavior_selection_cases();
+    assert_eq!(behavior_cases.len(), 2);
+    for case in behavior_cases {
+        let expected = case
+            .thread_behavior_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&case.root_behavior_id);
+        assert_eq!(case.projected_behavior_id, expected, "{}", case.witness);
+    }
+
+    let tool_metadata_cases = lean_codex_shim_tool_metadata_cases();
+    assert_eq!(tool_metadata_cases.len(), 10);
+    for case in tool_metadata_cases {
+        let nonempty = |value: &Option<String>| {
+            value
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        };
+        assert_eq!(
+            case.projected_server,
+            nonempty(&case.selected_server).unwrap_or_else(|| case.fallback_server.clone()),
+            "{}: server identity",
+            case.witness
+        );
+        assert_eq!(
+            case.projected_tool,
+            nonempty(&case.selected_tool).unwrap_or_else(|| case.fallback_tool.clone()),
+            "{}: tool identity",
+            case.witness
+        );
+        assert_eq!(
+            case.projected_failure,
+            nonempty(&case.denial_reason)
+                .or_else(|| nonempty(&case.cancel_cause))
+                .or_else(|| nonempty(&case.failure_class))
+                .or_else(|| nonempty(&case.result_fallback)),
+            "{}: failure diagnostic",
+            case.witness
+        );
+        assert_eq!(
+            case.projected_duration_ms,
+            case.latency_ms.or_else(|| {
+                case.started_at_ms
+                    .zip(case.completed_at_ms)
+                    .map(|(started, completed)| completed.saturating_sub(started))
+            }),
+            "{}: duration",
+            case.witness
+        );
+        assert_eq!(
+            case.projected_event_at_ms,
+            case.persisted_event_at_ms.unwrap_or(case.observed_at_ms),
+            "{}: event timestamp",
+            case.witness
+        );
+    }
+
     let context_cases = lean_codex_shim_context_usage_cases();
     assert_eq!(context_cases.len(), 2);
     for case in context_cases {

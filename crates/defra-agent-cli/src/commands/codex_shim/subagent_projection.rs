@@ -68,6 +68,7 @@ pub(super) struct LinkedSubagentThread {
     pub(super) request_id: String,
     pub(super) latest_request_id: String,
     pub(super) latest_request_content: String,
+    pub(super) latest_request_created_at: Option<String>,
     pub(super) session_id: String,
     pub(super) parent_request_id: String,
     pub(super) parent_tool_call_id: String,
@@ -591,6 +592,7 @@ fn resolve_authorized_subagent_threads(
                 request_id: child.request_id.clone(),
                 latest_request_id: child.request_id.clone(),
                 latest_request_content: child.content.clone(),
+                latest_request_created_at: child.created_at.clone(),
                 session_id: child.session_id.clone(),
                 parent_request_id: parent.request_id.clone(),
                 parent_tool_call_id: parent_tool_call_id.to_string(),
@@ -656,6 +658,7 @@ fn resolve_authorized_subagent_threads(
         let latest = &requests[*latest_index];
         link.latest_request_id = latest.request_id.clone();
         link.latest_request_content = latest.content.clone();
+        link.latest_request_created_at = latest.created_at.clone();
         link.lifecycle_state = nonempty(latest.lifecycle_state.as_deref())
             .unwrap_or("pending")
             .to_string();
@@ -1072,11 +1075,13 @@ mod tests {
             args: r#"{"name":"reviewer","prompt":"Inspect the patch"}"#.to_string(),
             result: String::new(),
             subagent_link: None,
+            ..Default::default()
         };
         tool.subagent_link = Some(LinkedSubagentThread {
             request_id: "child-request".to_string(),
             latest_request_id: "child-request".to_string(),
             latest_request_content: "Inspect the patch".to_string(),
+            latest_request_created_at: None,
             session_id: child_session_id.clone(),
             parent_request_id: "parent-request".to_string(),
             parent_tool_call_id: "spawn-call".to_string(),

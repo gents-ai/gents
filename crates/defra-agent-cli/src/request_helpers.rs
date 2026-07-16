@@ -23,6 +23,7 @@ pub(crate) struct SubmittedRequest {
     pub(crate) top_k: Option<i64>,
     pub(crate) max_tokens: Option<i64>,
     pub(crate) metadata: Option<String>,
+    pub(crate) created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -338,6 +339,7 @@ pub(crate) async fn create_agent_request(
         top_k: options.top_k,
         max_tokens: options.max_tokens,
         metadata: request_metadata,
+        created_at: Some(created_at),
     })
 }
 

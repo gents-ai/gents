@@ -11,9 +11,12 @@ use super::compaction_projection::{
     compaction_projection_events, context_compaction_item, CompactionProjectionEvent,
     DefraCompactionProgress,
 };
-use super::progress::{defra_tool_item, DefraToolCallProgress};
+use super::progress::{
+    defra_tool_item, tool_completed_at_ms, tool_started_at_ms, DefraToolCallProgress,
+};
 use super::protocol::{
-    agent_message_item, agent_message_item_with_phase, now_millis, send_notification, turn_value,
+    agent_message_item, agent_message_item_with_phase, now_millis, send_notification,
+    turn_value_with_timing,
 };
 use super::subagent_projection::{collab_tool_item, CollabProjection};
 use super::{Outbound, ShimState};
@@ -23,6 +26,10 @@ pub(super) struct TurnProjection<'a> {
     pub(super) thread_id: &'a str,
     pub(super) turn_id: &'a str,
     pub(super) cwd: PathBuf,
+    started_at: Option<i64>,
+    completed_at: Option<i64>,
+    response_started_at_ms: Option<i64>,
+    response_completed_at_ms: Option<i64>,
     active_agent_item_id: Option<String>,
     active_agent_text: String,
     rendered_agent_text: String,
@@ -37,12 +44,17 @@ impl<'a> TurnProjection<'a> {
         thread_id: &'a str,
         turn_id: &'a str,
         cwd: PathBuf,
+        started_at: Option<i64>,
     ) -> Self {
         Self {
             state,
             thread_id,
             turn_id,
             cwd,
+            started_at,
+            completed_at: None,
+            response_started_at_ms: None,
+            response_completed_at_ms: None,
             active_agent_item_id: None,
             active_agent_text: String::new(),
             rendered_agent_text: String::new(),
@@ -50,6 +62,23 @@ impl<'a> TurnProjection<'a> {
             active_reasoning_text: String::new(),
             completed_items: Vec::new(),
         }
+    }
+
+    pub(super) fn observe_response_timing(
+        &mut self,
+        started_at_ms: Option<i64>,
+        completed_at_ms: Option<i64>,
+    ) {
+        if self.response_started_at_ms.is_none() {
+            self.response_started_at_ms = started_at_ms;
+        }
+        if completed_at_ms.is_some() {
+            self.response_completed_at_ms = completed_at_ms;
+        }
+    }
+
+    pub(super) fn set_completed_at(&mut self, completed_at: Option<i64>) {
+        self.completed_at = completed_at;
     }
 
     pub(super) async fn append_reasoning_delta(
@@ -70,7 +99,7 @@ impl<'a> TurnProjection<'a> {
                     item: reasoning_item(item_id, ""),
                     thread_id: self.thread_id.to_string(),
                     turn_id: self.turn_id.to_string(),
-                    started_at_ms: now_millis(),
+                    started_at_ms: self.response_started_at_ms.unwrap_or_else(now_millis),
                 }),
             )
             .await?;
@@ -151,7 +180,7 @@ impl<'a> TurnProjection<'a> {
                 item: item.clone(),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                completed_at_ms: now_millis(),
+                completed_at_ms: self.response_completed_at_ms.unwrap_or_else(now_millis),
             }),
         )
         .await?;
@@ -189,7 +218,7 @@ impl<'a> TurnProjection<'a> {
                     item: agent_message_item(&item_id, ""),
                     thread_id: self.thread_id.to_string(),
                     turn_id: self.turn_id.to_string(),
-                    started_at_ms: now_millis(),
+                    started_at_ms: self.response_started_at_ms.unwrap_or_else(now_millis),
                 }),
             )
             .await?;
@@ -238,7 +267,7 @@ impl<'a> TurnProjection<'a> {
                 item: completed_item.clone(),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                completed_at_ms: now_millis(),
+                completed_at_ms: self.response_completed_at_ms.unwrap_or_else(now_millis),
             }),
         )
         .await?;
@@ -260,7 +289,7 @@ impl<'a> TurnProjection<'a> {
                 item: defra_tool_item(tool, codex::McpToolCallStatus::InProgress),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                started_at_ms: now_millis(),
+                started_at_ms: tool_started_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
         .await
@@ -282,7 +311,7 @@ impl<'a> TurnProjection<'a> {
                 item: completed_item.clone(),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                completed_at_ms: now_millis(),
+                completed_at_ms: tool_completed_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
         .await?;
@@ -305,7 +334,7 @@ impl<'a> TurnProjection<'a> {
                 item: command_execution_item(&self.cwd, tool, status),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                started_at_ms: now_millis(),
+                started_at_ms: tool_started_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
         .await
@@ -342,7 +371,7 @@ impl<'a> TurnProjection<'a> {
                 item: completed_item.clone(),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                completed_at_ms: now_millis(),
+                completed_at_ms: tool_completed_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
         .await?;
@@ -367,7 +396,7 @@ impl<'a> TurnProjection<'a> {
                 item,
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                started_at_ms: now_millis(),
+                started_at_ms: tool_started_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
         .await
@@ -390,7 +419,7 @@ impl<'a> TurnProjection<'a> {
                 item: collab_tool_item(self.thread_id, tool, &started),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                started_at_ms: now_millis(),
+                started_at_ms: tool_started_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
         .await
@@ -412,7 +441,7 @@ impl<'a> TurnProjection<'a> {
                 item: item.clone(),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                completed_at_ms: now_millis(),
+                completed_at_ms: tool_completed_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
         .await?;
@@ -446,7 +475,7 @@ impl<'a> TurnProjection<'a> {
                 item: item.clone(),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                completed_at_ms: now_millis(),
+                completed_at_ms: tool_completed_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
         .await?;
@@ -633,7 +662,14 @@ impl<'a> TurnProjection<'a> {
             self.state,
             codex::ServerNotification::TurnCompleted(codex::TurnCompletedNotification {
                 thread_id: self.thread_id.to_string(),
-                turn: turn_value(self.turn_id, status, Vec::new(), turn_error),
+                turn: turn_value_with_timing(
+                    self.turn_id,
+                    status,
+                    Vec::new(),
+                    turn_error,
+                    self.started_at,
+                    self.completed_at,
+                ),
             }),
         )
         .await

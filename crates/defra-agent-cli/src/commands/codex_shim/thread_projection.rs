@@ -22,7 +22,7 @@ mod usage;
 pub(in crate::commands::codex_shim) use goal::StoredGoal;
 pub(super) use goal::{clear_codex_thread_goal, get_codex_thread_goal, set_codex_thread_goal};
 pub(super) use json::{
-    codex_thread_json, codex_thread_json_with_turns, thread_response_json,
+    codex_thread_json, codex_thread_json_with_turns, projected_thread_status, thread_response_json,
     thread_resume_response_json, thread_start_response_json,
 };
 pub(super) use mutations::{
@@ -57,6 +57,14 @@ impl CodexThreadRecord {
     pub(super) fn is_subagent(&self) -> bool {
         self.subagent.is_some()
     }
+
+    pub(super) fn projection_behavior_id<'a>(&'a self, root_behavior_id: &'a str) -> &'a str {
+        self.subagent
+            .as_ref()
+            .map(|link| link.behavior_id.trim())
+            .filter(|behavior_id| !behavior_id.is_empty())
+            .unwrap_or(root_behavior_id)
+    }
 }
 
 #[allow(dead_code)]
@@ -74,6 +82,10 @@ pub(super) struct ConversationRow {
     pub(super) updated_at: Option<String>,
     #[serde(default, deserialize_with = "deserialize_nullable_string")]
     pub(super) latest_request_id: String,
+    #[serde(default)]
+    pub(super) latest_request_lifecycle_state: Option<String>,
+    #[serde(default)]
+    pub(super) latest_request_failure_reason: Option<String>,
     #[serde(default)]
     pub(super) forked_from_session_id: Option<String>,
 }
@@ -465,6 +477,7 @@ mod tests {
                 request_id: format!("request-{index}"),
                 latest_request_id: format!("request-{index}"),
                 latest_request_content: String::new(),
+                latest_request_created_at: None,
                 session_id: format!("child-{index}"),
                 parent_request_id: "parent-request".to_string(),
                 parent_tool_call_id: format!("spawn-{index}"),

@@ -17,7 +17,9 @@ use super::progress::{
     decode_defra_tool_call_progress, defra_tool_item, terminal_error_message, terminal_turn_status,
     DefraToolCallProgress,
 };
-use super::protocol::{absolute_path, agent_message_item_with_phase, turn_value};
+use super::protocol::{
+    absolute_path, agent_message_item_with_phase, timestamp_seconds, turn_value,
+};
 use super::store::{hydrate_materialized_response_content, query_node_json};
 use super::subagent_projection::{
     attach_subagent_link, collab_tool_item, load_authorized_subagent_threads_for_root,
@@ -39,6 +41,8 @@ struct RequestRow {
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
+    terminalized_at: Option<String>,
+    #[serde(default)]
     metadata: String,
     #[serde(default)]
     execution_origin: String,
@@ -58,7 +62,7 @@ struct ResponseRow {
     #[serde(default)]
     materialized_message_sequence: Option<i64>,
     #[serde(default)]
-    created_at: Option<String>,
+    materialized_at: Option<String>,
     #[serde(default)]
     completed_at: Option<String>,
     #[serde(default)]
@@ -111,6 +115,7 @@ pub(super) async fn load_thread_turns(
                 lifecycle_state
                 failure_reason
                 created_at
+                terminalized_at
                 metadata
                 execution_origin
             }}
@@ -125,7 +130,7 @@ pub(super) async fn load_thread_turns(
                 status
                 error_message
                 materialized_message_sequence
-                created_at
+                materialized_at
                 completed_at
                 interrupted_at
             }}
@@ -146,6 +151,12 @@ pub(super) async fn load_thread_turns(
                 result
                 started_at
                 completed_at
+                selected_service_id
+                selected_tool_name
+                tool_failure_class
+                denial_reason
+                cancel_cause
+                latency_ms
             }}
             AgentMessage(
                 filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
@@ -550,8 +561,8 @@ fn project_turn_group(
     let started_at = first_request
         .created_at
         .as_deref()
-        .and_then(parse_timestamp_seconds);
-    let completed_at = turn_completed_timestamp(tail_response);
+        .and_then(timestamp_seconds);
+    let completed_at = turn_completed_timestamp(tail_request, tail_response);
     let duration_ms = started_at
         .zip(completed_at)
         .map(|(started, completed)| (completed - started).max(0) * 1000);
@@ -750,15 +761,17 @@ fn turn_error(request: &RequestRow, response: Option<&ResponseRow>) -> Option<co
     })
 }
 
-fn turn_completed_timestamp(response: Option<&ResponseRow>) -> Option<i64> {
-    response.and_then(|response| {
-        response
-            .completed_at
-            .as_deref()
-            .or(response.interrupted_at.as_deref())
-            .or(response.created_at.as_deref())
-            .and_then(parse_timestamp_seconds)
-    })
+fn turn_completed_timestamp(request: &RequestRow, response: Option<&ResponseRow>) -> Option<i64> {
+    response
+        .and_then(|response| {
+            response
+                .completed_at
+                .as_deref()
+                .or(response.interrupted_at.as_deref())
+                .or(response.materialized_at.as_deref())
+        })
+        .or(request.terminalized_at.as_deref())
+        .and_then(timestamp_seconds)
 }
 
 async fn decode_response_rows(state: &ShimState, response: &Value) -> Result<Vec<ResponseRow>> {
@@ -888,12 +901,6 @@ fn normalized_nonempty(value: &str) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-fn parse_timestamp_seconds(raw: &str) -> Option<i64> {
-    chrono::DateTime::parse_from_rfc3339(raw)
-        .ok()
-        .map(|timestamp| timestamp.timestamp())
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -909,6 +916,7 @@ mod tests {
             lifecycle_state: "completed".to_string(),
             failure_reason: String::new(),
             created_at: None,
+            terminalized_at: None,
             metadata: r#"{"codex_shim":{}}"#.to_string(),
             execution_origin: "interactive".to_string(),
         };
@@ -919,7 +927,7 @@ mod tests {
             status: "error".to_string(),
             error_message: Some("stale response error".to_string()),
             materialized_message_sequence: None,
-            created_at: None,
+            materialized_at: None,
             completed_at: None,
             interrupted_at: None,
         };
@@ -927,6 +935,47 @@ mod tests {
         assert_eq!(
             turn_status(&request, Some(&response)),
             codex::TurnStatus::Completed
+        );
+    }
+
+    #[test]
+    fn turn_completion_timing_prefers_response_then_request_terminalization() {
+        let request = RequestRow {
+            request_id: "request-1".to_string(),
+            content: String::new(),
+            status: "completed".to_string(),
+            lifecycle_state: "completed".to_string(),
+            failure_reason: String::new(),
+            created_at: Some("2026-07-15T10:00:00Z".to_string()),
+            terminalized_at: Some("2026-07-15T10:00:05Z".to_string()),
+            metadata: r#"{"codex_shim":{}}"#.to_string(),
+            execution_origin: "interactive".to_string(),
+        };
+        let mut response = ResponseRow {
+            request_id: request.request_id.clone(),
+            content: String::new(),
+            reasoning: String::new(),
+            status: "complete".to_string(),
+            error_message: None,
+            materialized_message_sequence: None,
+            materialized_at: Some("2026-07-15T10:00:04Z".to_string()),
+            completed_at: Some("2026-07-15T10:00:03Z".to_string()),
+            interrupted_at: None,
+        };
+
+        assert_eq!(
+            turn_completed_timestamp(&request, Some(&response)),
+            timestamp_seconds("2026-07-15T10:00:03Z")
+        );
+        response.completed_at = None;
+        assert_eq!(
+            turn_completed_timestamp(&request, Some(&response)),
+            timestamp_seconds("2026-07-15T10:00:04Z")
+        );
+        response.materialized_at = None;
+        assert_eq!(
+            turn_completed_timestamp(&request, Some(&response)),
+            timestamp_seconds("2026-07-15T10:00:05Z")
         );
     }
 
@@ -952,6 +1001,7 @@ mod tests {
             lifecycle_state: "completed".to_string(),
             failure_reason: String::new(),
             created_at: None,
+            terminalized_at: None,
             metadata: r#"{"codex_shim":{}}"#.to_string(),
             execution_origin: "interactive".to_string(),
         };
@@ -962,7 +1012,7 @@ mod tests {
             status: "complete".to_string(),
             error_message: None,
             materialized_message_sequence: Some(4),
-            created_at: None,
+            materialized_at: None,
             completed_at: None,
             interrupted_at: None,
         };
@@ -980,6 +1030,7 @@ mod tests {
                 args: r#"{"path":"."}"#.to_string(),
                 result: "Cargo.toml\nsrc".to_string(),
                 subagent_link: None,
+                ..Default::default()
             },
         };
         let second_tool = ToolRow {
@@ -996,6 +1047,7 @@ mod tests {
                 args: r#"{"path":"Cargo.toml"}"#.to_string(),
                 result: "[package]".to_string(),
                 subagent_link: None,
+                ..Default::default()
             },
         };
         let messages_by_sequence = BTreeMap::from([
@@ -1091,6 +1143,7 @@ mod tests {
             lifecycle_state: "completed".to_string(),
             failure_reason: String::new(),
             created_at: None,
+            terminalized_at: None,
             metadata: r#"{"codex_shim":{}}"#.to_string(),
             execution_origin: "interactive".to_string(),
         };
@@ -1107,7 +1160,7 @@ mod tests {
             status: "complete".to_string(),
             error_message: None,
             materialized_message_sequence: None,
-            created_at: None,
+            materialized_at: None,
             completed_at: None,
             interrupted_at: None,
         };

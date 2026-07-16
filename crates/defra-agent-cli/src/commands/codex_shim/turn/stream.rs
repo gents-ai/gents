@@ -16,17 +16,19 @@ use super::super::command_projection::{
 use super::super::compaction_projection::decode_defra_compaction_progress;
 use super::super::progress::{
     content_delta, decode_defra_tool_call_progress, defra_turn_progress_query,
-    response_field_is_blank, terminal_error_message, terminal_turn_status,
+    response_field_is_blank, terminal_error_message, terminal_turn_status, timestamp_millis,
 };
-use super::super::protocol::{send_committed_user_message, send_notification};
+use super::super::protocol::{
+    send_committed_user_message, send_notification, send_thread_status_changed, timestamp_seconds,
+};
 use super::super::store::{hydrate_materialized_response_content, query_node_json};
 use super::super::subagent_projection::{
     attach_subagent_link, is_subagent_control_tool, load_authorized_subagent_threads_for_root,
     SubagentProjectionUpdateFilter,
 };
 use super::super::thread_projection::{
-    latest_inference_usage_observation, latest_requests_token_usage, session_token_usage,
-    thread_token_usage,
+    latest_inference_usage_observation, latest_requests_token_usage, projected_thread_status,
+    session_token_usage, thread_token_usage,
 };
 use super::super::turn_projection::TurnProjection;
 use super::super::{ConnectionState, ShimState};
@@ -66,6 +68,12 @@ struct ToolProgressMarker {
     result_len: Option<usize>,
     started_at: Option<String>,
     completed_at: Option<String>,
+    selected_service_id: Option<String>,
+    selected_tool_name: Option<String>,
+    tool_failure_class: Option<String>,
+    denial_reason: Option<String>,
+    cancel_cause: Option<String>,
+    latency_ms: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -237,6 +245,14 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
             .and_then(|row| row.get("lifecycle_state"))
             .and_then(Value::as_str)
             .unwrap_or("");
+        projection.observe_response_timing(
+            response_row
+                .and_then(|row| nonempty_timestamp_field(row, "created_at"))
+                .and_then(timestamp_millis),
+            response_row
+                .and_then(response_terminal_timestamp)
+                .and_then(timestamp_millis),
+        );
         let projection_settled = is_terminal_lifecycle_state(lifecycle_state)
             || matches!(response_status, "complete" | "completed" | "error");
 
@@ -422,6 +438,17 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
                 continue;
             }
 
+            let completed_at = response_terminal_timestamp(&terminal_response)
+                .or_else(|| {
+                    request_row.and_then(|row| nonempty_timestamp_field(row, "terminalized_at"))
+                })
+                .and_then(timestamp_seconds);
+            projection.set_completed_at(completed_at);
+            projection.observe_response_timing(
+                None,
+                completed_at.map(|timestamp| timestamp.saturating_mul(1000)),
+            );
+
             let durable_reasoning = terminal_response
                 .get("reasoning")
                 .and_then(Value::as_str)
@@ -516,6 +543,7 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
                         projection.thread_id,
                         projection.turn_id,
                         &next_input,
+                        timestamp_millis(&next_request.created_at),
                     )
                     .await?;
                     current.request_id = next_request.request_id;
@@ -549,6 +577,13 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
                 .finish_turn(outbound, turn_status, error_message)
                 .await
                 .context("sending terminal Codex turn notification")?;
+            send_thread_status_changed(
+                outbound,
+                state,
+                projection.thread_id,
+                projected_thread_status(Some(lifecycle_state), ""),
+            )
+            .await?;
             spawn_background_tool_watcher(
                 connection.clone(),
                 state.clone(),
@@ -612,6 +647,19 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
             }
         }
     }
+}
+
+fn nonempty_timestamp_field<'a>(row: &'a Value, field: &str) -> Option<&'a str> {
+    row.get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn response_terminal_timestamp(row: &Value) -> Option<&str> {
+    ["completed_at", "interrupted_at", "materialized_at"]
+        .into_iter()
+        .find_map(|field| nonempty_timestamp_field(row, field))
 }
 
 fn progress_marker(
@@ -957,6 +1005,12 @@ fn tool_progress_marker(row: &Value) -> ToolProgressMarker {
         result_len: string_len_marker(Some(row), "result"),
         started_at: scalar_marker(Some(row), "started_at"),
         completed_at: scalar_marker(Some(row), "completed_at"),
+        selected_service_id: scalar_marker(Some(row), "selected_service_id"),
+        selected_tool_name: scalar_marker(Some(row), "selected_tool_name"),
+        tool_failure_class: scalar_marker(Some(row), "tool_failure_class"),
+        denial_reason: scalar_marker(Some(row), "denial_reason"),
+        cancel_cause: scalar_marker(Some(row), "cancel_cause"),
+        latency_ms: scalar_marker(Some(row), "latency_ms"),
     }
 }
 
@@ -1044,6 +1098,13 @@ async fn finish_interrupted_turn(
     projection
         .finish_turn(&connection.outbound, codex::TurnStatus::Interrupted, None)
         .await?;
+    send_thread_status_changed(
+        &connection.outbound,
+        state,
+        projection.thread_id,
+        codex::ThreadStatus::Idle,
+    )
+    .await?;
     spawn_background_tool_watcher(
         connection.clone(),
         state.clone(),

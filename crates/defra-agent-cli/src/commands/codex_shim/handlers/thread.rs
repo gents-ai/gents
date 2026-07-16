@@ -99,8 +99,9 @@ pub(super) async fn handle_thread_request(
                     })
                     .cloned()
             });
+            let response_behavior_id = record.projection_behavior_id(state.behavior_id.as_ref());
             let bound_model_id =
-                load_bound_model_selection_id_for_state(state.node.as_ref(), &state.behavior_id)
+                load_bound_model_selection_id_for_state(state.node.as_ref(), response_behavior_id)
                     .await
                     .context("resolving bound model selection for ThreadResume")?;
             send_typed_json_result::<codex::ThreadResumeResponse>(
@@ -112,11 +113,7 @@ pub(super) async fn handle_thread_request(
             let (total_usage, last_usage) = thread_record_token_usage(state, &record)
                 .await
                 .unwrap_or_default();
-            let context_behavior_id = record
-                .subagent
-                .as_ref()
-                .map(|link| link.behavior_id.as_str())
-                .unwrap_or(state.behavior_id.as_ref());
+            let context_behavior_id = response_behavior_id;
             let model_context_window = load_bound_context_window(
                 state.node.as_ref(),
                 context_behavior_id,

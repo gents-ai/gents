@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use anyhow::{anyhow, Result};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::{
@@ -115,9 +113,9 @@ pub(super) async fn load_bound_model_selection_id(
 
 pub(super) async fn load_bound_model_selection_id_for_state(
     node: &EmbeddedNode,
-    behavior_id: &Arc<str>,
+    behavior_id: &str,
 ) -> Result<String> {
-    load_bound_model_selection_id(node, behavior_id.as_ref()).await
+    load_bound_model_selection_id(node, behavior_id).await
 }
 
 pub(super) fn model_selection_id(backend_id: &str, model_name: &str) -> String {
