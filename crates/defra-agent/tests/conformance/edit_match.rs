@@ -140,7 +140,9 @@ pub(super) fn overlapping_windows_apply_disjoint_selection() {
             ..
         } => {
             assert_eq!(replacements, 1);
-            assert_eq!(result, "a ");
+            // No-newline delete empties the window's lines (exact-pass
+            // parity); the disjointness property is the single application.
+            assert_eq!(result, "\na ");
         }
         other => panic!("E9 violated: {other:?}"),
     }

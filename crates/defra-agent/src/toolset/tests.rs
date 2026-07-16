@@ -2039,3 +2039,19 @@ async fn write_file_and_edit_file_serialize_on_the_same_lock() {
         assert!(legal, "round {round}: torn interleaving produced {text:?}");
     }
 }
+
+// Round-3 finding 2: mutation-lock keys for not-yet-existing files resolve
+// symlinked directory aliases to one key — both spellings share one lock.
+#[cfg(unix)]
+#[test]
+fn mutation_lock_keys_resolve_symlinked_parents_for_new_files() {
+    let root = temp_root("defra-agent-lock-alias");
+    std::fs::create_dir_all(root.join("real")).unwrap();
+    std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
+    let via_alias = super::file_tools::file_mutation_lock_for(&root.join("alias/new.txt"));
+    let via_real = super::file_tools::file_mutation_lock_for(&root.join("real/new.txt"));
+    assert!(
+        std::sync::Arc::ptr_eq(&via_alias, &via_real),
+        "alias and real spellings of a new file must share one lock"
+    );
+}

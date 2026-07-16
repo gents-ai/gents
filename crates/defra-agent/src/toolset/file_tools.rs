@@ -39,8 +39,35 @@ static FILE_MUTATION_LOCKS: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 > = std::sync::LazyLock::new(Default::default);
 
-fn file_mutation_lock_for(path: &Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
-    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+/// Lock key that is stable across path aliases even when the leaf does not
+/// exist yet: canonicalize the deepest existing ancestor and append the
+/// missing suffix, so `alias/new.txt` and `real/new.txt` (alias -> real)
+/// serialize on one lock.
+fn canonical_lock_key(path: &Path) -> PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+    let mut current = path;
+    while let Some(parent) = current.parent() {
+        match current.file_name() {
+            Some(name) => suffix.push(name.to_os_string()),
+            None => break,
+        }
+        if let Ok(canonical) = std::fs::canonicalize(parent) {
+            let mut key = canonical;
+            for part in suffix.iter().rev() {
+                key.push(part);
+            }
+            return key;
+        }
+        current = parent;
+    }
+    path.to_path_buf()
+}
+
+pub(super) fn file_mutation_lock_for(path: &Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    let key = canonical_lock_key(path);
     let mut locks = FILE_MUTATION_LOCKS
         .lock()
         .expect("file mutation lock registry poisoned");

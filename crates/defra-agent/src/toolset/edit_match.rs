@@ -296,13 +296,18 @@ fn decide_ladder(
     // the following line (drift must not decide newline preservation).
     let content_lines: Vec<&str> = content.split('\n').collect();
     let mut pattern_lines: Vec<&str> = pattern.split('\n').collect();
-    let mut replacement = replacement;
+    // Replacement handled in LINE space: "" splits to one empty line (an
+    // emptied line, matching the exact pass), and popping the consumed
+    // trailing newline pops a LINE — a newline-only replacement keeps its
+    // blank line instead of degrading to deletion.
+    let mut replacement_lines: Vec<&str> = replacement.split('\n').collect();
     let mut merge_tail = false;
     if pattern_lines.len() > 1 && pattern_lines.last() == Some(&"") {
         pattern_lines.pop();
-        match replacement.strip_suffix('\n') {
-            Some(stripped) => replacement = stripped,
-            None => merge_tail = !replacement.is_empty(),
+        if replacement_lines.last() == Some(&"") {
+            replacement_lines.pop();
+        } else {
+            merge_tail = true;
         }
     }
     for strategy in [Strategy::TrailingWs, Strategy::Trim, Strategy::Unicode] {
@@ -328,7 +333,7 @@ fn decide_ladder(
         let result = splice_windows(
             &content_lines,
             &pattern_lines,
-            replacement,
+            &replacement_lines,
             strategy,
             &occ,
             merge_tail,
@@ -404,7 +409,7 @@ fn window_occurrences(
 fn splice_windows(
     content_lines: &[&str],
     pattern_lines: &[&str],
-    replacement: &str,
+    replacement_lines: &[&str],
     strategy: Strategy,
     occ: &[usize],
     merge_tail: bool,
@@ -412,7 +417,7 @@ fn splice_windows(
     let mut lines: Vec<String> = content_lines.iter().map(|l| l.to_string()).collect();
     for &i in occ.iter().rev() {
         let mut repl_lines = reindent_replacement(
-            replacement,
+            replacement_lines,
             strategy,
             content_lines[i],
             pattern_lines.first().copied().unwrap_or(""),
@@ -440,20 +445,17 @@ fn leading_whitespace(line: &str) -> &str {
 }
 
 fn reindent_replacement(
-    replacement: &str,
+    replacement_lines: &[&str],
     strategy: Strategy,
     matched_first: &str,
     pattern_first: &str,
 ) -> Vec<String> {
-    if replacement.is_empty() {
-        return Vec::new();
-    }
-    let lines = replacement.split('\n');
     match strategy {
         Strategy::Trim | Strategy::Unicode => {
             let matched_lead = leading_whitespace(matched_first);
             let pattern_lead = leading_whitespace(pattern_first);
-            lines
+            replacement_lines
+                .iter()
                 .map(|l| {
                     if let Some(rest) = l.strip_prefix(pattern_lead) {
                         format!("{matched_lead}{rest}")
@@ -463,7 +465,7 @@ fn reindent_replacement(
                 })
                 .collect()
         }
-        _ => lines.map(|l| l.to_string()).collect(),
+        _ => replacement_lines.iter().map(|l| l.to_string()).collect(),
     }
 }
 
@@ -869,10 +871,10 @@ mod tests {
         request.replace_all = true;
         match decide(content, &request) {
             EditOutcome::Applied { result, .. } => {
-                assert_eq!(
-                    result, "a ",
-                    "one non-overlapping window deleted: {result:?}"
-                );
+                // Deleting text WITHOUT its trailing newline empties the
+                // window's lines (exact-pass parity) rather than removing
+                // them: one disjoint window -> one blank line remains.
+                assert_eq!(result, "\na ", "one non-overlapping window: {result:?}");
             }
             other => panic!("expected applied, got {other:?}"),
         }
@@ -1042,6 +1044,62 @@ mod tests {
         match decide("foo\nnext\n", &request) {
             EditOutcome::Applied { result, .. } => assert_eq!(result, "next\n"),
             other => panic!("expected applied, got {other:?}"),
+        }
+    }
+
+    // Round-3 finding 1: a newline-only replacement is NOT a deletion —
+    // relaxed results must stay byte-identical to the exact pass.
+    #[test]
+    fn relaxed_newline_only_replacement_matches_exact() {
+        let exact = match decide("foo\nnext\n", &req("foo\n", "\n")) {
+            EditOutcome::Applied { result, .. } => result,
+            other => panic!("exact: {other:?}"),
+        };
+        assert_eq!(exact, "\nnext\n");
+        match decide("foo\nnext\n", &req("foo   \n", "\n")) {
+            EditOutcome::Applied { result, .. } => {
+                assert_eq!(result, exact, "drift turned blank-line into deletion");
+            }
+            other => panic!("relaxed: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn relaxed_newline_only_replace_all_matches_exact() {
+        let mut request = req("foo\n", "\n");
+        request.replace_all = true;
+        let exact = match decide("foo\nfoo\nnext\n", &request) {
+            EditOutcome::Applied { result, .. } => result,
+            other => panic!("exact: {other:?}"),
+        };
+        assert_eq!(exact, "\n\nnext\n");
+        let mut request = req("foo  \n", "\n");
+        request.replace_all = true;
+        match decide("foo\nfoo\nnext\n", &request) {
+            EditOutcome::Applied { result, .. } => {
+                assert_eq!(result, exact, "replace_all collapsed blank lines");
+            }
+            other => panic!("relaxed: {other:?}"),
+        }
+    }
+
+    // Same divergence class from the other side: deleting text WITHOUT its
+    // newline leaves an empty line, exactly as the exact pass does.
+    #[test]
+    fn relaxed_no_newline_delete_leaves_empty_line_like_exact() {
+        let exact = match decide("foo\nnext\n", &req("foo", "")) {
+            EditOutcome::Applied { result, .. } => result,
+            other => panic!("exact: {other:?}"),
+        };
+        assert_eq!(exact, "\nnext\n");
+        match decide("foo\nnext\n", &req("foo   ", "")) {
+            EditOutcome::Applied {
+                result, strategy, ..
+            } => {
+                assert_eq!(strategy, Strategy::TrailingWs);
+                assert_eq!(result, exact, "drift dropped the emptied line");
+            }
+            other => panic!("relaxed: {other:?}"),
         }
     }
 
