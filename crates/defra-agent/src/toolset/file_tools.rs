@@ -2,6 +2,9 @@
 // glob, grep) that share private helpers defined in the same file. Splitting
 // each tool into its own file would scatter the shared defaults and make
 // cross-tool consistency harder to verify.
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
 use anyhow::{anyhow, Context as _, Result};
@@ -12,8 +15,64 @@ use defra_native_fs_runner::protocol::{
 use serde::Serialize;
 
 use super::args::{EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs};
+use super::edit_match::{self, EditOutcome, EditRequest, MatchMode, Operation};
 use super::native_runner::NativeFsRunner;
 use super::shared::{cap_output, render_file_contents, ToolContext, ToolError};
+
+/// Raw-byte content identity (#724): stable across line-ending or encoding
+/// drift precisely because nothing is normalized before hashing.
+fn content_hash(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+/// Per-path serialization for FILE MUTATORS — edit_file's read →
+/// hash-check → match → write sequence AND write_file's overwrite share it:
+/// without it, a concurrent mutation can land inside edit_file's validated
+/// window and be silently overwritten (lost update). Scope: WITHIN this
+/// process, keyed by canonical path (falling back to the resolved path for
+/// not-yet-existing files). External writers are outside the lock — they
+/// are caught by the expected_content_hash check at entry and otherwise
+/// race as ordinary last-writer-wins POSIX writes (#724 documents the
+/// optimistic-concurrency boundary; there is no OS-level file lock).
+static FILE_MUTATION_LOCKS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Lock key that is stable across path aliases even when the leaf does not
+/// exist yet: canonicalize the deepest existing ancestor and append the
+/// missing suffix, so `alias/new.txt` and `real/new.txt` (alias -> real)
+/// serialize on one lock.
+fn canonical_lock_key(path: &Path) -> PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+    let mut current = path;
+    while let Some(parent) = current.parent() {
+        match current.file_name() {
+            Some(name) => suffix.push(name.to_os_string()),
+            None => break,
+        }
+        if let Ok(canonical) = std::fs::canonicalize(parent) {
+            let mut key = canonical;
+            for part in suffix.iter().rev() {
+                key.push(part);
+            }
+            return key;
+        }
+        current = parent;
+    }
+    path.to_path_buf()
+}
+
+pub(super) fn file_mutation_lock_for(path: &Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    let key = canonical_lock_key(path);
+    let mut locks = FILE_MUTATION_LOCKS
+        .lock()
+        .expect("file mutation lock registry poisoned");
+    locks.entry(key).or_default().clone()
+}
 
 const OUTPUT_META_PREFIX: &str = "defra_fs: ";
 
@@ -173,7 +232,7 @@ impl Tool for ReadFileTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
-                "Read a UTF-8 text file under the allowed root ({}). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact line-numbered text with stable defra_fs metadata. Set raw_json=true for structured JSON.",
+                "Read a UTF-8 text file under the allowed root ({}). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact line-numbered text with stable defra_fs metadata, including content_hash — the raw-byte identity of the whole file, usable as edit_file expected_content_hash to guard against concurrent changes. Set raw_json=true for structured JSON.",
                 self.context.root().display()
             ),
             parameters: serde_json::json!({
@@ -215,6 +274,7 @@ impl Tool for ReadFileTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let path = self.context.resolve_existing_file(&args.path)?;
         let bytes = tokio::fs::read(&path).await?;
+        let content_hash = content_hash(&bytes);
         let text = String::from_utf8_lossy(&bytes).into_owned();
         let rendered = render_file_contents(&text, args.start_line, args.end_line);
         let max_chars = args.max_chars.min(self.default_max_chars).max(1);
@@ -231,6 +291,7 @@ impl Tool for ReadFileTool {
                 truncated,
                 start_line: rendered.start_line,
                 end_line: rendered.end_line,
+                content_hash,
             },
             content,
         };
@@ -402,6 +463,8 @@ impl Tool for WriteFileTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let path = self.context.resolve_path_allow_create(&args.path)?;
+        let lock = file_mutation_lock_for(&path);
+        let _guard = lock.lock().await;
         let created = !path.exists();
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -419,6 +482,7 @@ impl Tool for WriteFileTool {
                 truncated: false,
                 bytes_written: args.content.len(),
                 created,
+                content_hash: content_hash(args.content.as_bytes()),
             },
         };
 
@@ -524,7 +588,7 @@ impl Tool for EditFileTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Replace text in an existing file under the configured root. Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact success metadata by default. Set raw_json=true for structured JSON.".to_string(),
+            description: "Edit an existing file under the configured root by replacing old_text with new_text. Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Matching tolerates trailing-whitespace, indentation, and unicode-punctuation drift (the result reports match_strategy; an exact match always wins), and files are matched with normalized line endings, so CRLF files edit cleanly. Use the smallest old_text that uniquely identifies the change; if it matches multiple places the call fails with the locations. On failure the error includes the closest near-match — re-read the file and build new old_text from CURRENT content instead of retrying the same call. Set dry_run=true to preview the diff without writing. Pass expected_content_hash (from read_file) to reject the edit if the file changed since you read it. Set raw_json=true for structured JSON.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -534,16 +598,37 @@ impl Tool for EditFileTool {
                     },
                     "old_text": {
                         "type": "string",
-                        "description": "Exact text to replace. The call fails if this text is not found."
+                        "description": "Text to locate. Whitespace/indentation drift is tolerated; interior wording must match. With match_mode=\"regex\" this is a Rust regex instead."
                     },
                     "new_text": {
                         "type": "string",
-                        "description": "Replacement text."
+                        "description": "Replacement text. With match_mode=\"regex\", capture groups substitute ($1, $2, ...)."
                     },
                     "replace_all": {
                         "type": "boolean",
                         "default": false,
-                        "description": "When false, replace only the first occurrence. When true, replace every occurrence."
+                        "description": "When false, old_text must match exactly one location. When true, replace every match."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "When true, return the diff that WOULD be applied without writing the file."
+                    },
+                    "match_mode": {
+                        "type": "string",
+                        "enum": ["ladder", "regex"],
+                        "default": "ladder",
+                        "description": "ladder = tolerant literal matching (default). regex = old_text is a Rust regex."
+                    },
+                    "operation": {
+                        "type": "string",
+                        "enum": ["replace", "insert_after", "insert_before", "delete"],
+                        "default": "replace",
+                        "description": "replace swaps old_text for new_text; insert_after/insert_before keep old_text and add new_text after/before it; delete removes old_text (new_text ignored)."
+                    },
+                    "expected_content_hash": {
+                        "type": "string",
+                        "description": "Optional content_hash from a prior read_file of this file. If the file's current bytes hash differently, the edit is rejected before matching."
                     },
                     "raw_json": {
                         "type": "boolean",
@@ -558,54 +643,171 @@ impl Tool for EditFileTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let path = self.context.resolve_existing_file(&args.path)?;
-        let original = tokio::fs::read_to_string(&path).await?;
-        let replacements = original.matches(&args.old_text).count();
-        if replacements == 0 {
-            return Err(anyhow!(
-                "text to replace was not found in {}",
-                self.context.display_path(&path)
-            )
-            .into());
+        let display = self.context.display_path(&path);
+        let lock = file_mutation_lock_for(&path);
+        let _guard = lock.lock().await;
+        let raw = tokio::fs::read(&path).await?;
+        let pre_edit_hash = content_hash(&raw);
+
+        // #724 stale gate: fires BEFORE any matching (Lean E6), so a stale
+        // read never even reports ambiguity against content the model has
+        // not seen.
+        if let Some(expected) = &args.expected_content_hash {
+            if expected != &pre_edit_hash {
+                return Err(anyhow!(
+                    "{display} has changed since it was read: expected {expected}, but the current content hashes to {pre_edit_hash}. Re-read the file and rebuild the edit from current content."
+                )
+                .into());
+            }
         }
 
-        let updated = if args.replace_all {
-            original.replace(&args.old_text, &args.new_text)
-        } else {
-            original.replacen(&args.old_text, &args.new_text, 1)
+        let operation = match args.operation.as_deref() {
+            None | Some("replace") => Operation::Replace,
+            Some("insert_after") => Operation::InsertAfter,
+            Some("insert_before") => Operation::InsertBefore,
+            Some("delete") => Operation::Delete,
+            Some(other) => {
+                return Err(anyhow!(
+                "unknown operation {other:?}; valid: replace, insert_after, insert_before, delete"
+            )
+                .into())
+            }
         };
-        tokio::fs::write(&path, updated.as_bytes()).await?;
-
-        let replacements_applied = if args.replace_all { replacements } else { 1 };
-        let output = EditFileOutput {
-            metadata: EditFileMetadata {
-                ok: true,
-                status: "success",
-                tool: Self::NAME,
-                path: self.context.display_path(&path),
-                returned_count: replacements_applied,
-                total_count: Some(replacements),
-                truncated: false,
-                replacements_applied,
-                replace_all: args.replace_all,
-                bytes_written: updated.len(),
-            },
+        let match_mode = match args.match_mode.as_deref() {
+            None | Some("ladder") => MatchMode::Ladder,
+            Some("regex") => MatchMode::Regex,
+            Some(other) => {
+                return Err(anyhow!("unknown match_mode {other:?}; valid: ladder, regex").into())
+            }
         };
 
-        Ok(render_tool_output(
-            &output.metadata,
-            format!(
-                "edit_file: edited {} ({} replacement{})",
-                output.metadata.path,
-                output.metadata.replacements_applied,
-                if output.metadata.replacements_applied != 1 {
-                    "s"
-                } else {
-                    ""
+        // Strict UTF-8: a lossy conversion followed by a full-file rewrite
+        // would silently replace every invalid byte with U+FFFD.
+        let raw_text = String::from_utf8(raw).map_err(|error| {
+            anyhow!(
+                "{display} is not valid UTF-8 (first invalid byte at offset {}); edit_file only edits UTF-8 text files",
+                error.utf8_error().valid_up_to()
+            )
+        })?;
+        let normalized = edit_match::normalize_content(&raw_text);
+        let old_text = args.old_text.replace("\r\n", "\n");
+        let new_text = args.new_text.replace("\r\n", "\n");
+        let request = EditRequest {
+            old_text: &old_text,
+            new_text: &new_text,
+            replace_all: args.replace_all,
+            operation,
+            match_mode,
+        };
+
+        match edit_match::decide(&normalized.text, &request) {
+            EditOutcome::Applied {
+                result,
+                strategy,
+                replacements,
+                first_changed_line,
+                diff,
+            } => {
+                let post_text =
+                    edit_match::restore_content(&result, normalized.ending, normalized.had_bom);
+                let post_edit_hash = content_hash(post_text.as_bytes());
+                if !args.dry_run {
+                    tokio::fs::write(&path, post_text.as_bytes()).await?;
+                    // Post-write verification: some hosts report success
+                    // without persisting bytes; stat/mtime are not reliable.
+                    let verify = tokio::fs::read(&path).await?;
+                    if verify != post_text.as_bytes() {
+                        return Err(anyhow!(
+                            "post-write verification failed for {display}: the bytes on disk do not match the edited content"
+                        )
+                        .into());
+                    }
                 }
-            ),
-            &output,
-            args.raw_json,
-        )?)
+                let output = EditFileOutput {
+                    metadata: EditFileMetadata {
+                        ok: true,
+                        status: "success",
+                        tool: Self::NAME,
+                        path: display,
+                        returned_count: replacements,
+                        total_count: Some(replacements),
+                        truncated: false,
+                        replacements_applied: replacements,
+                        replace_all: args.replace_all,
+                        dry_run: args.dry_run,
+                        match_strategy: strategy.as_str(),
+                        first_changed_line,
+                        pre_edit_hash,
+                        post_edit_hash,
+                        bytes_written: if args.dry_run { 0 } else { post_text.len() },
+                    },
+                    diff,
+                };
+                let verb = if args.dry_run {
+                    "dry-run preview for"
+                } else {
+                    "edited"
+                };
+                Ok(render_tool_output(
+                    &output.metadata,
+                    format!(
+                        "edit_file: {verb} {} ({} replacement{}, strategy {})\n{}",
+                        output.metadata.path,
+                        replacements,
+                        if replacements != 1 { "s" } else { "" },
+                        output.metadata.match_strategy,
+                        output.diff,
+                    ),
+                    &output,
+                    args.raw_json,
+                )?)
+            }
+            EditOutcome::NotFound { closest } => {
+                let mut message = format!("old_text was not found in {display}.");
+                if let Some(c) = closest {
+                    let _ = write!(
+                        message,
+                        "\nClosest match ({}% similar) at line {}:",
+                        c.similarity_pct, c.line
+                    );
+                    if let Some((pattern_line, file_line)) = c.first_diff {
+                        let _ = write!(
+                            message,
+                            "\n  your text: {pattern_line}\n  file has:  {file_line}"
+                        );
+                    }
+                }
+                message.push_str(
+                    "\nRe-read the file and build old_text from its CURRENT content; do not retry the same call.",
+                );
+                Err(anyhow!(message).into())
+            }
+            EditOutcome::Ambiguous {
+                strategy,
+                count,
+                previews,
+            } => {
+                let mut message = format!(
+                    "old_text matches {count} locations in {display} (strategy {}):",
+                    strategy.as_str()
+                );
+                for preview in previews {
+                    let _ = write!(message, "\n  line {}: {}", preview.line, preview.text);
+                }
+                message.push_str(
+                    "\nAdd surrounding context to make it unique, or set replace_all=true.",
+                );
+                Err(anyhow!(message).into())
+            }
+            EditOutcome::Noop { .. } => Err(anyhow!(
+                "the edit would produce identical content in {display}; nothing was written. old_text and new_text are equivalent at the matched site."
+            )
+            .into()),
+            EditOutcome::InvalidRegex { error } => Err(anyhow!(
+                "match_mode=\"regex\": pattern failed to parse: {error}"
+            )
+            .into()),
+        }
     }
 }
 
@@ -620,6 +822,9 @@ struct ReadFileMetadata {
     truncated: bool,
     start_line: usize,
     end_line: usize,
+    /// Raw-byte identity of the COMPLETE file (even for ranged/truncated
+    /// reads) — pass to edit_file's expected_content_hash (#724).
+    content_hash: String,
 }
 
 #[derive(Serialize)]
@@ -640,6 +845,7 @@ struct WriteFileMetadata {
     truncated: bool,
     bytes_written: usize,
     created: bool,
+    content_hash: String,
 }
 
 #[derive(Serialize)]
@@ -659,6 +865,11 @@ struct EditFileMetadata {
     truncated: bool,
     replacements_applied: usize,
     replace_all: bool,
+    dry_run: bool,
+    match_strategy: &'static str,
+    first_changed_line: usize,
+    pre_edit_hash: String,
+    post_edit_hash: String,
     bytes_written: usize,
 }
 
@@ -666,6 +877,7 @@ struct EditFileMetadata {
 struct EditFileOutput {
     #[serde(flatten)]
     metadata: EditFileMetadata,
+    diff: String,
 }
 
 fn render_tool_output(

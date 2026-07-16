@@ -762,6 +762,10 @@ async fn write_and_edit_file_work_under_root() {
             new_text: "amy".to_string(),
             replace_all: false,
             raw_json: false,
+            dry_run: false,
+            match_mode: None,
+            operation: None,
+            expected_content_hash: None,
         },
     )
     .await
@@ -1775,4 +1779,279 @@ fn read_only_bash_rejects_mutating_host_diagnostics_commands() {
     )
     .is_err());
     assert!(validate_read_only_command("tailscale", &[String::from("up")], &allowlist).is_err());
+}
+
+// --- #738/#724: edit_file match ladder, dry-run, and content-hash wiring ---
+
+fn edit_args(path: &str, old: &str, new: &str) -> EditFileArgs {
+    EditFileArgs {
+        path: path.to_string(),
+        old_text: old.to_string(),
+        new_text: new.to_string(),
+        replace_all: false,
+        raw_json: true,
+        dry_run: false,
+        match_mode: None,
+        operation: None,
+        expected_content_hash: None,
+    }
+}
+
+#[tokio::test]
+async fn read_file_reports_raw_content_hash() {
+    let root = temp_root("defra-agent-read-hash");
+    std::fs::write(root.join("config.json"), "{\"max_turns\": 20}\n").unwrap();
+    let tool = ReadFileTool::new(
+        ToolContext::new(root, false).unwrap(),
+        DEFAULT_MAX_FILE_CHARS,
+    );
+    let output = crate::llm::tool::Tool::call(
+        &tool,
+        ReadFileArgs {
+            path: "config.json".to_string(),
+            start_line: None,
+            end_line: None,
+            max_chars: DEFAULT_MAX_FILE_CHARS,
+            raw_json: true,
+        },
+    )
+    .await
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    let hash = value["content_hash"].as_str().unwrap();
+    assert!(hash.starts_with("sha256:"), "{hash}");
+    assert_eq!(hash.len(), "sha256:".len() + 64);
+}
+
+#[tokio::test]
+async fn edit_file_dry_run_previews_diff_without_writing() {
+    let root = temp_root("defra-agent-edit-dry-run");
+    let file = root.join("config.json");
+    std::fs::write(&file, "{\n  \"max_turns\": 20\n}\n").unwrap();
+    let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
+    let mut args = edit_args("config.json", "\"max_turns\": 20", "\"max_turns\": 250");
+    args.dry_run = true;
+    let output = crate::llm::tool::Tool::call(&tool, args).await.unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["dry_run"], true, "{value}");
+    assert!(
+        value["diff"].as_str().unwrap().contains("max_turns"),
+        "{value}"
+    );
+    // Nothing was written.
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "{\n  \"max_turns\": 20\n}\n"
+    );
+}
+
+#[tokio::test]
+async fn edit_file_stale_hash_rejects_before_matching_and_reports_current() {
+    let root = temp_root("defra-agent-edit-stale");
+    let file = root.join("a.txt");
+    // Pattern is ambiguous — but the stale gate must fire FIRST (Lean E6).
+    std::fs::write(&file, "dup\ndup\n").unwrap();
+    let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
+    let mut args = edit_args("a.txt", "dup", "x");
+    args.expected_content_hash =
+        Some("sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string());
+    let err = crate::llm::tool::Tool::call(&tool, args)
+        .await
+        .expect_err("stale hash must reject");
+    let text = err.to_string();
+    assert!(text.contains("changed since"), "{text}");
+    assert!(text.contains("sha256:"), "{text}");
+    assert!(
+        text.contains("re-read") || text.contains("Re-read"),
+        "{text}"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "dup\ndup\n");
+}
+
+#[tokio::test]
+async fn edit_file_success_reports_strategy_hashes_and_diff() {
+    let root = temp_root("defra-agent-edit-success");
+    let file = root.join("profile.json");
+    std::fs::write(&file, "{\n  \"max_turns\": 20\n}\n").unwrap();
+    let pre_hash = {
+        use sha2::{Digest, Sha256};
+        format!("sha256:{:x}", Sha256::digest(std::fs::read(&file).unwrap()))
+    };
+    let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
+    // Pattern carries trailing whitespace the file lacks: ladder must apply.
+    let mut args = edit_args(
+        "profile.json",
+        "  \"max_turns\": 20   ",
+        "  \"max_turns\": 250",
+    );
+    args.expected_content_hash = Some(pre_hash.clone());
+    let output = crate::llm::tool::Tool::call(&tool, args).await.unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["match_strategy"], "trailing_whitespace", "{value}");
+    assert_eq!(value["pre_edit_hash"].as_str().unwrap(), pre_hash);
+    assert!(value["post_edit_hash"]
+        .as_str()
+        .unwrap()
+        .starts_with("sha256:"));
+    assert_ne!(value["post_edit_hash"], value["pre_edit_hash"]);
+    assert!(value["diff"].as_str().unwrap().contains("+"), "{value}");
+    assert!(std::fs::read_to_string(&file)
+        .unwrap()
+        .contains("\"max_turns\": 250"));
+}
+
+#[tokio::test]
+async fn edit_file_not_found_error_carries_closest_match() {
+    let root = temp_root("defra-agent-edit-closest");
+    std::fs::write(root.join("a.yaml"), "max_turns: 20\nmodel: d4f\n").unwrap();
+    let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
+    let err = crate::llm::tool::Tool::call(
+        &tool,
+        edit_args("a.yaml", "max_turns: 21", "max_turns: 250"),
+    )
+    .await
+    .expect_err("no match");
+    let text = err.to_string();
+    assert!(text.contains("Closest match"), "{text}");
+    assert!(text.contains("line 1"), "{text}");
+    assert!(text.contains("% similar"), "{text}");
+}
+
+#[tokio::test]
+async fn edit_file_ambiguous_error_lists_occurrences() {
+    let root = temp_root("defra-agent-edit-ambiguous");
+    std::fs::write(root.join("a.txt"), "x = 1\ny\nx = 1\n").unwrap();
+    let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
+    let err = crate::llm::tool::Tool::call(&tool, edit_args("a.txt", "x = 1", "x = 2"))
+        .await
+        .expect_err("ambiguous");
+    let text = err.to_string();
+    assert!(text.contains("2 "), "{text}");
+    assert!(text.contains("line 1"), "{text}");
+    assert!(text.contains("line 3"), "{text}");
+    assert!(text.contains("replace_all"), "{text}");
+}
+
+#[tokio::test]
+async fn edit_file_crlf_file_round_trips() {
+    let root = temp_root("defra-agent-edit-crlf");
+    let file = root.join("w.ini");
+    std::fs::write(&file, "a=1\r\nmax_turns=20\r\n").unwrap();
+    let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
+    let output =
+        crate::llm::tool::Tool::call(&tool, edit_args("w.ini", "max_turns=20", "max_turns=250"))
+            .await
+            .unwrap();
+    let _: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(std::fs::read(&file).unwrap(), b"a=1\r\nmax_turns=250\r\n");
+}
+
+#[tokio::test]
+async fn edit_file_regex_mode_and_insert_after_operation() {
+    let root = temp_root("defra-agent-edit-regex-ops");
+    let file = root.join("c.toml");
+    std::fs::write(&file, "timeout = 1800\n").unwrap();
+    let tool = EditFileTool::new(ToolContext::new(root.clone(), false).unwrap());
+    let mut args = edit_args("c.toml", r"timeout = (\d+)", "timeout = 3600 # was $1");
+    args.match_mode = Some("regex".to_string());
+    crate::llm::tool::Tool::call(&tool, args).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "timeout = 3600 # was 1800\n"
+    );
+
+    let mut args = edit_args("c.toml", "timeout = 3600 # was 1800", "\nretries = 3");
+    args.operation = Some("insert_after".to_string());
+    crate::llm::tool::Tool::call(&tool, args).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "timeout = 3600 # was 1800\nretries = 3\n"
+    );
+}
+
+// Review finding 2: non-UTF-8 files are rejected, never lossy-rewritten.
+#[tokio::test]
+async fn edit_file_rejects_non_utf8_instead_of_corrupting() {
+    let root = temp_root("defra-agent-edit-non-utf8");
+    let file = root.join("latin1.txt");
+    std::fs::write(&file, b"caf\xe9 target\n").unwrap();
+    let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
+    let err = crate::llm::tool::Tool::call(&tool, edit_args("latin1.txt", "target", "x"))
+        .await
+        .expect_err("non-UTF-8 must be rejected");
+    assert!(err.to_string().contains("UTF-8"), "{err}");
+    // The file is untouched — no U+FFFD rewrite.
+    assert_eq!(std::fs::read(&file).unwrap(), b"caf\xe9 target\n");
+}
+
+// Review finding 1: concurrent edits to the same file serialize — neither
+// lost-updates the other. (Without the per-path lock this interleaves:
+// both read, both write full content, one edit vanishes.)
+#[tokio::test(flavor = "multi_thread")]
+async fn edit_file_concurrent_edits_do_not_lose_updates() {
+    let root = temp_root("defra-agent-edit-concurrent");
+    let file = root.join("both.txt");
+    let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
+    for round in 0..20 {
+        std::fs::write(&file, "alpha: 0\nbeta: 0\n").unwrap();
+        let a = crate::llm::tool::Tool::call(&tool, edit_args("both.txt", "alpha: 0", "alpha: 1"));
+        let b = crate::llm::tool::Tool::call(&tool, edit_args("both.txt", "beta: 0", "beta: 1"));
+        let (ra, rb) = tokio::join!(a, b);
+        ra.unwrap();
+        rb.unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(
+            text, "alpha: 1\nbeta: 1\n",
+            "round {round}: lost update, file is {text:?}"
+        );
+    }
+}
+
+// Round-2 finding 1: write_file shares the mutation lock — a concurrent
+// edit_file + write_file pair serializes, so the final state is always one
+// of the two legal serial orders, never a torn third state (edit reads
+// before the write, lands after it, resurrecting overwritten content).
+#[tokio::test(flavor = "multi_thread")]
+async fn write_file_and_edit_file_serialize_on_the_same_lock() {
+    let root = temp_root("defra-agent-write-edit-serialize");
+    let file = root.join("both.txt");
+    let context = ToolContext::new(root, false).unwrap();
+    let editor = EditFileTool::new(context.clone());
+    let writer = WriteFileTool::new(context);
+    for round in 0..20 {
+        std::fs::write(&file, "alpha: 0\nbeta: 0\n").unwrap();
+        let edit =
+            crate::llm::tool::Tool::call(&editor, edit_args("both.txt", "alpha: 0", "alpha: 1"));
+        let write = crate::llm::tool::Tool::call(
+            &writer,
+            WriteFileArgs {
+                path: "both.txt".to_string(),
+                content: "alpha: 0\nbeta: 1\n".to_string(),
+                raw_json: false,
+            },
+        );
+        let (re, rw) = tokio::join!(edit, write);
+        rw.unwrap();
+        let _ = re; // edit may legitimately fail if it reads mid-transition
+        let text = std::fs::read_to_string(&file).unwrap();
+        let legal = text == "alpha: 1\nbeta: 1\n" // write then edit
+            || text == "alpha: 0\nbeta: 1\n"; // edit then write (write wins)
+        assert!(legal, "round {round}: torn interleaving produced {text:?}");
+    }
+}
+
+// Round-3 finding 2: mutation-lock keys for not-yet-existing files resolve
+// symlinked directory aliases to one key — both spellings share one lock.
+#[cfg(unix)]
+#[test]
+fn mutation_lock_keys_resolve_symlinked_parents_for_new_files() {
+    let root = temp_root("defra-agent-lock-alias");
+    std::fs::create_dir_all(root.join("real")).unwrap();
+    std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
+    let via_alias = super::file_tools::file_mutation_lock_for(&root.join("alias/new.txt"));
+    let via_real = super::file_tools::file_mutation_lock_for(&root.join("real/new.txt"));
+    assert!(
+        std::sync::Arc::ptr_eq(&via_alias, &via_real),
+        "alias and real spellings of a new file must share one lock"
+    );
 }

@@ -11,6 +11,7 @@ mod cancellable;
 mod cli_tool;
 mod context_budget;
 mod denial;
+pub mod edit_match;
 mod file_tools;
 #[cfg(feature = "agent-memory")]
 mod memory;
