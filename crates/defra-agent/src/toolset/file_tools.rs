@@ -26,20 +26,24 @@ fn content_hash(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
-/// Per-path serialization for edit_file's read → hash-check → match → write
-/// sequence: without it, two concurrent edits can both validate the same
-/// pre-edit hash and overwrite each other (lost update). Scope: WITHIN this
-/// process, keyed by canonical path. External writers are outside the lock —
-/// they are caught by the expected_content_hash check at entry and otherwise
+/// Per-path serialization for FILE MUTATORS — edit_file's read →
+/// hash-check → match → write sequence AND write_file's overwrite share it:
+/// without it, a concurrent mutation can land inside edit_file's validated
+/// window and be silently overwritten (lost update). Scope: WITHIN this
+/// process, keyed by canonical path (falling back to the resolved path for
+/// not-yet-existing files). External writers are outside the lock — they
+/// are caught by the expected_content_hash check at entry and otherwise
 /// race as ordinary last-writer-wins POSIX writes (#724 documents the
 /// optimistic-concurrency boundary; there is no OS-level file lock).
-static EDIT_LOCKS: std::sync::LazyLock<
+static FILE_MUTATION_LOCKS: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 > = std::sync::LazyLock::new(Default::default);
 
-fn edit_lock_for(path: &Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+fn file_mutation_lock_for(path: &Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
     let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let mut locks = EDIT_LOCKS.lock().expect("edit lock registry poisoned");
+    let mut locks = FILE_MUTATION_LOCKS
+        .lock()
+        .expect("file mutation lock registry poisoned");
     locks.entry(key).or_default().clone()
 }
 
@@ -432,6 +436,8 @@ impl Tool for WriteFileTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let path = self.context.resolve_path_allow_create(&args.path)?;
+        let lock = file_mutation_lock_for(&path);
+        let _guard = lock.lock().await;
         let created = !path.exists();
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -611,7 +617,7 @@ impl Tool for EditFileTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let path = self.context.resolve_existing_file(&args.path)?;
         let display = self.context.display_path(&path);
-        let lock = edit_lock_for(&path);
+        let lock = file_mutation_lock_for(&path);
         let _guard = lock.lock().await;
         let raw = tokio::fs::read(&path).await?;
         let pre_edit_hash = content_hash(&raw);

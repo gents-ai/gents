@@ -2006,3 +2006,36 @@ async fn edit_file_concurrent_edits_do_not_lose_updates() {
         );
     }
 }
+
+// Round-2 finding 1: write_file shares the mutation lock — a concurrent
+// edit_file + write_file pair serializes, so the final state is always one
+// of the two legal serial orders, never a torn third state (edit reads
+// before the write, lands after it, resurrecting overwritten content).
+#[tokio::test(flavor = "multi_thread")]
+async fn write_file_and_edit_file_serialize_on_the_same_lock() {
+    let root = temp_root("defra-agent-write-edit-serialize");
+    let file = root.join("both.txt");
+    let context = ToolContext::new(root, false).unwrap();
+    let editor = EditFileTool::new(context.clone());
+    let writer = WriteFileTool::new(context);
+    for round in 0..20 {
+        std::fs::write(&file, "alpha: 0\nbeta: 0\n").unwrap();
+        let edit =
+            crate::llm::tool::Tool::call(&editor, edit_args("both.txt", "alpha: 0", "alpha: 1"));
+        let write = crate::llm::tool::Tool::call(
+            &writer,
+            WriteFileArgs {
+                path: "both.txt".to_string(),
+                content: "alpha: 0\nbeta: 1\n".to_string(),
+                raw_json: false,
+            },
+        );
+        let (re, rw) = tokio::join!(edit, write);
+        rw.unwrap();
+        let _ = re; // edit may legitimately fail if it reads mid-transition
+        let text = std::fs::read_to_string(&file).unwrap();
+        let legal = text == "alpha: 1\nbeta: 1\n" // write then edit
+            || text == "alpha: 0\nbeta: 1\n"; // edit then write (write wins)
+        assert!(legal, "round {round}: torn interleaving produced {text:?}");
+    }
+}

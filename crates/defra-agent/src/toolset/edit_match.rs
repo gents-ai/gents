@@ -158,41 +158,50 @@ pub fn restore_content(text: &str, ending: LineEnding, had_bom: bool) -> String 
 /// `EditMatch.decideMatched` (the #724 stale gate runs in the caller,
 /// before this, on raw bytes).
 pub fn decide(content: &str, req: &EditRequest<'_>) -> EditOutcome {
-    let (pattern, replacement) = desugar(req);
-    if pattern.is_empty() {
+    if req.old_text.is_empty() {
         return EditOutcome::NotFound { closest: None };
     }
     match req.match_mode {
-        MatchMode::Regex => decide_regex(content, &pattern, &replacement, req.replace_all),
-        MatchMode::Ladder => decide_ladder(content, &pattern, &replacement, req.replace_all),
+        MatchMode::Regex => decide_regex(
+            content,
+            req.old_text,
+            req.new_text,
+            req.replace_all,
+            req.operation,
+        ),
+        MatchMode::Ladder => {
+            let (pattern, replacement) = desugar(req);
+            decide_ladder(content, &pattern, &replacement, req.replace_all)
+        }
     }
 }
 
+/// Ladder-mode desugaring only: regex-mode operations are composed inside
+/// the replacer closure (template composition cannot express "the matched
+/// text" without corrupting user templates that end in `$`).
 fn desugar(req: &EditRequest<'_>) -> (String, String) {
     let old = req.old_text.to_string();
     match req.operation {
         Operation::Replace => (old, req.new_text.to_string()),
-        // In regex mode the pattern SOURCE is not the matched text: inserts
-        // must preserve the actual match via whole-match substitution.
-        Operation::InsertAfter => match req.match_mode {
-            MatchMode::Regex => (old, format!("${{0}}{}", req.new_text)),
-            MatchMode::Ladder => {
-                let repl = format!("{}{}", req.old_text, req.new_text);
-                (old, repl)
-            }
-        },
-        Operation::InsertBefore => match req.match_mode {
-            MatchMode::Regex => (old, format!("{}${{0}}", req.new_text)),
-            MatchMode::Ladder => {
-                let repl = format!("{}{}", req.new_text, req.old_text);
-                (old, repl)
-            }
-        },
+        Operation::InsertAfter => {
+            let repl = format!("{}{}", req.old_text, req.new_text);
+            (old, repl)
+        }
+        Operation::InsertBefore => {
+            let repl = format!("{}{}", req.new_text, req.old_text);
+            (old, repl)
+        }
         Operation::Delete => (old, String::new()),
     }
 }
 
-fn decide_regex(content: &str, pattern: &str, replacement: &str, replace_all: bool) -> EditOutcome {
+fn decide_regex(
+    content: &str,
+    pattern: &str,
+    new_text: &str,
+    replace_all: bool,
+    operation: Operation,
+) -> EditOutcome {
     const REGEX_SIZE_LIMIT: usize = 10 * (1 << 20);
     let regex = match regex::RegexBuilder::new(pattern)
         .size_limit(REGEX_SIZE_LIMIT)
@@ -228,11 +237,21 @@ fn decide_regex(content: &str, pattern: &str, replacement: &str, replace_all: bo
             previews,
         };
     }
-    let result = if replace_all {
-        regex.replace_all(content, replacement).into_owned()
-    } else {
-        regex.replacen(content, 1, replacement).into_owned()
+    // One replacer for every operation: the user template expands with
+    // replace-mode semantics ($1, $$ for literal $), and inserts splice the
+    // ACTUAL matched text around the expansion.
+    let render = |caps: &regex::Captures<'_>| -> String {
+        let mut expanded = String::new();
+        caps.expand(new_text, &mut expanded);
+        match operation {
+            Operation::Replace => expanded,
+            Operation::InsertAfter => format!("{}{expanded}", &caps[0]),
+            Operation::InsertBefore => format!("{expanded}{}", &caps[0]),
+            Operation::Delete => String::new(),
+        }
     };
+    let limit = if replace_all { 0 } else { 1 };
+    let result = regex.replacen(content, limit, render).into_owned();
     finish(content, result, Strategy::Regex, count.max(1))
 }
 
@@ -271,14 +290,20 @@ fn decide_ladder(
 
     // Passes 2-4 — line-window matching with progressively coarser keys. A
     // pattern ending in a newline splits into a trailing empty line that
-    // would force the NEXT content line to be empty; drop it (and one
-    // trailing newline of the replacement to keep line structure).
+    // would force the NEXT content line to be empty; drop it. Replacement
+    // semantics must match the exact pass: the pattern's trailing newline is
+    // CONSUMED, so a replacement that does not end in a newline merges with
+    // the following line (drift must not decide newline preservation).
     let content_lines: Vec<&str> = content.split('\n').collect();
     let mut pattern_lines: Vec<&str> = pattern.split('\n').collect();
     let mut replacement = replacement;
+    let mut merge_tail = false;
     if pattern_lines.len() > 1 && pattern_lines.last() == Some(&"") {
         pattern_lines.pop();
-        replacement = replacement.strip_suffix('\n').unwrap_or(replacement);
+        match replacement.strip_suffix('\n') {
+            Some(stripped) => replacement = stripped,
+            None => merge_tail = !replacement.is_empty(),
+        }
     }
     for strategy in [Strategy::TrailingWs, Strategy::Trim, Strategy::Unicode] {
         let occ = window_occurrences(&content_lines, &pattern_lines, strategy);
@@ -300,7 +325,14 @@ fn decide_ladder(
                 previews,
             };
         }
-        let result = splice_windows(&content_lines, &pattern_lines, replacement, strategy, &occ);
+        let result = splice_windows(
+            &content_lines,
+            &pattern_lines,
+            replacement,
+            strategy,
+            &occ,
+            merge_tail,
+        );
         return finish(content, result, strategy, occ.len());
     }
 
@@ -375,16 +407,30 @@ fn splice_windows(
     replacement: &str,
     strategy: Strategy,
     occ: &[usize],
+    merge_tail: bool,
 ) -> String {
     let mut lines: Vec<String> = content_lines.iter().map(|l| l.to_string()).collect();
     for &i in occ.iter().rev() {
-        let repl_lines = reindent_replacement(
+        let mut repl_lines = reindent_replacement(
             replacement,
             strategy,
             content_lines[i],
             pattern_lines.first().copied().unwrap_or(""),
         );
-        lines.splice(i..i + pattern_lines.len(), repl_lines);
+        let end = i + pattern_lines.len();
+        // The pattern consumed a trailing newline the replacement does not
+        // supply: join the replacement's last line with the following line,
+        // exactly as the exact-substring pass would have.
+        if merge_tail && !repl_lines.is_empty() && end < lines.len() {
+            let following = lines[end].clone();
+            repl_lines
+                .last_mut()
+                .expect("non-empty replacement lines")
+                .push_str(&following);
+            lines.splice(i..end + 1, repl_lines);
+        } else {
+            lines.splice(i..end, repl_lines);
+        }
     }
     lines.join("\n")
 }
@@ -888,6 +934,113 @@ mod tests {
                 assert_eq!(strategy, Strategy::TrailingWs);
                 assert_eq!(result, "bar\nnext\n");
             }
+            other => panic!("expected applied, got {other:?}"),
+        }
+    }
+
+    // Round-2 finding 2: regex replacement semantics (including literal $
+    // via $$ and capture refs) must be identical across replace and insert
+    // operations — inserts expand the user template, then splice the whole
+    // match around it.
+    #[test]
+    fn regex_insert_before_preserves_literal_dollar_replacement() {
+        let content = "timeout = 1800\n";
+        let mut request = req(r"timeout = (\d+)", "$$");
+        request.match_mode = MatchMode::Regex;
+        request.operation = Operation::InsertBefore;
+        match decide(content, &request) {
+            EditOutcome::Applied { result, .. } => {
+                assert_eq!(result, "$timeout = 1800\n");
+            }
+            other => panic!("expected applied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn regex_insert_before_lone_dollar_matches_replace_semantics() {
+        // In replace mode a lone trailing $ renders as a literal $; insert
+        // modes must not let template composition eat the match.
+        let content = "timeout = 1800
+";
+        let mut request = req(r"timeout = (\d+)", "$");
+        request.match_mode = MatchMode::Regex;
+        request.operation = Operation::InsertBefore;
+        match decide(content, &request) {
+            EditOutcome::Applied { result, .. } => {
+                assert_eq!(
+                    result,
+                    "$timeout = 1800
+"
+                );
+            }
+            other => panic!("expected applied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn regex_insert_after_expands_capture_refs_like_replace() {
+        let content = "timeout = 1800\n";
+        let mut request = req(r"timeout = (\d+)", " # doubled from $1");
+        request.match_mode = MatchMode::Regex;
+        request.operation = Operation::InsertAfter;
+        match decide(content, &request) {
+            EditOutcome::Applied { result, .. } => {
+                assert_eq!(result, "timeout = 1800 # doubled from 1800\n");
+            }
+            other => panic!("expected applied, got {other:?}"),
+        }
+    }
+
+    // Round-2 finding 3: whitespace drift must not change replacement
+    // semantics. Exact replacement of "foo\n" with "bar" consumes the
+    // newline; the drifted pattern must produce the same result.
+    #[test]
+    fn relaxed_trailing_newline_consumes_the_newline_like_exact() {
+        let exact = decide("foo\nnext\n", &req("foo\n", "bar"));
+        let relaxed = decide("foo\nnext\n", &req("foo   \n", "bar"));
+        let exact_result = match exact {
+            EditOutcome::Applied { result, .. } => result,
+            other => panic!("exact: {other:?}"),
+        };
+        assert_eq!(exact_result, "barnext\n");
+        match relaxed {
+            EditOutcome::Applied {
+                result, strategy, ..
+            } => {
+                assert_eq!(strategy, Strategy::TrailingWs);
+                assert_eq!(result, exact_result, "drift changed semantics");
+            }
+            other => panic!("relaxed: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn relaxed_trailing_newline_replace_all_matches_exact_semantics() {
+        // Adjacent windows: exact replace_all of "foo\n" -> "bar" on
+        // "foo\nfoo\nnext\n" yields "barbarnext\n"; drifted input must too.
+        let mut request = req("foo\n", "bar");
+        request.replace_all = true;
+        let exact = match decide("foo\nfoo\nnext\n", &request) {
+            EditOutcome::Applied { result, .. } => result,
+            other => panic!("exact: {other:?}"),
+        };
+        assert_eq!(exact, "barbarnext\n");
+        let mut request = req("foo  \n", "bar");
+        request.replace_all = true;
+        match decide("foo\nfoo\nnext\n", &request) {
+            EditOutcome::Applied { result, .. } => {
+                assert_eq!(result, exact, "drifted replace_all diverged");
+            }
+            other => panic!("relaxed: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn relaxed_trailing_newline_delete_matches_exact_semantics() {
+        let mut request = req("foo   \n", "");
+        request.operation = Operation::Delete;
+        match decide("foo\nnext\n", &request) {
+            EditOutcome::Applied { result, .. } => assert_eq!(result, "next\n"),
             other => panic!("expected applied, got {other:?}"),
         }
     }
