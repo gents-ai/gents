@@ -772,18 +772,30 @@ structure CodexShimBehaviorSelectionCase where
   rootBehaviorId : String
   threadBehaviorId : Option String
   projectedBehaviorId : String
+  rootModel : String
+  projectedChildModel : Option String
+  resolvedChildModel : Option String
+  projectedModel : String
 
 def codexShimBehaviorSelectionCase
     (witness : String)
     (leanTheorems : List String)
     (rootBehaviorId : String)
-    (threadBehaviorId : Option String) : CodexShimBehaviorSelectionCase :=
+    (threadBehaviorId : Option String)
+    (rootModel : String := "root-model")
+    (projectedChildModel : Option String := none)
+    (resolvedChildModel : Option String := none) : CodexShimBehaviorSelectionCase :=
   { witness
   , leanTheorems
   , rootBehaviorId
   , threadBehaviorId
   , projectedBehaviorId :=
       CodexShim.projectionBehaviorId rootBehaviorId threadBehaviorId
+  , rootModel
+  , projectedChildModel
+  , resolvedChildModel
+  , projectedModel :=
+      CodexShim.projectedThreadModel rootModel projectedChildModel resolvedChildModel
   }
 
 def codexShimBehaviorSelectionCaseJson
@@ -793,7 +805,11 @@ def codexShimBehaviorSelectionCaseJson
     ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
     ++ "\"root_behavior_id\":" ++ jsonString witness.rootBehaviorId ++ ","
     ++ "\"thread_behavior_id\":" ++ jsonOptionalString witness.threadBehaviorId ++ ","
-    ++ "\"projected_behavior_id\":" ++ jsonString witness.projectedBehaviorId
+    ++ "\"projected_behavior_id\":" ++ jsonString witness.projectedBehaviorId ++ ","
+    ++ "\"root_model\":" ++ jsonString witness.rootModel ++ ","
+    ++ "\"projected_child_model\":" ++ jsonOptionalString witness.projectedChildModel ++ ","
+    ++ "\"resolved_child_model\":" ++ jsonOptionalString witness.resolvedChildModel ++ ","
+    ++ "\"projected_model\":" ++ jsonString witness.projectedModel
     ++ "}"
 
 def codexShimBehaviorSelectionCases : List CodexShimBehaviorSelectionCase :=
@@ -805,6 +821,21 @@ def codexShimBehaviorSelectionCases : List CodexShimBehaviorSelectionCase :=
       "codex_shim.behavior.root"
       ["CodexShim.absent_child_behavior_keeps_root_response_metadata"]
       "root" none
+  , codexShimBehaviorSelectionCase
+      "codex_shim.behavior.resolved_child_model"
+      ["CodexShim.resolved_child_model_has_priority"]
+      "root" (some "child")
+      (projectedChildModel := some "projected-child")
+      (resolvedChildModel := some "resolved-child")
+  , codexShimBehaviorSelectionCase
+      "codex_shim.behavior.projected_child_model"
+      ["CodexShim.projected_child_model_fills_unavailable_behavior"]
+      "root" (some "child")
+      (projectedChildModel := some "projected-child")
+  , codexShimBehaviorSelectionCase
+      "codex_shim.behavior.root_model_fallback"
+      ["CodexShim.unavailable_child_model_falls_back_to_root"]
+      "root" (some "child")
   ]
 
 def codexShimBehaviorSelectionCasesJson : String :=
@@ -918,9 +949,13 @@ def codexShimToolMetadataCases : List CodexShimToolMetadataCase :=
       ["CodexShim.cancellation_diagnostic_precedes_failure_class"]
       (cancelCause := some "deadline") (failureClass := some "timedOut")
   , codexShimToolMetadataCase
-      "codex_shim.tool_metadata.failure_class"
-      ["CodexShim.failure_class_precedes_result_fallback"]
+      "codex_shim.tool_metadata.result_diagnostic"
+      ["CodexShim.result_diagnostic_precedes_failure_class_fallback"]
       (failureClass := some "argumentInvalid") (resultFallback := some "generic result")
+  , codexShimToolMetadataCase
+      "codex_shim.tool_metadata.failure_class_fallback"
+      ["CodexShim.failure_class_fills_absent_result_diagnostic"]
+      (failureClass := some "argumentInvalid")
   , codexShimToolMetadataCase
       "codex_shim.tool_metadata.persisted_latency"
       ["CodexShim.persisted_latency_precedes_timestamp_duration"]

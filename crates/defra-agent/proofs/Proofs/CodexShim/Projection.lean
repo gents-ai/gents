@@ -472,6 +472,20 @@ theorem terminal_durable_suffix_projects_before_completion :
       , terminal := true } =
       [.rawTextDelta "; durable suffix", .completed] := rfl
 
+theorem nonterminal_without_live_reasoning_projects_nothing
+    (obs : ReasoningProjectionObservation)
+    (hTerminal : obs.terminal = false)
+    (hDelta : nonemptyReasoningText obs.liveDelta = none) :
+    reasoningProjectionEvents obs = [] := by
+  simp [reasoningProjectionEvents, reasoningTextForObservation, hTerminal, hDelta]
+
+theorem reasoning_completion_requires_an_open_item
+    (obs : ReasoningProjectionObservation)
+    (hClosed : obs.itemOpen = false)
+    (hNoText : reasoningTextForObservation obs = none) :
+    ReasoningProjectionEvent.completed ∉ reasoningProjectionEvents obs := by
+  simp [reasoningProjectionEvents, hClosed, hNoText]
+
 /-!
 ## Runtime metadata hydration
 
@@ -502,6 +516,15 @@ def projectionBehaviorId (rootBehaviorId : String)
   | some behaviorId => behaviorId
   | none => rootBehaviorId
 
+def projectedThreadModel (rootModel : String)
+    (projectedChildModel resolvedChildModel : Option String) : String :=
+  match nonemptyReasoningText resolvedChildModel with
+  | some model => model
+  | none =>
+      match nonemptyReasoningText projectedChildModel with
+      | some model => model
+      | none => rootModel
+
 def projectedToolIdentity (fallback : String) (selected : Option String) : String :=
   match nonemptyReasoningText selected with
   | some value => value
@@ -515,9 +538,9 @@ def projectedToolFailure
       match nonemptyReasoningText cancelCause with
       | some value => some value
       | none =>
-          match nonemptyReasoningText failureClass with
+          match nonemptyReasoningText result with
           | some value => some value
-          | none => nonemptyReasoningText result
+          | none => nonemptyReasoningText failureClass
 
 def projectedDurationMs
     (latencyMs startedAtMs completedAtMs : Option Nat) : Option Nat :=
@@ -552,6 +575,17 @@ theorem child_behavior_overrides_root_for_response_metadata :
 theorem absent_child_behavior_keeps_root_response_metadata :
     projectionBehaviorId "root" none = "root" := rfl
 
+theorem resolved_child_model_has_priority :
+    projectedThreadModel "root-model" (some "projected-child")
+      (some "resolved-child") = "resolved-child" := rfl
+
+theorem projected_child_model_fills_unavailable_behavior :
+    projectedThreadModel "root-model" (some "projected-child") none =
+      "projected-child" := rfl
+
+theorem unavailable_child_model_falls_back_to_root :
+    projectedThreadModel "root-model" none none = "root-model" := rfl
+
 theorem selected_tool_identity_overrides_model_facing_name :
     projectedToolIdentity "defra" (some "service-a") = "service-a" := rfl
 
@@ -567,8 +601,12 @@ theorem cancellation_diagnostic_precedes_failure_class :
     projectedToolFailure none (some "deadline") (some "timedOut") none =
       some "deadline" := rfl
 
-theorem failure_class_precedes_result_fallback :
+theorem result_diagnostic_precedes_failure_class_fallback :
     projectedToolFailure none none (some "argumentInvalid") (some "generic result") =
+      some "generic result" := rfl
+
+theorem failure_class_fills_absent_result_diagnostic :
+    projectedToolFailure none none (some "argumentInvalid") none =
       some "argumentInvalid" := rfl
 
 theorem persisted_latency_precedes_timestamp_duration :

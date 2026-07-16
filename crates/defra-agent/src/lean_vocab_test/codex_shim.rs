@@ -102,6 +102,10 @@ pub(crate) struct LeanCodexShimBehaviorSelectionCase {
     pub(crate) root_behavior_id: String,
     pub(crate) thread_behavior_id: Option<String>,
     pub(crate) projected_behavior_id: String,
+    pub(crate) root_model: String,
+    pub(crate) projected_child_model: Option<String>,
+    pub(crate) resolved_child_model: Option<String>,
+    pub(crate) projected_model: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

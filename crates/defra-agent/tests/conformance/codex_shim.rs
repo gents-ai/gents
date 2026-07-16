@@ -350,7 +350,7 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     }
 
     let behavior_cases = lean_codex_shim_behavior_selection_cases();
-    assert_eq!(behavior_cases.len(), 2);
+    assert_eq!(behavior_cases.len(), 5);
     for case in behavior_cases {
         let expected = case
             .thread_behavior_id
@@ -358,10 +358,21 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
             .filter(|value| !value.is_empty())
             .unwrap_or(&case.root_behavior_id);
         assert_eq!(case.projected_behavior_id, expected, "{}", case.witness);
+        let projected_model = case
+            .resolved_child_model
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                case.projected_child_model
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+            })
+            .unwrap_or(&case.root_model);
+        assert_eq!(case.projected_model, projected_model, "{}", case.witness);
     }
 
     let tool_metadata_cases = lean_codex_shim_tool_metadata_cases();
-    assert_eq!(tool_metadata_cases.len(), 10);
+    assert_eq!(tool_metadata_cases.len(), 11);
     for case in tool_metadata_cases {
         let nonempty = |value: &Option<String>| {
             value
@@ -385,8 +396,8 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
             case.projected_failure,
             nonempty(&case.denial_reason)
                 .or_else(|| nonempty(&case.cancel_cause))
-                .or_else(|| nonempty(&case.failure_class))
-                .or_else(|| nonempty(&case.result_fallback)),
+                .or_else(|| nonempty(&case.result_fallback))
+                .or_else(|| nonempty(&case.failure_class)),
             "{}: failure diagnostic",
             case.witness
         );

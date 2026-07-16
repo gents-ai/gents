@@ -68,7 +68,7 @@ impl CodexThreadRecord {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub(super) struct ConversationRow {
     #[serde(default, deserialize_with = "deserialize_nullable_string")]
     pub(super) title: String,
@@ -237,13 +237,14 @@ pub(super) async fn list_codex_threads_for_sources(
     records.reserve(links.len());
     for link in links {
         if seen.insert(link.session_id.clone()) {
-            let workspace =
-                root_workspace_for_link(&root_workspaces, &link).with_context(|| {
-                    format!(
-                        "authorized subagent thread {} references unavailable Codex root {}",
-                        link.session_id, link.root_session_id
-                    )
-                })?;
+            let Some(workspace) = root_workspace_for_link(&root_workspaces, &link) else {
+                tracing::warn!(
+                    thread_id = %link.session_id,
+                    root_session_id = %link.root_session_id,
+                    "skipping authorized subagent thread whose Codex root workspace is unavailable"
+                );
+                continue;
+            };
             records.push(assemble_subagent_record_with_workspace(state, link, workspace).await?);
         }
     }

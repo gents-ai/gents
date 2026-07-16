@@ -19,7 +19,7 @@ use super::super::progress::{
     response_field_is_blank, terminal_error_message, terminal_turn_status, timestamp_millis,
 };
 use super::super::protocol::{
-    send_committed_user_message, send_notification, send_thread_status_changed, timestamp_seconds,
+    send_committed_user_message, send_notification, send_thread_status_changed,
 };
 use super::super::store::{hydrate_materialized_response_content, query_node_json};
 use super::super::subagent_projection::{
@@ -99,6 +99,7 @@ struct ContentCursor {
 struct ReasoningCursor {
     observed_preview: String,
     active_item_id: Option<String>,
+    progress_seq: Option<String>,
     segment: u64,
 }
 
@@ -106,6 +107,12 @@ struct ReasoningCursor {
 struct ReasoningDelta {
     item_id: String,
     text: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ReasoningObservation {
+    completed_item_id: Option<String>,
+    delta: Option<ReasoningDelta>,
 }
 
 #[derive(Clone, Debug)]
@@ -324,13 +331,22 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
             subagent_links_refreshed = true;
         }
 
-        if marker_changed {
+        if marker_changed && !projection_settled {
             if let Some(reasoning) = response_row
                 .and_then(|row| row.get("reasoning"))
                 .and_then(Value::as_str)
             {
-                if let Some(delta) = latest_reasoning_cursor.observe(&current.request_id, reasoning)
-                {
+                let observation = latest_reasoning_cursor.observe(
+                    &current.request_id,
+                    reasoning,
+                    response_row.and_then(|row| scalar_marker(Some(row), "progress_seq")),
+                );
+                if let Some(item_id) = observation.completed_item_id {
+                    projection
+                        .finish_reasoning(outbound, &item_id, None)
+                        .await?;
+                }
+                if let Some(delta) = observation.delta {
                     projection
                         .append_reasoning_delta(outbound, &delta.item_id, &delta.text)
                         .await?;
@@ -438,16 +454,14 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
                 continue;
             }
 
-            let completed_at = response_terminal_timestamp(&terminal_response)
+            let completed_at_ms = response_terminal_timestamp(&terminal_response)
                 .or_else(|| {
                     request_row.and_then(|row| nonempty_timestamp_field(row, "terminalized_at"))
                 })
-                .and_then(timestamp_seconds);
-            projection.set_completed_at(completed_at);
-            projection.observe_response_timing(
-                None,
-                completed_at.map(|timestamp| timestamp.saturating_mul(1000)),
-            );
+                .and_then(timestamp_millis);
+            projection
+                .set_completed_at(completed_at_ms.map(|timestamp| timestamp.div_euclid(1000)));
+            projection.observe_response_timing(None, completed_at_ms);
 
             let durable_reasoning = terminal_response
                 .get("reasoning")
@@ -555,6 +569,7 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
                     subagent_links_dirty = true;
                     latest_content_cursor.reset();
                     latest_reasoning_cursor.reset();
+                    projection.reset_response_timing();
                     latest_error_message = None;
                     latest_progress_marker = None;
                     last_progress_at = tokio::time::Instant::now();
@@ -708,8 +723,7 @@ fn prime_projection_from_turn(
     let preferred_reasoning_id = reasoning_item_id(request_id, 0);
     let mut resumed_agent = None;
     let mut found_preferred_agent = false;
-    let mut resumed_reasoning = None;
-    let mut found_preferred_reasoning = false;
+    let resumed_reasoning = resumable_reasoning_item(turn, &preferred_reasoning_id);
     for item in &turn.items {
         match item {
             codex::ThreadItem::AgentMessage { id, text, .. } => {
@@ -720,26 +734,7 @@ fn prime_projection_from_turn(
                     resumed_agent = Some((id.clone(), text.clone()));
                 }
             }
-            codex::ThreadItem::Reasoning {
-                id,
-                summary,
-                content,
-            } => {
-                let text = if content.is_empty() {
-                    summary.concat()
-                } else {
-                    content.concat()
-                };
-                if text.trim().is_empty() {
-                    continue;
-                }
-                if id == &preferred_reasoning_id {
-                    resumed_reasoning = Some((id.clone(), text));
-                    found_preferred_reasoning = true;
-                } else if !found_preferred_reasoning {
-                    resumed_reasoning = Some((id.clone(), text));
-                }
-            }
+            codex::ThreadItem::Reasoning { .. } => {}
             codex::ThreadItem::McpToolCall { id, status, .. } => {
                 known_tool_calls.insert(id.clone(), ToolProjectionStatus::Mcp(status.clone()));
             }
@@ -773,7 +768,7 @@ fn prime_projection_from_turn(
                             child_model: model.clone(),
                             child_lifecycle_state: child
                                 .map(|state| collab_lifecycle_state(&state.status))
-                                .unwrap_or("pending")
+                                .unwrap_or("")
                                 .to_string(),
                             child_failure_reason: child.and_then(|state| state.message.clone()),
                         },
@@ -794,6 +789,28 @@ fn prime_projection_from_turn(
         reasoning_cursor.prime(item_id.clone(), &text);
         projection.resume_reasoning(item_id, &text);
     }
+}
+
+fn resumable_reasoning_item(turn: &codex::Turn, preferred_id: &str) -> Option<(String, String)> {
+    turn.items.iter().find_map(|item| {
+        let codex::ThreadItem::Reasoning {
+            id,
+            summary,
+            content,
+        } = item
+        else {
+            return None;
+        };
+        if id != preferred_id {
+            return None;
+        }
+        let text = if content.is_empty() {
+            summary.concat()
+        } else {
+            content.concat()
+        };
+        (!text.trim().is_empty()).then(|| (id.clone(), text))
+    })
 }
 
 fn collab_lifecycle_state(status: &codex::CollabAgentStatus) -> &'static str {
@@ -883,9 +900,35 @@ impl ContentCursor {
 }
 
 impl ReasoningCursor {
-    fn observe(&mut self, request_id: &str, current: &str) -> Option<ReasoningDelta> {
-        if current.is_empty() || current == self.observed_preview {
-            return None;
+    fn observe(
+        &mut self,
+        request_id: &str,
+        current: &str,
+        progress_seq: Option<String>,
+    ) -> ReasoningObservation {
+        let progress_boundary = self.progress_seq.is_some()
+            && progress_seq.is_some()
+            && self.progress_seq != progress_seq;
+        self.progress_seq = progress_seq;
+        let explicit_boundary = current.is_empty() && !self.observed_preview.is_empty();
+        let previous_preview = self.observed_preview.clone();
+        let completed_item_id = ((progress_boundary || explicit_boundary)
+            && !self.observed_preview.is_empty())
+        .then(|| self.active_item_id(request_id));
+        if completed_item_id.is_some() {
+            self.observed_preview.clear();
+            self.active_item_id = None;
+            self.segment = self.segment.saturating_add(1);
+        }
+
+        if current.is_empty()
+            || (progress_boundary && current == previous_preview)
+            || current == self.observed_preview
+        {
+            return ReasoningObservation {
+                completed_item_id,
+                delta: None,
+            };
         }
 
         let (delta, discontinuity) = if self.observed_preview.is_empty() {
@@ -902,7 +945,10 @@ impl ReasoningCursor {
         };
         self.observed_preview = current.to_string();
         if delta.is_empty() {
-            return None;
+            return ReasoningObservation {
+                completed_item_id,
+                delta: None,
+            };
         }
         if discontinuity {
             self.segment = self.segment.saturating_add(1);
@@ -912,10 +958,13 @@ impl ReasoningCursor {
             .active_item_id
             .get_or_insert_with(|| reasoning_item_id(request_id, self.segment))
             .clone();
-        Some(ReasoningDelta {
-            item_id,
-            text: delta.to_string(),
-        })
+        ReasoningObservation {
+            completed_item_id,
+            delta: Some(ReasoningDelta {
+                item_id,
+                text: delta.to_string(),
+            }),
+        }
     }
 
     fn prime(&mut self, item_id: String, text: &str) {
@@ -932,6 +981,7 @@ impl ReasoningCursor {
     fn reset(&mut self) {
         self.observed_preview.clear();
         self.active_item_id = None;
+        self.progress_seq = None;
         self.segment = 0;
     }
 }
@@ -1170,7 +1220,12 @@ async fn steering_input_for_request(
 
 #[cfg(test)]
 mod tests {
-    use super::{content_delta_from_cursor, suffix_prefix_overlap, ContentCursor, ReasoningCursor};
+    use codex_app_server_protocol as codex;
+
+    use super::{
+        content_delta_from_cursor, resumable_reasoning_item, suffix_prefix_overlap, ContentCursor,
+        ReasoningCursor,
+    };
 
     #[test]
     fn content_cursor_emits_only_appended_suffix() {
@@ -1263,27 +1318,34 @@ mod tests {
     fn reasoning_cursor_emits_live_append_without_duplication() {
         let mut cursor = ReasoningCursor::default();
         let first = cursor
-            .observe("request-1", "inspect")
+            .observe("request-1", "inspect", Some("1".to_string()))
+            .delta
             .expect("first reasoning delta");
         assert_eq!(first.item_id, "defra-reasoning-request-1");
         assert_eq!(first.text, "inspect");
 
         let appended = cursor
-            .observe("request-1", "inspect then test")
+            .observe("request-1", "inspect then test", Some("1".to_string()))
+            .delta
             .expect("appended reasoning delta");
         assert_eq!(appended.item_id, first.item_id);
         assert_eq!(appended.text, " then test");
-        assert!(cursor.observe("request-1", "inspect then test").is_none());
+        assert_eq!(
+            cursor.observe("request-1", "inspect then test", Some("1".to_string())),
+            Default::default()
+        );
     }
 
     #[test]
     fn reasoning_cursor_recovers_delta_after_bounded_tail_rolls() {
         let mut cursor = ReasoningCursor::default();
         cursor
-            .observe("request-1", "first middle")
+            .observe("request-1", "first middle", Some("1".to_string()))
+            .delta
             .expect("first reasoning delta");
         let rolled = cursor
-            .observe("request-1", "middle last")
+            .observe("request-1", "middle last", Some("1".to_string()))
+            .delta
             .expect("rolled reasoning delta");
         assert_eq!(rolled.item_id, "defra-reasoning-request-1");
         assert_eq!(rolled.text, " last");
@@ -1293,24 +1355,98 @@ mod tests {
     fn reasoning_cursor_primes_resume_without_replay() {
         let mut cursor = ReasoningCursor::default();
         cursor.prime("defra-reasoning-request-1".to_string(), "already visible");
-        assert!(cursor.observe("request-1", "already visible").is_none());
+        assert!(cursor
+            .observe("request-1", "already visible", Some("1".to_string()))
+            .delta
+            .is_none());
         let delta = cursor
-            .observe("request-1", "already visible plus new")
+            .observe(
+                "request-1",
+                "already visible plus new",
+                Some("1".to_string()),
+            )
+            .delta
             .expect("new reasoning after resume");
         assert_eq!(delta.text, " plus new");
+    }
+
+    #[test]
+    fn resume_never_binds_current_cursor_to_foreign_reasoning_item() {
+        let turn = codex::Turn {
+            id: "request-2".to_string(),
+            items: vec![codex::ThreadItem::Reasoning {
+                id: "defra-reasoning-message-1".to_string(),
+                summary: Vec::new(),
+                content: vec!["reasoning from an earlier model turn".to_string()],
+            }],
+            items_view: codex::TurnItemsView::Full,
+            status: codex::TurnStatus::InProgress,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        };
+        assert!(resumable_reasoning_item(&turn, "defra-reasoning-request-2").is_none());
     }
 
     #[test]
     fn reasoning_cursor_starts_new_item_after_unrecoverable_gap() {
         let mut cursor = ReasoningCursor::default();
         cursor
-            .observe("request-1", "old preview")
+            .observe("request-1", "old preview", Some("1".to_string()))
+            .delta
             .expect("first reasoning delta");
         let replacement = cursor
-            .observe("request-1", "entirely new preview")
+            .observe("request-1", "entirely new preview", Some("1".to_string()))
+            .delta
             .expect("replacement reasoning delta");
         assert_eq!(replacement.item_id, "defra-reasoning-request-1-segment-1");
         assert_eq!(replacement.text, "entirely new preview");
+    }
+
+    #[test]
+    fn reasoning_cursor_segments_on_observed_empty_runtime_boundary() {
+        let mut cursor = ReasoningCursor::default();
+        cursor
+            .observe("request-1", "first turn", Some("1".to_string()))
+            .delta
+            .expect("first reasoning delta");
+
+        let boundary = cursor.observe("request-1", "", Some("2".to_string()));
+        assert_eq!(
+            boundary.completed_item_id.as_deref(),
+            Some("defra-reasoning-request-1")
+        );
+        assert!(boundary.delta.is_none());
+
+        let next = cursor
+            .observe("request-1", "second turn", Some("2".to_string()))
+            .delta
+            .expect("second reasoning delta");
+        assert_eq!(next.item_id, "defra-reasoning-request-1-segment-1");
+        assert_eq!(next.text, "second turn");
+    }
+
+    #[test]
+    fn reasoning_cursor_uses_progress_boundary_when_empty_write_was_missed() {
+        let mut cursor = ReasoningCursor::default();
+        cursor
+            .observe("request-1", "tail shared", Some("1".to_string()))
+            .delta
+            .expect("first reasoning delta");
+
+        let next = cursor.observe(
+            "request-1",
+            "shared but belongs to the next turn",
+            Some("2".to_string()),
+        );
+        assert_eq!(
+            next.completed_item_id.as_deref(),
+            Some("defra-reasoning-request-1")
+        );
+        let delta = next.delta.expect("next-turn reasoning delta");
+        assert_eq!(delta.item_id, "defra-reasoning-request-1-segment-1");
+        assert_eq!(delta.text, "shared but belongs to the next turn");
     }
 
     #[test]

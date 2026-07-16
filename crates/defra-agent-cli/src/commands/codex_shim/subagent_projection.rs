@@ -604,7 +604,7 @@ fn resolve_authorized_subagent_threads(
                 model: None,
                 nickname,
                 lifecycle_state: nonempty(child.lifecycle_state.as_deref())
-                    .unwrap_or("pending")
+                    .unwrap_or("")
                     .to_string(),
                 failure_reason: child
                     .failure_reason
@@ -660,7 +660,7 @@ fn resolve_authorized_subagent_threads(
         link.latest_request_content = latest.content.clone();
         link.latest_request_created_at = latest.created_at.clone();
         link.lifecycle_state = nonempty(latest.lifecycle_state.as_deref())
-            .unwrap_or("pending")
+            .unwrap_or("")
             .to_string();
         link.failure_reason = latest
             .failure_reason

@@ -243,18 +243,21 @@ fn selected_tool_identity(selected: Option<&str>, fallback: &str) -> String {
 }
 
 fn tool_failure_message(tool: &DefraToolCallProgress) -> String {
-    [
-        tool.denial_reason.as_deref(),
-        tool.cancel_cause.as_deref(),
-        tool.tool_failure_class.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .map(str::trim)
-    .find(|value| !value.is_empty())
-    .map(ToOwned::to_owned)
-    .or_else(|| preview_compact_text(&tool.result))
-    .unwrap_or_else(|| "DEFRA tool call failed".to_string())
+    [tool.denial_reason.as_deref(), tool.cancel_cause.as_deref()]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| preview_compact_text(&tool.result))
+        .or_else(|| {
+            tool.tool_failure_class
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "DEFRA tool call failed".to_string())
 }
 
 fn optional_nonempty_string(row: &Value, field: &str) -> Option<String> {
@@ -535,6 +538,34 @@ mod tests {
             "policy denied search"
         );
         assert_eq!(duration_ms, Some(17));
+    }
+
+    #[test]
+    fn tool_projection_keeps_result_diagnostic_ahead_of_failure_class() {
+        let mut tool =
+            test_tool("search", "failed", "{}").with_result("connection refused to search service");
+        tool.tool_failure_class = Some("external".to_string());
+
+        let item = defra_tool_item(&tool, codex::McpToolCallStatus::Failed);
+        let codex::ThreadItem::McpToolCall { error, .. } = item else {
+            panic!("expected MCP tool call item");
+        };
+        assert_eq!(
+            error.expect("failed tool should carry diagnostics").message,
+            "connection refused to search service"
+        );
+
+        tool.result.clear();
+        let item = defra_tool_item(&tool, codex::McpToolCallStatus::Failed);
+        let codex::ThreadItem::McpToolCall { error, .. } = item else {
+            panic!("expected MCP tool call item");
+        };
+        assert_eq!(
+            error
+                .expect("failure class should remain a fallback")
+                .message,
+            "external"
+        );
     }
 
     #[test]

@@ -419,15 +419,24 @@ async fn fleet_observe_live_child(
 ) -> Result<FleetLiveChildObservation> {
     let mut list_ws = fleet_connect_and_initialize_codex(shim_port).await?;
     let mut seen = HashSet::new();
+    let mut observing = HashSet::new();
+    let mut retry_after = HashMap::<String, Instant>::new();
     let mut observers = tokio::task::JoinSet::new();
     let deadline = Instant::now() + Duration::from_secs(180);
     let mut request_sequence = 100_i64;
 
     loop {
         while let Some(joined) = observers.try_join_next() {
-            if let Some(observation) = joined.context("fleet child observer task panicked")?? {
-                observers.abort_all();
-                return Ok(observation);
+            let (thread_id, result) = joined.context("fleet child observer task panicked")?;
+            observing.remove(&thread_id);
+            match result? {
+                Some(observation) => {
+                    observers.abort_all();
+                    return Ok(observation);
+                }
+                None => {
+                    retry_after.insert(thread_id, Instant::now() + Duration::from_millis(500));
+                }
             }
         }
 
@@ -463,13 +472,24 @@ async fn fleet_observe_live_child(
         let response: codex::ThreadListResponse =
             fleet_read_typed_response(&mut list_ws, request_id).await?;
         for thread in response.data {
-            if !seen.insert(thread.id.clone()) {
+            seen.insert(thread.id.clone());
+            if observing.contains(&thread.id)
+                || retry_after
+                    .get(&thread.id)
+                    .is_some_and(|retry_at| *retry_at > Instant::now())
+            {
                 continue;
             }
             let thread_id = thread.id;
+            observing.insert(thread_id.clone());
+            retry_after.remove(&thread_id);
             let parent_thread_id = parent_thread_id.to_string();
+            let observer_thread_id = thread_id.clone();
             observers.spawn(async move {
-                fleet_observe_child_thread(shim_port, thread_id, parent_thread_id).await
+                let result =
+                    fleet_observe_child_thread(shim_port, observer_thread_id, parent_thread_id)
+                        .await;
+                (thread_id, result)
             });
         }
 

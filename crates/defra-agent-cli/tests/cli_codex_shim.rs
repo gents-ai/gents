@@ -2180,6 +2180,8 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
     let child_backend_id = "child-projection-backend";
     let child_model_name = "child-projection-model";
     let child_model_selection = format!("{child_backend_id}::{child_model_name}");
+    let root_model_selection =
+        defra_model_selection_id(&default_backend_id(&agent_did), &model_name);
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -2338,9 +2340,27 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
     assert_eq!(child_resume.thread.id, child_thread_id);
     assert_eq!(child_resume.model, child_model_selection);
 
+    delete_agent_behavior(&graphql, &child_behavior_id).await?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadResume {
+            request_id: request_id(241),
+            params: codex::ThreadResumeParams {
+                thread_id: child_thread_id.clone(),
+                cwd: None,
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let child_resume_without_behavior: codex::ThreadResumeResponse =
+        read_typed_response(&mut ws, request_id(241)).await?;
+    assert_eq!(child_resume_without_behavior.thread.id, child_thread_id);
+    assert_eq!(child_resume_without_behavior.model, root_model_selection);
+
     let live_child_text = format!("live child output {}", Uuid::new_v4().simple());
     let live_child_reasoning = format!("child reasoning {}", Uuid::new_v4().simple());
-    seed_child_streaming_response(
+    let child_started_at_ms = seed_child_streaming_response(
         &graphql,
         &agent_did,
         &child_behavior_id,
@@ -2350,7 +2370,7 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         &live_child_reasoning,
     )
     .await?;
-    let (projected_text, projected_reasoning) = match tokio::time::timeout(
+    let (projected_text, projected_reasoning, projected_started_at_ms) = match tokio::time::timeout(
         Duration::from_secs(15),
         read_child_agent_and_reasoning_deltas(&mut ws, &child_thread_id, &child_request_id),
     )
@@ -2366,6 +2386,7 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
     };
     assert_eq!(projected_text, live_child_text);
     assert_eq!(projected_reasoning, live_child_reasoning);
+    assert_eq!(projected_started_at_ms, child_started_at_ms);
 
     let reasoning_tail = " then checks the durable result";
     update_streaming_response_reasoning(
@@ -2384,7 +2405,7 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
     assert_eq!(appended_reasoning, reasoning_tail);
 
     let durable_reasoning = format!("{live_child_reasoning}{reasoning_tail}; durable message wins");
-    complete_child_materialized_response(
+    let child_completed_at_ms = complete_child_materialized_response(
         &graphql,
         &agent_did,
         &child_request_id,
@@ -2392,22 +2413,28 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         &durable_reasoning,
     )
     .await?;
-    let (completed_reasoning, durable_delta, completed, child_thread_status) =
-        tokio::time::timeout(
-            Duration::from_secs(15),
-            read_reasoning_completion_and_collab_status(
-                &mut ws,
-                &child_thread_id,
-                &child_request_id,
-                &tool_call_key,
-            ),
-        )
-        .await
-        .context("timed out waiting for durable reasoning and refreshed subagent state")??;
+    let (
+        completed_reasoning,
+        durable_delta,
+        completed,
+        child_thread_status,
+        projected_completed_at_ms,
+    ) = tokio::time::timeout(
+        Duration::from_secs(15),
+        read_reasoning_completion_and_collab_status(
+            &mut ws,
+            &child_thread_id,
+            &child_request_id,
+            &tool_call_key,
+        ),
+    )
+    .await
+    .context("timed out waiting for durable reasoning and refreshed subagent state")??;
     assert_eq!(completed_reasoning, durable_reasoning);
     assert_eq!(durable_delta, "; durable message wins");
     assert_eq!(completed, codex::CollabAgentStatus::Completed);
     assert_eq!(child_thread_status, codex::ThreadStatus::Idle);
+    assert_eq!(projected_completed_at_ms, child_completed_at_ms);
 
     send_client_request(
         &mut ws,
@@ -2494,7 +2521,7 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         &unresolved_tool_call_key,
     )
     .await?;
-    update_request_lifecycle(&graphql, &parent_request_id, "completed").await?;
+    update_request_lifecycle(&graphql, &parent_request_id, "failed").await?;
     tokio::time::timeout(
         Duration::from_secs(15),
         read_mcp_tool_completion(
@@ -2505,6 +2532,32 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
     )
     .await
     .context("timed out waiting for terminal unresolved subagent MCP fallback")??;
+
+    let parent_failed = tokio::time::timeout(
+        Duration::from_secs(15),
+        read_thread_status_changed(&mut ws, &parent_thread_id),
+    )
+    .await
+    .context("timed out waiting for failed root thread status")??;
+    assert_eq!(parent_failed, codex::ThreadStatus::SystemError);
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadRead {
+            request_id: request_id(242),
+            params: codex::ThreadReadParams {
+                thread_id: parent_thread_id.clone(),
+                include_turns: false,
+            },
+        },
+    )
+    .await?;
+    let failed_parent: codex::ThreadReadResponse =
+        read_typed_response(&mut ws, request_id(242)).await?;
+    assert_eq!(
+        failed_parent.thread.status,
+        codex::ThreadStatus::SystemError
+    );
 
     Ok(())
 }
@@ -4410,6 +4463,29 @@ async fn seed_authorized_subagent_link(
     Ok(())
 }
 
+async fn delete_agent_behavior(graphql: &str, behavior_id: &str) -> Result<()> {
+    let behavior_id = escape_graphql_string(behavior_id);
+    let response = graphql_query(
+        graphql,
+        &format!(
+            r#"mutation {{
+                delete_AgentBehavior(filter: {{ behavior_id: {{ _eq: "{behavior_id}" }} }}) {{
+                    _docID
+                }}
+            }}"#
+        ),
+    )
+    .await?;
+    anyhow::ensure!(
+        response
+            .pointer("/data/delete_AgentBehavior")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| !rows.is_empty()),
+        "expected child AgentBehavior to be deleted: {response}"
+    );
+    Ok(())
+}
+
 async fn seed_unresolved_completed_subagent_tool(
     graphql: &str,
     agent_did: &str,
@@ -4471,8 +4547,9 @@ async fn seed_child_streaming_response(
     session_id: &str,
     content: &str,
     reasoning: &str,
-) -> Result<()> {
+) -> Result<i64> {
     let now = chrono::Utc::now().to_rfc3339();
+    let created_at_ms = chrono::DateTime::parse_from_rfc3339(&now)?.timestamp_millis();
     let mutation = format!(
         r#"mutation {{
             create_AgentResponse(input: {{
@@ -4501,7 +4578,7 @@ async fn seed_child_streaming_response(
         now = escape_graphql_string(&now),
     );
     graphql_query(graphql, &mutation).await?;
-    Ok(())
+    Ok(created_at_ms)
 }
 
 async fn update_streaming_response_reasoning(
@@ -4533,8 +4610,9 @@ async fn complete_child_materialized_response(
     request_id: &str,
     session_id: &str,
     reasoning: &str,
-) -> Result<()> {
+) -> Result<i64> {
     let now = chrono::Utc::now().to_rfc3339();
+    let completed_at_ms = chrono::DateTime::parse_from_rfc3339(&now)?.timestamp_millis();
     let message_key = format!("{session_id}:2");
     let content = r#"{"role":"assistant","id":null,"content":[{"text":"durable child answer"}]}"#;
     let mutation = format!(
@@ -4579,7 +4657,7 @@ async fn complete_child_materialized_response(
         now = escape_graphql_string(&now),
     );
     graphql_query(graphql, &mutation).await?;
-    Ok(())
+    Ok(completed_at_ms)
 }
 
 async fn update_request_lifecycle(
@@ -5196,10 +5274,10 @@ async fn read_child_agent_and_reasoning_deltas(
     ws: &mut ShimWebSocket,
     child_thread_id: &str,
     child_turn_id: &str,
-) -> Result<(String, String)> {
+) -> Result<(String, String, i64)> {
     let mut agent_delta = None;
     let mut reasoning_delta = None;
-    let mut reasoning_started = false;
+    let mut reasoning_started_at_ms = None;
     loop {
         match read_jsonrpc(ws).await? {
             codex::JSONRPCMessage::Notification(notification) => {
@@ -5209,7 +5287,7 @@ async fn read_child_agent_and_reasoning_deltas(
                             && started.turn_id == child_turn_id
                             && matches!(started.item, codex::ThreadItem::Reasoning { .. }) =>
                     {
-                        reasoning_started = true;
+                        reasoning_started_at_ms = Some(started.started_at_ms);
                     }
                     codex::ServerNotification::AgentMessageDelta(delta)
                         if delta.thread_id == child_thread_id && delta.turn_id == child_turn_id =>
@@ -5224,10 +5302,14 @@ async fn read_child_agent_and_reasoning_deltas(
                     }
                     _ => {}
                 }
-                if reasoning_started && agent_delta.is_some() && reasoning_delta.is_some() {
+                if reasoning_started_at_ms.is_some()
+                    && agent_delta.is_some()
+                    && reasoning_delta.is_some()
+                {
                     return Ok((
                         agent_delta.take().expect("checked agent delta"),
                         reasoning_delta.take().expect("checked reasoning delta"),
+                        reasoning_started_at_ms.expect("checked reasoning start"),
                     ));
                 }
             }
@@ -5280,11 +5362,13 @@ async fn read_reasoning_completion_and_collab_status(
     String,
     codex::CollabAgentStatus,
     codex::ThreadStatus,
+    i64,
 )> {
     let mut completed_reasoning = None;
     let mut durable_delta = None;
     let mut child_status = None;
     let mut thread_status = None;
+    let mut completed_at_ms = None;
     loop {
         match read_jsonrpc(ws).await? {
             codex::JSONRPCMessage::Notification(notification) => {
@@ -5302,6 +5386,7 @@ async fn read_reasoning_completion_and_collab_status(
                         {
                             assert!(summary.is_empty());
                             completed_reasoning = Some(content.concat());
+                            completed_at_ms = Some(completed.completed_at_ms);
                         }
                         codex::ThreadItem::CollabAgentToolCall {
                             id, agents_states, ..
@@ -5333,12 +5418,16 @@ async fn read_reasoning_completion_and_collab_status(
             && durable_delta.is_some()
             && child_status.is_some()
             && thread_status.is_some()
+            && completed_at_ms.is_some()
         {
             return Ok((
                 completed_reasoning.take().expect("checked reasoning"),
                 durable_delta.take().expect("checked durable delta"),
                 child_status.take().expect("checked child status"),
                 thread_status.take().expect("checked thread status"),
+                completed_at_ms
+                    .take()
+                    .expect("checked completion timestamp"),
             ));
         }
     }

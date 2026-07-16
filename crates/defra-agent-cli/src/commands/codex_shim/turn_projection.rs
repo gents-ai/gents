@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -21,6 +22,21 @@ use super::protocol::{
 use super::subagent_projection::{collab_tool_item, CollabProjection};
 use super::{Outbound, ShimState};
 
+#[derive(Default)]
+struct ReasoningCompletionTracker {
+    item_ids: HashSet<String>,
+}
+
+impl ReasoningCompletionTracker {
+    fn contains(&self, item_id: &str) -> bool {
+        self.item_ids.contains(item_id)
+    }
+
+    fn record(&mut self, item_id: String) -> bool {
+        self.item_ids.insert(item_id)
+    }
+}
+
 pub(super) struct TurnProjection<'a> {
     state: &'a ShimState,
     pub(super) thread_id: &'a str,
@@ -35,6 +51,7 @@ pub(super) struct TurnProjection<'a> {
     rendered_agent_text: String,
     active_reasoning_item_id: Option<String>,
     active_reasoning_text: String,
+    completed_reasoning_items: ReasoningCompletionTracker,
     completed_items: Vec<codex::ThreadItem>,
 }
 
@@ -60,6 +77,7 @@ impl<'a> TurnProjection<'a> {
             rendered_agent_text: String::new(),
             active_reasoning_item_id: None,
             active_reasoning_text: String::new(),
+            completed_reasoning_items: ReasoningCompletionTracker::default(),
             completed_items: Vec::new(),
         }
     }
@@ -72,9 +90,14 @@ impl<'a> TurnProjection<'a> {
         if self.response_started_at_ms.is_none() {
             self.response_started_at_ms = started_at_ms;
         }
-        if completed_at_ms.is_some() {
+        if self.response_completed_at_ms.is_none() {
             self.response_completed_at_ms = completed_at_ms;
         }
+    }
+
+    pub(super) fn reset_response_timing(&mut self) {
+        self.response_started_at_ms = None;
+        self.response_completed_at_ms = None;
     }
 
     pub(super) fn set_completed_at(&mut self, completed_at: Option<i64>) {
@@ -88,6 +111,9 @@ impl<'a> TurnProjection<'a> {
         delta: &str,
     ) -> Result<()> {
         if delta.is_empty() {
+            return Ok(());
+        }
+        if self.completed_reasoning_items.contains(item_id) {
             return Ok(());
         }
         if self.active_reasoning_item_id.as_deref() != Some(item_id) {
@@ -133,6 +159,9 @@ impl<'a> TurnProjection<'a> {
         item_id: &str,
         durable_text: Option<&str>,
     ) -> Result<()> {
+        if self.completed_reasoning_items.contains(item_id) {
+            return Ok(());
+        }
         let durable_text = durable_text.filter(|text| !text.trim().is_empty());
         if self.active_reasoning_item_id.is_none() {
             if let Some(text) = durable_text {
@@ -184,6 +213,7 @@ impl<'a> TurnProjection<'a> {
             }),
         )
         .await?;
+        self.completed_reasoning_items.record(item_id);
         self.completed_items.push(item);
         Ok(())
     }
@@ -702,7 +732,7 @@ fn suppress_blank_agent_delta(active_agent_text: &str, delta: &str) -> bool {
 mod tests {
     use codex_app_server_protocol as codex;
 
-    use super::{reasoning_item, suppress_blank_agent_delta};
+    use super::{reasoning_item, suppress_blank_agent_delta, ReasoningCompletionTracker};
 
     #[test]
     fn suppresses_blank_delta_that_would_open_phantom_agent_stream() {
@@ -718,6 +748,15 @@ mod tests {
     #[test]
     fn keeps_visible_delta() {
         assert!(!suppress_blank_agent_delta("", "answer"));
+    }
+
+    #[test]
+    fn completed_reasoning_item_is_terminally_idempotent() {
+        let mut completed = ReasoningCompletionTracker::default();
+        assert!(!completed.contains("reasoning-1"));
+        assert!(completed.record("reasoning-1".to_string()));
+        assert!(completed.contains("reasoning-1"));
+        assert!(!completed.record("reasoning-1".to_string()));
     }
 
     #[test]
