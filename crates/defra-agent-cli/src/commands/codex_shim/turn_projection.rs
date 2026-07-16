@@ -26,6 +26,8 @@ pub(super) struct TurnProjection<'a> {
     active_agent_item_id: Option<String>,
     active_agent_text: String,
     rendered_agent_text: String,
+    active_reasoning_item_id: Option<String>,
+    active_reasoning_text: String,
     completed_items: Vec<codex::ThreadItem>,
 }
 
@@ -44,8 +46,117 @@ impl<'a> TurnProjection<'a> {
             active_agent_item_id: None,
             active_agent_text: String::new(),
             rendered_agent_text: String::new(),
+            active_reasoning_item_id: None,
+            active_reasoning_text: String::new(),
             completed_items: Vec::new(),
         }
+    }
+
+    pub(super) async fn append_reasoning_delta(
+        &mut self,
+        outbound: &Outbound,
+        item_id: &str,
+        delta: &str,
+    ) -> Result<()> {
+        if delta.is_empty() {
+            return Ok(());
+        }
+        if self.active_reasoning_item_id.as_deref() != Some(item_id) {
+            self.complete_active_reasoning(outbound, None).await?;
+            send_notification(
+                outbound,
+                self.state,
+                codex::ServerNotification::ItemStarted(codex::ItemStartedNotification {
+                    item: reasoning_item(item_id, ""),
+                    thread_id: self.thread_id.to_string(),
+                    turn_id: self.turn_id.to_string(),
+                    started_at_ms: now_millis(),
+                }),
+            )
+            .await?;
+            self.active_reasoning_item_id = Some(item_id.to_string());
+            self.active_reasoning_text.clear();
+        }
+
+        self.active_reasoning_text.push_str(delta);
+        send_notification(
+            outbound,
+            self.state,
+            codex::ServerNotification::ReasoningTextDelta(codex::ReasoningTextDeltaNotification {
+                thread_id: self.thread_id.to_string(),
+                turn_id: self.turn_id.to_string(),
+                item_id: item_id.to_string(),
+                delta: delta.to_string(),
+                content_index: 0,
+            }),
+        )
+        .await
+    }
+
+    pub(super) fn resume_reasoning(&mut self, item_id: String, text: &str) {
+        self.active_reasoning_item_id = Some(item_id);
+        self.active_reasoning_text = text.to_string();
+    }
+
+    pub(super) async fn finish_reasoning(
+        &mut self,
+        outbound: &Outbound,
+        item_id: &str,
+        durable_text: Option<&str>,
+    ) -> Result<()> {
+        let durable_text = durable_text.filter(|text| !text.trim().is_empty());
+        if self.active_reasoning_item_id.is_none() {
+            if let Some(text) = durable_text {
+                self.append_reasoning_delta(outbound, item_id, text).await?;
+            } else {
+                return Ok(());
+            }
+        } else if self.active_reasoning_item_id.as_deref() != Some(item_id) {
+            self.complete_active_reasoning(outbound, None).await?;
+            if let Some(text) = durable_text {
+                self.append_reasoning_delta(outbound, item_id, text).await?;
+            } else {
+                return Ok(());
+            }
+        } else if let Some(text) = durable_text {
+            if let Some(delta) = text.strip_prefix(&self.active_reasoning_text) {
+                self.append_reasoning_delta(outbound, item_id, delta)
+                    .await?;
+            }
+        }
+
+        self.complete_active_reasoning(outbound, durable_text).await
+    }
+
+    async fn complete_active_reasoning(
+        &mut self,
+        outbound: &Outbound,
+        completed_text: Option<&str>,
+    ) -> Result<()> {
+        let Some(item_id) = self.active_reasoning_item_id.take() else {
+            return Ok(());
+        };
+        let streamed_text = std::mem::take(&mut self.active_reasoning_text);
+        let text = completed_text
+            .filter(|text| !text.trim().is_empty())
+            .unwrap_or(&streamed_text);
+        if text.trim().is_empty() {
+            return Ok(());
+        }
+        let item = reasoning_item(&item_id, text);
+        send_notification(
+            outbound,
+            self.state,
+            codex::ServerNotification::ItemCompleted(codex::ItemCompletedNotification {
+                item: item.clone(),
+                thread_id: self.thread_id.to_string(),
+                turn_id: self.turn_id.to_string(),
+                completed_at_ms: now_millis(),
+            }),
+        )
+        .await?;
+        self.completed_items.push(item);
+        Ok(())
     }
 
     pub(super) async fn append_agent_delta(
@@ -505,6 +616,7 @@ impl<'a> TurnProjection<'a> {
         status: codex::TurnStatus,
         error_message: Option<String>,
     ) -> Result<()> {
+        self.complete_active_reasoning(outbound, None).await?;
         self.finish_agent_message_with_phase(outbound, Some(MessagePhase::FinalAnswer))
             .await?;
         let turn_error = if status == codex::TurnStatus::Failed {
@@ -536,13 +648,25 @@ impl<'a> TurnProjection<'a> {
     }
 }
 
+fn reasoning_item(item_id: &str, text: &str) -> codex::ThreadItem {
+    codex::ThreadItem::Reasoning {
+        id: item_id.to_string(),
+        summary: Vec::new(),
+        content: (!text.is_empty())
+            .then(|| vec![text.to_string()])
+            .unwrap_or_default(),
+    }
+}
+
 fn suppress_blank_agent_delta(active_agent_text: &str, delta: &str) -> bool {
     delta.trim().is_empty() && active_agent_text.trim().is_empty()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::suppress_blank_agent_delta;
+    use codex_app_server_protocol as codex;
+
+    use super::{reasoning_item, suppress_blank_agent_delta};
 
     #[test]
     fn suppresses_blank_delta_that_would_open_phantom_agent_stream() {
@@ -558,5 +682,39 @@ mod tests {
     #[test]
     fn keeps_visible_delta() {
         assert!(!suppress_blank_agent_delta("", "answer"));
+    }
+
+    #[test]
+    fn reasoning_projection_round_trips_through_pinned_codex_protocol() {
+        let item = reasoning_item("reasoning-1", "durable reasoning");
+        let encoded = serde_json::to_value(&item).expect("encode reasoning item");
+        let decoded: codex::ThreadItem =
+            serde_json::from_value(encoded).expect("decode reasoning item");
+        assert!(matches!(
+            decoded,
+            codex::ThreadItem::Reasoning { id, summary, content }
+                if id == "reasoning-1"
+                    && summary.is_empty()
+                    && content == ["durable reasoning"]
+        ));
+
+        let notification =
+            codex::ServerNotification::ReasoningTextDelta(codex::ReasoningTextDeltaNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "reasoning-1".to_string(),
+                delta: "increment".to_string(),
+                content_index: 0,
+            });
+        let encoded = serde_json::to_value(&notification).expect("encode reasoning delta");
+        let decoded: codex::ServerNotification =
+            serde_json::from_value(encoded).expect("decode reasoning delta");
+        assert!(matches!(
+            decoded,
+            codex::ServerNotification::ReasoningTextDelta(delta)
+                if delta.item_id == "reasoning-1"
+                    && delta.delta == "increment"
+                    && delta.content_index == 0
+        ));
     }
 }

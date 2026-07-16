@@ -130,6 +130,8 @@ def snapshotJson : String :=
       ++ codexShimSubagentListingCasesJson ++ ","
     ++ "\"codex_shim_subagent_thread_shape_cases\":"
       ++ codexShimSubagentThreadShapeCasesJson ++ ","
+    ++ "\"codex_shim_reasoning_projection_cases\":"
+      ++ codexShimReasoningProjectionCasesJson ++ ","
     ++ "\"codex_shim_context_usage_cases\":"
       ++ codexShimContextUsageCasesJson ++ ","
     ++ "\"codex_shim_compaction_projection_cases\":"

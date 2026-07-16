@@ -57,6 +57,16 @@ pub(super) fn codex_notification(default_path: &Path, notification: &codex::Serv
             "item_id": notification.item_id,
             "delta_len": notification.delta.len(),
         }),
+        codex::ServerNotification::ReasoningTextDelta(notification) => json!({
+            "ts_ms": now_millis(),
+            "direction": "out",
+            "method": "reasoning/text_delta",
+            "thread_id": notification.thread_id,
+            "turn_id": notification.turn_id,
+            "item_id": notification.item_id,
+            "content_index": notification.content_index,
+            "delta_len": notification.delta.len(),
+        }),
         codex::ServerNotification::ItemStarted(notification) => {
             let mut event = trace_thread_item("item/started", &notification.item);
             event["ts_ms"] = json!(now_millis());
@@ -100,6 +110,19 @@ fn trace_thread_item(method: &str, item: &codex::ThreadItem) -> Value {
             "item_type": "agentMessage",
             "item_id": id,
             "text_len": text.len(),
+        }),
+        codex::ThreadItem::Reasoning {
+            id,
+            summary,
+            content,
+        } => json!({
+            "method": method,
+            "item_type": "reasoning",
+            "item_id": id,
+            "summary_parts": summary.len(),
+            "content_parts": content.len(),
+            "summary_len": summary.iter().map(String::len).sum::<usize>(),
+            "content_len": content.iter().map(String::len).sum::<usize>(),
         }),
         codex::ThreadItem::McpToolCall {
             id,
@@ -187,6 +210,23 @@ mod tests {
         assert_eq!(trace["item_id"], "spawn-1");
         assert_eq!(trace["receiver_thread_ids"], json!(["child"]));
         assert_eq!(trace["model"], "backend::model");
+    }
+
+    #[test]
+    fn reasoning_items_are_named_without_logging_reasoning_text() {
+        let item = codex::ThreadItem::Reasoning {
+            id: "reasoning-1".to_string(),
+            summary: Vec::new(),
+            content: vec!["private chain of thought".to_string()],
+        };
+
+        let trace = trace_thread_item("item/completed", &item);
+        assert_eq!(trace["item_type"], "reasoning");
+        assert_eq!(trace["item_id"], "reasoning-1");
+        assert_eq!(trace["summary_parts"], 0);
+        assert_eq!(trace["content_parts"], 1);
+        assert_eq!(trace["content_len"], 24);
+        assert!(!trace.to_string().contains("private chain of thought"));
     }
 }
 

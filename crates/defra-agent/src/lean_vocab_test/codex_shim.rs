@@ -72,6 +72,21 @@ pub(crate) struct LeanCodexShimSubagentThreadShapeCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanCodexShimReasoningProjectionCase {
+    pub(crate) witness: String,
+    pub(crate) lean_theorems: Vec<String>,
+    pub(crate) item_open: bool,
+    pub(crate) cursor_primed: bool,
+    pub(crate) streamed_text: Option<String>,
+    pub(crate) live_delta: Option<String>,
+    pub(crate) durable_text: Option<String>,
+    pub(crate) terminal: bool,
+    pub(crate) projected_events: Vec<String>,
+    pub(crate) projected_delta: Option<String>,
+    pub(crate) completed_text: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanCodexShimContextUsageCase {
     pub(crate) witness: String,
     pub(crate) lean_theorems: Vec<String>,

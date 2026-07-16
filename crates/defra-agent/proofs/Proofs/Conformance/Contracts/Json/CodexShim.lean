@@ -557,6 +557,145 @@ def codexShimSubagentThreadShapeCasesJson : String :=
   jsonArray
     (codexShimSubagentThreadShapeCases.map codexShimSubagentThreadShapeCaseJson)
 
+structure CodexShimReasoningProjectionCase where
+  witness : String
+  leanTheorems : List String
+  itemOpen : Bool
+  cursorPrimed : Bool
+  streamedText : Option String
+  liveDelta : Option String
+  durableText : Option String
+  terminal : Bool
+  projectedEvents : List String
+  projectedDelta : Option String
+  completedText : Option String
+
+def reasoningProjectionEventName : CodexShim.ReasoningProjectionEvent → String
+  | .started => "started"
+  | .rawTextDelta _ => "rawTextDelta"
+  | .completed => "completed"
+
+def codexShimReasoningProjectionCase
+    (witness : String)
+    (leanTheorems : List String)
+    (observation : CodexShim.ReasoningProjectionObservation) :
+    CodexShimReasoningProjectionCase :=
+  { witness := witness
+  , leanTheorems := leanTheorems
+  , itemOpen := observation.itemOpen
+  , cursorPrimed := observation.cursorPrimed
+  , streamedText := observation.streamedText
+  , liveDelta := observation.liveDelta
+  , durableText := observation.durableText
+  , terminal := observation.terminal
+  , projectedEvents :=
+      (CodexShim.reasoningProjectionEvents observation).map
+        reasoningProjectionEventName
+  , projectedDelta := CodexShim.reasoningTextForObservation observation
+  , completedText := CodexShim.completedReasoningText observation
+  }
+
+def codexShimReasoningProjectionCaseJson
+    (witness : CodexShimReasoningProjectionCase) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString witness.witness ++ ","
+    ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
+    ++ "\"item_open\":" ++ boolString witness.itemOpen ++ ","
+    ++ "\"cursor_primed\":" ++ boolString witness.cursorPrimed ++ ","
+    ++ "\"streamed_text\":" ++ jsonOptionalString witness.streamedText ++ ","
+    ++ "\"live_delta\":" ++ jsonOptionalString witness.liveDelta ++ ","
+    ++ "\"durable_text\":" ++ jsonOptionalString witness.durableText ++ ","
+    ++ "\"terminal\":" ++ boolString witness.terminal ++ ","
+    ++ "\"projected_events\":" ++ jsonStringArray witness.projectedEvents ++ ","
+    ++ "\"projected_delta\":" ++ jsonOptionalString witness.projectedDelta ++ ","
+    ++ "\"completed_text\":" ++ jsonOptionalString witness.completedText
+    ++ "}"
+
+def codexShimReasoningProjectionCases : List CodexShimReasoningProjectionCase :=
+  [ codexShimReasoningProjectionCase
+      "codex_shim.reasoning.first_live"
+      [ "CodexShim.first_live_reasoning_projects_raw_lifecycle" ]
+      { itemOpen := false
+      , cursorPrimed := false
+      , streamedText := none
+      , liveDelta := some "inspect"
+      , durableText := none
+      , terminal := false }
+  , codexShimReasoningProjectionCase
+      "codex_shim.reasoning.append_live"
+      [ "CodexShim.appended_live_reasoning_projects_only_delta" ]
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "inspect"
+      , liveDelta := some " then test"
+      , durableText := none
+      , terminal := false }
+  , codexShimReasoningProjectionCase
+      "codex_shim.reasoning.resumed_unchanged"
+      [ "CodexShim.primed_resume_without_new_reasoning_replays_nothing" ]
+      { itemOpen := true
+      , cursorPrimed := true
+      , streamedText := some "already visible"
+      , liveDelta := none
+      , durableText := none
+      , terminal := false }
+  , codexShimReasoningProjectionCase
+      "codex_shim.reasoning.terminal_open"
+      [ "CodexShim.terminal_open_reasoning_completes_without_replay"
+      , "CodexShim.terminal_completed_item_uses_durable_reasoning"
+      ]
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "inspect then test"
+      , liveDelta := none
+      , durableText := some "inspect then test"
+      , terminal := true }
+  , codexShimReasoningProjectionCase
+      "codex_shim.reasoning.terminal_first_observation"
+      [ "CodexShim.terminal_durable_first_observation_projects_lifecycle"
+      , "CodexShim.terminal_completed_item_uses_durable_reasoning"
+      ]
+      { itemOpen := false
+      , cursorPrimed := false
+      , streamedText := none
+      , liveDelta := none
+      , durableText := some "inspect then test"
+      , terminal := true }
+  , codexShimReasoningProjectionCase
+      "codex_shim.reasoning.absent"
+      [ "CodexShim.absent_reasoning_projects_nothing" ]
+      { itemOpen := false
+      , cursorPrimed := false
+      , streamedText := none
+      , liveDelta := none
+      , durableText := none
+      , terminal := true }
+  , codexShimReasoningProjectionCase
+      "codex_shim.reasoning.terminal_durable_suffix"
+      [ "CodexShim.terminal_durable_suffix_projects_before_completion"
+      , "CodexShim.terminal_completed_item_uses_durable_reasoning"
+      ]
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "inspect then test"
+      , liveDelta := some "; durable suffix"
+      , durableText := some "inspect then test; durable suffix"
+      , terminal := true }
+  , codexShimReasoningProjectionCase
+      "codex_shim.reasoning.terminal_streamed_fallback"
+      [ "CodexShim.terminal_without_durable_reasoning_keeps_streamed_text" ]
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "streamed reasoning"
+      , liveDelta := none
+      , durableText := none
+      , terminal := true }
+  ]
+
+def codexShimReasoningProjectionCasesJson : String :=
+  jsonArray
+    (codexShimReasoningProjectionCases.map codexShimReasoningProjectionCaseJson)
+
 structure CodexShimContextUsageCase where
   witness : String
   leanTheorems : List String

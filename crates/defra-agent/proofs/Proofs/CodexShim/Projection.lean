@@ -311,6 +311,167 @@ theorem subagent_parent_uses_native_source (parentThreadId : String) :
 theorem subagent_parent_omits_legacy_top_level (parentThreadId : String) :
     (projectSubagentThreadParent parentThreadId).legacyTopLevelParent = none := rfl
 
+/-!
+## Native reasoning presentation
+
+DEFRA owns two views of reasoning: the bounded live `AgentResponse.reasoning`
+preview and the durable `AgentMessage.reasoning` copy materialized before the
+live tail is cleared.  The shim projects both through Codex's raw reasoning
+channel. It must not relabel provider reasoning text as a summary merely to
+make a client render it by default.
+
+`liveDelta` is the append-only text recovered by the adapter's bounded-tail
+cursor. A primed cursor on child-thread resume therefore supplies `none` until
+new reasoning arrives. At terminal observation, durable text is used to create
+the lifecycle when replication skipped every live observation and is always
+the authoritative completed-item payload.
+-/
+
+/-- Codex item notifications emitted for native reasoning text. The event type
+deliberately has only a raw-text delta constructor, so the adapter cannot
+accidentally promote raw reasoning to a summary. -/
+inductive ReasoningProjectionEvent where
+  | started
+  | rawTextDelta (text : String)
+  | completed
+  deriving DecidableEq, Repr
+
+/-- Facts available at one reasoning projection observation. -/
+structure ReasoningProjectionObservation where
+  itemOpen : Bool
+  cursorPrimed : Bool
+  streamedText : Option String
+  liveDelta : Option String
+  durableText : Option String
+  terminal : Bool
+  deriving DecidableEq, Repr
+
+def nonemptyReasoningText : Option String → Option String
+  | some text => if text.isEmpty then none else some text
+  | none => none
+
+def preferReasoningText (preferred fallback : Option String) : Option String :=
+  match nonemptyReasoningText preferred with
+  | some text => some text
+  | none => nonemptyReasoningText fallback
+
+/-- Text to expose at this observation. Live cursor output wins. A durable
+terminal value is streamed only when no item was already opened or primed. -/
+def reasoningTextForObservation
+    (obs : ReasoningProjectionObservation) : Option String :=
+  match nonemptyReasoningText obs.liveDelta with
+  | some text => some text
+  | none =>
+      if obs.terminal && !obs.itemOpen && !obs.cursorPrimed then
+        nonemptyReasoningText obs.durableText
+      else
+        none
+
+def reasoningProjectionEvents
+    (obs : ReasoningProjectionObservation) : List ReasoningProjectionEvent :=
+  let text := reasoningTextForObservation obs
+  let startEvents :=
+    if !obs.itemOpen && text.isSome then [.started] else []
+  let deltaEvents :=
+    match text with
+    | some delta => [.rawTextDelta delta]
+    | none => []
+  let openAfter := obs.itemOpen || text.isSome
+  let completionEvents :=
+    if obs.terminal && openAfter then [.completed] else []
+  startEvents ++ deltaEvents ++ completionEvents
+
+/-- Completed-item content comes from the durable materialized message, never
+from the bounded live preview, when that durable value exists. -/
+def completedReasoningText
+    (obs : ReasoningProjectionObservation) : Option String :=
+  if obs.terminal then preferReasoningText obs.durableText obs.streamedText else none
+
+theorem first_live_reasoning_projects_raw_lifecycle :
+    reasoningProjectionEvents
+      { itemOpen := false
+      , cursorPrimed := false
+      , streamedText := none
+      , liveDelta := some "inspect"
+      , durableText := none
+      , terminal := false } =
+      [.started, .rawTextDelta "inspect"] := rfl
+
+theorem appended_live_reasoning_projects_only_delta :
+    reasoningProjectionEvents
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "inspect"
+      , liveDelta := some " then test"
+      , durableText := none
+      , terminal := false } =
+      [.rawTextDelta " then test"] := rfl
+
+theorem primed_resume_without_new_reasoning_replays_nothing :
+    reasoningProjectionEvents
+      { itemOpen := true
+      , cursorPrimed := true
+      , streamedText := some "already visible"
+      , liveDelta := none
+      , durableText := none
+      , terminal := false } = [] := rfl
+
+theorem terminal_open_reasoning_completes_without_replay :
+    reasoningProjectionEvents
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "inspect then test"
+      , liveDelta := none
+      , durableText := some "inspect then test"
+      , terminal := true } = [.completed] := rfl
+
+theorem terminal_durable_first_observation_projects_lifecycle :
+    reasoningProjectionEvents
+      { itemOpen := false
+      , cursorPrimed := false
+      , streamedText := none
+      , liveDelta := none
+      , durableText := some "inspect then test"
+      , terminal := true } =
+      [.started, .rawTextDelta "inspect then test", .completed] := rfl
+
+theorem absent_reasoning_projects_nothing :
+    reasoningProjectionEvents
+      { itemOpen := false
+      , cursorPrimed := false
+      , streamedText := none
+      , liveDelta := none
+      , durableText := none
+      , terminal := true } = [] := rfl
+
+theorem terminal_completed_item_uses_durable_reasoning :
+    completedReasoningText
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "bounded preview"
+      , liveDelta := none
+      , durableText := some "durable reasoning"
+      , terminal := true } = some "durable reasoning" := rfl
+
+theorem terminal_without_durable_reasoning_keeps_streamed_text :
+    completedReasoningText
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "streamed reasoning"
+      , liveDelta := none
+      , durableText := none
+      , terminal := true } = some "streamed reasoning" := rfl
+
+theorem terminal_durable_suffix_projects_before_completion :
+    reasoningProjectionEvents
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "inspect then test"
+      , liveDelta := some "; durable suffix"
+      , durableText := some "inspect then test; durable suffix"
+      , terminal := true } =
+      [.rawTextDelta "; durable suffix", .completed] := rfl
+
 /-- Automatic compaction runs after the request is accepted and before the
 owned inference/tool loop, so replay places its item between the user request
 and model-derived items. -/

@@ -90,6 +90,8 @@ struct MessageRow {
     role: String,
     #[serde(default)]
     content: String,
+    #[serde(default)]
+    reasoning: String,
 }
 
 pub(super) async fn load_thread_turns(
@@ -152,6 +154,7 @@ pub(super) async fn load_thread_turns(
                 sequence
                 role
                 content
+                reasoning
             }}
         }}"#,
     );
@@ -659,8 +662,9 @@ fn append_assistant_message_items(
     }
     let presentation = present_persisted_message(&message.role, &message.content);
     let mut appended = false;
-    if let Some(reasoning) = presentation
-        .reasoning_markdown
+    if let Some(reasoning) = (!message.reasoning.trim().is_empty())
+        .then(|| message.reasoning.clone())
+        .or(presentation.reasoning_markdown)
         .filter(|value| !value.trim().is_empty())
     {
         items.push(codex::ThreadItem::Reasoning {
@@ -1001,6 +1005,7 @@ mod tests {
                     sequence: 2,
                     role: "assistant".to_string(),
                     content: r#"{"role":"assistant","id":null,"content":[{"id":"call-1","call_id":null,"function":{"name":"list_files","arguments":{"path":"."}},"signature":null,"additional_params":null},{"text":"Before the tool call."}]}"#.to_string(),
+                    reasoning: String::new(),
                 },
             ),
             (
@@ -1009,6 +1014,7 @@ mod tests {
                     sequence: 4,
                     role: "assistant".to_string(),
                     content: r#"{"role":"assistant","id":null,"content":[{"text":"Final answer after tools."}]}"#.to_string(),
+                    reasoning: String::new(),
                 },
             ),
         ]);
@@ -1132,12 +1138,14 @@ mod tests {
                 role: "user".to_string(),
                 content: r#"{"role":"user","content":[{"type":"text","text":"Hello from stored user JSON."}]}"#
                     .to_string(),
+                reasoning: String::new(),
             },
             MessageRow {
                 sequence: 2,
                 role: "assistant".to_string(),
                 content: r#"{"role":"assistant","id":null,"content":[{"text":"Hello from stored assistant JSON."}]}"#
                     .to_string(),
+                reasoning: String::new(),
             },
         ]);
 
@@ -1158,5 +1166,29 @@ mod tests {
                 if text == "Hello from stored assistant JSON."
                     && *phase == Some(MessagePhase::FinalAnswer)
         )));
+    }
+
+    #[test]
+    fn persisted_reasoning_field_is_the_authoritative_replay_source() {
+        let mut items = Vec::new();
+        let appended = append_assistant_message_items(
+            &mut items,
+            4,
+            &MessageRow {
+                sequence: 4,
+                role: "assistant".to_string(),
+                content: r#"{"role":"assistant","id":null,"content":[{"reasoning":"legacy embedded reasoning"},{"text":"answer"}]}"#
+                    .to_string(),
+                reasoning: "durable dedicated reasoning".to_string(),
+            },
+            true,
+        );
+
+        assert!(appended);
+        assert!(matches!(
+            &items[0],
+            codex::ThreadItem::Reasoning { summary, content, .. }
+                if summary.is_empty() && content == &["durable dedicated reasoning"]
+        ));
     }
 }

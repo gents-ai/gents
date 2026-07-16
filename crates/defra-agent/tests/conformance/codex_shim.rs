@@ -263,6 +263,78 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     assert_eq!(shape.legacy_top_level_parent, None);
     assert_eq!(shape.replay_stages, ["user", "compaction", "modelItems"]);
 
+    let reasoning_cases = lean_codex_shim_reasoning_projection_cases();
+    assert_eq!(reasoning_cases.len(), 8);
+    for case in reasoning_cases {
+        assert_eq!(
+            case.projected_delta,
+            case.live_delta
+                .as_ref()
+                .filter(|text| !text.is_empty())
+                .cloned()
+                .or_else(|| {
+                    (case.terminal && !case.item_open && !case.cursor_primed)
+                        .then(|| case.durable_text.clone())
+                        .flatten()
+                        .filter(|text| !text.is_empty())
+                }),
+            "{}: live delta or first durable observation must drive raw reasoning text",
+            case.witness
+        );
+        assert_eq!(
+            case.completed_text,
+            case.terminal
+                .then(|| {
+                    case.durable_text
+                        .clone()
+                        .filter(|text| !text.is_empty())
+                        .or_else(|| case.streamed_text.clone())
+                })
+                .flatten()
+                .filter(|text| !text.is_empty()),
+            "{}: completed reasoning must prefer durable text and retain the streamed fallback",
+            case.witness
+        );
+        assert!(
+            !case
+                .projected_events
+                .iter()
+                .any(|event| event == "summaryTextDelta"),
+            "{}: raw DEFRA reasoning must not be promoted to a summary",
+            case.witness
+        );
+    }
+    let first = reasoning_cases
+        .iter()
+        .find(|case| case.witness == "codex_shim.reasoning.first_live")
+        .expect("first live reasoning witness");
+    assert_eq!(first.projected_events, ["started", "rawTextDelta"]);
+    let resumed = reasoning_cases
+        .iter()
+        .find(|case| case.witness == "codex_shim.reasoning.resumed_unchanged")
+        .expect("resumed reasoning witness");
+    assert!(resumed.projected_events.is_empty());
+    let terminal_first = reasoning_cases
+        .iter()
+        .find(|case| case.witness == "codex_shim.reasoning.terminal_first_observation")
+        .expect("terminal first reasoning witness");
+    assert_eq!(
+        terminal_first.projected_events,
+        ["started", "rawTextDelta", "completed"]
+    );
+    let durable_suffix = reasoning_cases
+        .iter()
+        .find(|case| case.witness == "codex_shim.reasoning.terminal_durable_suffix")
+        .expect("terminal durable suffix witness");
+    assert_eq!(
+        durable_suffix.projected_events,
+        ["rawTextDelta", "completed"]
+    );
+    assert_eq!(
+        durable_suffix.projected_delta.as_deref(),
+        Some("; durable suffix")
+    );
+
     let context_cases = lean_codex_shim_context_usage_cases();
     assert_eq!(context_cases.len(), 2);
     for case in context_cases {

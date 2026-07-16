@@ -2332,6 +2332,7 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
     assert_eq!(child_resume.thread.id, child_thread_id);
 
     let live_child_text = format!("live child output {}", Uuid::new_v4().simple());
+    let live_child_reasoning = format!("child reasoning {}", Uuid::new_v4().simple());
     seed_child_streaming_response(
         &graphql,
         &agent_did,
@@ -2339,11 +2340,12 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         &child_request_id,
         &child_thread_id,
         &live_child_text,
+        &live_child_reasoning,
     )
     .await?;
-    let projected_text = match tokio::time::timeout(
+    let (projected_text, projected_reasoning) = match tokio::time::timeout(
         Duration::from_secs(15),
-        read_child_agent_delta(&mut ws, &child_thread_id, &child_request_id),
+        read_child_agent_and_reasoning_deltas(&mut ws, &child_thread_id, &child_request_id),
     )
     .await
     {
@@ -2356,15 +2358,72 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         }
     };
     assert_eq!(projected_text, live_child_text);
+    assert_eq!(projected_reasoning, live_child_reasoning);
 
-    update_request_lifecycle(&graphql, &child_request_id, "completed").await?;
-    let (completed, _, _) = tokio::time::timeout(
+    let reasoning_tail = " then checks the durable result";
+    update_streaming_response_reasoning(
+        &graphql,
+        &child_request_id,
+        &format!("{live_child_reasoning}{reasoning_tail}"),
+        2,
+    )
+    .await?;
+    let appended_reasoning = tokio::time::timeout(
         Duration::from_secs(15),
-        read_collab_agent_status(&mut ws, &tool_call_key, &child_thread_id),
+        read_child_reasoning_delta(&mut ws, &child_thread_id, &child_request_id),
     )
     .await
-    .context("timed out waiting for refreshed subagent agentsStates")??;
+    .context("timed out waiting for appended child reasoning delta")??;
+    assert_eq!(appended_reasoning, reasoning_tail);
+
+    let durable_reasoning = format!("{live_child_reasoning}{reasoning_tail}; durable message wins");
+    complete_child_materialized_response(
+        &graphql,
+        &agent_did,
+        &child_request_id,
+        &child_thread_id,
+        &durable_reasoning,
+    )
+    .await?;
+    let (completed_reasoning, durable_delta, completed) = tokio::time::timeout(
+        Duration::from_secs(15),
+        read_reasoning_completion_and_collab_status(
+            &mut ws,
+            &child_thread_id,
+            &child_request_id,
+            &tool_call_key,
+        ),
+    )
+    .await
+    .context("timed out waiting for durable reasoning and refreshed subagent state")??;
+    assert_eq!(completed_reasoning, durable_reasoning);
+    assert_eq!(durable_delta, "; durable message wins");
     assert_eq!(completed, codex::CollabAgentStatus::Completed);
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadRead {
+            request_id: request_id(240),
+            params: codex::ThreadReadParams {
+                thread_id: child_thread_id.clone(),
+                include_turns: true,
+            },
+        },
+    )
+    .await?;
+    let completed_child: codex::ThreadReadResponse =
+        read_typed_response(&mut ws, request_id(240)).await?;
+    assert!(completed_child.thread.turns.iter().any(|turn| {
+        turn.items.iter().any(|item| {
+            matches!(
+                item,
+                codex::ThreadItem::Reasoning { summary, content, .. }
+                    if summary.is_empty()
+                        && content.len() == 1
+                        && content.first().is_some_and(|text| text == &durable_reasoning)
+            )
+        })
+    }));
 
     send_client_request(
         &mut ws,
@@ -4394,6 +4453,7 @@ async fn seed_child_streaming_response(
     request_id: &str,
     session_id: &str,
     content: &str,
+    reasoning: &str,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
@@ -4405,12 +4465,12 @@ async fn seed_child_streaming_response(
                 behavior_id: "{behavior_id}",
                 session_id: "{session_id}",
                 content: "{content}",
-                reasoning: "",
+                reasoning: "{reasoning}",
                 status: "streaming",
                 error_message: "",
                 token_count: 0,
                 progress_seq: 1,
-                reasoning_progress_seq: 0,
+                reasoning_progress_seq: 1,
                 created_at: "{now}",
                 completed_at: ""
             }}) {{ _docID }}
@@ -4420,6 +4480,85 @@ async fn seed_child_streaming_response(
         behavior_id = escape_graphql_string(behavior_id),
         session_id = escape_graphql_string(session_id),
         content = escape_graphql_string(content),
+        reasoning = escape_graphql_string(reasoning),
+        now = escape_graphql_string(&now),
+    );
+    graphql_query(graphql, &mutation).await?;
+    Ok(())
+}
+
+async fn update_streaming_response_reasoning(
+    graphql: &str,
+    request_id: &str,
+    reasoning: &str,
+    reasoning_progress_seq: i64,
+) -> Result<()> {
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentResponse(
+                filter: {{ response_key: {{ _eq: "{request_id}" }} }},
+                input: {{
+                    reasoning: "{reasoning}",
+                    reasoning_progress_seq: {reasoning_progress_seq}
+                }}
+            ) {{ _docID }}
+        }}"#,
+        request_id = escape_graphql_string(request_id),
+        reasoning = escape_graphql_string(reasoning),
+    );
+    graphql_query(graphql, &mutation).await?;
+    Ok(())
+}
+
+async fn complete_child_materialized_response(
+    graphql: &str,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+    reasoning: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let message_key = format!("{session_id}:2");
+    let content = r#"{"role":"assistant","id":null,"content":[{"text":"durable child answer"}]}"#;
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentMessage(input: {{
+                message_key: "{message_key}",
+                session_id: "{session_id}",
+                agent_did: "{agent_did}",
+                request_id: "{request_id}",
+                sequence: 2,
+                role: "assistant",
+                content: "{content}",
+                reasoning: "{reasoning}",
+                timestamp: "{now}"
+            }}) {{ _docID }}
+            update_AgentResponse(
+                filter: {{ response_key: {{ _eq: "{request_id}" }} }},
+                input: {{
+                    content: "",
+                    reasoning: "",
+                    status: "complete",
+                    materialized_message_sequence: 2,
+                    materialized_at: "{now}",
+                    completed_at: "{now}"
+                }}
+            ) {{ _docID }}
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                input: {{
+                    status: "completed",
+                    lifecycle_state: "completed",
+                    failure_reason: ""
+                }}
+            ) {{ _docID }}
+        }}"#,
+        message_key = escape_graphql_string(&message_key),
+        session_id = escape_graphql_string(session_id),
+        agent_did = escape_graphql_string(agent_did),
+        request_id = escape_graphql_string(request_id),
+        content = escape_graphql_string(content),
+        reasoning = escape_graphql_string(reasoning),
         now = escape_graphql_string(&now),
     );
     graphql_query(graphql, &mutation).await?;
@@ -4997,7 +5136,57 @@ async fn read_mcp_tool_completion(
     }
 }
 
-async fn read_child_agent_delta(
+async fn read_child_agent_and_reasoning_deltas(
+    ws: &mut ShimWebSocket,
+    child_thread_id: &str,
+    child_turn_id: &str,
+) -> Result<(String, String)> {
+    let mut agent_delta = None;
+    let mut reasoning_delta = None;
+    let mut reasoning_started = false;
+    loop {
+        match read_jsonrpc(ws).await? {
+            codex::JSONRPCMessage::Notification(notification) => {
+                match server_notification_from_jsonrpc(notification)? {
+                    codex::ServerNotification::ItemStarted(started)
+                        if started.thread_id == child_thread_id
+                            && started.turn_id == child_turn_id
+                            && matches!(started.item, codex::ThreadItem::Reasoning { .. }) =>
+                    {
+                        reasoning_started = true;
+                    }
+                    codex::ServerNotification::AgentMessageDelta(delta)
+                        if delta.thread_id == child_thread_id && delta.turn_id == child_turn_id =>
+                    {
+                        agent_delta = Some(delta.delta);
+                    }
+                    codex::ServerNotification::ReasoningTextDelta(delta)
+                        if delta.thread_id == child_thread_id && delta.turn_id == child_turn_id =>
+                    {
+                        assert_eq!(delta.content_index, 0);
+                        reasoning_delta = Some(delta.delta);
+                    }
+                    _ => {}
+                }
+                if reasoning_started && agent_delta.is_some() && reasoning_delta.is_some() {
+                    return Ok((
+                        agent_delta.take().expect("checked agent delta"),
+                        reasoning_delta.take().expect("checked reasoning delta"),
+                    ));
+                }
+            }
+            codex::JSONRPCMessage::Error(error) => {
+                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+            }
+            codex::JSONRPCMessage::Request(request) => {
+                bail!("Codex shim sent unexpected server request: {request:?}");
+            }
+            codex::JSONRPCMessage::Response(_) => {}
+        }
+    }
+}
+
+async fn read_child_reasoning_delta(
     ws: &mut ShimWebSocket,
     child_thread_id: &str,
     child_turn_id: &str,
@@ -5005,10 +5194,11 @@ async fn read_child_agent_delta(
     loop {
         match read_jsonrpc(ws).await? {
             codex::JSONRPCMessage::Notification(notification) => {
-                if let codex::ServerNotification::AgentMessageDelta(delta) =
+                if let codex::ServerNotification::ReasoningTextDelta(delta) =
                     server_notification_from_jsonrpc(notification)?
                 {
                     if delta.thread_id == child_thread_id && delta.turn_id == child_turn_id {
+                        assert_eq!(delta.content_index, 0);
                         return Ok(delta.delta);
                     }
                 }
@@ -5020,6 +5210,64 @@ async fn read_child_agent_delta(
                 bail!("Codex shim sent unexpected server request: {request:?}");
             }
             codex::JSONRPCMessage::Response(_) => {}
+        }
+    }
+}
+
+async fn read_reasoning_completion_and_collab_status(
+    ws: &mut ShimWebSocket,
+    child_thread_id: &str,
+    child_turn_id: &str,
+    expected_tool_call_key: &str,
+) -> Result<(String, String, codex::CollabAgentStatus)> {
+    let mut completed_reasoning = None;
+    let mut durable_delta = None;
+    let mut child_status = None;
+    loop {
+        match read_jsonrpc(ws).await? {
+            codex::JSONRPCMessage::Notification(notification) => {
+                match server_notification_from_jsonrpc(notification)? {
+                    codex::ServerNotification::ReasoningTextDelta(delta)
+                        if delta.thread_id == child_thread_id && delta.turn_id == child_turn_id =>
+                    {
+                        durable_delta = Some(delta.delta);
+                    }
+                    codex::ServerNotification::ItemCompleted(completed) => match completed.item {
+                        codex::ThreadItem::Reasoning {
+                            content, summary, ..
+                        } if completed.thread_id == child_thread_id
+                            && completed.turn_id == child_turn_id =>
+                        {
+                            assert!(summary.is_empty());
+                            completed_reasoning = Some(content.concat());
+                        }
+                        codex::ThreadItem::CollabAgentToolCall {
+                            id, agents_states, ..
+                        } if id == expected_tool_call_key => {
+                            child_status = agents_states
+                                .get(child_thread_id)
+                                .map(|state| state.status.clone());
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+            codex::JSONRPCMessage::Error(error) => {
+                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+            }
+            codex::JSONRPCMessage::Request(request) => {
+                bail!("Codex shim sent unexpected server request: {request:?}");
+            }
+            codex::JSONRPCMessage::Response(_) => {}
+        }
+
+        if completed_reasoning.is_some() && durable_delta.is_some() && child_status.is_some() {
+            return Ok((
+                completed_reasoning.take().expect("checked reasoning"),
+                durable_delta.take().expect("checked durable delta"),
+                child_status.take().expect("checked child status"),
+            ));
         }
     }
 }

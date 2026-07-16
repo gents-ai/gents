@@ -89,8 +89,12 @@ pub(super) async fn hydrate_materialized_response_content(
         );
     }
     if reasoning_blank {
-        if let Some(reasoning) = presentation
-            .reasoning_markdown
+        if let Some(reasoning) = message
+            .get("reasoning")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+            .or(presentation.reasoning_markdown)
             .filter(|value| !value.trim().is_empty())
         {
             object.insert("reasoning".to_string(), Value::String(reasoning));
