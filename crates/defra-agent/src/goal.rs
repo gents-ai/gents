@@ -18,7 +18,7 @@ pub const UPDATE_GOAL_TOOL_NAME: &str = "update_goal";
 pub const BLOCKED_AUDIT_THRESHOLD: i64 = 3;
 pub const MAX_INFRASTRUCTURE_RETRIES: i64 = 2;
 
-const GOAL_FIELDS: &str = r#"
+pub const GOAL_FIELDS: &str = r#"
     _docID
     goal_id
     session_id
@@ -31,12 +31,14 @@ const GOAL_FIELDS: &str = r#"
     active_started_at
     consecutive_blocked_audits
     last_blocked_request_id
+    last_blocked_reason
     last_continued_from_request_id
     continuation_sequence
     wrapup_requested
     wrapup_completed
     infrastructure_retry_count
     last_failure
+    completion_evidence
     created_at
     updated_at
 "#;
@@ -81,6 +83,115 @@ pub enum GoalDecision {
     Retry,
     Pause,
     Wrapup,
+    AbandonWrapup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoalAuditObservation {
+    SameRequest,
+    SameCondition,
+    NewCondition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoalAction {
+    Pause,
+    Resume,
+    Complete,
+    BlockedAudit(GoalAuditObservation),
+    OperatorBlock,
+    UsageLimit,
+    BudgetExhausted,
+    WrapupFinished,
+    WrapupAbandoned,
+    CleanTurn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GoalState {
+    pub status: GoalStatus,
+    pub blocked_audits: i64,
+    pub wrapup_requested: bool,
+    pub wrapup_completed: bool,
+}
+
+impl GoalState {
+    /// Executable mirror of `Goals.step?` in `proofs/Proofs/Goals.lean`.
+    pub fn step(self, action: GoalAction) -> Option<Self> {
+        match action {
+            GoalAction::Pause if self.status == GoalStatus::Active => Some(Self {
+                status: GoalStatus::Paused,
+                ..self
+            }),
+            GoalAction::Resume
+                if matches!(
+                    self.status,
+                    GoalStatus::Paused | GoalStatus::Blocked | GoalStatus::UsageLimited
+                ) =>
+            {
+                Some(Self {
+                    status: GoalStatus::Active,
+                    blocked_audits: 0,
+                    ..self
+                })
+            }
+            GoalAction::Complete if self.status != GoalStatus::Complete => Some(Self {
+                status: GoalStatus::Complete,
+                wrapup_completed: true,
+                ..self
+            }),
+            GoalAction::BlockedAudit(observation) if self.status == GoalStatus::Active => {
+                let blocked_audits = match observation {
+                    GoalAuditObservation::SameRequest => self.blocked_audits.max(0),
+                    GoalAuditObservation::SameCondition => {
+                        self.blocked_audits.max(0).saturating_add(1)
+                    }
+                    GoalAuditObservation::NewCondition => 1,
+                };
+                Some(Self {
+                    status: if blocked_audits >= BLOCKED_AUDIT_THRESHOLD {
+                        GoalStatus::Blocked
+                    } else {
+                        GoalStatus::Active
+                    },
+                    blocked_audits,
+                    ..self
+                })
+            }
+            GoalAction::OperatorBlock if self.status == GoalStatus::Active => Some(Self {
+                status: GoalStatus::Blocked,
+                ..self
+            }),
+            GoalAction::UsageLimit if self.status == GoalStatus::Active => Some(Self {
+                status: GoalStatus::UsageLimited,
+                ..self
+            }),
+            GoalAction::BudgetExhausted
+                if self.status == GoalStatus::Active && !self.wrapup_requested =>
+            {
+                Some(Self {
+                    status: GoalStatus::BudgetLimited,
+                    wrapup_requested: true,
+                    ..self
+                })
+            }
+            GoalAction::WrapupFinished | GoalAction::WrapupAbandoned
+                if self.status == GoalStatus::BudgetLimited
+                    && self.wrapup_requested
+                    && !self.wrapup_completed =>
+            {
+                Some(Self {
+                    wrapup_completed: true,
+                    ..self
+                })
+            }
+            GoalAction::CleanTurn if self.status == GoalStatus::Active => Some(Self {
+                blocked_audits: 0,
+                ..self
+            }),
+            _ => None,
+        }
+    }
 }
 
 /// Advances the durable blocked-condition audit without double-counting a
@@ -93,14 +204,22 @@ pub fn next_blocked_audit(
     reason: &str,
     request_id: &str,
 ) -> (i64, bool) {
-    let audits = if previous_request_id == Some(request_id) {
-        previous_count.max(0)
+    let observation = if previous_request_id == Some(request_id) {
+        GoalAuditObservation::SameRequest
     } else if previous_reason == Some(reason) {
-        previous_count.max(0).saturating_add(1)
+        GoalAuditObservation::SameCondition
     } else {
-        1
+        GoalAuditObservation::NewCondition
     };
-    (audits, audits >= BLOCKED_AUDIT_THRESHOLD)
+    let state = GoalState {
+        status: GoalStatus::Active,
+        blocked_audits: previous_count,
+        wrapup_requested: false,
+        wrapup_completed: false,
+    }
+    .step(GoalAction::BlockedAudit(observation))
+    .expect("blocked audit is legal from active");
+    (state.blocked_audits, state.status == GoalStatus::Blocked)
 }
 
 /// Executable mirror of `Goals.decide` in `proofs/Proofs/Goals.lean`.
@@ -112,6 +231,7 @@ pub fn decide_goal_continuation(
     child_exists: bool,
     budget_reached: bool,
     has_activity: bool,
+    request_is_wrapup: bool,
     infrastructure_retries: i64,
     wrapup_requested: bool,
     wrapup_completed: bool,
@@ -142,10 +262,24 @@ pub fn decide_goal_continuation(
             }
         },
         GoalStatus::BudgetLimited => {
-            if wrapup_requested && !wrapup_completed {
+            if !wrapup_requested || wrapup_completed {
+                GoalDecision::None
+            } else if !request_is_wrapup {
                 GoalDecision::Wrapup
             } else {
-                GoalDecision::None
+                match terminal {
+                    GoalRequestTerminal::Completed => GoalDecision::None,
+                    GoalRequestTerminal::Failed
+                    | GoalRequestTerminal::Dead
+                    | GoalRequestTerminal::Interrupted
+                    | GoalRequestTerminal::Superseded => {
+                        if infrastructure_retries.max(0) < MAX_INFRASTRUCTURE_RETRIES {
+                            GoalDecision::Retry
+                        } else {
+                            GoalDecision::AbandonWrapup
+                        }
+                    }
+                }
             }
         }
         GoalStatus::Paused
@@ -184,6 +318,33 @@ impl GoalStatus {
     }
 }
 
+fn operator_action_for_status(current: GoalStatus, target: GoalStatus) -> Option<GoalAction> {
+    if current == target {
+        return None;
+    }
+    Some(match target {
+        GoalStatus::Active => GoalAction::Resume,
+        GoalStatus::Paused => GoalAction::Pause,
+        GoalStatus::Blocked => GoalAction::OperatorBlock,
+        GoalStatus::UsageLimited => GoalAction::UsageLimit,
+        GoalStatus::BudgetLimited => GoalAction::BudgetExhausted,
+        GoalStatus::Complete => GoalAction::Complete,
+    })
+}
+
+pub fn apply_operator_status_transition(state: GoalState, target: GoalStatus) -> Result<GoalState> {
+    let Some(action) = operator_action_for_status(state.status, target) else {
+        return Ok(state);
+    };
+    state.step(action).with_context(|| {
+        format!(
+            "illegal durable Goal transition {} -> {}",
+            state.status.as_str(),
+            target.as_str()
+        )
+    })
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GoalDocument {
     #[serde(rename = "_docID")]
@@ -208,6 +369,8 @@ pub struct GoalDocument {
     #[serde(default)]
     pub last_blocked_request_id: Option<String>,
     #[serde(default)]
+    pub last_blocked_reason: Option<String>,
+    #[serde(default)]
     pub last_continued_from_request_id: Option<String>,
     #[serde(default)]
     pub continuation_sequence: Option<i64>,
@@ -220,6 +383,8 @@ pub struct GoalDocument {
     #[serde(default)]
     pub last_failure: Option<String>,
     #[serde(default)]
+    pub completion_evidence: Option<String>,
+    #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
@@ -228,6 +393,15 @@ pub struct GoalDocument {
 impl GoalDocument {
     pub fn parsed_status(&self) -> Option<GoalStatus> {
         GoalStatus::parse(&self.status)
+    }
+
+    pub fn state(&self) -> Option<GoalState> {
+        Some(GoalState {
+            status: self.parsed_status()?,
+            blocked_audits: self.consecutive_blocked_audits.unwrap_or_default().max(0),
+            wrapup_requested: self.wrapup_requested.unwrap_or(false),
+            wrapup_completed: self.wrapup_completed.unwrap_or(false),
+        })
     }
 
     pub fn current_active_time_seconds(&self, now: DateTime<Utc>) -> i64 {
@@ -263,6 +437,9 @@ pub struct GoalSnapshot {
     pub continuation_sequence: i64,
     pub wrapup_requested: bool,
     pub wrapup_completed: bool,
+    pub last_blocked_reason: Option<String>,
+    pub last_failure: Option<String>,
+    pub completion_evidence: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
 }
@@ -282,13 +459,16 @@ impl GoalSnapshot {
             continuation_sequence: goal.continuation_sequence(),
             wrapup_requested: goal.wrapup_requested.unwrap_or(false),
             wrapup_completed: goal.wrapup_completed.unwrap_or(false),
+            last_blocked_reason: goal.last_blocked_reason.clone(),
+            last_failure: goal.last_failure.clone(),
+            completion_evidence: goal.completion_evidence.clone(),
             created_at: goal.created_at.clone(),
             updated_at: goal.updated_at.clone(),
         }
     }
 }
 
-fn deterministic_goal_id(agent_did: &str, session_id: &str) -> String {
+pub fn deterministic_goal_id(agent_did: &str, session_id: &str) -> String {
     format!("{}:{agent_did}:{session_id}", agent_did.len())
 }
 
@@ -398,11 +578,16 @@ pub async fn set_goal(
     let now = Utc::now();
     let now_string = now.to_rfc3339();
     if let Some(existing) = existing {
+        let pre = existing
+            .state()
+            .context("existing Goal has an unknown status")?;
+        let action = operator_action_for_status(pre.status, status);
+        let post = apply_operator_status_transition(pre, status)?;
         let active_time = existing.current_active_time_seconds(now);
         // `active_time_seconds` has just absorbed the current active segment,
         // so a still-active goal starts a fresh segment at this write. Keeping
         // the old timestamp here would charge the same elapsed time twice.
-        let active_started_at = if status.accrues_active_time() {
+        let active_started_at = if post.status.accrues_active_time() {
             now_string.clone()
         } else {
             String::new()
@@ -415,7 +600,17 @@ pub async fn set_goal(
         let doc_id = escape_graphql_string(&existing.doc_id);
         let agent_did = escape_graphql_string(agent_did);
         let objective = escape_graphql_string(&objective);
-        let status = status.as_str();
+        let status = post.status.as_str();
+        let reset_audit_fields = if action == Some(GoalAction::Resume) {
+            "last_blocked_request_id: null, last_blocked_reason: null, last_failure: null, infrastructure_retry_count: 0,"
+        } else {
+            ""
+        };
+        let reset_completion_field = if action == Some(GoalAction::Resume) {
+            "completion_evidence: null,"
+        } else {
+            ""
+        };
         let now = escape_graphql_string(&now_string);
         let mutation = format!(
             r#"mutation {{
@@ -428,11 +623,19 @@ pub async fn set_goal(
                         tokens_used: {tokens_used},
                         active_time_seconds: {active_time},
                         {active_started_field}
+                        consecutive_blocked_audits: {blocked_audits},
+                        wrapup_requested: {wrapup_requested},
+                        wrapup_completed: {wrapup_completed},
+                        {reset_audit_fields}
+                        {reset_completion_field}
                         updated_at: "{now}"
                     }}
                 ) {{ _docID }}
             }}"#,
             tokens_used = existing.tokens_used.unwrap_or_default().max(0),
+            blocked_audits = post.blocked_audits,
+            wrapup_requested = post.wrapup_requested,
+            wrapup_completed = post.wrapup_completed,
         );
         execute_goal_mutation(node, &mutation, "update goal").await?;
         return load_goal_by_doc_id(node, &existing.doc_id)
@@ -447,6 +650,16 @@ pub async fn set_goal(
     let escaped_objective = escape_graphql_string(&objective);
     let escaped_now = escape_graphql_string(&now_string);
     let budget_field = optional_int_graphql_field("token_budget", budget);
+    let initial_state = GoalState {
+        status,
+        blocked_audits: if status == GoalStatus::Blocked {
+            BLOCKED_AUDIT_THRESHOLD
+        } else {
+            0
+        },
+        wrapup_requested: status == GoalStatus::BudgetLimited,
+        wrapup_completed: status == GoalStatus::Complete,
+    };
     let active_started_field = optional_string_graphql_field(
         "active_started_at",
         status.accrues_active_time().then_some(now_string.as_str()),
@@ -463,16 +676,19 @@ pub async fn set_goal(
                 tokens_used: 0,
                 active_time_seconds: 0,
                 {active_started_field}
-                consecutive_blocked_audits: 0,
+                consecutive_blocked_audits: {blocked_audits},
                 continuation_sequence: 0,
-                wrapup_requested: false,
-                wrapup_completed: false,
+                wrapup_requested: {wrapup_requested},
+                wrapup_completed: {wrapup_completed},
                 infrastructure_retry_count: 0,
                 created_at: "{escaped_now}",
                 updated_at: "{escaped_now}"
             }}) {{ _docID }}
         }}"#,
         status = status.as_str(),
+        blocked_audits = initial_state.blocked_audits,
+        wrapup_requested = initial_state.wrapup_requested,
+        wrapup_completed = initial_state.wrapup_completed,
     );
     execute_goal_mutation(node, &mutation, "create goal").await?;
     load_canonical_goal(node, agent_did, session_id)
@@ -497,6 +713,37 @@ pub async fn delete_goal(node: &EmbeddedNode, goal: &GoalDocument) -> Result<boo
         .as_ref()
         .and_then(|data| data.get("delete_Goal"))
         .is_some_and(mutation_returned_rows))
+}
+
+/// Delete every replicated twin for an agent/session goal. Goal identity is
+/// intentionally not unique at the schema layer because DefraDB unique indexes
+/// do not provide a distributed P2P uniqueness guarantee; clear must therefore
+/// sweep the complete ownership scope rather than delete only the canonical row.
+pub async fn delete_goals_for_session(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    session_id: &str,
+) -> Result<usize> {
+    let agent_did = escape_graphql_string(agent_did);
+    let session_id = escape_graphql_string(session_id);
+    let mutation = format!(
+        r#"mutation {{
+            delete_Goal(filter: {{
+                agent_did: {{ _eq: "{agent_did}" }},
+                session_id: {{ _eq: "{session_id}" }}
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    if response.has_errors() {
+        bail!("delete session goals failed: {:?}", response.errors);
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("delete_Goal"))
+        .map(mutation_row_count)
+        .unwrap_or_default())
 }
 
 pub async fn update_goal_fields(
@@ -673,6 +920,12 @@ async fn execute_goal_mutation(node: &EmbeddedNode, mutation: &str, label: &str)
 
 fn mutation_returned_rows(value: &serde_json::Value) -> bool {
     value.as_array().is_some_and(|rows| !rows.is_empty()) || value.get("_docID").is_some()
+}
+
+fn mutation_row_count(value: &serde_json::Value) -> usize {
+    value
+        .as_array()
+        .map_or_else(|| usize::from(value.get("_docID").is_some()), Vec::len)
 }
 
 fn optional_int_graphql_field(name: &str, value: Option<i64>) -> String {

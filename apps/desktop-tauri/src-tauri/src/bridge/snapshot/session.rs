@@ -143,7 +143,9 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
             continuation_sequence: row.continuation_sequence.unwrap_or_default().max(0),
             wrapup_requested: row.wrapup_requested.unwrap_or(false),
             wrapup_completed: row.wrapup_completed.unwrap_or(false),
+            last_blocked_reason: normalize_optional(row.last_blocked_reason.as_deref()),
             last_failure: normalize_optional(row.last_failure.as_deref()),
+            completion_evidence: normalize_optional(row.completion_evidence.as_deref()),
         });
 
     if conversation.is_none() && session_row.is_none() && requests.is_empty() && goal.is_none() {

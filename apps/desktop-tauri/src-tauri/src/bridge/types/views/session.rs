@@ -167,7 +167,9 @@ pub(crate) struct GoalView {
     pub continuation_sequence: i64,
     pub wrapup_requested: bool,
     pub wrapup_completed: bool,
+    pub last_blocked_reason: Option<String>,
     pub last_failure: Option<String>,
+    pub completion_evidence: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

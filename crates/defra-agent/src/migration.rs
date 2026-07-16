@@ -139,6 +139,14 @@ const ADD_AGENT_RESPONSE_REASONING_PROGRESS_PATCH: &str = r#"[
     {"op":"add","path":"/AgentResponse/Fields/-","value":{"Name":"reasoning_progress_seq","Kind":"Int"}}
 ]"#;
 
+// Durable goal accounting excludes cache reads from charged input. Existing
+// InferenceCall collections must gain this scalar before any completion write
+// or goal usage query references it. Keep Kind as the canonical SDL string:
+// numeric DefraDB kind values caused the #661 fleet incident.
+const ADD_INFERENCE_CALL_CACHED_INPUT_TOKENS_PATCH: &str = r#"[
+    {"op":"add","path":"/InferenceCall/Fields/-","value":{"Name":"cached_input_tokens","Kind":"Int"}}
+]"#;
+
 const ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH: &str = r#"[
     {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"agent_did","Kind":"String"}}
 ]"#;
@@ -1236,6 +1244,67 @@ pub async fn ensure_inference_profile_migrations(node: Arc<EmbeddedNode>) -> Res
         version = %next.version_id,
         added = missing.len(),
         "InferenceProfile patched with additive fields"
+    );
+    Ok(())
+}
+
+/// Add and type-check the cache-read accounting field on upgraded stores.
+///
+/// The bundled-schema sweep is a final backstop for missing scalar fields, but
+/// this inference write-path field is release-gated explicitly: completion
+/// persistence writes it unconditionally and durable-goal usage selects it.
+pub async fn ensure_inference_call_cached_input_tokens_migration(
+    node: Arc<EmbeddedNode>,
+) -> Result<()> {
+    let Some(collection) = node
+        .get_collection("InferenceCall")
+        .context("get InferenceCall collection")?
+    else {
+        return match node
+            .add_schema(defra_agent_protocol::schemas::INFERENCE_CALL)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) if error.to_string().contains("already exists") => Ok(()),
+            Err(error) => Err(error).context("add InferenceCall schema"),
+        };
+    };
+
+    if collection_has_field(&collection, "cached_input_tokens") {
+        ensure_field_kind_matches_reference(
+            &collection,
+            "InferenceCall",
+            "cached_input_tokens",
+            &["prompt_tokens", "completion_tokens", "call_seq", "attempt"],
+            "Int",
+        )?;
+        return Ok(());
+    }
+
+    let next = node
+        .patch_collection(
+            "InferenceCall",
+            ADD_INFERENCE_CALL_CACHED_INPUT_TOKENS_PATCH,
+        )
+        .await
+        .context("patch_collection InferenceCall cached input tokens")?;
+    node.set_active_collection_version(&next.version_id)
+        .await
+        .context("set_active_collection_version InferenceCall cached input tokens")?;
+    let migrated = node
+        .get_collection("InferenceCall")
+        .context("reload InferenceCall after cached input migration")?
+        .context("InferenceCall disappeared after cached input migration")?;
+    ensure_field_kind_matches_reference(
+        &migrated,
+        "InferenceCall",
+        "cached_input_tokens",
+        &["prompt_tokens", "completion_tokens", "call_seq", "attempt"],
+        "Int",
+    )?;
+    tracing::info!(
+        version = %next.version_id,
+        "InferenceCall patched with cached_input_tokens"
     );
     Ok(())
 }
@@ -2677,6 +2746,9 @@ pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()
     ensure_inference_profile_migrations(node.clone())
         .await
         .context("ensure InferenceProfile migrations")?;
+    ensure_inference_call_cached_input_tokens_migration(node.clone())
+        .await
+        .context("ensure InferenceCall cached input token migration")?;
     ensure_agent_network_migrations(node.clone())
         .await
         .context("ensure AgentNetwork migrations")?;
@@ -2744,6 +2816,15 @@ mod patch_kind_tests {
             replicator_addresses: [String!]!
             created_at: DateTime @index(direction: DESC)
             updated_at: DateTime @index(direction: DESC)
+        }
+    "#;
+    const OLD_INFERENCE_CALL_SCHEMA: &str = r#"
+        type InferenceCall {
+            call_id: String @index(unique: true)
+            request_id: String @index
+            call_seq: Int
+            prompt_tokens: Int
+            completion_tokens: Int
         }
     "#;
 
@@ -2835,6 +2916,7 @@ mod patch_kind_tests {
             ADD_AGENT_BEHAVIOR_DESCRIPTION_SUMMARY_PATCH,
             ADD_TOOL_SERVICE_HEALTH_STATE_TOOL_COUNT_PATCH,
             ADD_AGENT_RUNTIME_EXECUTOR_STATUS_PATCH,
+            ADD_INFERENCE_CALL_CACHED_INPUT_TOKENS_PATCH,
             ADD_AGENT_MESSAGE_AGENT_DID_PATCH,
             ADD_AGENT_TOOL_CALL_AGENT_DID_PATCH,
             ADD_AGENT_SESSION_AGENT_DID_PATCH,
@@ -2844,6 +2926,96 @@ mod patch_kind_tests {
                 assert_ne!(kind, "17", "field {name} uses unassigned Kind 17");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn inference_call_cached_input_tokens_migrates_populated_legacy_store() {
+        let node = test_node().await;
+        node.add_schema(OLD_INFERENCE_CALL_SCHEMA).await.unwrap();
+        let seeded = node
+            .execute(
+                r#"mutation {
+                    create_InferenceCall(input: {
+                        call_id: "legacy-call",
+                        request_id: "legacy-request",
+                        call_seq: 1,
+                        prompt_tokens: 100,
+                        completion_tokens: 5
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !seeded.has_errors(),
+            "legacy InferenceCall seed failed: {:?}",
+            seeded.errors
+        );
+
+        ensure_inference_call_cached_input_tokens_migration(node.clone())
+            .await
+            .unwrap();
+        let first_version = node
+            .get_collection("InferenceCall")
+            .unwrap()
+            .expect("InferenceCall after migration")
+            .version_id;
+        ensure_inference_call_cached_input_tokens_migration(node.clone())
+            .await
+            .unwrap();
+        let collection = node
+            .get_collection("InferenceCall")
+            .unwrap()
+            .expect("InferenceCall after idempotent migration");
+        assert_eq!(collection.version_id, first_version);
+        assert!(collection_has_field(&collection, "cached_input_tokens"));
+        ensure_field_kind_matches_reference(
+            &collection,
+            "InferenceCall",
+            "cached_input_tokens",
+            &["prompt_tokens", "completion_tokens"],
+            "Int",
+        )
+        .unwrap();
+
+        let write = node
+            .execute(
+                r#"mutation {
+                    update_InferenceCall(
+                        filter: { call_id: { _eq: "legacy-call" } },
+                        input: { cached_input_tokens: 90 }
+                    ) { call_id cached_input_tokens }
+                }"#,
+            )
+            .await;
+        assert!(
+            !write.has_errors(),
+            "migrated cached token write failed: {:?}",
+            write.errors
+        );
+        let read = node
+            .execute(
+                r#"query {
+                    InferenceCall(filter: { call_id: { _eq: "legacy-call" } }) {
+                        call_id prompt_tokens completion_tokens cached_input_tokens
+                    }
+                }"#,
+            )
+            .await;
+        assert!(
+            !read.has_errors(),
+            "migrated cached token read failed: {:?}",
+            read.errors
+        );
+        assert_eq!(
+            read.data
+                .as_ref()
+                .and_then(|data| data.get("InferenceCall"))
+                .and_then(|rows| rows.as_array())
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("cached_input_tokens"))
+                .and_then(|value| value.as_i64()),
+            Some(90)
+        );
     }
 
     #[test]

@@ -77,6 +77,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_decision_cases_fence_runtime_controller",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::goals::generated_goal_transition_cases_fence_runtime_state_machine",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/conformance/goals.rs",
+            module_path: "conformance::goals",
+            function: "generated_goal_transition_cases_fence_runtime_state_machine",
+        },
+        ConformanceConsumer::RustTest {
             id: "goal_continuation_live::durable_goal_continues_with_real_inference_until_model_completes",
             package: "defra-agent",
             source_path: "crates/defra-agent/tests/e2e_live/goal_continuation_live.rs",

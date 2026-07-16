@@ -112,6 +112,40 @@ async fn goal_set_get_pause_resume_and_clear_are_durable() -> Result<()> {
         Some(objective)
     );
 
+    let unbudgeted = run_cli_json(
+        &home_dir,
+        &[
+            "goal",
+            "set",
+            "--graphql",
+            &graphql,
+            "--session",
+            &session_id,
+            "--clear-token-budget",
+        ],
+    )?;
+    assert!(unbudgeted.get("token_budget").is_some_and(Value::is_null));
+
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                create_Goal(input: {{
+                    goal_id: "duplicate-{}",
+                    session_id: "{}",
+                    agent_did: "{}",
+                    objective: "replicated twin",
+                    status: "paused",
+                    created_at: "2026-07-16T00:00:00Z"
+                }}) {{ _docID }}
+            }}"#,
+            Uuid::new_v4().simple(),
+            escape_graphql_string(&session_id),
+            escape_graphql_string(&agent_did),
+        ),
+    )
+    .await?;
+
     let cleared = run_cli_json(
         &home_dir,
         &[

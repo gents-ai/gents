@@ -2760,6 +2760,12 @@ pub(crate) struct GoalSetArgs {
     pub(crate) status: Option<GoalStatusArg>,
     #[arg(long, value_name = "TOKENS", help = "Positive charged-token budget")]
     pub(crate) token_budget: Option<i64>,
+    #[arg(
+        long,
+        conflicts_with = "token_budget",
+        help = "Remove the charged-token budget"
+    )]
+    pub(crate) clear_token_budget: bool,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
     pub(crate) output: OutputFormat,
 }

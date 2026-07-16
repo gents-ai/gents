@@ -106,6 +106,114 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
     assert_eq!(goal.objective, objective);
     assert_eq!(goal.status, codex::ThreadGoalStatus::Active);
     assert_eq!(goal.token_budget, Some(12_345));
+
+    let foreign_thread_id = format!("foreign-goal-{}", Uuid::new_v4().simple());
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                create_Goal(input: {{
+                    goal_id: "foreign-goal",
+                    session_id: "{}",
+                    agent_did: "{}",
+                    objective: "belongs to another surface",
+                    status: "active",
+                    created_at: "2026-07-16T00:00:00Z"
+                }}) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&foreign_thread_id),
+            escape_graphql_string(&agent_did),
+        ),
+    )
+    .await?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadGoalGet {
+            request_id: request_id(122),
+            params: codex::ThreadGoalGetParams {
+                thread_id: foreign_thread_id.clone(),
+            },
+        },
+    )
+    .await?;
+    let foreign_get: codex::ThreadGoalGetResponse =
+        read_typed_response(&mut ws, request_id(122)).await?;
+    assert!(foreign_get.goal.is_none());
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadGoalClear {
+            request_id: request_id(123),
+            params: codex::ThreadGoalClearParams {
+                thread_id: foreign_thread_id.clone(),
+            },
+        },
+    )
+    .await?;
+    let foreign_clear: codex::ThreadGoalClearResponse =
+        read_typed_response(&mut ws, request_id(123)).await?;
+    assert!(!foreign_clear.cleared);
+    let foreign_rows = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{ Goal(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ goal_id }} }}"#,
+            escape_graphql_string(&foreign_thread_id)
+        ),
+    )
+    .await?;
+    assert_eq!(
+        foreign_rows
+            .pointer("/data/Goal")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(1)
+    );
+
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                create_Goal(input: {{
+                    goal_id: "duplicate-goal",
+                    session_id: "{}",
+                    agent_did: "{}",
+                    objective: "replicated twin",
+                    status: "paused",
+                    created_at: "2026-07-16T00:00:01Z"
+                }}) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&thread_id),
+            escape_graphql_string(&agent_did),
+        ),
+    )
+    .await?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadGoalClear {
+            request_id: request_id(124),
+            params: codex::ThreadGoalClearParams {
+                thread_id: thread_id.clone(),
+            },
+        },
+    )
+    .await?;
+    let cleared: codex::ThreadGoalClearResponse =
+        read_typed_response(&mut ws, request_id(124)).await?;
+    assert!(cleared.cleared);
+    let cleared_rows = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{ Goal(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ goal_id }} }}"#,
+            escape_graphql_string(&thread_id)
+        ),
+    )
+    .await?;
+    assert_eq!(
+        cleared_rows
+            .pointer("/data/Goal")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(0)
+    );
     Ok(())
 }
 

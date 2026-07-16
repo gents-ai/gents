@@ -2,8 +2,8 @@ use chrono::Utc;
 use serde_json::json;
 
 use crate::goal::{
-    load_canonical_goal, next_blocked_audit, refresh_goal_usage, update_goal_fields, GoalSnapshot,
-    GoalStatus, BLOCKED_AUDIT_THRESHOLD, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME,
+    load_canonical_goal, next_blocked_audit, refresh_goal_usage, update_goal_fields, GoalAction,
+    GoalSnapshot, GoalStatus, BLOCKED_AUDIT_THRESHOLD, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME,
 };
 use crate::graphql::escape_graphql_string;
 use crate::llm::ToolCallHookAction;
@@ -100,8 +100,22 @@ impl DefraSessionHook {
 
         let now = Utc::now();
         let updated_at = escape_graphql_string(&now.to_rfc3339());
+        let Some(pre) = goal.state() else {
+            let result =
+                json!({"error": format!("durable goal has unknown status {:?}", goal.status)})
+                    .to_string();
+            lifecycle.complete(&result).await?;
+            return Ok(self.skip_tool_result(UPDATE_GOAL_TOOL_NAME, result));
+        };
         let outcome = match parsed.status.trim() {
             "complete" => {
+                let Some(post) = pre.step(GoalAction::Complete) else {
+                    let result =
+                        json!({"error": "complete is not legal from the goal's current status"})
+                            .to_string();
+                    lifecycle.complete(&result).await?;
+                    return Ok(self.skip_tool_result(UPDATE_GOAL_TOOL_NAME, result));
+                };
                 let active_time = goal.current_active_time_seconds(now);
                 let reason = parsed
                     .reason
@@ -109,21 +123,33 @@ impl DefraSessionHook {
                     .map(str::trim)
                     .filter(|reason| !reason.is_empty())
                     .map(escape_graphql_string);
-                let reason_field = reason
+                let evidence_field = reason
                     .as_deref()
-                    .map(|reason| format!(r#"last_failure: "{reason}","#))
-                    .unwrap_or_else(|| "last_failure: null,".to_string());
+                    .map(|reason| format!(r#"completion_evidence: "{reason}","#))
+                    .unwrap_or_else(|| "completion_evidence: null,".to_string());
                 update_goal_fields(
                     &self.node,
                     &goal,
                     &format!(
-                        r#"status: "complete", active_time_seconds: {active_time}, active_started_at: null, wrapup_completed: true, {reason_field} updated_at: "{updated_at}""#
+                        r#"status: "{}", active_time_seconds: {active_time}, active_started_at: null, wrapup_completed: {}, last_failure: null, {evidence_field} updated_at: "{updated_at}""#,
+                        post.status.as_str(), post.wrapup_completed
                     ),
                 )
                 .await?;
                 json!({"accepted": true, "status": GoalStatus::Complete.as_str()})
             }
             "blocked" => {
+                if pre.status != GoalStatus::Active {
+                    let result = json!({
+                        "error": format!(
+                            "blocked audit is legal only from active; current status is {}",
+                            pre.status.as_str()
+                        )
+                    })
+                    .to_string();
+                    lifecycle.complete(&result).await?;
+                    return Ok(self.skip_tool_result(UPDATE_GOAL_TOOL_NAME, result));
+                }
                 let Some(reason) = parsed
                     .reason
                     .as_deref()
@@ -136,7 +162,7 @@ impl DefraSessionHook {
                 };
                 let (audits, accepted) = next_blocked_audit(
                     goal.consecutive_blocked_audits.unwrap_or_default(),
-                    goal.last_failure.as_deref(),
+                    goal.last_blocked_reason.as_deref(),
                     goal.last_blocked_request_id.as_deref(),
                     reason,
                     &request_id,
@@ -158,7 +184,7 @@ impl DefraSessionHook {
                     &self.node,
                     &goal,
                     &format!(
-                        r#"status: "{}", consecutive_blocked_audits: {audits}, last_blocked_request_id: "{request_id}", last_failure: "{reason}", {active_fields} updated_at: "{updated_at}""#,
+                        r#"status: "{}", consecutive_blocked_audits: {audits}, last_blocked_request_id: "{request_id}", last_blocked_reason: "{reason}", {active_fields} updated_at: "{updated_at}""#,
                         status.as_str()
                     ),
                 )

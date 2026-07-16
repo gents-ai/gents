@@ -30,7 +30,9 @@ describe("durable goal transcript card", () => {
         continuationSequence: 2,
         wrapupRequested: false,
         wrapupCompleted: false,
+        lastBlockedReason: null,
         lastFailure: null,
+        completionEvidence: null,
       },
     };
 

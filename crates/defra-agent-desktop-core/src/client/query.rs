@@ -34,7 +34,7 @@ const AGENT_REQUEST_FIELDS: &str = "request_id agent_did behavior_id session_id 
 const AGENT_RESPONSE_FIELDS: &str = "response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at";
 const AGENT_MESSAGE_FIELDS: &str = "message_key session_id sequence role content timestamp";
 const AGENT_SESSION_FIELDS: &str = "session_id agent_name behavior_id started ended status";
-const GOAL_FIELDS: &str = "goal_id session_id agent_did objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure created_at updated_at";
+const GOAL_FIELDS: &str = "goal_id session_id agent_did objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence created_at updated_at";
 const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id message_sequence tool_name tool_call_id args result status lifecycle_state cancel_policy workflow_group_id workflow_role deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms";
 const AGENT_TOOL_RESULT_FIELDS: &str = "agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted";
 const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at";
@@ -654,7 +654,7 @@ query DesktopRemoteSnapshot {
   AgentResponse { response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }
   AgentMessage { message_key session_id sequence role content timestamp }
   AgentSession { session_id agent_name behavior_id started ended status }
-  Goal { goal_id session_id agent_did objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure created_at updated_at }
+  Goal { goal_id session_id agent_did objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence created_at updated_at }
   AgentToolCall { tool_call_key session_id request_id message_sequence tool_name tool_call_id args result status lifecycle_state cancel_policy workflow_group_id workflow_role deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms }
   AgentToolResult { agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted }
   CompactionEntry { compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at }
@@ -857,7 +857,7 @@ pub async fn fetch_doc_patch(
 }
 
 /// Load a snapshot of all rows for a specific `agent_did`. Agent-keyed
-/// collections are filtered by `agent_did`; transcript collections
+/// collections (including Goal) are filtered by `agent_did`; transcript collections
 /// (Message, Session, ToolCall, CompactionEntry) are filtered by the
 /// session_id list derived from the agent's conversations. Control-plane
 /// collections (InferenceBackend, InferenceProfile, ToolServiceRegistry,
@@ -917,6 +917,12 @@ pub async fn load_agent_scoped_snapshot(
         ),
     )
     .await?;
+    let goals: Vec<GoalRow> = load_rows(
+        node,
+        GOAL_NAME,
+        &format!("query {{ {GOAL_NAME}({did_filter}) {{ {GOAL_FIELDS} }} }}"),
+    )
+    .await?;
     let tool_selections: Vec<ToolSelectionRow> = load_rows(
         node,
         TOOL_SELECTION_NAME,
@@ -934,10 +940,13 @@ pub async fn load_agent_scoped_snapshot(
             session_ids.insert(sid.to_string());
         }
     }
+    for goal in &goals {
+        session_ids.insert(goal.session_id.clone());
+    }
 
     // Session-keyed collections.
-    let (messages, sessions, goals, tool_calls, compaction_entries) = if session_ids.is_empty() {
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
+    let (messages, sessions, tool_calls, compaction_entries) = if session_ids.is_empty() {
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new())
     } else {
         let session_in = session_ids
             .iter()
@@ -961,12 +970,6 @@ pub async fn load_agent_scoped_snapshot(
             ),
         )
         .await?;
-        let goals: Vec<GoalRow> = load_rows(
-            node,
-            "Goal",
-            &format!("query {{ Goal({session_filter}) {{ {GOAL_FIELDS} }} }}"),
-        )
-        .await?;
         let tool_calls: Vec<AgentToolCallRow> = load_rows(
             node,
             AGENT_TOOL_CALL_NAME,
@@ -979,7 +982,7 @@ pub async fn load_agent_scoped_snapshot(
             &format!("query {{ {COMPACTION_ENTRY_NAME}({session_filter}) {{ {COMPACTION_ENTRY_FIELDS} }} }}"),
         )
         .await?;
-        (messages, sessions, goals, tool_calls, compaction_entries)
+        (messages, sessions, tool_calls, compaction_entries)
     };
 
     // Control-plane (load in full; small).
@@ -1152,6 +1155,27 @@ mod tests {
         let response = node.execute(mutation).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
 
+        let goal_mutation = r#"mutation {
+            alpha: create_Goal(input: {
+                goal_id: "alpha-goal",
+                session_id: "alpha-goal-only",
+                agent_did: "did:alpha",
+                objective: "goal-only session",
+                status: "active",
+                created_at: "2026-05-07T00:00:00Z"
+            }) { _docID }
+            beta: create_Goal(input: {
+                goal_id: "beta-goal",
+                session_id: "beta-goal-only",
+                agent_did: "did:beta",
+                objective: "other agent",
+                status: "active",
+                created_at: "2026-05-07T00:00:00Z"
+            }) { _docID }
+        }"#;
+        let response = node.execute(goal_mutation).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+
         let store = load_agent_scoped_snapshot(node.as_ref(), "did:alpha")
             .await
             .expect("load_agent_scoped_snapshot");
@@ -1165,6 +1189,8 @@ mod tests {
             dids.iter().all(|d| *d == "did:alpha"),
             "expected only did:alpha conversations; got {dids:?}"
         );
+        assert_eq!(store.goals.len(), 1);
+        assert_eq!(store.goals[0].session_id, "alpha-goal-only");
     }
 
     #[test]
@@ -1178,6 +1204,21 @@ mod tests {
             assert!(
                 REMOTE_SNAPSHOT_QUERY.contains(field),
                 "remote snapshot missing AgentToolCall field {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_goal_queries_include_local_field_set() {
+        let chat_patch = remote_chat_patch_query("sess-1");
+        for field in GOAL_FIELDS.split_whitespace() {
+            assert!(
+                chat_patch.contains(field),
+                "remote chat patch missing Goal field {field}"
+            );
+            assert!(
+                REMOTE_SNAPSHOT_QUERY.contains(field),
+                "remote snapshot missing Goal field {field}"
             );
         }
     }

@@ -3,34 +3,53 @@ import Proofs.Conformance.ContractTypes
 
 namespace Conformance.Contracts
 
+def goalStatuses : List Goals.Status :=
+  [ .active, .paused, .blocked, .usageLimited, .budgetLimited, .complete ]
+
 def goalStatusNames : List String :=
-  [ Goals.Status.active
-  , .paused
-  , .blocked
-  , .usageLimited
-  , .budgetLimited
-  , .complete
-  ].map Goals.Status.toDefraDB
+  goalStatuses.map Goals.Status.toDefraDB
+
+def goalState (status : Goals.Status) (audits : Nat := 0)
+    (requested : Bool := false) (completed : Bool := false) : Goals.State :=
+  { status := status
+  , blockedAudits := audits
+  , wrapupRequested := requested
+  , wrapupCompleted := completed
+  }
+
+def goalSamples : List Goals.State :=
+  (goalStatuses.map goalState) ++
+  [ goalState .active 1
+  , goalState .active 2
+  , goalState .budgetLimited 0 true false
+  , goalState .budgetLimited 0 true true
+  ]
+
+def goalActions : List (String × Goals.Action) :=
+  [ ("pause", .pause)
+  , ("resume", .resume)
+  , ("complete", .complete)
+  , ("blocked_audit_same_request", .blockedAudit .sameRequest)
+  , ("blocked_audit_same_condition", .blockedAudit .sameCondition)
+  , ("blocked_audit_new_condition", .blockedAudit .newCondition)
+  , ("operator_block", .operatorBlock)
+  , ("usage_limit", .usageLimit)
+  , ("budget_exhausted", .budgetExhausted)
+  , ("wrapup_finished", .wrapupFinished)
+  , ("wrapup_abandoned", .wrapupAbandoned)
+  , ("clean_turn", .cleanTurn)
+  ]
 
 def goalMachine : StateMachineContract :=
   machineContract
     "Goal"
     goalStatusNames
     ["complete"]
-    ["pause", "resume", "complete", "blocked_audit", "budget_exhausted", "wrapup_finished"]
-    [ { source := "active", target := "paused" }
-    , { source := "active", target := "complete" }
-    , { source := "active", target := "active" }
-    , { source := "active", target := "blocked" }
-    , { source := "active", target := "budget_limited" }
-    , { source := "paused", target := "active" }
-    , { source := "paused", target := "complete" }
-    , { source := "blocked", target := "active" }
-    , { source := "blocked", target := "complete" }
-    , { source := "usage_limited", target := "active" }
-    , { source := "usage_limited", target := "complete" }
-    , { source := "budget_limited", target := "budget_limited" }
-    , { source := "budget_limited", target := "complete" }
-    ]
+    (actionNames goalActions)
+    (transitionPairsFromSamples
+      goalSamples
+      goalActions
+      Goals.step?
+      (fun state => state.status.toDefraDB))
 
 end Conformance.Contracts

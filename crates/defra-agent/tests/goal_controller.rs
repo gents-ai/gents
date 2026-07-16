@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_agent::goal::{load_canonical_goal, set_goal, GoalStatus};
+use defra_agent::goal::{load_canonical_goal, set_goal, update_goal_fields, GoalStatus};
 use defra_agent::{ActiveRuntimeSnapshot, GoalSource, TriggerSource, UpdateSubscriptionSource};
 use serde::Deserialize;
 use tokio::sync::watch;
@@ -88,6 +88,7 @@ struct ChildRow {
     caused_by_trigger_id: Option<String>,
     caused_by_trigger_kind: Option<String>,
     metadata: Option<String>,
+    lifecycle_state: Option<String>,
 }
 
 async fn goal_children(db: &TestDb) -> Vec<ChildRow> {
@@ -97,7 +98,7 @@ async fn goal_children(db: &TestDb) -> Vec<ChildRow> {
             r#"{
                 AgentRequest(filter: { caused_by_trigger_kind: { _eq: "goal" } }) {
                     _docID request_id session_id caused_by_parent_request_id
-                    caused_by_trigger_id caused_by_trigger_kind metadata
+                    caused_by_trigger_id caused_by_trigger_kind metadata lifecycle_state
                 }
             }"#,
         )
@@ -309,4 +310,172 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     assert_eq!(goal.wrapup_requested, Some(true));
     assert_eq!(goal.wrapup_completed, Some(true));
     assert_eq!(goal_children(&db).await.len(), 1);
+}
+
+#[tokio::test]
+async fn resume_resets_blocked_audit_identity_and_count() {
+    let db = test_db("goal-resume-audit-reset").await;
+    let goal = set_goal(
+        db.node.as_ref(),
+        AGENT_DID,
+        SESSION,
+        Some("Resume with a fresh blocked audit"),
+        Some(GoalStatus::Active),
+        None,
+    )
+    .await
+    .expect("set goal");
+    update_goal_fields(
+        db.node.as_ref(),
+        &goal,
+        r#"status: "blocked", consecutive_blocked_audits: 3, last_blocked_request_id: "request-3", last_blocked_reason: "needs approval", active_started_at: null"#,
+    )
+    .await
+    .expect("seed blocked audit");
+
+    let resumed = set_goal(
+        db.node.as_ref(),
+        AGENT_DID,
+        SESSION,
+        None,
+        Some(GoalStatus::Active),
+        None,
+    )
+    .await
+    .expect("resume goal");
+    assert_eq!(resumed.parsed_status(), Some(GoalStatus::Active));
+    assert_eq!(resumed.consecutive_blocked_audits, Some(0));
+    assert_eq!(resumed.last_blocked_request_id, None);
+    assert_eq!(resumed.last_blocked_reason, None);
+}
+
+#[tokio::test]
+async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
+    let db = test_db("goal-provider-usage-limit").await;
+    create_request(
+        db.node.as_ref(),
+        "usage-limited-request",
+        SESSION,
+        "error",
+        "2026-07-15T00:00:00Z",
+    )
+    .await;
+    let response = db
+        .node
+        .execute(
+            r#"mutation {
+                add_InferenceCall(input: {
+                    call_id: "usage-limited-call",
+                    request_id: "usage-limited-request",
+                    call_seq: 1,
+                    attempt: 1,
+                    call_state: "failed",
+                    failure_reason: "provider insufficient_quota: credit balance exhausted"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "seed usage limit: {:?}",
+        response.errors
+    );
+    set_goal(
+        db.node.as_ref(),
+        AGENT_DID,
+        SESSION,
+        Some("Stop on provider quota exhaustion"),
+        Some(GoalStatus::Active),
+        None,
+    )
+    .await
+    .expect("set goal");
+
+    let (mut source, _snapshot_tx) = source(&db);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), source.next_fire())
+            .await
+            .is_err()
+    );
+    let goal = load_canonical_goal(db.node.as_ref(), AGENT_DID, SESSION)
+        .await
+        .expect("load goal")
+        .expect("goal exists");
+    assert_eq!(goal.parsed_status(), Some(GoalStatus::UsageLimited));
+    assert!(goal
+        .last_failure
+        .as_deref()
+        .is_some_and(|reason| reason.contains("insufficient_quota")));
+}
+
+#[tokio::test]
+async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
+    let db = test_db("goal-wrapup-retry-bound").await;
+    seed_completed_request(&db, "parent-wrapup-retry").await;
+    set_goal(
+        db.node.as_ref(),
+        AGENT_DID,
+        SESSION,
+        Some("Bound failed wrap-up retries"),
+        Some(GoalStatus::Active),
+        Some(Some(1)),
+    )
+    .await
+    .expect("set goal");
+    let response = db
+        .node
+        .execute(
+            r#"mutation {
+                add_InferenceCall(input: {
+                    call_id: "wrapup-budget-call",
+                    request_id: "parent-wrapup-retry",
+                    call_seq: 1,
+                    attempt: 1,
+                    call_state: "completed",
+                    prompt_tokens: 2,
+                    completion_tokens: 0,
+                    cached_input_tokens: 0
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "seed wrapup usage: {:?}",
+        response.errors
+    );
+
+    let (mut source, _snapshot_tx) = source(&db);
+    for expected_children in 1..=3 {
+        tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+            .await
+            .expect("goal source timed out")
+            .expect("wrapup or retry intent");
+        let children = goal_children(&db).await;
+        assert_eq!(children.len(), expected_children);
+        let child = children
+            .iter()
+            .find(|child| child.lifecycle_state.as_deref() == Some("pending"))
+            .expect("new pending wrap-up child");
+        set_request_lifecycle_state(db.node.as_ref(), &child.doc_id, "failed").await;
+    }
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(250), source.next_fire())
+            .await
+            .is_err(),
+        "bounded failed wrap-up must not spawn a fourth child"
+    );
+    let goal = load_canonical_goal(db.node.as_ref(), AGENT_DID, SESSION)
+        .await
+        .expect("load goal")
+        .expect("goal exists");
+    assert_eq!(goal.parsed_status(), Some(GoalStatus::BudgetLimited));
+    assert_eq!(goal.infrastructure_retry_count, Some(2));
+    assert_eq!(goal.wrapup_completed, Some(true));
+    assert!(goal
+        .last_failure
+        .as_deref()
+        .is_some_and(|reason| reason.contains("after 2 retries")));
+    assert_eq!(goal_children(&db).await.len(), 3);
 }

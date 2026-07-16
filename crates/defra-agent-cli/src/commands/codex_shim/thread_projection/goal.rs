@@ -3,8 +3,8 @@ use chrono::{DateTime, Utc};
 use codex_app_server_protocol as codex;
 
 use defra_agent::goal::{
-    delete_goal, load_canonical_goal, refresh_goal_usage, set_goal, GoalDocument, GoalSnapshot,
-    GoalStatus,
+    delete_goals_for_session, load_canonical_goal, refresh_goal_usage, set_goal, GoalDocument,
+    GoalSnapshot, GoalStatus,
 };
 
 use crate::commands::codex_shim::ShimState;
@@ -36,6 +36,12 @@ pub(in crate::commands::codex_shim) async fn get_codex_thread_goal(
     state: &ShimState,
     thread_id: &str,
 ) -> Result<Option<codex::ThreadGoal>> {
+    if super::storage::load_scoped_session(state, thread_id)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
     let Some(goal) =
         load_canonical_goal(state.node.as_ref(), state.agent_did.as_ref(), thread_id).await?
     else {
@@ -48,12 +54,16 @@ pub(in crate::commands::codex_shim) async fn clear_codex_thread_goal(
     state: &ShimState,
     thread_id: &str,
 ) -> Result<bool> {
-    let Some(goal) =
-        load_canonical_goal(state.node.as_ref(), state.agent_did.as_ref(), thread_id).await?
-    else {
+    if super::storage::load_scoped_session(state, thread_id)
+        .await?
+        .is_none()
+    {
         return Ok(false);
-    };
-    delete_goal(state.node.as_ref(), &goal).await
+    }
+    Ok(
+        delete_goals_for_session(state.node.as_ref(), state.agent_did.as_ref(), thread_id).await?
+            > 0,
+    )
 }
 
 async fn enrich(state: &ShimState, mut goal: GoalDocument) -> Result<codex::ThreadGoal> {

@@ -111,7 +111,9 @@ export type DesktopSessionSnapshot = {
     continuationSequence: number;
     wrapupRequested: boolean;
     wrapupCompleted: boolean;
+    lastBlockedReason?: string | null;
     lastFailure?: string | null;
+    completionEvidence?: string | null;
   } | null;
   turnState?: string | null;
   latestRequestId?: string | null;

@@ -47,6 +47,8 @@ def snapshotJson : String :=
       ++ Conformance.TriggerContracts.triggerDispatchCasesJson ++ ","
     ++ "\"goal_decision_cases\":"
       ++ goalDecisionCasesJson ++ ","
+    ++ "\"goal_transition_cases\":"
+      ++ goalTransitionCasesJson ++ ","
     ++ "\"frontend_client_shell_case_count\":"
       ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
     ++ "\"frontend_client_shell_cases\":"

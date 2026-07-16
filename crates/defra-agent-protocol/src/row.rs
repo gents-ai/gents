@@ -371,6 +371,8 @@ pub struct GoalRow {
     #[serde(default)]
     pub last_blocked_request_id: Option<String>,
     #[serde(default)]
+    pub last_blocked_reason: Option<String>,
+    #[serde(default)]
     pub last_continued_from_request_id: Option<String>,
     #[serde(default)]
     pub continuation_sequence: Option<i64>,
@@ -382,6 +384,8 @@ pub struct GoalRow {
     pub infrastructure_retry_count: Option<i64>,
     #[serde(default)]
     pub last_failure: Option<String>,
+    #[serde(default)]
+    pub completion_evidence: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
