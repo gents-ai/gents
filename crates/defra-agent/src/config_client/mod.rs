@@ -31,6 +31,7 @@ mod txn;
 pub mod patch;
 
 pub use agent_behavior::write_agent_behavior_document;
+pub use common::mint_recreate_identity;
 pub use event_trigger::write_event_trigger_document;
 pub use inference_backend::{write_inference_backend_document, InferenceBackendUpsertDocument};
 pub use schedule::write_schedule_document;

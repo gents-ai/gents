@@ -4,5 +4,6 @@ type AgentPrincipal {
     default_behavior_id: String @index
     enabled: Boolean @index
     created_at: String
+    updated_at: DateTime @index(direction: DESC)
     created_by: String
 }

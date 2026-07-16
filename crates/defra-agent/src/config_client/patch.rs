@@ -133,6 +133,7 @@ impl SelfConfigTarget {
                 "skill_refs",
                 "skill_excludes",
                 "created_at",
+                "updated_at",
             ],
             Self::ToolSelection => &[
                 "selection_id",
@@ -172,6 +173,7 @@ impl SelfConfigTarget {
                 "self_config_categories",
                 "self_config_no_lockout",
                 "self_config_dry_run",
+                "updated_at",
             ],
             Self::InferenceProfile => &[
                 "profile_id",
@@ -194,6 +196,7 @@ impl SelfConfigTarget {
                 "retry_max_resample",
                 "retry_allow_repair",
                 "retry_interactive_max",
+                "updated_at",
             ],
             Self::InferenceBackend => &[
                 "backend_id",
@@ -209,6 +212,7 @@ impl SelfConfigTarget {
                 "models",
                 "last_probe",
                 "probe_status",
+                "updated_at",
             ],
             Self::ToolServiceRegistry => &[
                 "service_id",
