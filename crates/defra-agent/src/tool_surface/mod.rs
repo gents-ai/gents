@@ -28,7 +28,7 @@ use crate::defra_write::BoundedWriteTool;
 use crate::document_config::{SubagentTarget, WriteToolDecl};
 use crate::meta_tools::{build_meta_tools, META_TOOL_NAMES};
 use crate::toolset::{
-    background_tool_names, build_background_tools, build_context_budget_tool,
+    background_tool_names, build_background_tools, build_context_budget_tool, build_goal_tools,
     build_orchestration_tools, build_session_history_tool, build_subagent_tools,
     orchestration_tool_names, subagent_tool_names, CliToolConfig, ToolSet,
     CONTEXT_BUDGET_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
@@ -166,6 +166,8 @@ impl ToolSurface {
         if self.enable_defra_query {
             names.push(DEFRA_QUERY_TOOL_NAME.to_string());
         }
+        names.push(crate::goal::GET_GOAL_TOOL_NAME.to_string());
+        names.push(crate::goal::UPDATE_GOAL_TOOL_NAME.to_string());
         names.extend(crate::self_config::self_config_tool_names(
             &self.self_config,
         ));
@@ -226,6 +228,7 @@ impl ToolSurface {
                 self.defra_query_scope.clone(),
             ));
         }
+        tools.extend(build_goal_tools());
         tools.extend(crate::self_config::build_self_config_tools(
             runtime.node.clone(),
             runtime.agent_did.clone(),

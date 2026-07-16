@@ -53,6 +53,7 @@ enum SubagentTargetHost {
 }
 
 mod background_tools;
+mod goal_tools;
 mod helpers;
 mod message_spawn;
 mod orchestration;

@@ -33,6 +33,7 @@ pub enum QueueSource {
     #[serde(alias = "subagent_completion")]
     BackgroundCompletion,
     Steering,
+    Goal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -86,6 +87,10 @@ pub(crate) fn is_subagent_owned_queue(metadata: Option<&str>) -> bool {
                     .as_deref()
                     .is_some_and(|key| !key.trim().is_empty()))
     })
+}
+
+pub(crate) fn is_goal_queue(metadata: Option<&str>) -> bool {
+    parse_queue_hints(metadata).is_some_and(|hints| matches!(hints.source, QueueSource::Goal))
 }
 
 #[derive(Debug, Deserialize)]
@@ -236,6 +241,125 @@ pub(crate) async fn enqueue_session_request(
     }
 
     Ok(enqueued)
+}
+
+pub(crate) async fn enqueue_goal_continuation(
+    node: &EmbeddedNode,
+    parent: &AgentRequest,
+    goal_id: &str,
+    content: &str,
+    continuation_sequence: i64,
+    wrapup: bool,
+) -> Result<EnqueuedAgentRequest> {
+    use sha2::{Digest, Sha256};
+
+    let behavior_id = parent_behavior_id(node, parent).await?;
+    let digest = Sha256::digest(format!("{goal_id}\0{}", parent.request_id).as_bytes());
+    let request_id = format!(
+        "goal-cont-{}",
+        digest[..16]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    if let Some(doc_id) = lookup_request_doc_id_optional(node, &request_id).await? {
+        return Ok(EnqueuedAgentRequest {
+            doc_id,
+            request_id,
+            session_id: parent.session_id.clone(),
+        });
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let queue_hints = QueueHints {
+        source: QueueSource::Goal,
+        policy: QueuePolicy::Coalesce,
+        key: Some(format!("goal:{goal_id}:{}", parent.request_id)),
+        queued_after_request_id: Some(parent.request_id.clone()),
+        interrupted_request_id: None,
+    };
+    let metadata = serde_json::json!({
+        "queue": queue_hints,
+        "goal": {
+            "goal_id": goal_id,
+            "parent_request_id": parent.request_id,
+            "continuation_sequence": continuation_sequence,
+            "wrapup": wrapup,
+        }
+    })
+    .to_string();
+
+    let escaped_request_id = escape_graphql_string(&request_id);
+    let escaped_agent_did = escape_graphql_string(&parent.agent_did);
+    let requester_did_field = session::requester_did_create_field(parent.requester_did.as_deref());
+    let escaped_behavior_id = escape_graphql_string(&behavior_id);
+    let escaped_session_id = escape_graphql_string(&parent.session_id);
+    let escaped_content = escape_graphql_string(content);
+    let escaped_metadata = escape_graphql_string(&metadata);
+    let escaped_created_at = escape_graphql_string(&now);
+    let escaped_goal_id = escape_graphql_string(goal_id);
+    let escaped_parent_request_id = escape_graphql_string(&parent.request_id);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{escaped_request_id}",
+                agent_did: "{escaped_agent_did}",
+                {requester_did_field}
+                behavior_id: "{escaped_behavior_id}",
+                session_id: "{escaped_session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{escaped_request_id}",
+                superseded_by_request: "",
+                content: "{escaped_content}",
+                metadata: "{escaped_metadata}",
+                status: "pending",
+                lifecycle_state: "pending",
+                backend_id: "",
+                execution_origin: "scheduled",
+                caused_by_trigger_id: "{escaped_goal_id}",
+                caused_by_trigger_kind: "goal",
+                caused_by_parent_request_id: "{escaped_parent_request_id}",
+                failure_reason: "",
+                created_at: "{escaped_created_at}",
+                retry_count: 0,
+                max_retries: {max_retries},
+                subagent_depth: 0
+            }}) {{ _docID }}
+        }}"#,
+        max_retries = DEFAULT_REQUEST_MAX_RETRIES,
+    );
+    let response =
+        session::execute_mutation_with_retry(node, &mutation, "enqueue_goal_continuation").await?;
+    let doc_id = extract_single_doc_id(&response, "create_AgentRequest")
+        .or(lookup_request_doc_id_optional(node, &request_id).await?)
+        .context("goal continuation create returned no _docID")?;
+
+    if let Err(error) = session::upsert_conversation_from_request_with_identity_and_requester_did(
+        node,
+        &parent.session_id,
+        &behavior_id,
+        &parent.agent_did,
+        &behavior_id,
+        &request_id,
+        content,
+        "pending",
+        parent.requester_did.as_deref(),
+    )
+    .await
+    {
+        tracing::warn!(
+            %request_id,
+            session_id = %parent.session_id,
+            %error,
+            "failed to update conversation for goal continuation"
+        );
+    }
+
+    Ok(EnqueuedAgentRequest {
+        doc_id,
+        request_id,
+        session_id: parent.session_id.clone(),
+    })
 }
 
 // SAFETY (#664): `agent_did` scopes the candidate query AND the supersede
@@ -467,6 +591,30 @@ async fn lookup_request_doc_id(node: &EmbeddedNode, request_id: &str) -> Result<
     extract_single_doc_id(&response, "AgentRequest").ok_or_else(|| {
         anyhow::anyhow!("queued AgentRequest request_id={request_id} not found after create")
     })
+}
+
+async fn lookup_request_doc_id_optional(
+    node: &EmbeddedNode,
+    request_id: &str,
+) -> Result<Option<String>> {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                order: {{ created_at: ASC }},
+                limit: 1
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "lookup optional AgentRequest doc id failed for request_id={request_id}: {:?}",
+            response.errors
+        );
+    }
+    Ok(extract_single_doc_id(&response, "AgentRequest"))
 }
 
 pub async fn drain_automated_wakeups(
@@ -771,6 +919,7 @@ mod tests {
             ("background_completion", QueueSource::BackgroundCompletion),
             ("subagent_completion", QueueSource::BackgroundCompletion),
             ("steering", QueueSource::Steering),
+            ("goal", QueueSource::Goal),
         ];
 
         for (source, expected_source) in cases {

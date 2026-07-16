@@ -104,6 +104,8 @@ mod coverage;
 mod event_delivery;
 #[path = "conformance/fleet.rs"]
 mod fleet;
+#[path = "conformance/goals.rs"]
+mod goals;
 #[path = "conformance/inference_call.rs"]
 mod inference_call;
 #[path = "conformance/interrupts_manual.rs"]

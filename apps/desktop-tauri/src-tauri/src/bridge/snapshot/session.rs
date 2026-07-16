@@ -9,7 +9,7 @@ use super::super::cause_derivation::{
 };
 use super::super::types::{
     normalize_optional, turn_state_label, CommandDenialView, DerivedCancelCauseView,
-    DesktopSessionSnapshot, MessageView, PendingTurnView, ResponseView, ToolCallView,
+    DesktopSessionSnapshot, GoalView, MessageView, PendingTurnView, ResponseView, ToolCallView,
     ToolResultView,
 };
 use super::timeline::{build_rendered_timeline, materialized_user_turn_count};
@@ -120,8 +120,35 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
         || store.requests_for_session(session_id),
         |agent_did| store.requests_for_session_for_agent(session_id, agent_did),
     );
+    let goal = store
+        .goals
+        .iter()
+        .filter(|row| {
+            row.session_id == session_id
+                && agent_did.map_or(true, |agent_did| row.agent_did == agent_did)
+        })
+        .min_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.goal_id.cmp(&right.goal_id))
+        })
+        .map(|row| GoalView {
+            goal_id: row.goal_id.clone(),
+            objective: normalize_optional(row.objective.as_deref()),
+            status: normalize_optional(row.status.as_deref()),
+            token_budget: row.token_budget,
+            tokens_used: row.tokens_used.unwrap_or_default().max(0),
+            active_time_seconds: row.active_time_seconds.unwrap_or_default().max(0),
+            consecutive_blocked_audits: row.consecutive_blocked_audits.unwrap_or_default().max(0),
+            continuation_sequence: row.continuation_sequence.unwrap_or_default().max(0),
+            wrapup_requested: row.wrapup_requested.unwrap_or(false),
+            wrapup_completed: row.wrapup_completed.unwrap_or(false),
+            last_blocked_reason: normalize_optional(row.last_blocked_reason.as_deref()),
+            last_failure: normalize_optional(row.last_failure.as_deref()),
+            completion_evidence: normalize_optional(row.completion_evidence.as_deref()),
+        });
 
-    if conversation.is_none() && session_row.is_none() && requests.is_empty() {
+    if conversation.is_none() && session_row.is_none() && requests.is_empty() && goal.is_none() {
         return None;
     }
 
@@ -374,6 +401,7 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
         status: conversation
             .and_then(|row| normalize_optional(row.status.as_deref()))
             .or_else(|| session_row.and_then(|row| normalize_optional(row.status.as_deref()))),
+        goal,
         turn_state: turn_state_label,
         latest_request_id,
         latest_response,

@@ -100,6 +100,21 @@ export type DesktopSessionSnapshot = {
   title?: string | null;
   previewText?: string | null;
   status?: string | null;
+  goal?: {
+    goalId: string;
+    objective?: string | null;
+    status?: string | null;
+    tokenBudget?: number | null;
+    tokensUsed: number;
+    activeTimeSeconds: number;
+    consecutiveBlockedAudits: number;
+    continuationSequence: number;
+    wrapupRequested: boolean;
+    wrapupCompleted: boolean;
+    lastBlockedReason?: string | null;
+    lastFailure?: string | null;
+    completionEvidence?: string | null;
+  } | null;
   turnState?: string | null;
   latestRequestId?: string | null;
   latestResponse?: ResponseView | null;

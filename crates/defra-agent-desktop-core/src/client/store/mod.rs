@@ -8,8 +8,8 @@ use defra_agent_protocol::client_protocol::ClientTurnState;
 use defra_agent_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
     AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
-    CompactionEntryRow, EventTriggerRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow,
-    SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
+    CompactionEntryRow, EventTriggerRow, GoalRow, InferenceBackendRow, InferenceProfileRow,
+    ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
 use serde::Serialize;
 
@@ -25,6 +25,7 @@ pub struct ClientStoreRows {
     pub responses: Vec<AgentResponseRow>,
     pub messages: Vec<AgentMessageRow>,
     pub sessions: Vec<AgentSessionRow>,
+    pub goals: Vec<GoalRow>,
     pub tool_calls: Vec<AgentToolCallRow>,
     pub tool_results: Vec<AgentToolResultRow>,
     pub compaction_entries: Vec<CompactionEntryRow>,
@@ -72,6 +73,7 @@ pub struct ClientStore {
     pub responses: Vec<AgentResponseRow>,
     pub messages: Vec<AgentMessageRow>,
     pub sessions: Vec<AgentSessionRow>,
+    pub goals: Vec<GoalRow>,
     pub tool_calls: Vec<AgentToolCallRow>,
     pub tool_results: Vec<AgentToolResultRow>,
     pub compaction_entries: Vec<CompactionEntryRow>,
@@ -172,6 +174,7 @@ impl ClientStore {
             incoming.session_source_agent_dids,
             session_merge_key,
         );
+        upsert_goal_rows(&mut rows.goals, incoming.goals);
         upsert_rows_with_sources_by_key(
             &mut rows.tool_calls,
             &mut rows.tool_call_source_agent_dids,
@@ -280,6 +283,7 @@ impl ClientStore {
             patch_rows.session_source_agent_dids,
             session_merge_key,
         );
+        upsert_goal_rows(&mut rows.goals, patch_rows.goals);
         upsert_rows_with_sources_by_key(
             &mut rows.tool_calls,
             &mut rows.tool_call_source_agent_dids,
@@ -335,6 +339,7 @@ impl ClientStore {
             responses: self.responses.clone(),
             messages: self.messages.clone(),
             sessions: self.sessions.clone(),
+            goals: self.goals.clone(),
             tool_calls: self.tool_calls.clone(),
             tool_results: self.tool_results.clone(),
             compaction_entries: self.compaction_entries.clone(),
@@ -740,6 +745,7 @@ impl ClientStore {
             + self.responses.len()
             + self.messages.len()
             + self.sessions.len()
+            + self.goals.len()
             + self.tool_calls.len()
             + self.tool_results.len()
             + self.compaction_entries.len()
@@ -792,6 +798,33 @@ fn upsert_rows_by_key<T>(target: &mut Vec<T>, incoming: Vec<T>, key_fn: impl Fn(
         let key = key_fn(&row);
         if let Some(index) = indexes.get(&key).copied() {
             target[index] = row;
+        } else {
+            indexes.insert(key, target.len());
+            target.push(row);
+        }
+    }
+}
+
+/// Merge durable goals without allowing a later-created replicated twin to
+/// replace the canonical row selected by the runtime. A row with the same
+/// creation time and goal ID is treated as an update and replaces in place.
+fn upsert_goal_rows(target: &mut Vec<GoalRow>, incoming: Vec<GoalRow>) {
+    let mut indexes = target
+        .iter()
+        .enumerate()
+        .map(|(index, row)| (goal_merge_key(row), index))
+        .collect::<HashMap<_, _>>();
+
+    for row in incoming {
+        let key = goal_merge_key(&row);
+        if let Some(index) = indexes.get(&key).copied() {
+            let canonical_order = row
+                .created_at
+                .cmp(&target[index].created_at)
+                .then_with(|| row.goal_id.cmp(&target[index].goal_id));
+            if !canonical_order.is_gt() {
+                target[index] = row;
+            }
         } else {
             indexes.insert(key, target.len());
             target.push(row);
@@ -883,6 +916,10 @@ fn session_merge_key(row: &AgentSessionRow, source_agent_did: Option<&str>) -> S
         source_agent_did.unwrap_or_default(),
         row.session_id
     )
+}
+
+fn goal_merge_key(row: &GoalRow) -> String {
+    format!("{}\0{}", row.agent_did, row.session_id)
 }
 
 fn tool_call_merge_key(row: &AgentToolCallRow, source_agent_did: Option<&str>) -> String {
@@ -982,6 +1019,17 @@ fn tool_service_registry_merge_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn goal_row(goal_id: &str, created_at: &str, status: &str) -> GoalRow {
+        serde_json::from_value(serde_json::json!({
+            "goal_id": goal_id,
+            "session_id": "session-1",
+            "agent_did": "did:agent:1",
+            "status": status,
+            "created_at": created_at
+        }))
+        .expect("goal row")
+    }
 
     fn schedule_row(
         schedule_id: &str,
@@ -1120,5 +1168,39 @@ mod tests {
             restored.event_trigger_source_agent_dids,
             vec![Some("did:defra:mini-1".to_string())]
         );
+    }
+
+    #[test]
+    fn goal_merge_preserves_the_earliest_canonical_twin() {
+        let canonical_created_at = "2026-07-16T00:00:00Z";
+        let store = ClientStore::from_rows(ClientStoreRows {
+            goals: vec![
+                goal_row("later-twin", "2026-07-16T00:00:01Z", "complete"),
+                goal_row("canonical", canonical_created_at, "active"),
+            ],
+            ..ClientStoreRows::default()
+        });
+        assert_eq!(store.goals.len(), 1);
+        assert_eq!(store.goals[0].goal_id, "canonical");
+
+        let later_twin = ClientStore::from_rows(ClientStoreRows {
+            goals: vec![goal_row(
+                "arriving-twin",
+                "2026-07-16T00:00:02Z",
+                "complete",
+            )],
+            ..ClientStoreRows::default()
+        });
+        let store = store.merge_snapshot(later_twin);
+        assert_eq!(store.goals.len(), 1);
+        assert_eq!(store.goals[0].status.as_deref(), Some("active"));
+
+        let canonical_update = ClientStore::from_rows(ClientStoreRows {
+            goals: vec![goal_row("canonical", canonical_created_at, "complete")],
+            ..ClientStoreRows::default()
+        });
+        let store = store.merge_snapshot(canonical_update);
+        assert_eq!(store.goals.len(), 1);
+        assert_eq!(store.goals[0].status.as_deref(), Some("complete"));
     }
 }

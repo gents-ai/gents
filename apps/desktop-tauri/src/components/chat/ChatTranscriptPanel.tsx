@@ -95,6 +95,23 @@ export function ChatTranscriptPanel({
     >
       {selectedSessionId && session ? (
         <div className="message-list">
+          {session.goal ? (
+            <article className="message-card" data-testid="durable-goal-card">
+              <div className="message-role">
+                durable goal · {session.goal.status ?? "unknown"}
+              </div>
+              <div className="message-content">
+                {session.goal.objective ?? "No objective"}
+              </div>
+              <div className="muted">
+                {session.goal.tokensUsed}
+                {session.goal.tokenBudget != null
+                  ? ` / ${session.goal.tokenBudget}`
+                  : ""}{" "}
+                charged tokens · {session.goal.activeTimeSeconds}s active
+              </div>
+            </article>
+          ) : null}
           <MessageList
             timelineItems={session.timelineItems}
             responseCancelCause={session.latestResponse?.cancelCause}

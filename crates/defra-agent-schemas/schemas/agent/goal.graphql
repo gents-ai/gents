@@ -1,0 +1,23 @@
+type Goal @branchable {
+    goal_id: String @index
+    session_id: String @index
+    agent_did: String @index @immutable
+    objective: String
+    status: String @index
+    token_budget: Int
+    tokens_used: Int
+    active_time_seconds: Int
+    active_started_at: String
+    consecutive_blocked_audits: Int
+    last_blocked_request_id: String @index
+    last_blocked_reason: String
+    last_continued_from_request_id: String @index
+    continuation_sequence: Int
+    wrapup_requested: Boolean @index
+    wrapup_completed: Boolean @index
+    infrastructure_retry_count: Int
+    last_failure: String
+    completion_evidence: String
+    created_at: String @index
+    updated_at: String @index
+}

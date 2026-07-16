@@ -19,7 +19,6 @@ mod mutations;
 mod storage;
 mod usage;
 
-pub(in crate::commands::codex_shim) use goal::StoredGoal;
 pub(super) use goal::{clear_codex_thread_goal, get_codex_thread_goal, set_codex_thread_goal};
 pub(super) use json::{
     codex_thread_json, codex_thread_json_with_turns, projected_thread_status, thread_response_json,

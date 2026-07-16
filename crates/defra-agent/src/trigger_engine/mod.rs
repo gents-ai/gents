@@ -15,6 +15,7 @@ use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
 pub(crate) mod cross_deployment_cancel_mirror;
 pub(crate) mod event_source;
+pub(crate) mod goal_source;
 pub(crate) mod manual_source;
 pub(crate) mod production_materializer;
 pub(crate) mod schedule_source;
