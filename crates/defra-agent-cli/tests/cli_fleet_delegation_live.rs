@@ -240,10 +240,19 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
     // still producing real model output on a remote deployment. This is the
     // end-to-end fence between DEFRA's durable state machine and the native
     // Codex collaboration/thread protocol.
-    let (parent_capture, live_child) = tokio::try_join!(
+    let observation = tokio::try_join!(
         fleet_capture_parent_turn(&mut parent_ws),
         fleet_observe_live_child(shim_port, &parent_session_id),
-    )?;
+    );
+    let (parent_capture, live_child) = match observation {
+        Ok(observation) => observation,
+        Err(error) => {
+            dump_fleet_doc_state(&fleet).await;
+            persist_fleet_logs(&fleet, "delegation-fail");
+            dump_fleet_logs(&fleet);
+            return Err(error);
+        }
+    };
     assert_eq!(parent_capture.turn.status, codex::TurnStatus::Completed);
 
     let completed_children = wait_for_all_subagent_children_completed(
@@ -640,11 +649,15 @@ fn assert_fleet_parent_collab_projection(
             *status == codex::CollabAgentToolCallStatus::Completed,
             "spawn projection was not terminal-completed: {item:?}"
         );
+        // Cross-deployment conversation replication deliberately does not
+        // replicate AgentBehavior. Preserve an absent child model rather than
+        // inventing root metadata; when runtime metadata is locally available,
+        // it must still be meaningful.
         anyhow::ensure!(
             model
                 .as_deref()
-                .is_some_and(|value| !value.trim().is_empty()),
-            "spawn projection omitted the child model: {item:?}"
+                .is_none_or(|value| !value.trim().is_empty()),
+            "spawn projection exposed a blank child model: {item:?}"
         );
         for thread_id in receiver_thread_ids {
             anyhow::ensure!(

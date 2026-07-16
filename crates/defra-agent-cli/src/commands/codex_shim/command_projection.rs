@@ -33,24 +33,28 @@ impl ToolProjectionStatus {
 }
 
 pub(super) fn tool_projection_status(tool: &DefraToolCallProgress) -> ToolProjectionStatus {
-    tool_projection_status_with_settled(tool, false)
+    tool_projection_status_with_settled(tool, false, false)
 }
 
 pub(super) fn tool_projection_status_with_settled(
     tool: &DefraToolCallProgress,
     projection_settled: bool,
+    link_settle_expired: bool,
 ) -> ToolProjectionStatus {
     let status = defra_tool_call_status(tool);
     if is_subagent_control_tool(&tool.tool_name) {
         if let Some(projection) = collab_projection(tool) {
             ToolProjectionStatus::Collab(projection)
         } else if status == codex::McpToolCallStatus::Failed
-            || (projection_settled && status == codex::McpToolCallStatus::Completed)
+            || (projection_settled
+                && link_settle_expired
+                && status == codex::McpToolCallStatus::Completed)
         {
             // A rejected control call may never create a child edge. Likewise,
-            // once the enclosing projection is terminal, an unresolved but
-            // completed bridge has no remaining retry window. Preserve the
-            // durable tool result as MCP instead of hiding it forever.
+            // once the enclosing projection is terminal and its bounded link
+            // settle window has expired, an unresolved completed bridge has
+            // no remaining retry window. Preserve the durable tool result as
+            // MCP instead of hiding it forever.
             ToolProjectionStatus::Mcp(status)
         } else {
             // The child request and its reciprocal bridge may replicate just
@@ -449,7 +453,11 @@ mod tests {
             ToolProjectionStatus::DeferredCollab
         );
         assert_eq!(
-            tool_projection_status_with_settled(&tool, true),
+            tool_projection_status_with_settled(&tool, true, false),
+            ToolProjectionStatus::DeferredCollab
+        );
+        assert_eq!(
+            tool_projection_status_with_settled(&tool, true, true),
             ToolProjectionStatus::Mcp(codex::McpToolCallStatus::Completed)
         );
     }

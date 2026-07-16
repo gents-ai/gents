@@ -233,6 +233,9 @@ structure CodexShimSubagentToolCase where
   collabTool : Option String
   reciprocalLink : Bool
   projectionSettled : Bool
+  linkSettleExpired : Bool
+  runtimeToolStatus : Option String := none
+  projectedCollabStatus : Option String := none
 
 def codexShimSubagentToolCaseJson
     (witness : CodexShimSubagentToolCase) : String :=
@@ -243,17 +246,34 @@ def codexShimSubagentToolCaseJson
     ++ "\"projected_item_kind\":" ++ jsonString witness.projectedItemKind ++ ","
     ++ "\"collab_tool\":" ++ jsonOptionalString witness.collabTool ++ ","
     ++ "\"reciprocal_link\":" ++ boolString witness.reciprocalLink ++ ","
-    ++ "\"projection_settled\":" ++ boolString witness.projectionSettled
+    ++ "\"projection_settled\":" ++ boolString witness.projectionSettled ++ ","
+    ++ "\"link_settle_expired\":" ++ boolString witness.linkSettleExpired ++ ","
+    ++ "\"runtime_tool_status\":" ++ jsonOptionalString witness.runtimeToolStatus ++ ","
+    ++ "\"projected_collab_status\":"
+      ++ jsonOptionalString witness.projectedCollabStatus
     ++ "}"
+
+def collabToolCallPhaseString : CodexShim.CollabToolCallPhase → String
+  | .inProgress => "inProgress"
+  | .completed => "completed"
+  | .failed => "failed"
 
 def codexShimSubagentToolCases : List CodexShimSubagentToolCase :=
   [ { witness := "codex_shim.subagent_tool.spawn"
-    , leanTheorems := [ "CodexShim.known_subagent_control_projects_collab" ]
+    , leanTheorems :=
+        [ "CodexShim.known_subagent_control_projects_collab"
+        , "CodexShim.linked_spawn_operation_completes_while_child_runs"
+        ]
     , toolName := "spawn_subagent"
     , projectedItemKind := "collabAgentToolCall"
     , collabTool := some "spawnAgent"
     , reciprocalLink := true
     , projectionSettled := false
+    , linkSettleExpired := false
+    , runtimeToolStatus := some "inProgress"
+    , projectedCollabStatus := some (collabToolCallPhaseString
+        (CodexShim.projectCollabToolCallPhase
+          .spawn true .inProgress))
     }
   , { witness := "codex_shim.subagent_tool.wait"
     , leanTheorems := [ "CodexShim.known_subagent_control_projects_collab" ]
@@ -262,6 +282,7 @@ def codexShimSubagentToolCases : List CodexShimSubagentToolCase :=
     , collabTool := some "wait"
     , reciprocalLink := true
     , projectionSettled := false
+    , linkSettleExpired := false
     }
   , { witness := "codex_shim.subagent_tool.steer"
     , leanTheorems := [ "CodexShim.known_subagent_control_projects_collab" ]
@@ -270,6 +291,7 @@ def codexShimSubagentToolCases : List CodexShimSubagentToolCase :=
     , collabTool := some "sendInput"
     , reciprocalLink := true
     , projectionSettled := false
+    , linkSettleExpired := false
     }
   , { witness := "codex_shim.subagent_tool.cancel"
     , leanTheorems := [ "CodexShim.known_subagent_control_projects_collab" ]
@@ -278,6 +300,7 @@ def codexShimSubagentToolCases : List CodexShimSubagentToolCase :=
     , collabTool := some "closeAgent"
     , reciprocalLink := true
     , projectionSettled := false
+    , linkSettleExpired := false
     }
   , { witness := "codex_shim.subagent_tool.list"
     , leanTheorems := [ "CodexShim.non_control_tool_stays_mcp" ]
@@ -286,6 +309,7 @@ def codexShimSubagentToolCases : List CodexShimSubagentToolCase :=
     , collabTool := none
     , reciprocalLink := false
     , projectionSettled := false
+    , linkSettleExpired := false
     }
   , { witness := "codex_shim.subagent_tool.read"
     , leanTheorems := [ "CodexShim.non_control_tool_stays_mcp" ]
@@ -294,6 +318,7 @@ def codexShimSubagentToolCases : List CodexShimSubagentToolCase :=
     , collabTool := none
     , reciprocalLink := false
     , projectionSettled := false
+    , linkSettleExpired := false
     }
   , { witness := "codex_shim.subagent_tool.unresolved_open"
     , leanTheorems := [ "CodexShim.unresolved_subagent_control_defers_while_open" ]
@@ -302,15 +327,27 @@ def codexShimSubagentToolCases : List CodexShimSubagentToolCase :=
     , collabTool := none
     , reciprocalLink := false
     , projectionSettled := false
+    , linkSettleExpired := false
+    }
+  , { witness := "codex_shim.subagent_tool.unresolved_settling"
+    , leanTheorems :=
+        [ "CodexShim.settled_unresolved_subagent_control_defers_during_link_window" ]
+    , toolName := "spawn_subagent"
+    , projectedItemKind := "deferred"
+    , collabTool := none
+    , reciprocalLink := false
+    , projectionSettled := true
+    , linkSettleExpired := false
     }
   , { witness := "codex_shim.subagent_tool.unresolved_settled"
     , leanTheorems :=
-        [ "CodexShim.settled_unresolved_subagent_control_stays_visible" ]
+        [ "CodexShim.expired_unresolved_subagent_control_stays_visible" ]
     , toolName := "spawn_subagent"
     , projectedItemKind := "mcpToolCall"
     , collabTool := none
     , reciprocalLink := false
     , projectionSettled := true
+    , linkSettleExpired := true
     }
   ]
 
@@ -561,6 +598,7 @@ structure CodexShimReasoningProjectionCase where
   witness : String
   leanTheorems : List String
   itemOpen : Bool
+  itemCompleted : Bool
   cursorPrimed : Bool
   streamedText : Option String
   liveDelta : Option String
@@ -583,6 +621,7 @@ def codexShimReasoningProjectionCase
   { witness := witness
   , leanTheorems := leanTheorems
   , itemOpen := observation.itemOpen
+  , itemCompleted := observation.itemCompleted
   , cursorPrimed := observation.cursorPrimed
   , streamedText := observation.streamedText
   , liveDelta := observation.liveDelta
@@ -601,6 +640,7 @@ def codexShimReasoningProjectionCaseJson
     ++ "\"witness\":" ++ jsonString witness.witness ++ ","
     ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
     ++ "\"item_open\":" ++ boolString witness.itemOpen ++ ","
+    ++ "\"item_completed\":" ++ boolString witness.itemCompleted ++ ","
     ++ "\"cursor_primed\":" ++ boolString witness.cursorPrimed ++ ","
     ++ "\"streamed_text\":" ++ jsonOptionalString witness.streamedText ++ ","
     ++ "\"live_delta\":" ++ jsonOptionalString witness.liveDelta ++ ","
@@ -616,6 +656,7 @@ def codexShimReasoningProjectionCases : List CodexShimReasoningProjectionCase :=
       "codex_shim.reasoning.first_live"
       [ "CodexShim.first_live_reasoning_projects_raw_lifecycle" ]
       { itemOpen := false
+      , itemCompleted := false
       , cursorPrimed := false
       , streamedText := none
       , liveDelta := some "inspect"
@@ -625,6 +666,7 @@ def codexShimReasoningProjectionCases : List CodexShimReasoningProjectionCase :=
       "codex_shim.reasoning.append_live"
       [ "CodexShim.appended_live_reasoning_projects_only_delta" ]
       { itemOpen := true
+      , itemCompleted := false
       , cursorPrimed := false
       , streamedText := some "inspect"
       , liveDelta := some " then test"
@@ -634,6 +676,7 @@ def codexShimReasoningProjectionCases : List CodexShimReasoningProjectionCase :=
       "codex_shim.reasoning.resumed_unchanged"
       [ "CodexShim.primed_resume_without_new_reasoning_replays_nothing" ]
       { itemOpen := true
+      , itemCompleted := false
       , cursorPrimed := true
       , streamedText := some "already visible"
       , liveDelta := none
@@ -645,6 +688,7 @@ def codexShimReasoningProjectionCases : List CodexShimReasoningProjectionCase :=
       , "CodexShim.terminal_completed_item_uses_durable_reasoning"
       ]
       { itemOpen := true
+      , itemCompleted := false
       , cursorPrimed := false
       , streamedText := some "inspect then test"
       , liveDelta := none
@@ -656,6 +700,7 @@ def codexShimReasoningProjectionCases : List CodexShimReasoningProjectionCase :=
       , "CodexShim.terminal_completed_item_uses_durable_reasoning"
       ]
       { itemOpen := false
+      , itemCompleted := false
       , cursorPrimed := false
       , streamedText := none
       , liveDelta := none
@@ -665,6 +710,7 @@ def codexShimReasoningProjectionCases : List CodexShimReasoningProjectionCase :=
       "codex_shim.reasoning.absent"
       [ "CodexShim.absent_reasoning_projects_nothing" ]
       { itemOpen := false
+      , itemCompleted := false
       , cursorPrimed := false
       , streamedText := none
       , liveDelta := none
@@ -676,6 +722,7 @@ def codexShimReasoningProjectionCases : List CodexShimReasoningProjectionCase :=
       , "CodexShim.terminal_completed_item_uses_durable_reasoning"
       ]
       { itemOpen := true
+      , itemCompleted := false
       , cursorPrimed := false
       , streamedText := some "inspect then test"
       , liveDelta := some "; durable suffix"
@@ -685,10 +732,23 @@ def codexShimReasoningProjectionCases : List CodexShimReasoningProjectionCase :=
       "codex_shim.reasoning.terminal_streamed_fallback"
       [ "CodexShim.terminal_without_durable_reasoning_keeps_streamed_text" ]
       { itemOpen := true
+      , itemCompleted := false
       , cursorPrimed := false
       , streamedText := some "streamed reasoning"
       , liveDelta := none
       , durableText := none
+      , terminal := true }
+  , codexShimReasoningProjectionCase
+      "codex_shim.reasoning.reset_before_terminal"
+      [ "CodexShim.reset_before_terminal_suppresses_durable_replay"
+      , "CodexShim.reset_before_terminal_has_no_second_completed_text"
+      ]
+      { itemOpen := false
+      , itemCompleted := true
+      , cursorPrimed := false
+      , streamedText := none
+      , liveDelta := none
+      , durableText := some "already completed reasoning"
       , terminal := true }
   ]
 

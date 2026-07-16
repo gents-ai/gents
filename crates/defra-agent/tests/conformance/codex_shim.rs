@@ -169,7 +169,7 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
         .contains(&"CodexShim.interrupt_step_is_terminal".to_string()));
 
     let tool_cases = lean_codex_shim_subagent_tool_cases();
-    assert_eq!(tool_cases.len(), 8);
+    assert_eq!(tool_cases.len(), 9);
     for case in tool_cases {
         let expected = match case.witness.as_str() {
             "codex_shim.subagent_tool.spawn" => ("collabAgentToolCall", Some("spawnAgent")),
@@ -180,6 +180,7 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
                 ("mcpToolCall", None)
             }
             "codex_shim.subagent_tool.unresolved_open" => ("deferred", None),
+            "codex_shim.subagent_tool.unresolved_settling" => ("deferred", None),
             "codex_shim.subagent_tool.unresolved_settled" => ("mcpToolCall", None),
             other => panic!("unmodeled subagent tool witness {other:?}"),
         };
@@ -188,8 +189,20 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
         if case.projected_item_kind == "collabAgentToolCall" {
             assert!(case.reciprocal_link, "{}", case.witness);
         }
+        if case.witness == "codex_shim.subagent_tool.spawn" {
+            assert_eq!(case.runtime_tool_status.as_deref(), Some("inProgress"));
+            assert_eq!(case.projected_collab_status.as_deref(), Some("completed"));
+            assert!(case.lean_theorems.contains(
+                &"CodexShim.linked_spawn_operation_completes_while_child_runs".to_string()
+            ));
+        }
+        if case.witness == "codex_shim.subagent_tool.unresolved_settling" {
+            assert!(case.projection_settled, "{}", case.witness);
+            assert!(!case.link_settle_expired, "{}", case.witness);
+        }
         if case.witness == "codex_shim.subagent_tool.unresolved_settled" {
             assert!(case.projection_settled, "{}", case.witness);
+            assert!(case.link_settle_expired, "{}", case.witness);
         }
     }
 
@@ -264,7 +277,7 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     assert_eq!(shape.replay_stages, ["user", "compaction", "modelItems"]);
 
     let reasoning_cases = lean_codex_shim_reasoning_projection_cases();
-    assert_eq!(reasoning_cases.len(), 8);
+    assert_eq!(reasoning_cases.len(), 9);
     for case in reasoning_cases {
         assert_eq!(
             case.projected_delta,
@@ -273,7 +286,10 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
                 .filter(|text| !text.is_empty())
                 .cloned()
                 .or_else(|| {
-                    (case.terminal && !case.item_open && !case.cursor_primed)
+                    (case.terminal
+                        && !case.item_open
+                        && !case.item_completed
+                        && !case.cursor_primed)
                         .then(|| case.durable_text.clone())
                         .flatten()
                         .filter(|text| !text.is_empty())
@@ -283,7 +299,7 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
         );
         assert_eq!(
             case.completed_text,
-            case.terminal
+            (case.terminal && !case.item_completed)
                 .then(|| {
                     case.durable_text
                         .clone()
@@ -334,6 +350,13 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
         durable_suffix.projected_delta.as_deref(),
         Some("; durable suffix")
     );
+    let reset_before_terminal = reasoning_cases
+        .iter()
+        .find(|case| case.witness == "codex_shim.reasoning.reset_before_terminal")
+        .expect("reset-before-terminal reasoning witness");
+    assert!(reset_before_terminal.projected_events.is_empty());
+    assert_eq!(reset_before_terminal.projected_delta, None);
+    assert_eq!(reset_before_terminal.completed_text, None);
 
     let thread_status_cases = lean_codex_shim_thread_status_cases();
     assert_eq!(thread_status_cases.len(), 11);

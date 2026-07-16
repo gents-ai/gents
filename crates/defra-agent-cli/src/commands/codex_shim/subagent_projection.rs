@@ -763,10 +763,18 @@ fn tool_child_request_id(tool: &DefraToolCallProgress) -> Option<String> {
 pub(super) fn collab_projection(tool: &DefraToolCallProgress) -> Option<CollabProjection> {
     let collab_tool = collab_tool(&tool.tool_name)?;
     let link = tool.subagent_link.as_ref()?;
-    let status = match defra_tool_call_status(tool) {
-        codex::McpToolCallStatus::InProgress => codex::CollabAgentToolCallStatus::InProgress,
-        codex::McpToolCallStatus::Completed => codex::CollabAgentToolCallStatus::Completed,
-        codex::McpToolCallStatus::Failed => codex::CollabAgentToolCallStatus::Failed,
+    let runtime_status = defra_tool_call_status(tool);
+    let status = match (&collab_tool, runtime_status) {
+        (_, codex::McpToolCallStatus::Failed) => codex::CollabAgentToolCallStatus::Failed,
+        (codex::CollabAgentTool::SpawnAgent, _) => {
+            // The reciprocal edge proves the spawn operation succeeded. DEFRA
+            // deliberately keeps the bridge row running while a background
+            // child works; Codex represents that child lifecycle separately
+            // in agentsStates, so the collaboration operation is complete.
+            codex::CollabAgentToolCallStatus::Completed
+        }
+        (_, codex::McpToolCallStatus::InProgress) => codex::CollabAgentToolCallStatus::InProgress,
+        (_, codex::McpToolCallStatus::Completed) => codex::CollabAgentToolCallStatus::Completed,
     };
     Some(CollabProjection {
         status,
@@ -1097,6 +1105,11 @@ mod tests {
             created_at: None,
         });
         let projection = collab_projection(&tool).expect("authorized spawn projection");
+        assert_eq!(
+            projection.status,
+            codex::CollabAgentToolCallStatus::Completed,
+            "the linked spawn operation completes while agentsStates tracks the running child"
+        );
         let item = collab_tool_item("parent-thread", &tool, &projection);
         let value = serde_json::to_value(&item).expect("serialize collab item");
         serde_json::from_value::<codex::ThreadItem>(value.clone())
@@ -1104,6 +1117,7 @@ mod tests {
 
         assert_eq!(value["type"], "collabAgentToolCall");
         assert_eq!(value["tool"], "spawnAgent");
+        assert_eq!(value["status"], "completed");
         assert_eq!(value["senderThreadId"], "parent-thread");
         assert_eq!(value["receiverThreadIds"], json!([child_session_id]));
         assert_eq!(value["prompt"], "Inspect the patch");

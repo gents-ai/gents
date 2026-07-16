@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
@@ -34,6 +35,8 @@ use super::super::turn_projection::TurnProjection;
 use super::super::{ConnectionState, ShimState};
 use super::active::next_steering_request_after;
 use crate::{is_terminal_lifecycle_state, request_diagnostic_hint, SubmittedRequest};
+
+const SUBAGENT_LINK_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProgressMarker {
@@ -179,6 +182,7 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
     let subagent_update_filter = SubagentProjectionUpdateFilter::from_state(state);
     let mut subagent_links = Vec::new();
     let mut subagent_links_dirty = true;
+    let mut subagent_link_settle_started_at = None;
     let mut latest_content_cursor = ContentCursor::default();
     let mut latest_reasoning_cursor = ReasoningCursor::default();
     let mut latest_error_message: Option<String> = None;
@@ -330,6 +334,24 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
             subagent_links_dirty = false;
             subagent_links_refreshed = true;
         }
+        let unresolved_terminal_control = projection_settled
+            && tool_rows.iter().any(|row| {
+                let Some(mut tool) = decode_defra_tool_call_progress(row) else {
+                    return false;
+                };
+                attach_subagent_link(&mut tool, &subagent_links);
+                matches!(
+                    tool_projection_status_with_settled(&tool, false, false),
+                    ToolProjectionStatus::DeferredCollab
+                )
+            });
+        let link_settle_expired = observe_subagent_link_settle_window(
+            &mut subagent_link_settle_started_at,
+            unresolved_terminal_control,
+            tokio::time::Instant::now(),
+            SUBAGENT_LINK_SETTLE_TIMEOUT,
+        );
+        let waiting_for_subagent_links = unresolved_terminal_control && !link_settle_expired;
 
         if marker_changed && !projection_settled {
             if let Some(reasoning) = response_row
@@ -374,7 +396,8 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
             if has_subagent_control {
                 attach_subagent_link(&mut tool, &subagent_links);
             }
-            let projection_status = tool_projection_status_with_settled(&tool, projection_settled);
+            let projection_status =
+                tool_projection_status_with_settled(&tool, projection_settled, link_settle_expired);
             let previous_status = known_tool_calls.get(&tool.tool_call_key).cloned();
             update_running_background_tools(
                 &mut running_background_tools,
@@ -423,7 +446,7 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
         let terminal_by_request = is_terminal_lifecycle_state(lifecycle_state);
         let terminal_by_response = matches!(response_status, "complete" | "completed" | "error");
 
-        if terminal_by_request || terminal_by_response {
+        if (terminal_by_request || terminal_by_response) && !waiting_for_subagent_links {
             let mut terminal_response = response_row.cloned().unwrap_or_else(|| {
                 json!({
                     "request_id": current.request_id.clone(),
@@ -567,6 +590,7 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
                     known_compaction_states.clear();
                     known_inference_usage_call_id = None;
                     subagent_links_dirty = true;
+                    subagent_link_settle_started_at = None;
                     latest_content_cursor.reset();
                     latest_reasoning_cursor.reset();
                     projection.reset_response_timing();
@@ -662,6 +686,20 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
             }
         }
     }
+}
+
+fn observe_subagent_link_settle_window(
+    started_at: &mut Option<tokio::time::Instant>,
+    unresolved: bool,
+    now: tokio::time::Instant,
+    timeout: Duration,
+) -> bool {
+    if !unresolved {
+        *started_at = None;
+        return false;
+    }
+    let started_at = *started_at.get_or_insert(now);
+    now.duration_since(started_at) >= timeout
 }
 
 fn nonempty_timestamp_field<'a>(row: &'a Value, field: &str) -> Option<&'a str> {
@@ -1223,9 +1261,42 @@ mod tests {
     use codex_app_server_protocol as codex;
 
     use super::{
-        content_delta_from_cursor, resumable_reasoning_item, suffix_prefix_overlap, ContentCursor,
-        ReasoningCursor,
+        content_delta_from_cursor, observe_subagent_link_settle_window, resumable_reasoning_item,
+        suffix_prefix_overlap, ContentCursor, ReasoningCursor,
     };
+
+    #[test]
+    fn terminal_subagent_link_gets_a_bounded_replication_window() {
+        let start = tokio::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(5);
+        let mut started_at = None;
+
+        assert!(!observe_subagent_link_settle_window(
+            &mut started_at,
+            true,
+            start,
+            timeout
+        ));
+        assert!(!observe_subagent_link_settle_window(
+            &mut started_at,
+            true,
+            start + std::time::Duration::from_secs(4),
+            timeout
+        ));
+        assert!(observe_subagent_link_settle_window(
+            &mut started_at,
+            true,
+            start + timeout,
+            timeout
+        ));
+        assert!(!observe_subagent_link_settle_window(
+            &mut started_at,
+            false,
+            start + timeout,
+            timeout
+        ));
+        assert!(started_at.is_none());
+    }
 
     #[test]
     fn content_cursor_emits_only_appended_suffix() {
