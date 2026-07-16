@@ -325,6 +325,46 @@ fn generated_backend_health_cases_pin_threshold_and_veto_shape() {
 }
 
 #[test]
+fn edit_match_exact_priority_is_never_shadowed() {
+    edit_match::exact_priority_is_never_shadowed();
+}
+
+#[test]
+fn edit_match_ladder_fires_at_the_strictest_matching_rung() {
+    edit_match::ladder_fires_at_the_strictest_matching_rung();
+}
+
+#[test]
+fn edit_match_ambiguity_gate_requires_unique_or_replace_all() {
+    edit_match::ambiguity_gate_requires_unique_or_replace_all();
+}
+
+#[test]
+fn edit_match_decision_is_pure_and_deterministic() {
+    edit_match::decision_is_pure_and_deterministic();
+}
+
+#[test]
+fn edit_match_noop_is_reported_not_applied() {
+    edit_match::noop_is_reported_not_applied();
+}
+
+#[test]
+fn edit_match_operations_desugar_onto_the_single_matcher() {
+    edit_match::operations_desugar_onto_the_single_matcher();
+}
+
+#[test]
+fn edit_match_near_miss_is_diagnosed_never_applied() {
+    edit_match::near_miss_is_diagnosed_never_applied();
+}
+
+#[test]
+fn edit_match_overlapping_windows_apply_disjoint_selection() {
+    edit_match::overlapping_windows_apply_disjoint_selection();
+}
+
+#[test]
 fn generated_process_transition_cases_cover_runtime_status_policy_shape() {
     process::generated_process_transition_cases_cover_runtime_status_policy_shape();
 }
@@ -390,6 +430,8 @@ async fn event_delivery_convergence_traces_match_runtime_or_deviation() {
 mod apply_reconcile;
 #[path = "conformance/docs.rs"]
 mod docs;
+#[path = "conformance/edit_match.rs"]
+mod edit_match;
 #[path = "conformance/identity.rs"]
 mod identity;
 #[path = "conformance/identity_proptest.rs"]

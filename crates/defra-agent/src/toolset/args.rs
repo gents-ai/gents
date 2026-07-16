@@ -71,6 +71,19 @@ pub(super) struct EditFileArgs {
     pub replace_all: bool,
     #[serde(default)]
     pub raw_json: bool,
+    /// Preview only: return the diff without writing (#738).
+    #[serde(default)]
+    pub dry_run: bool,
+    /// "ladder" (default) or "regex" (#738).
+    #[serde(default)]
+    pub match_mode: Option<String>,
+    /// "replace" (default), "insert_after", "insert_before", or "delete".
+    #[serde(default)]
+    pub operation: Option<String>,
+    /// Optimistic-concurrency precondition: the content_hash from a prior
+    /// read of this file; a mismatch rejects before matching (#724).
+    #[serde(default)]
+    pub expected_content_hash: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
