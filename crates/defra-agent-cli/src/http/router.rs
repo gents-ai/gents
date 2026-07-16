@@ -614,7 +614,9 @@ mod tests {
                     "pending_dag_capacity_shed": 59,
                     "pending_dag_retry_dispatched": 61,
                     "pending_dag_retry_suppressed": 67,
-                    "next_pending_retry_in_ms": 71
+                    "next_pending_retry_in_ms": 71,
+                    "pending_dag_terminal_quarantined": 73,
+                    "quarantined_pending_dags": 79
                 }
             }),
             None,
@@ -635,6 +637,8 @@ mod tests {
         assert_eq!(sync.gossip_direction_filtered_total, 47);
         assert_eq!(sync.pending_dag_capacity_shed, 59);
         assert_eq!(sync.next_pending_retry_in_ms, Some(71));
+        assert_eq!(sync.pending_dag_terminal_quarantined, 73);
+        assert_eq!(sync.quarantined_pending_dags, 79);
     }
 
     #[test]

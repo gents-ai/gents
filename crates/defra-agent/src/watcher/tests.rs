@@ -6,6 +6,28 @@ use std::time::Instant;
 use super::cooldown::{take_next_eligible_pending_request, PROCESSED_REQUEST_COOLDOWN};
 use super::*;
 
+#[test]
+fn local_and_relayed_updates_are_both_request_wakeups() {
+    fn update_message(is_relay: bool) -> events::Message {
+        let block = format!("request-update-{is_relay}").into_bytes();
+        let cid = defra_core::block::generate_cid_from_bytes(&block)
+            .expect("fixture bytes produce a CID");
+        events::Message::update(events::Update::new(
+            "request-doc".to_string(),
+            cid,
+            "request-collection".to_string(),
+            block,
+            false,
+            is_relay,
+        ))
+    }
+
+    let local = update_message(false);
+    let relayed = update_message(true);
+    assert!(!request_update_wakeup(&local).unwrap().is_relay);
+    assert!(request_update_wakeup(&relayed).unwrap().is_relay);
+}
+
 // ---------------------------------------------------------------------------
 // validate_agent_request_subagent_coherence
 // ---------------------------------------------------------------------------
