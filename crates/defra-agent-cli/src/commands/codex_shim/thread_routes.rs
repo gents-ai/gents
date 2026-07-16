@@ -11,9 +11,8 @@ use super::history_projection::load_thread_turns;
 use super::protocol::absolute_path;
 use super::store::query_node_json;
 use super::thread_projection::{
-    codex_thread_json, codex_thread_json_with_turns, list_codex_subagent_threads_by_archived,
-    list_codex_threads_by_archived, load_codex_thread, store_forked_codex_thread,
-    thread_response_json, CodexThreadRecord,
+    codex_thread_json, codex_thread_json_with_turns, list_codex_threads_for_sources,
+    load_codex_thread, store_forked_codex_thread, thread_response_json, CodexThreadRecord,
 };
 use super::{ShimState, JSONRPC_INTERNAL_ERROR, JSONRPC_INVALID_PARAMS};
 
@@ -99,21 +98,10 @@ pub(super) async fn list_threads_response(
     }
 
     let archived = params.archived.unwrap_or(false);
-    let mut records = Vec::new();
-    if include_cli {
-        records.extend(
-            list_codex_threads_by_archived(state, archived)
-                .await
-                .map_err(internal_error)?,
-        );
-    }
-    if include_subagents {
-        records.extend(
-            list_codex_subagent_threads_by_archived(state, archived)
-                .await
-                .map_err(internal_error)?,
-        );
-    }
+    let mut records =
+        list_codex_threads_for_sources(state, archived, include_cli, include_subagents)
+            .await
+            .map_err(internal_error)?;
     if let Some(cwd_filter) = params.cwd.as_ref() {
         let allowed = cwd_filter_values(cwd_filter);
         records.retain(|record| allowed.iter().any(|cwd| cwd_matches_record(cwd, record)));
@@ -183,21 +171,9 @@ pub(super) async fn search_threads_response(
 
     let mut matches = Vec::<(CodexThreadRecord, String)>::new();
     let archived = params.archived.unwrap_or(false);
-    let mut records = Vec::new();
-    if include_cli {
-        records.extend(
-            list_codex_threads_by_archived(state, archived)
-                .await
-                .map_err(internal_error)?,
-        );
-    }
-    if include_subagents {
-        records.extend(
-            list_codex_subagent_threads_by_archived(state, archived)
-                .await
-                .map_err(internal_error)?,
-        );
-    }
+    let records = list_codex_threads_for_sources(state, archived, include_cli, include_subagents)
+        .await
+        .map_err(internal_error)?;
     for record in records {
         if let Some(snippet) = record_snippet(&record, search_term) {
             matches.push((record, snippet));

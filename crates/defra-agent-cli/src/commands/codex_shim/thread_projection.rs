@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -149,9 +151,10 @@ pub(super) async fn loaded_codex_thread_ids(state: &ShimState) -> Result<Vec<Str
     Ok(loaded)
 }
 
-pub(super) async fn list_codex_threads_by_archived(
+async fn list_codex_threads_by_archived_with_git_cache(
     state: &ShimState,
     archived: bool,
+    git_info_cache: &mut ThreadGitInfoCache,
 ) -> Result<Vec<CodexThreadRecord>> {
     let sessions = list_scoped_sessions(state).await?;
     // Ordinary CLI/chat/runtime sessions share the shim's (agent_did,
@@ -172,35 +175,64 @@ pub(super) async fn list_codex_threads_by_archived(
         }
         let conversation = load_conversation(state, &session.session_id).await?;
         records.push(
-            assemble_record(state, &session.session_id, session.started, conversation).await?,
+            assemble_record_with_git_cache(
+                state,
+                &session.session_id,
+                session.started,
+                conversation,
+                git_info_cache,
+            )
+            .await?,
         );
     }
     Ok(records)
 }
 
-pub(super) async fn list_codex_subagent_threads_by_archived(
+pub(super) async fn list_codex_threads_for_sources(
     state: &ShimState,
     archived: bool,
+    include_cli: bool,
+    include_subagents: bool,
 ) -> Result<Vec<CodexThreadRecord>> {
-    if archived {
-        return Ok(Vec::new());
+    let mut git_info_cache = ThreadGitInfoCache::default();
+    if archived || !include_subagents {
+        return if include_cli {
+            list_codex_threads_by_archived_with_git_cache(state, archived, &mut git_info_cache)
+                .await
+        } else {
+            Ok(Vec::new())
+        };
     }
 
     // Start from durable Codex roots, then walk only their authorized bridge
     // graph. This keeps thread/list scoped to the same DEFRA authority as
-    // thread/read and avoids a fleet-wide child scan.
-    let mut roots = list_codex_threads_by_archived(state, false).await?;
-    roots.extend(list_codex_threads_by_archived(state, true).await?);
-    let root_ids = roots
-        .into_iter()
-        .map(|record| record.session_id)
-        .collect::<Vec<_>>();
+    // thread/read and avoids a fleet-wide child scan. Git metadata is resolved
+    // once per unique root workspace; children inherit their authorized root's
+    // projection instead of spawning one git process per child.
+    let active_roots =
+        list_codex_threads_by_archived_with_git_cache(state, false, &mut git_info_cache).await?;
+    let archived_roots =
+        list_codex_threads_by_archived_with_git_cache(state, true, &mut git_info_cache).await?;
+    let root_workspaces = index_root_workspaces(active_roots.iter().chain(&archived_roots));
+    let root_ids = root_workspaces.keys().cloned().collect::<Vec<_>>();
     let links = load_authorized_subagent_threads_for_root_ids(state, &root_ids).await?;
-    let mut seen = std::collections::HashSet::<String>::new();
-    let mut records = Vec::with_capacity(links.len());
+    let mut seen = HashSet::<String>::new();
+    let mut records = if include_cli {
+        active_roots
+    } else {
+        Vec::new()
+    };
+    records.reserve(links.len());
     for link in links {
         if seen.insert(link.session_id.clone()) {
-            records.push(assemble_subagent_record(state, link).await?);
+            let workspace =
+                root_workspace_for_link(&root_workspaces, &link).with_context(|| {
+                    format!(
+                        "authorized subagent thread {} references unavailable Codex root {}",
+                        link.session_id, link.root_session_id
+                    )
+                })?;
+            records.push(assemble_subagent_record_with_workspace(state, link, workspace).await?);
         }
     }
     Ok(records)
@@ -235,9 +267,27 @@ async fn assemble_record(
     started: Option<String>,
     conversation: Option<ConversationRow>,
 ) -> Result<CodexThreadRecord> {
+    let mut git_info_cache = ThreadGitInfoCache::default();
+    assemble_record_with_git_cache(
+        state,
+        session_id,
+        started,
+        conversation,
+        &mut git_info_cache,
+    )
+    .await
+}
+
+async fn assemble_record_with_git_cache(
+    state: &ShimState,
+    session_id: &str,
+    started: Option<String>,
+    conversation: Option<ConversationRow>,
+    git_info_cache: &mut ThreadGitInfoCache,
+) -> Result<CodexThreadRecord> {
     let cwd = storage::derive_thread_cwd(state, session_id).await?;
     state.set_thread_cwd(session_id, cwd.clone()).await;
-    let git_info = thread_git_info(&cwd).await;
+    let git_info = git_info_cache.resolve(&cwd).await;
     Ok(CodexThreadRecord {
         session_id: session_id.to_string(),
         cwd,
@@ -258,8 +308,31 @@ async fn assemble_subagent_record(
     link: LinkedSubagentThread,
 ) -> Result<CodexThreadRecord> {
     let cwd = storage::derive_thread_cwd(state, &link.root_session_id).await?;
-    state.set_thread_cwd(&link.session_id, cwd.clone()).await;
     let git_info = thread_git_info(&cwd).await;
+    assemble_subagent_record_parts(state, link, cwd, git_info).await
+}
+
+async fn assemble_subagent_record_with_workspace(
+    state: &ShimState,
+    link: LinkedSubagentThread,
+    workspace: &RootThreadWorkspace,
+) -> Result<CodexThreadRecord> {
+    assemble_subagent_record_parts(
+        state,
+        link,
+        workspace.cwd.clone(),
+        workspace.git_info.clone(),
+    )
+    .await
+}
+
+async fn assemble_subagent_record_parts(
+    state: &ShimState,
+    link: LinkedSubagentThread,
+    cwd: PathBuf,
+    git_info: Option<Value>,
+) -> Result<CodexThreadRecord> {
+    state.set_thread_cwd(&link.session_id, cwd.clone()).await;
     Ok(CodexThreadRecord {
         session_id: link.session_id.clone(),
         cwd,
@@ -273,4 +346,143 @@ async fn assemble_subagent_record(
         conversation: None,
         subagent: Some(link),
     })
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct RootThreadWorkspace {
+    cwd: PathBuf,
+    git_info: Option<Value>,
+}
+
+fn index_root_workspaces<'a>(
+    roots: impl IntoIterator<Item = &'a CodexThreadRecord>,
+) -> HashMap<String, RootThreadWorkspace> {
+    roots
+        .into_iter()
+        .map(|root| {
+            (
+                root.session_id.clone(),
+                RootThreadWorkspace {
+                    cwd: root.cwd.clone(),
+                    git_info: root.git_info.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
+fn root_workspace_for_link<'a>(
+    root_workspaces: &'a HashMap<String, RootThreadWorkspace>,
+    link: &LinkedSubagentThread,
+) -> Option<&'a RootThreadWorkspace> {
+    root_workspaces.get(&link.root_session_id)
+}
+
+#[derive(Default)]
+struct ThreadGitInfoCache {
+    by_cwd: HashMap<PathBuf, Option<Value>>,
+}
+
+impl ThreadGitInfoCache {
+    async fn resolve(&mut self, cwd: &Path) -> Option<Value> {
+        self.resolve_with(cwd, |cwd| async move { thread_git_info(&cwd).await })
+            .await
+    }
+
+    async fn resolve_with<F, Fut>(&mut self, cwd: &Path, load: F) -> Option<Value>
+    where
+        F: FnOnce(PathBuf) -> Fut,
+        Fut: Future<Output = Option<Value>>,
+    {
+        if let Some(git_info) = self.by_cwd.get(cwd) {
+            return git_info.clone();
+        }
+        let cwd = cwd.to_path_buf();
+        let git_info = load(cwd.clone()).await;
+        self.by_cwd.insert(cwd, git_info.clone());
+        git_info
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn git_info_cache_resolves_once_per_unique_workspace_including_misses() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut cache = ThreadGitInfoCache::default();
+        let shared = Path::new("/workspace/shared");
+
+        for _ in 0..128 {
+            let calls = Arc::clone(&calls);
+            let git_info = cache
+                .resolve_with(shared, move |_| async move {
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    None
+                })
+                .await;
+            assert!(git_info.is_none());
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        let calls_for_other = Arc::clone(&calls);
+        let other = cache
+            .resolve_with(Path::new("/workspace/other"), move |_| async move {
+                calls_for_other.fetch_add(1, Ordering::Relaxed);
+                Some(json!({"sha": "abc"}))
+            })
+            .await;
+        assert_eq!(other, Some(json!({"sha": "abc"})));
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn subagent_fanout_reuses_the_authorized_root_workspace_projection() {
+        let root = CodexThreadRecord {
+            session_id: "root-session".to_string(),
+            cwd: PathBuf::from("/workspace/root"),
+            archived: false,
+            loaded: true,
+            memory_mode: "disabled".to_string(),
+            name: String::new(),
+            settings_json: String::new(),
+            git_info: Some(json!({"sha": "abc", "branch": "main"})),
+            projection_started: None,
+            conversation: None,
+            subagent: None,
+        };
+        let workspaces = index_root_workspaces([&root]);
+        let expected = workspaces.get("root-session").expect("root workspace");
+
+        for index in 0..128 {
+            let link = LinkedSubagentThread {
+                request_id: format!("request-{index}"),
+                latest_request_id: format!("request-{index}"),
+                latest_request_content: String::new(),
+                session_id: format!("child-{index}"),
+                parent_request_id: "parent-request".to_string(),
+                parent_tool_call_id: format!("spawn-{index}"),
+                parent_session_id: "root-session".to_string(),
+                root_session_id: "root-session".to_string(),
+                depth: 1,
+                agent_did: "did:defra:child".to_string(),
+                behavior_id: "child-behavior".to_string(),
+                model: None,
+                nickname: format!("child-{index}"),
+                lifecycle_state: "running".to_string(),
+                failure_reason: None,
+                created_at: None,
+            };
+            let workspace = root_workspace_for_link(&workspaces, &link)
+                .expect("fan-out child should resolve its root workspace");
+            assert!(std::ptr::eq(workspace, expected));
+        }
+        assert_eq!(workspaces.len(), 1);
+    }
 }
