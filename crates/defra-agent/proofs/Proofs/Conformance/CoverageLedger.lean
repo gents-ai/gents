@@ -210,6 +210,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.api, Surface.runtimeInternal]
     , deferred := []
     }
+  , { feature := "durable-goals"
+    , required := allSurfaces
+    , deferred := []
+    }
   , { feature := "command-policy"
     , required := [Surface.agentFacing, Surface.operatorUi]
     , deferred := []
@@ -342,6 +346,11 @@ def vocabularyCoverage : List CoverageEntry :=
       "ChildTerminal"
       "conformance::lean_emits_child_terminal_vocabulary_and_projections")
       "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "vocabulary"
+      "GoalStatus"
+      "conformance::goals::rust_goal_status_vocabulary_and_machine_match_lean_contract")
+      "durable-goals" [Surface.runtimeInternal]
   ]
 
 def stateMachineCoverage : List CoverageEntry :=
@@ -424,6 +433,11 @@ def stateMachineCoverage : List CoverageEntry :=
       "ChildTerminal"
       "conformance::lean_emits_child_terminal_vocabulary_and_projections")
       "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "state_machine"
+      "Goal"
+      "conformance::goals::rust_goal_status_vocabulary_and_machine_match_lean_contract")
+      "durable-goals" [Surface.runtimeInternal]
   ]
 
 def caseCoverage : List CoverageEntry :=
@@ -452,6 +466,36 @@ def caseCoverage : List CoverageEntry :=
       "TriggerDispatch"
       "defra_agent_desktop_tauri::bridge::snapshot::tests::runtime::task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_cases")
       "triggers" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "goal_decision_cases"
+      "GoalDecisionCases"
+      "conformance::goals::generated_goal_decision_cases_fence_runtime_controller")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_transition_cases"
+      "GoalTransitionCases"
+      "conformance::goals::generated_goal_transition_cases_fence_runtime_state_machine")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_decision_cases"
+      "GoalDecisionCases"
+      "goal_continuation_live::durable_goal_continues_with_real_inference_until_model_completes")
+      "durable-goals" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "goal_decision_cases"
+      "GoalDecisionCases"
+      "cli_goal::goal_set_get_pause_resume_and_clear_are_durable")
+      "durable-goals" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "goal_decision_cases"
+      "GoalDecisionCases"
+      "apps/desktop-tauri/tests/durable-goal-card.test.tsx::durable goal transcript card renders persisted goal status, objective, token usage, and active time")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "goal_decision_cases"
+      "GoalDecisionCases"
+      "cli_codex_shim::thread_goal_round_trip_survives_shim_restart")
+      "durable-goals" [Surface.api]
   , tagged (consumerCoverage
       "runtime_cases"
       "RuntimeReconcileCases"

@@ -9,6 +9,7 @@ import Proofs.Conformance.Contracts.Machines.InferenceCall
 import Proofs.Conformance.Contracts.Machines.ToolCall
 import Proofs.Conformance.Contracts.Machines.ManagedExec
 import Proofs.Conformance.Contracts.Machines.Subagent
+import Proofs.Conformance.Contracts.Machines.Goal
 import Proofs.CompletionRetry.Contracts
 
 /-!
@@ -57,6 +58,7 @@ def vocabularies : List VocabularyContract :=
   , { domain := "ChildTerminal"
     , values := ["failed", "dead", "interrupted", "superseded"]
     }
+  , { domain := "GoalStatus", values := goalStatusNames }
   ]
 
 def stateMachines : List StateMachineContract :=
@@ -75,6 +77,7 @@ def stateMachines : List StateMachineContract :=
   , awaitModeMachine
   , cancelPolicyMachine
   , childTerminalMachine
+  , goalMachine
   ]
 
 end Conformance.Contracts

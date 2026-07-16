@@ -78,7 +78,6 @@ pub(crate) struct CodexSidecar {
     pub(crate) archived: BTreeSet<String>,
     pub(crate) memory_mode: BTreeMap<String, String>,
     pub(crate) settings: BTreeMap<String, String>,
-    pub(crate) goal: BTreeMap<String, crate::commands::codex_shim::thread_projection::StoredGoal>,
 }
 
 impl CodexSidecar {
@@ -440,29 +439,6 @@ impl ShimState {
             .await
             .settings
             .insert(thread_id.to_string(), settings_json.to_string());
-    }
-
-    async fn thread_goal(
-        &self,
-        thread_id: &str,
-    ) -> Option<crate::commands::codex_shim::thread_projection::StoredGoal> {
-        self.sidecar.lock().await.goal.get(thread_id).cloned()
-    }
-
-    async fn set_thread_goal(
-        &self,
-        thread_id: &str,
-        goal: crate::commands::codex_shim::thread_projection::StoredGoal,
-    ) {
-        self.sidecar
-            .lock()
-            .await
-            .goal
-            .insert(thread_id.to_string(), goal);
-    }
-
-    async fn clear_thread_goal(&self, thread_id: &str) -> bool {
-        self.sidecar.lock().await.goal.remove(thread_id).is_some()
     }
 }
 

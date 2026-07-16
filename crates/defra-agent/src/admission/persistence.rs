@@ -140,7 +140,7 @@ fn add_call_mutation(
     let started_at = optional_graphql_string("started_at", started_at);
     let ended_at = optional_graphql_string("ended_at", ended_at);
     let failure_reason = optional_graphql_string("failure_reason", failure_reason);
-    let (prompt_tokens, completion_tokens) = usage_fields(usage);
+    let (prompt_tokens, completion_tokens, cached_input_tokens) = usage_fields(usage);
     format!(
         r#"mutation {{
             add_InferenceCall(input: {{
@@ -164,6 +164,7 @@ fn add_call_mutation(
                 backend_config_fingerprint: "{backend_config_fingerprint}"
                 {prompt_tokens}
                 {completion_tokens}
+                {cached_input_tokens}
             }}) {{ _docID }}
         }}"#,
         call_id = escape_graphql_string(&call.call_id),
@@ -185,6 +186,7 @@ fn add_call_mutation(
         backend_config_fingerprint = escape_graphql_string(&call.backend_config_fingerprint),
         prompt_tokens = prompt_tokens,
         completion_tokens = completion_tokens,
+        cached_input_tokens = cached_input_tokens,
     )
 }
 
@@ -241,7 +243,7 @@ fn upsert_call_terminal_mutation(
     usage: Option<Usage>,
 ) -> String {
     let failure_reason = optional_graphql_string("failure_reason", failure_reason);
-    let (prompt_tokens, completion_tokens) = usage_fields(usage);
+    let (prompt_tokens, completion_tokens, cached_input_tokens) = usage_fields(usage);
     format!(
         r#"mutation {{
             upsert_InferenceCall(
@@ -266,6 +268,7 @@ fn upsert_call_terminal_mutation(
                     backend_config_fingerprint: "{backend_config_fingerprint}"
                     {prompt_tokens}
                     {completion_tokens}
+                    {cached_input_tokens}
                 }},
                 update: {{
                     call_state: "{call_state}",
@@ -273,6 +276,7 @@ fn upsert_call_terminal_mutation(
                     ended_at: "{ended_at}"
                     {prompt_tokens}
                     {completion_tokens}
+                    {cached_input_tokens}
                 }}
             ) {{ _docID }}
         }}"#,
@@ -293,6 +297,7 @@ fn upsert_call_terminal_mutation(
         backend_config_fingerprint = escape_graphql_string(&call.backend_config_fingerprint),
         prompt_tokens = prompt_tokens,
         completion_tokens = completion_tokens,
+        cached_input_tokens = cached_input_tokens,
     )
 }
 
@@ -302,12 +307,13 @@ fn optional_graphql_string(field: &str, value: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-fn usage_fields(usage: Option<Usage>) -> (String, String) {
+fn usage_fields(usage: Option<Usage>) -> (String, String, String) {
     match usage {
         Some(usage) => (
             format!("prompt_tokens: {},", usage.input_tokens),
             format!("completion_tokens: {},", usage.output_tokens),
+            format!("cached_input_tokens: {},", usage.cached_input_tokens),
         ),
-        None => (String::new(), String::new()),
+        None => (String::new(), String::new(), String::new()),
     }
 }

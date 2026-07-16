@@ -53,15 +53,16 @@ pub struct AgentRequest {
 pub fn validate_agent_request_subagent_coherence(req: &AgentRequest) -> Result<()> {
     let has_parent_req = req.caused_by_parent_request_id.is_some();
     let has_parent_tc = req.caused_by_parent_tool_call_id.is_some();
-    let request_only_steering_link = has_parent_req && !has_parent_tc && is_steering_queue(req);
-    if has_parent_req != has_parent_tc && !request_only_steering_link {
+    let request_only_control_link =
+        has_parent_req && !has_parent_tc && (is_steering_queue(req) || is_goal_queue(req));
+    if has_parent_req != has_parent_tc && !request_only_control_link {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
     let is_top_level = !has_parent_req; // both None
     if is_top_level && req.subagent_depth != 0 {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
-    if !is_top_level && req.subagent_depth == 0 {
+    if !is_top_level && req.subagent_depth == 0 && !is_goal_queue(req) {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
     Ok(())
@@ -84,6 +85,10 @@ fn is_steering_queue(req: &AgentRequest) -> bool {
         .and_then(|queue| queue.get("source"))
         .and_then(serde_json::Value::as_str)
         == Some("steering")
+}
+
+fn is_goal_queue(req: &AgentRequest) -> bool {
+    crate::lifecycle::queue::is_goal_queue(req.metadata.as_deref())
 }
 
 pub trait Watcher: Send + Sync {

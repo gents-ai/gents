@@ -279,6 +279,7 @@ pub(in crate::agent) async fn run_agent(
     let trigger_engine_node = agent.node.clone();
     let trigger_engine_schedule_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_event_snapshot_rx = active_snapshot_rx.clone();
+    let trigger_engine_goal_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_subagent_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_engine_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_materializer_snapshot_rx = active_snapshot_rx.clone();
@@ -322,7 +323,13 @@ pub(in crate::agent) async fn run_agent(
         let subagent_source: Box<dyn crate::trigger_engine::TriggerSource> =
             Box::new(crate::trigger_engine::subagent_source::SubagentSource::new(
                 trigger_engine_subagent_snapshot_rx,
-                trigger_engine_node,
+                trigger_engine_node.clone(),
+                trigger_engine_cancel.clone(),
+            ));
+        let goal_source: Box<dyn crate::trigger_engine::TriggerSource> =
+            Box::new(crate::trigger_engine::goal_source::GoalSource::new(
+                trigger_engine_goal_snapshot_rx,
+                trigger_engine_node.clone(),
                 trigger_engine_cancel.clone(),
             ));
         let manual_source_box: Box<dyn crate::trigger_engine::TriggerSource> =
@@ -330,6 +337,7 @@ pub(in crate::agent) async fn run_agent(
         let sources: Vec<Box<dyn crate::trigger_engine::TriggerSource>> = vec![
             schedule_source,
             event_source,
+            goal_source,
             subagent_source,
             manual_source_box,
         ];

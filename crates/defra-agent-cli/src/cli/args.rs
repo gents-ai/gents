@@ -148,6 +148,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SessionCommand,
     },
+    #[command(about = "Inspect and control durable session goals")]
+    Goal {
+        #[command(subcommand)]
+        command: GoalCommand,
+    },
     #[command(
         about = "Inspect and control background subagents",
         after_help = SUBAGENT_AFTER_HELP
@@ -2700,6 +2705,69 @@ pub(crate) enum SessionCommand {
     Show(ConfigShowArgs),
     #[command(about = "Fork an existing session at a user-turn boundary")]
     Fork(SessionForkArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum GoalCommand {
+    #[command(about = "Show the durable goal for a session")]
+    Show(GoalShowArgs),
+    #[command(about = "Create or update the durable goal for a session")]
+    Set(GoalSetArgs),
+    #[command(about = "Delete the durable goal for a session")]
+    Clear(GoalShowArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct GoalScopeArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for a running runtime")]
+    pub(crate) graphql: Option<String>,
+    #[arg(
+        long,
+        help = "Override the goal owner DID (defaults to local identity)"
+    )]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, value_name = "SESSION_ID")]
+    pub(crate) session: String,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct GoalShowArgs {
+    #[command(flatten)]
+    pub(crate) scope: GoalScopeArgs,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum GoalStatusArg {
+    Active,
+    Paused,
+    Blocked,
+    UsageLimited,
+    BudgetLimited,
+    Complete,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct GoalSetArgs {
+    #[command(flatten)]
+    pub(crate) scope: GoalScopeArgs,
+    #[arg(long, help = "Goal objective; required when creating a goal")]
+    pub(crate) objective: Option<String>,
+    #[arg(long, value_enum)]
+    pub(crate) status: Option<GoalStatusArg>,
+    #[arg(long, value_name = "TOKENS", help = "Positive charged-token budget")]
+    pub(crate) token_budget: Option<i64>,
+    #[arg(
+        long,
+        conflicts_with = "token_budget",
+        help = "Remove the charged-token budget"
+    )]
+    pub(crate) clear_token_budget: bool,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub(crate) output: OutputFormat,
 }
 
 #[derive(clap::Args)]

@@ -1,4 +1,5 @@
 use super::*;
+use crate::lean_vocab_test::{lean_goal_decision_cases, lean_goal_transition_cases};
 
 pub(super) fn lean_executable_contracts_cover_initial_domains() {
     for domain in [
@@ -864,6 +865,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "SubagentDelegationGraphCases".to_string(),
         ));
     }
+    if !lean_goal_decision_cases().is_empty() {
+        emitted.insert((
+            "goal_decision_cases".to_string(),
+            "GoalDecisionCases".to_string(),
+        ));
+    }
+    if !lean_goal_transition_cases().is_empty() {
+        emitted.insert((
+            "goal_transition_cases".to_string(),
+            "GoalTransitionCases".to_string(),
+        ));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -925,6 +938,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "cancel_propagation_cases",
         "r6_background_theorem_witnesses",
         "subagent_delegation_graph_cases",
+        "goal_decision_cases",
+        "goal_transition_cases",
         "follow_up_hook",
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();

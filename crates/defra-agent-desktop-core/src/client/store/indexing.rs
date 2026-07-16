@@ -38,6 +38,18 @@ impl ClientStore {
                 })
                 .then_with(|| left.request_id.cmp(&right.request_id))
         });
+        rows.goals.sort_by(|left, right| {
+            left.agent_did
+                .cmp(&right.agent_did)
+                .then_with(|| left.session_id.cmp(&right.session_id))
+                .then_with(|| {
+                    cmp_opt_str_asc(left.created_at.as_deref(), right.created_at.as_deref())
+                })
+                .then_with(|| left.goal_id.cmp(&right.goal_id))
+        });
+        rows.goals.dedup_by(|right, left| {
+            right.agent_did == left.agent_did && right.session_id == left.session_id
+        });
         sort_rows_with_sources(
             &mut rows.tool_calls,
             &mut rows.tool_call_source_agent_dids,
@@ -155,6 +167,7 @@ impl ClientStore {
             responses: rows.responses,
             messages: rows.messages,
             sessions: rows.sessions,
+            goals: rows.goals,
             tool_calls: rows.tool_calls,
             tool_results: rows.tool_results,
             compaction_entries: rows.compaction_entries,

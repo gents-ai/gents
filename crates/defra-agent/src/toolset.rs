@@ -13,6 +13,7 @@ mod context_budget;
 mod denial;
 pub mod edit_match;
 mod file_tools;
+mod goal;
 #[cfg(feature = "agent-memory")]
 mod memory;
 mod native_runner;
@@ -40,6 +41,8 @@ pub use context_budget::{
     CONTEXT_BUDGET_TOOL_NAME,
 };
 pub(crate) use denial::{CommandPolicyDenial, DenialReason};
+pub(crate) use goal::build_goal_tools;
+pub(crate) use goal::{GetGoalArgs, UpdateGoalArgs};
 #[cfg(feature = "agent-memory")]
 pub use memory::{build_memory_tool, MEMORY_TOOL_NAME};
 pub(crate) use orchestration::{build_orchestration_tools, orchestration_tool_names};

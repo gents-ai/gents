@@ -529,6 +529,80 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
 }
 
 #[tokio::test]
+async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-goal-guard-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .expect("embedded node"),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("start goal"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    crate::goal::set_goal(
+        node.as_ref(),
+        "did:defra-agent:general",
+        &session_id,
+        Some("Do not resurrect after budget exhaustion"),
+        Some(crate::goal::GoalStatus::Active),
+        Some(Some(1)),
+    )
+    .await
+    .expect("create active goal");
+    crate::goal::set_goal(
+        node.as_ref(),
+        "did:defra-agent:general",
+        &session_id,
+        None,
+        Some(crate::goal::GoalStatus::BudgetLimited),
+        None,
+    )
+    .await
+    .expect("latch budget-limited goal");
+    hook.set_active_request_id(Some("goal-wrapup-request".to_string()))
+        .await;
+
+    let action = hook
+        .on_tool_call(
+            crate::goal::UPDATE_GOAL_TOOL_NAME,
+            None,
+            "blocked-during-wrapup",
+            r#"{"status":"blocked","reason":"needs approval"}"#,
+        )
+        .await;
+    assert!(matches!(action, ToolCallHookAction::Skip { .. }));
+    let goal =
+        crate::goal::load_canonical_goal(node.as_ref(), "did:defra-agent:general", &session_id)
+            .await
+            .expect("load goal")
+            .expect("goal exists");
+    assert_eq!(
+        goal.parsed_status(),
+        Some(crate::goal::GoalStatus::BudgetLimited)
+    );
+    assert_eq!(goal.consecutive_blocked_audits, Some(0));
+    assert_eq!(goal.wrapup_requested, Some(true));
+    assert_eq!(goal.wrapup_completed, Some(false));
+
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
 async fn completion_call_persists_context_once_before_prompt() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-context-{}", uuid::Uuid::new_v4()));

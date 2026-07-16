@@ -27,6 +27,7 @@ pub mod document_config;
 pub mod error;
 pub mod event_delivery_contract;
 pub mod external_adapter_capture;
+pub mod goal;
 pub mod graphql;
 pub mod health_checker;
 pub mod hook;
@@ -189,7 +190,7 @@ pub use schema::{
     ensure_config_bootstrap_schemas, ensure_runtime_schemas, ensure_schemas, AGENT_BEHAVIOR_SCHEMA,
     AGENT_CONVERSATION_SCHEMA, AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA,
     AGENT_RESPONSE_SCHEMA, AGENT_RUNTIME_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA,
-    AGENT_TOOL_RESULT_SCHEMA, COMPACTION_ENTRY_SCHEMA, INFERENCE_BACKEND_SCHEMA,
+    AGENT_TOOL_RESULT_SCHEMA, COMPACTION_ENTRY_SCHEMA, GOAL_SCHEMA, INFERENCE_BACKEND_SCHEMA,
     INFERENCE_CALL_SCHEMA, INFERENCE_PROFILE_SCHEMA, OAUTH_CREDENTIAL_SCHEMA, SCHEDULE_SCHEMA,
     TASK_SCHEMA, TOOL_SELECTION_SCHEMA, TOOL_SERVICE_HEALTH_STATE_SCHEMA,
     TOOL_SERVICE_REGISTRY_SCHEMA,
@@ -213,6 +214,7 @@ pub use toolset::{
     CommandNetworkMode, NativeTool, ToolSet, ToolSetBuilder,
 };
 pub use trigger_engine::event_source::EventSource;
+pub use trigger_engine::goal_source::GoalSource;
 pub use trigger_engine::subagent_source::SubagentSource;
 pub use trigger_engine::subscription_source::UpdateSubscriptionSource;
 pub use trigger_engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
