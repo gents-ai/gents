@@ -263,6 +263,162 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     assert_eq!(shape.legacy_top_level_parent, None);
     assert_eq!(shape.replay_stages, ["user", "compaction", "modelItems"]);
 
+    let reasoning_cases = lean_codex_shim_reasoning_projection_cases();
+    assert_eq!(reasoning_cases.len(), 8);
+    for case in reasoning_cases {
+        assert_eq!(
+            case.projected_delta,
+            case.live_delta
+                .as_ref()
+                .filter(|text| !text.is_empty())
+                .cloned()
+                .or_else(|| {
+                    (case.terminal && !case.item_open && !case.cursor_primed)
+                        .then(|| case.durable_text.clone())
+                        .flatten()
+                        .filter(|text| !text.is_empty())
+                }),
+            "{}: live delta or first durable observation must drive raw reasoning text",
+            case.witness
+        );
+        assert_eq!(
+            case.completed_text,
+            case.terminal
+                .then(|| {
+                    case.durable_text
+                        .clone()
+                        .filter(|text| !text.is_empty())
+                        .or_else(|| case.streamed_text.clone())
+                })
+                .flatten()
+                .filter(|text| !text.is_empty()),
+            "{}: completed reasoning must prefer durable text and retain the streamed fallback",
+            case.witness
+        );
+        assert!(
+            !case
+                .projected_events
+                .iter()
+                .any(|event| event == "summaryTextDelta"),
+            "{}: raw DEFRA reasoning must not be promoted to a summary",
+            case.witness
+        );
+    }
+    let first = reasoning_cases
+        .iter()
+        .find(|case| case.witness == "codex_shim.reasoning.first_live")
+        .expect("first live reasoning witness");
+    assert_eq!(first.projected_events, ["started", "rawTextDelta"]);
+    let resumed = reasoning_cases
+        .iter()
+        .find(|case| case.witness == "codex_shim.reasoning.resumed_unchanged")
+        .expect("resumed reasoning witness");
+    assert!(resumed.projected_events.is_empty());
+    let terminal_first = reasoning_cases
+        .iter()
+        .find(|case| case.witness == "codex_shim.reasoning.terminal_first_observation")
+        .expect("terminal first reasoning witness");
+    assert_eq!(
+        terminal_first.projected_events,
+        ["started", "rawTextDelta", "completed"]
+    );
+    let durable_suffix = reasoning_cases
+        .iter()
+        .find(|case| case.witness == "codex_shim.reasoning.terminal_durable_suffix")
+        .expect("terminal durable suffix witness");
+    assert_eq!(
+        durable_suffix.projected_events,
+        ["rawTextDelta", "completed"]
+    );
+    assert_eq!(
+        durable_suffix.projected_delta.as_deref(),
+        Some("; durable suffix")
+    );
+
+    let thread_status_cases = lean_codex_shim_thread_status_cases();
+    assert_eq!(thread_status_cases.len(), 11);
+    for case in thread_status_cases {
+        let expected = match case.request_state.as_deref() {
+            Some("pending" | "claimed" | "processing" | "inputRequired") => "active",
+            Some("failed" | "dead") => "systemError",
+            Some("completed" | "superseded" | "interrupted") => "idle",
+            None if case.conversation_status == "error" => "systemError",
+            None => "idle",
+            Some(other) => panic!("{}: unknown request state {other}", case.witness),
+        };
+        assert_eq!(case.projected_status, expected, "{}", case.witness);
+    }
+
+    let behavior_cases = lean_codex_shim_behavior_selection_cases();
+    assert_eq!(behavior_cases.len(), 5);
+    for case in behavior_cases {
+        let expected = case
+            .thread_behavior_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&case.root_behavior_id);
+        assert_eq!(case.projected_behavior_id, expected, "{}", case.witness);
+        let projected_model = case
+            .resolved_child_model
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                case.projected_child_model
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+            })
+            .unwrap_or(&case.root_model);
+        assert_eq!(case.projected_model, projected_model, "{}", case.witness);
+    }
+
+    let tool_metadata_cases = lean_codex_shim_tool_metadata_cases();
+    assert_eq!(tool_metadata_cases.len(), 11);
+    for case in tool_metadata_cases {
+        let nonempty = |value: &Option<String>| {
+            value
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        };
+        assert_eq!(
+            case.projected_server,
+            nonempty(&case.selected_server).unwrap_or_else(|| case.fallback_server.clone()),
+            "{}: server identity",
+            case.witness
+        );
+        assert_eq!(
+            case.projected_tool,
+            nonempty(&case.selected_tool).unwrap_or_else(|| case.fallback_tool.clone()),
+            "{}: tool identity",
+            case.witness
+        );
+        assert_eq!(
+            case.projected_failure,
+            nonempty(&case.denial_reason)
+                .or_else(|| nonempty(&case.cancel_cause))
+                .or_else(|| nonempty(&case.result_fallback))
+                .or_else(|| nonempty(&case.failure_class)),
+            "{}: failure diagnostic",
+            case.witness
+        );
+        assert_eq!(
+            case.projected_duration_ms,
+            case.latency_ms.or_else(|| {
+                case.started_at_ms
+                    .zip(case.completed_at_ms)
+                    .map(|(started, completed)| completed.saturating_sub(started))
+            }),
+            "{}: duration",
+            case.witness
+        );
+        assert_eq!(
+            case.projected_event_at_ms,
+            case.persisted_event_at_ms.unwrap_or(case.observed_at_ms),
+            "{}: event timestamp",
+            case.witness
+        );
+    }
+
     let context_cases = lean_codex_shim_context_usage_cases();
     assert_eq!(context_cases.len(), 2);
     for case in context_cases {

@@ -25,7 +25,7 @@ pub(in crate::commands::codex_shim) fn codex_thread_json_with_turns(
         &record.cwd,
         &record.session_id,
         preview,
-        codex::ThreadStatus::Idle,
+        codex_thread_status(record),
         turns,
     );
     let object = thread
@@ -99,6 +99,37 @@ pub(in crate::commands::codex_shim) fn codex_thread_json_with_turns(
         );
     }
     thread
+}
+
+pub(in crate::commands::codex_shim) fn codex_thread_status(
+    record: &CodexThreadRecord,
+) -> codex::ThreadStatus {
+    if let Some(link) = record.subagent.as_ref() {
+        return projected_thread_status(Some(&link.lifecycle_state), "");
+    }
+    let conversation = record.conversation.as_ref();
+    projected_thread_status(
+        conversation.and_then(|row| row.latest_request_lifecycle_state.as_deref()),
+        conversation.map(|row| row.status.as_str()).unwrap_or(""),
+    )
+}
+
+pub(in crate::commands::codex_shim) fn projected_thread_status(
+    request_state: Option<&str>,
+    conversation_status: &str,
+) -> codex::ThreadStatus {
+    match request_state.map(str::trim) {
+        Some("pending" | "claimed" | "processing") => codex::ThreadStatus::Active {
+            active_flags: Vec::new(),
+        },
+        Some("inputRequired") => codex::ThreadStatus::Active {
+            active_flags: vec![codex::ThreadActiveFlag::WaitingOnUserInput],
+        },
+        Some("failed" | "dead") => codex::ThreadStatus::SystemError,
+        Some("completed" | "superseded" | "interrupted") => codex::ThreadStatus::Idle,
+        _ if conversation_status.trim() == "error" => codex::ThreadStatus::SystemError,
+        _ => codex::ThreadStatus::Idle,
+    }
 }
 
 pub(in crate::commands::codex_shim) fn thread_start_response_json(
@@ -198,6 +229,7 @@ mod tests {
                 request_id: "child-request".to_string(),
                 latest_request_id: "child-request".to_string(),
                 latest_request_content: "Inspect the patch".to_string(),
+                latest_request_created_at: None,
                 session_id: child_session_id.clone(),
                 parent_request_id: "parent-request".to_string(),
                 parent_tool_call_id: "spawn-call".to_string(),
@@ -230,6 +262,44 @@ mod tests {
         assert_eq!(
             value.pointer("/source/subAgent/thread_spawn/depth"),
             Some(&json!(1))
+        );
+        assert_eq!(value.pointer("/status/type"), Some(&json!("active")));
+    }
+
+    #[test]
+    fn thread_status_projects_runtime_request_lifecycle() {
+        let cases = [
+            (Some("pending"), "active", None),
+            (Some("claimed"), "active", None),
+            (Some("processing"), "active", None),
+            (Some("inputRequired"), "active", Some("waitingOnUserInput")),
+            (Some("completed"), "idle", None),
+            (Some("superseded"), "idle", None),
+            (Some("interrupted"), "idle", None),
+            (Some("failed"), "systemError", None),
+            (Some("dead"), "systemError", None),
+        ];
+
+        for (runtime_state, expected_type, expected_flag) in cases {
+            let encoded = serde_json::to_value(projected_thread_status(runtime_state, ""))
+                .expect("encode thread status");
+            assert_eq!(
+                encoded.pointer("/type"),
+                Some(&json!(expected_type)),
+                "runtime state {runtime_state:?}"
+            );
+            if let Some(flag) = expected_flag {
+                assert_eq!(encoded.pointer("/activeFlags/0"), Some(&json!(flag)));
+            }
+        }
+
+        assert_eq!(
+            serde_json::to_value(projected_thread_status(None, "error")).unwrap()["type"],
+            "systemError"
+        );
+        assert_eq!(
+            serde_json::to_value(projected_thread_status(None, "active")).unwrap()["type"],
+            "idle"
         );
     }
 }

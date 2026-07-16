@@ -16,17 +16,19 @@ use super::super::command_projection::{
 use super::super::compaction_projection::decode_defra_compaction_progress;
 use super::super::progress::{
     content_delta, decode_defra_tool_call_progress, defra_turn_progress_query,
-    response_field_is_blank, terminal_error_message, terminal_turn_status,
+    response_field_is_blank, terminal_error_message, terminal_turn_status, timestamp_millis,
 };
-use super::super::protocol::{send_committed_user_message, send_notification};
+use super::super::protocol::{
+    send_committed_user_message, send_notification, send_thread_status_changed,
+};
 use super::super::store::{hydrate_materialized_response_content, query_node_json};
 use super::super::subagent_projection::{
     attach_subagent_link, is_subagent_control_tool, load_authorized_subagent_threads_for_root,
     SubagentProjectionUpdateFilter,
 };
 use super::super::thread_projection::{
-    latest_inference_usage_observation, latest_requests_token_usage, session_token_usage,
-    thread_token_usage,
+    latest_inference_usage_observation, latest_requests_token_usage, projected_thread_status,
+    session_token_usage, thread_token_usage,
 };
 use super::super::turn_projection::TurnProjection;
 use super::super::{ConnectionState, ShimState};
@@ -66,6 +68,12 @@ struct ToolProgressMarker {
     result_len: Option<usize>,
     started_at: Option<String>,
     completed_at: Option<String>,
+    selected_service_id: Option<String>,
+    selected_tool_name: Option<String>,
+    tool_failure_class: Option<String>,
+    denial_reason: Option<String>,
+    cancel_cause: Option<String>,
+    latency_ms: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,6 +93,26 @@ struct ContentCursor {
     rendered_len: usize,
     head: String,
     tail: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ReasoningCursor {
+    observed_preview: String,
+    active_item_id: Option<String>,
+    progress_seq: Option<String>,
+    segment: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReasoningDelta {
+    item_id: String,
+    text: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ReasoningObservation {
+    completed_item_id: Option<String>,
+    delta: Option<ReasoningDelta>,
 }
 
 #[derive(Clone, Debug)]
@@ -152,6 +180,7 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
     let mut subagent_links = Vec::new();
     let mut subagent_links_dirty = true;
     let mut latest_content_cursor = ContentCursor::default();
+    let mut latest_reasoning_cursor = ReasoningCursor::default();
     let mut latest_error_message: Option<String> = None;
     let mut latest_progress_marker: Option<ProgressMarker> = None;
     let mut last_progress_at = tokio::time::Instant::now();
@@ -161,6 +190,7 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
             &baseline_turn,
             &current.request_id,
             &mut latest_content_cursor,
+            &mut latest_reasoning_cursor,
             &mut known_tool_calls,
             &mut known_compaction_states,
         );
@@ -222,6 +252,14 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
             .and_then(|row| row.get("lifecycle_state"))
             .and_then(Value::as_str)
             .unwrap_or("");
+        projection.observe_response_timing(
+            response_row
+                .and_then(|row| nonempty_timestamp_field(row, "created_at"))
+                .and_then(timestamp_millis),
+            response_row
+                .and_then(response_terminal_timestamp)
+                .and_then(timestamp_millis),
+        );
         let projection_settled = is_terminal_lifecycle_state(lifecycle_state)
             || matches!(response_status, "complete" | "completed" | "error");
 
@@ -291,6 +329,29 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
             .await?;
             subagent_links_dirty = false;
             subagent_links_refreshed = true;
+        }
+
+        if marker_changed && !projection_settled {
+            if let Some(reasoning) = response_row
+                .and_then(|row| row.get("reasoning"))
+                .and_then(Value::as_str)
+            {
+                let observation = latest_reasoning_cursor.observe(
+                    &current.request_id,
+                    reasoning,
+                    response_row.and_then(|row| scalar_marker(Some(row), "progress_seq")),
+                );
+                if let Some(item_id) = observation.completed_item_id {
+                    projection
+                        .finish_reasoning(outbound, &item_id, None)
+                        .await?;
+                }
+                if let Some(delta) = observation.delta {
+                    projection
+                        .append_reasoning_delta(outbound, &delta.item_id, &delta.text)
+                        .await?;
+                }
+            }
         }
 
         for row in tool_rows {
@@ -393,6 +454,26 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
                 continue;
             }
 
+            let completed_at_ms = response_terminal_timestamp(&terminal_response)
+                .or_else(|| {
+                    request_row.and_then(|row| nonempty_timestamp_field(row, "terminalized_at"))
+                })
+                .and_then(timestamp_millis);
+            projection
+                .set_completed_at(completed_at_ms.map(|timestamp| timestamp.div_euclid(1000)));
+            projection.observe_response_timing(None, completed_at_ms);
+
+            let durable_reasoning = terminal_response
+                .get("reasoning")
+                .and_then(Value::as_str)
+                .filter(|text| !text.trim().is_empty());
+            let reasoning_item_id = latest_reasoning_cursor
+                .active_item_id(&current.request_id)
+                .to_string();
+            projection
+                .finish_reasoning(outbound, &reasoning_item_id, durable_reasoning)
+                .await?;
+
             if let Some(content) = terminal_response.get("content").and_then(Value::as_str) {
                 let delta = content_delta(projection.active_agent_text(), content);
                 projection.append_agent_delta(outbound, &delta).await?;
@@ -476,6 +557,7 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
                         projection.thread_id,
                         projection.turn_id,
                         &next_input,
+                        timestamp_millis(&next_request.created_at),
                     )
                     .await?;
                     current.request_id = next_request.request_id;
@@ -486,6 +568,8 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
                     known_inference_usage_call_id = None;
                     subagent_links_dirty = true;
                     latest_content_cursor.reset();
+                    latest_reasoning_cursor.reset();
+                    projection.reset_response_timing();
                     latest_error_message = None;
                     latest_progress_marker = None;
                     last_progress_at = tokio::time::Instant::now();
@@ -508,6 +592,13 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
                 .finish_turn(outbound, turn_status, error_message)
                 .await
                 .context("sending terminal Codex turn notification")?;
+            send_thread_status_changed(
+                outbound,
+                state,
+                projection.thread_id,
+                projected_thread_status(Some(lifecycle_state), ""),
+            )
+            .await?;
             spawn_background_tool_watcher(
                 connection.clone(),
                 state.clone(),
@@ -573,6 +664,19 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
     }
 }
 
+fn nonempty_timestamp_field<'a>(row: &'a Value, field: &str) -> Option<&'a str> {
+    row.get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn response_terminal_timestamp(row: &Value) -> Option<&str> {
+    ["completed_at", "interrupted_at", "materialized_at"]
+        .into_iter()
+        .find_map(|field| nonempty_timestamp_field(row, field))
+}
+
 fn progress_marker(
     request_row: Option<&Value>,
     response_row: Option<&Value>,
@@ -611,12 +715,15 @@ fn prime_projection_from_turn(
     turn: &codex::Turn,
     request_id: &str,
     content_cursor: &mut ContentCursor,
+    reasoning_cursor: &mut ReasoningCursor,
     known_tool_calls: &mut BTreeMap<String, ToolProjectionStatus>,
     known_compaction_states: &mut BTreeMap<String, String>,
 ) {
     let preferred_agent_id = format!("defra-agent-{request_id}");
+    let preferred_reasoning_id = reasoning_item_id(request_id, 0);
     let mut resumed_agent = None;
     let mut found_preferred_agent = false;
+    let resumed_reasoning = resumable_reasoning_item(turn, &preferred_reasoning_id);
     for item in &turn.items {
         match item {
             codex::ThreadItem::AgentMessage { id, text, .. } => {
@@ -627,6 +734,7 @@ fn prime_projection_from_turn(
                     resumed_agent = Some((id.clone(), text.clone()));
                 }
             }
+            codex::ThreadItem::Reasoning { .. } => {}
             codex::ThreadItem::McpToolCall { id, status, .. } => {
                 known_tool_calls.insert(id.clone(), ToolProjectionStatus::Mcp(status.clone()));
             }
@@ -660,7 +768,7 @@ fn prime_projection_from_turn(
                             child_model: model.clone(),
                             child_lifecycle_state: child
                                 .map(|state| collab_lifecycle_state(&state.status))
-                                .unwrap_or("pending")
+                                .unwrap_or("")
                                 .to_string(),
                             child_failure_reason: child.and_then(|state| state.message.clone()),
                         },
@@ -677,6 +785,32 @@ fn prime_projection_from_turn(
         content_cursor.prime(&text);
         projection.resume_agent_message(item_id, &text);
     }
+    if let Some((item_id, text)) = resumed_reasoning {
+        reasoning_cursor.prime(item_id.clone(), &text);
+        projection.resume_reasoning(item_id, &text);
+    }
+}
+
+fn resumable_reasoning_item(turn: &codex::Turn, preferred_id: &str) -> Option<(String, String)> {
+    turn.items.iter().find_map(|item| {
+        let codex::ThreadItem::Reasoning {
+            id,
+            summary,
+            content,
+        } = item
+        else {
+            return None;
+        };
+        if id != preferred_id {
+            return None;
+        }
+        let text = if content.is_empty() {
+            summary.concat()
+        } else {
+            content.concat()
+        };
+        (!text.trim().is_empty()).then(|| (id.clone(), text))
+    })
 }
 
 fn collab_lifecycle_state(status: &codex::CollabAgentStatus) -> &'static str {
@@ -765,6 +899,128 @@ impl ContentCursor {
     }
 }
 
+impl ReasoningCursor {
+    fn observe(
+        &mut self,
+        request_id: &str,
+        current: &str,
+        progress_seq: Option<String>,
+    ) -> ReasoningObservation {
+        let progress_boundary = self.progress_seq.is_some()
+            && progress_seq.is_some()
+            && self.progress_seq != progress_seq;
+        self.progress_seq = progress_seq;
+        let explicit_boundary = current.is_empty() && !self.observed_preview.is_empty();
+        let previous_preview = self.observed_preview.clone();
+        let completed_item_id = ((progress_boundary || explicit_boundary)
+            && !self.observed_preview.is_empty())
+        .then(|| self.active_item_id(request_id));
+        if completed_item_id.is_some() {
+            self.observed_preview.clear();
+            self.active_item_id = None;
+            self.segment = self.segment.saturating_add(1);
+        }
+
+        if current.is_empty()
+            || (progress_boundary && current == previous_preview)
+            || current == self.observed_preview
+        {
+            return ReasoningObservation {
+                completed_item_id,
+                delta: None,
+            };
+        }
+
+        let (delta, discontinuity) = if self.observed_preview.is_empty() {
+            (current, false)
+        } else if let Some(delta) = current.strip_prefix(&self.observed_preview) {
+            (delta, false)
+        } else {
+            let overlap = suffix_prefix_overlap(&self.observed_preview, current);
+            if overlap == 0 {
+                (current, true)
+            } else {
+                (&current[overlap..], false)
+            }
+        };
+        self.observed_preview = current.to_string();
+        if delta.is_empty() {
+            return ReasoningObservation {
+                completed_item_id,
+                delta: None,
+            };
+        }
+        if discontinuity {
+            self.segment = self.segment.saturating_add(1);
+            self.active_item_id = Some(reasoning_item_id(request_id, self.segment));
+        }
+        let item_id = self
+            .active_item_id
+            .get_or_insert_with(|| reasoning_item_id(request_id, self.segment))
+            .clone();
+        ReasoningObservation {
+            completed_item_id,
+            delta: Some(ReasoningDelta {
+                item_id,
+                text: delta.to_string(),
+            }),
+        }
+    }
+
+    fn prime(&mut self, item_id: String, text: &str) {
+        self.observed_preview = text.to_string();
+        self.active_item_id = Some(item_id);
+    }
+
+    fn active_item_id(&self, request_id: &str) -> String {
+        self.active_item_id
+            .clone()
+            .unwrap_or_else(|| reasoning_item_id(request_id, self.segment))
+    }
+
+    fn reset(&mut self) {
+        self.observed_preview.clear();
+        self.active_item_id = None;
+        self.progress_seq = None;
+        self.segment = 0;
+    }
+}
+
+fn reasoning_item_id(request_id: &str, segment: u64) -> String {
+    if segment == 0 {
+        format!("defra-reasoning-{request_id}")
+    } else {
+        format!("defra-reasoning-{request_id}-segment-{segment}")
+    }
+}
+
+/// Longest byte length which is both a suffix of `previous` and a prefix of
+/// `current`. This is the KMP prefix function over `current + sentinel +
+/// previous`; 0xFF cannot occur in valid UTF-8, so it is an unambiguous
+/// separator. The result is a UTF-8 boundary because the matching suffix ends
+/// at the boundary at the end of `previous`.
+fn suffix_prefix_overlap(previous: &str, current: &str) -> usize {
+    if previous.is_empty() || current.is_empty() {
+        return 0;
+    }
+    let mut combined = Vec::with_capacity(current.len() + 1 + previous.len());
+    combined.extend_from_slice(current.as_bytes());
+    combined.push(0xff);
+    combined.extend_from_slice(previous.as_bytes());
+    let mut prefix = vec![0usize; combined.len()];
+    for index in 1..combined.len() {
+        let mut candidate = prefix[index - 1];
+        while candidate > 0 && combined[index] != combined[candidate] {
+            candidate = prefix[candidate - 1];
+        }
+        if combined[index] == combined[candidate] {
+            candidate += 1;
+        }
+        prefix[index] = candidate.min(current.len());
+    }
+    prefix.last().copied().unwrap_or_default()
+}
+
 fn head_window(value: &str, max_bytes: usize) -> &str {
     if value.len() <= max_bytes {
         return value;
@@ -799,6 +1055,12 @@ fn tool_progress_marker(row: &Value) -> ToolProgressMarker {
         result_len: string_len_marker(Some(row), "result"),
         started_at: scalar_marker(Some(row), "started_at"),
         completed_at: scalar_marker(Some(row), "completed_at"),
+        selected_service_id: scalar_marker(Some(row), "selected_service_id"),
+        selected_tool_name: scalar_marker(Some(row), "selected_tool_name"),
+        tool_failure_class: scalar_marker(Some(row), "tool_failure_class"),
+        denial_reason: scalar_marker(Some(row), "denial_reason"),
+        cancel_cause: scalar_marker(Some(row), "cancel_cause"),
+        latency_ms: scalar_marker(Some(row), "latency_ms"),
     }
 }
 
@@ -886,6 +1148,13 @@ async fn finish_interrupted_turn(
     projection
         .finish_turn(&connection.outbound, codex::TurnStatus::Interrupted, None)
         .await?;
+    send_thread_status_changed(
+        &connection.outbound,
+        state,
+        projection.thread_id,
+        codex::ThreadStatus::Idle,
+    )
+    .await?;
     spawn_background_tool_watcher(
         connection.clone(),
         state.clone(),
@@ -951,7 +1220,12 @@ async fn steering_input_for_request(
 
 #[cfg(test)]
 mod tests {
-    use super::{content_delta_from_cursor, ContentCursor};
+    use codex_app_server_protocol as codex;
+
+    use super::{
+        content_delta_from_cursor, resumable_reasoning_item, suffix_prefix_overlap, ContentCursor,
+        ReasoningCursor,
+    };
 
     #[test]
     fn content_cursor_emits_only_appended_suffix() {
@@ -1038,5 +1312,147 @@ mod tests {
             content_delta_from_cursor(&mut cursor, "hello ☕ done"),
             " done"
         );
+    }
+
+    #[test]
+    fn reasoning_cursor_emits_live_append_without_duplication() {
+        let mut cursor = ReasoningCursor::default();
+        let first = cursor
+            .observe("request-1", "inspect", Some("1".to_string()))
+            .delta
+            .expect("first reasoning delta");
+        assert_eq!(first.item_id, "defra-reasoning-request-1");
+        assert_eq!(first.text, "inspect");
+
+        let appended = cursor
+            .observe("request-1", "inspect then test", Some("1".to_string()))
+            .delta
+            .expect("appended reasoning delta");
+        assert_eq!(appended.item_id, first.item_id);
+        assert_eq!(appended.text, " then test");
+        assert_eq!(
+            cursor.observe("request-1", "inspect then test", Some("1".to_string())),
+            Default::default()
+        );
+    }
+
+    #[test]
+    fn reasoning_cursor_recovers_delta_after_bounded_tail_rolls() {
+        let mut cursor = ReasoningCursor::default();
+        cursor
+            .observe("request-1", "first middle", Some("1".to_string()))
+            .delta
+            .expect("first reasoning delta");
+        let rolled = cursor
+            .observe("request-1", "middle last", Some("1".to_string()))
+            .delta
+            .expect("rolled reasoning delta");
+        assert_eq!(rolled.item_id, "defra-reasoning-request-1");
+        assert_eq!(rolled.text, " last");
+    }
+
+    #[test]
+    fn reasoning_cursor_primes_resume_without_replay() {
+        let mut cursor = ReasoningCursor::default();
+        cursor.prime("defra-reasoning-request-1".to_string(), "already visible");
+        assert!(cursor
+            .observe("request-1", "already visible", Some("1".to_string()))
+            .delta
+            .is_none());
+        let delta = cursor
+            .observe(
+                "request-1",
+                "already visible plus new",
+                Some("1".to_string()),
+            )
+            .delta
+            .expect("new reasoning after resume");
+        assert_eq!(delta.text, " plus new");
+    }
+
+    #[test]
+    fn resume_never_binds_current_cursor_to_foreign_reasoning_item() {
+        let turn = codex::Turn {
+            id: "request-2".to_string(),
+            items: vec![codex::ThreadItem::Reasoning {
+                id: "defra-reasoning-message-1".to_string(),
+                summary: Vec::new(),
+                content: vec!["reasoning from an earlier model turn".to_string()],
+            }],
+            items_view: codex::TurnItemsView::Full,
+            status: codex::TurnStatus::InProgress,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        };
+        assert!(resumable_reasoning_item(&turn, "defra-reasoning-request-2").is_none());
+    }
+
+    #[test]
+    fn reasoning_cursor_starts_new_item_after_unrecoverable_gap() {
+        let mut cursor = ReasoningCursor::default();
+        cursor
+            .observe("request-1", "old preview", Some("1".to_string()))
+            .delta
+            .expect("first reasoning delta");
+        let replacement = cursor
+            .observe("request-1", "entirely new preview", Some("1".to_string()))
+            .delta
+            .expect("replacement reasoning delta");
+        assert_eq!(replacement.item_id, "defra-reasoning-request-1-segment-1");
+        assert_eq!(replacement.text, "entirely new preview");
+    }
+
+    #[test]
+    fn reasoning_cursor_segments_on_observed_empty_runtime_boundary() {
+        let mut cursor = ReasoningCursor::default();
+        cursor
+            .observe("request-1", "first turn", Some("1".to_string()))
+            .delta
+            .expect("first reasoning delta");
+
+        let boundary = cursor.observe("request-1", "", Some("2".to_string()));
+        assert_eq!(
+            boundary.completed_item_id.as_deref(),
+            Some("defra-reasoning-request-1")
+        );
+        assert!(boundary.delta.is_none());
+
+        let next = cursor
+            .observe("request-1", "second turn", Some("2".to_string()))
+            .delta
+            .expect("second reasoning delta");
+        assert_eq!(next.item_id, "defra-reasoning-request-1-segment-1");
+        assert_eq!(next.text, "second turn");
+    }
+
+    #[test]
+    fn reasoning_cursor_uses_progress_boundary_when_empty_write_was_missed() {
+        let mut cursor = ReasoningCursor::default();
+        cursor
+            .observe("request-1", "tail shared", Some("1".to_string()))
+            .delta
+            .expect("first reasoning delta");
+
+        let next = cursor.observe(
+            "request-1",
+            "shared but belongs to the next turn",
+            Some("2".to_string()),
+        );
+        assert_eq!(
+            next.completed_item_id.as_deref(),
+            Some("defra-reasoning-request-1")
+        );
+        let delta = next.delta.expect("next-turn reasoning delta");
+        assert_eq!(delta.item_id, "defra-reasoning-request-1-segment-1");
+        assert_eq!(delta.text, "shared but belongs to the next turn");
+    }
+
+    #[test]
+    fn suffix_prefix_overlap_is_linear_and_utf8_safe() {
+        assert_eq!(suffix_prefix_overlap("abc middle", "middle xyz"), 6);
+        assert_eq!(suffix_prefix_overlap("reason ☕", "☕ next"), "☕".len());
+        assert_eq!(suffix_prefix_overlap("no overlap", "fresh"), 0);
     }
 }

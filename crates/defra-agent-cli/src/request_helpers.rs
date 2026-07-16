@@ -23,6 +23,7 @@ pub(crate) struct SubmittedRequest {
     pub(crate) top_k: Option<i64>,
     pub(crate) max_tokens: Option<i64>,
     pub(crate) metadata: Option<String>,
+    pub(crate) created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -105,6 +106,7 @@ pub(crate) fn materialized_message_query(session_id: &str, sequence: i64) -> Str
             ) {{
                 role
                 content
+                reasoning
                 sequence
             }}
         }}"#,
@@ -209,8 +211,12 @@ pub(crate) async fn hydrate_materialized_response_content(
         );
     }
     if reasoning_blank {
-        if let Some(reasoning) = presentation
-            .reasoning_markdown
+        if let Some(reasoning) = message
+            .get("reasoning")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+            .or(presentation.reasoning_markdown)
             .filter(|value| !value.trim().is_empty())
         {
             object.insert("reasoning".to_string(), Value::String(reasoning));
@@ -333,6 +339,7 @@ pub(crate) async fn create_agent_request(
         top_k: options.top_k,
         max_tokens: options.max_tokens,
         metadata: request_metadata,
+        created_at: Some(created_at),
     })
 }
 
@@ -825,7 +832,14 @@ pub(crate) async fn fetch_request_view(
 
 #[cfg(test)]
 mod tests {
-    use super::content_and_metadata_with_prompt_selected_skill_ids;
+    use super::{content_and_metadata_with_prompt_selected_skill_ids, materialized_message_query};
+
+    #[test]
+    fn materialized_message_query_loads_dedicated_reasoning() {
+        let query = materialized_message_query("session-1", 7);
+        assert!(query.contains("reasoning"));
+        assert!(query.contains("sequence: { _eq: 7 }"));
+    }
 
     #[test]
     fn slash_prompt_adds_selected_skill_ids_metadata() {

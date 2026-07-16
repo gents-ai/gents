@@ -5,7 +5,11 @@ use codex_app_server_protocol as codex;
 use defra_agent::UpdateSubscriptionSource;
 use tokio::sync::watch;
 
-use super::protocol::{send_committed_user_message, send_notification, turn_value};
+use super::progress::timestamp_millis;
+use super::protocol::{
+    send_committed_user_message, send_notification, send_thread_status_changed, timestamp_seconds,
+    turn_value_with_timing,
+};
 use super::subagent_projection::{
     load_authorized_subagent_threads_for_root, LinkedSubagentThread, SubagentProjectionUpdateFilter,
 };
@@ -145,16 +149,34 @@ async fn project_child_request(
         top_k: None,
         max_tokens: None,
         metadata: None,
+        created_at: link.latest_request_created_at.clone(),
     };
     let turn_id = submitted.request_id.clone();
+    let started_at = submitted.created_at.as_deref().and_then(timestamp_seconds);
     if announce_turn {
         send_notification(
             &connection.outbound,
             state,
             codex::ServerNotification::TurnStarted(codex::TurnStartedNotification {
                 thread_id: link.session_id.clone(),
-                turn: turn_value(&turn_id, codex::TurnStatus::InProgress, Vec::new(), None),
+                turn: turn_value_with_timing(
+                    &turn_id,
+                    codex::TurnStatus::InProgress,
+                    Vec::new(),
+                    None,
+                    started_at,
+                    None,
+                ),
             }),
+        )
+        .await?;
+        send_thread_status_changed(
+            &connection.outbound,
+            state,
+            &link.session_id,
+            codex::ThreadStatus::Active {
+                active_flags: Vec::new(),
+            },
         )
         .await?;
         if !link.latest_request_content.trim().is_empty() {
@@ -167,13 +189,14 @@ async fn project_child_request(
                     text: link.latest_request_content.clone(),
                     text_elements: Vec::new(),
                 }],
+                submitted.created_at.as_deref().and_then(timestamp_millis),
             )
             .await?;
         }
     }
 
     let cwd = state.thread_cwd(&link.session_id).await;
-    let mut projection = TurnProjection::new(state, &link.session_id, &turn_id, cwd);
+    let mut projection = TurnProjection::new(state, &link.session_id, &turn_id, cwd, started_at);
     let (_cancel_tx, cancel_rx) = watch::channel(false);
     stream_defra_turn(
         connection,

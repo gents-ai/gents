@@ -213,17 +213,58 @@ pub(super) async fn load_conversation(
             ) {{
                 title preview_text status created_at updated_at latest_request_id forked_from_session_id
             }}
+            AgentRequest(
+                filter: {{
+                    session_id: {{ _eq: "{escaped_thread_id}" }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    behavior_id: {{ _eq: "{escaped_behavior_id}" }}
+                }},
+                order: [{{ created_at: DESC }}, {{ request_id: DESC }}],
+                limit: 1
+            ) {{
+                request_id
+                lifecycle_state
+                failure_reason
+            }}
         }}"#
     );
     let response = query_node_json(&state.node, &query).await?;
-    response
+    let conversation: Option<ConversationRow> = response
         .pointer("/data/AgentConversation")
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
         .cloned()
         .map(serde_json::from_value)
         .transpose()
-        .context("decoding AgentConversation row")
+        .context("decoding AgentConversation row")?;
+    Ok(attach_latest_request(
+        conversation,
+        response.pointer("/data/AgentRequest/0"),
+    ))
+}
+
+fn attach_latest_request(
+    mut conversation: Option<ConversationRow>,
+    request: Option<&Value>,
+) -> Option<ConversationRow> {
+    if conversation.is_none() && request.is_some() {
+        conversation = Some(ConversationRow::default());
+    }
+    if let Some(conversation) = conversation.as_mut() {
+        conversation.latest_request_lifecycle_state = request
+            .and_then(|row| row.get("lifecycle_state"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        conversation.latest_request_failure_reason = request
+            .and_then(|row| row.get("failure_reason"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+    }
+    conversation
 }
 
 pub(super) async fn derive_thread_cwd(state: &ShimState, thread_id: &str) -> Result<PathBuf> {
@@ -319,6 +360,23 @@ fn agent_name(state: &ShimState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn pending_request_projects_even_before_conversation_materializes() {
+        let request = json!({
+            "request_id": "request-1",
+            "lifecycle_state": "pending",
+            "failure_reason": ""
+        });
+        let conversation = attach_latest_request(None, Some(&request))
+            .expect("request should provide a projection shell");
+        assert_eq!(
+            conversation.latest_request_lifecycle_state.as_deref(),
+            Some("pending")
+        );
+        assert_eq!(conversation.latest_request_failure_reason, None);
+    }
 
     #[test]
     fn metadata_json_cwd_reads_codex_shim_cwd() {

@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 
 use super::subagent_projection::LinkedSubagentThread;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(super) struct DefraToolCallProgress {
     pub(super) tool_call_key: String,
     pub(super) tool_name: String,
@@ -14,6 +14,14 @@ pub(super) struct DefraToolCallProgress {
     pub(super) child_request_id: Option<String>,
     pub(super) args: String,
     pub(super) result: String,
+    pub(super) selected_service_id: Option<String>,
+    pub(super) selected_tool_name: Option<String>,
+    pub(super) tool_failure_class: Option<String>,
+    pub(super) denial_reason: Option<String>,
+    pub(super) cancel_cause: Option<String>,
+    pub(super) latency_ms: Option<i64>,
+    pub(super) started_at: Option<String>,
+    pub(super) completed_at: Option<String>,
     pub(super) subagent_link: Option<LinkedSubagentThread>,
 }
 
@@ -28,6 +36,8 @@ pub(super) fn defra_turn_progress_query(request_id: &str, session_id: &str) -> S
                 request_id
                 lifecycle_state
                 failure_reason
+                created_at
+                terminalized_at
                 interrupt_requested_at
                 valid_until
             }}
@@ -46,6 +56,7 @@ pub(super) fn defra_turn_progress_query(request_id: &str, session_id: &str) -> S
                 token_count
                 progress_seq
                 reasoning_progress_seq
+                created_at
                 materialized_message_sequence
                 materialized_at
                 completed_at
@@ -68,6 +79,12 @@ pub(super) fn defra_turn_progress_query(request_id: &str, session_id: &str) -> S
                 result
                 started_at
                 completed_at
+                selected_service_id
+                selected_tool_name
+                tool_failure_class
+                denial_reason
+                cancel_cause
+                latency_ms
             }}
             InferenceCall(
                 filter: {{
@@ -112,6 +129,12 @@ pub(super) fn defra_tool_progress_query(request_id: &str, session_id: &str) -> S
                 result
                 started_at
                 completed_at
+                selected_service_id
+                selected_tool_name
+                tool_failure_class
+                denial_reason
+                cancel_cause
+                latency_ms
             }}
         }}"#,
         request_id = escape_graphql_string(request_id),
@@ -147,6 +170,14 @@ pub(super) fn decode_defra_tool_call_progress(row: &Value) -> Option<DefraToolCa
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string(),
+        selected_service_id: optional_nonempty_string(row, "selected_service_id"),
+        selected_tool_name: optional_nonempty_string(row, "selected_tool_name"),
+        tool_failure_class: optional_nonempty_string(row, "tool_failure_class"),
+        denial_reason: optional_nonempty_string(row, "denial_reason"),
+        cancel_cause: optional_nonempty_string(row, "cancel_cause"),
+        latency_ms: row.get("latency_ms").and_then(json_i64),
+        started_at: optional_nonempty_string(row, "started_at"),
+        completed_at: optional_nonempty_string(row, "completed_at"),
         subagent_link: None,
     })
 }
@@ -167,8 +198,7 @@ pub(super) fn defra_tool_item(
         codex::McpToolCallStatus::Failed => (
             None,
             Some(codex::McpToolCallError {
-                message: preview_compact_text(&tool.result)
-                    .unwrap_or_else(|| "DEFRA tool call failed".to_string()),
+                message: tool_failure_message(tool),
             }),
         ),
         codex::McpToolCallStatus::InProgress => (None, None),
@@ -176,16 +206,78 @@ pub(super) fn defra_tool_item(
 
     codex::ThreadItem::McpToolCall {
         id: tool.tool_call_key.clone(),
-        server: "defra".to_string(),
-        tool: tool.tool_name.clone(),
+        server: selected_tool_identity(tool.selected_service_id.as_deref(), "defra"),
+        tool: selected_tool_identity(tool.selected_tool_name.as_deref(), &tool.tool_name),
         status,
         arguments: parse_json_value(&tool.args).unwrap_or_else(|| json!({})),
         mcp_app_resource_uri: None,
         plugin_id: None,
         result,
         error,
-        duration_ms: None,
+        duration_ms: tool_duration_ms(tool),
     }
+}
+
+pub(super) fn tool_duration_ms(tool: &DefraToolCallProgress) -> Option<i64> {
+    tool.latency_ms.filter(|latency| *latency >= 0).or_else(|| {
+        let started = tool.started_at.as_deref().and_then(timestamp_millis)?;
+        let completed = tool.completed_at.as_deref().and_then(timestamp_millis)?;
+        Some(completed.saturating_sub(started).max(0))
+    })
+}
+
+pub(super) fn tool_started_at_ms(tool: &DefraToolCallProgress) -> Option<i64> {
+    tool.started_at.as_deref().and_then(timestamp_millis)
+}
+
+pub(super) fn tool_completed_at_ms(tool: &DefraToolCallProgress) -> Option<i64> {
+    tool.completed_at.as_deref().and_then(timestamp_millis)
+}
+
+fn selected_tool_identity(selected: Option<&str>, fallback: &str) -> String {
+    selected
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback)
+        .to_string()
+}
+
+fn tool_failure_message(tool: &DefraToolCallProgress) -> String {
+    [tool.denial_reason.as_deref(), tool.cancel_cause.as_deref()]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| preview_compact_text(&tool.result))
+        .or_else(|| {
+            tool.tool_failure_class
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "DEFRA tool call failed".to_string())
+}
+
+fn optional_nonempty_string(row: &Value, field: &str) -> Option<String> {
+    row.get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn json_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+}
+
+pub(super) fn timestamp_millis(raw: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|timestamp| timestamp.timestamp_millis())
 }
 
 pub(super) fn defra_tool_call_status(tool: &DefraToolCallProgress) -> codex::McpToolCallStatus {
@@ -415,6 +507,103 @@ mod tests {
         assert!(query.contains("ended_at"));
     }
 
+    #[test]
+    fn tool_projection_prefers_runtime_identity_failure_and_latency() {
+        let mut tool = test_tool("configured_search", "failed", r#"{"query":"DEFRA"}"#)
+            .with_result("provider returned a generic failure");
+        tool.selected_service_id = Some("search-service".to_string());
+        tool.selected_tool_name = Some("search".to_string());
+        tool.tool_failure_class = Some("provider_error".to_string());
+        tool.cancel_cause = Some("operator cancelled".to_string());
+        tool.denial_reason = Some("policy denied search".to_string());
+        tool.latency_ms = Some(17);
+        tool.started_at = Some("2026-07-15T10:00:00Z".to_string());
+        tool.completed_at = Some("2026-07-15T10:00:01Z".to_string());
+
+        let item = defra_tool_item(&tool, codex::McpToolCallStatus::Failed);
+        let codex::ThreadItem::McpToolCall {
+            server,
+            tool,
+            error,
+            duration_ms,
+            ..
+        } = item
+        else {
+            panic!("expected MCP tool call item");
+        };
+        assert_eq!(server, "search-service");
+        assert_eq!(tool, "search");
+        assert_eq!(
+            error.expect("failed tool should carry diagnostics").message,
+            "policy denied search"
+        );
+        assert_eq!(duration_ms, Some(17));
+    }
+
+    #[test]
+    fn tool_projection_keeps_result_diagnostic_ahead_of_failure_class() {
+        let mut tool =
+            test_tool("search", "failed", "{}").with_result("connection refused to search service");
+        tool.tool_failure_class = Some("external".to_string());
+
+        let item = defra_tool_item(&tool, codex::McpToolCallStatus::Failed);
+        let codex::ThreadItem::McpToolCall { error, .. } = item else {
+            panic!("expected MCP tool call item");
+        };
+        assert_eq!(
+            error.expect("failed tool should carry diagnostics").message,
+            "connection refused to search service"
+        );
+
+        tool.result.clear();
+        let item = defra_tool_item(&tool, codex::McpToolCallStatus::Failed);
+        let codex::ThreadItem::McpToolCall { error, .. } = item else {
+            panic!("expected MCP tool call item");
+        };
+        assert_eq!(
+            error
+                .expect("failure class should remain a fallback")
+                .message,
+            "external"
+        );
+    }
+
+    #[test]
+    fn tool_duration_falls_back_to_persisted_timestamps() {
+        let mut tool = test_tool("search", "completed", "{}");
+        tool.started_at = Some("2026-07-15T10:00:00.100Z".to_string());
+        tool.completed_at = Some("2026-07-15T10:00:00.125Z".to_string());
+        assert_eq!(tool_duration_ms(&tool), Some(25));
+        assert_eq!(
+            tool_completed_at_ms(&tool).unwrap() - tool_started_at_ms(&tool).unwrap(),
+            25
+        );
+
+        tool.completed_at = None;
+        assert_eq!(tool_duration_ms(&tool), None);
+    }
+
+    #[test]
+    fn tool_queries_hydrate_runtime_presentation_metadata() {
+        for query in [
+            defra_turn_progress_query("request-1", "session-1"),
+            defra_tool_progress_query("request-1", "session-1"),
+        ] {
+            for field in [
+                "selected_service_id",
+                "selected_tool_name",
+                "tool_failure_class",
+                "denial_reason",
+                "cancel_cause",
+                "latency_ms",
+                "started_at",
+                "completed_at",
+            ] {
+                assert!(query.contains(field), "query must load {field}: {query}");
+            }
+        }
+    }
+
     fn test_tool(tool_name: &str, status: &str, args: &str) -> DefraToolCallProgress {
         DefraToolCallProgress {
             tool_call_key: "session:call".to_string(),
@@ -426,6 +615,7 @@ mod tests {
             args: args.to_string(),
             result: String::new(),
             subagent_link: None,
+            ..Default::default()
         }
     }
 

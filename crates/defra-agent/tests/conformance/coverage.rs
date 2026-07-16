@@ -795,6 +795,30 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CodexShimSubagentThreadShapeCases".to_string(),
         ));
     }
+    if !lean_codex_shim_reasoning_projection_cases().is_empty() {
+        emitted.insert((
+            "codex_shim_reasoning_projection_cases".to_string(),
+            "CodexShimReasoningProjectionCases".to_string(),
+        ));
+    }
+    if !lean_codex_shim_thread_status_cases().is_empty() {
+        emitted.insert((
+            "codex_shim_thread_status_cases".to_string(),
+            "CodexShimThreadStatusCases".to_string(),
+        ));
+    }
+    if !lean_codex_shim_behavior_selection_cases().is_empty() {
+        emitted.insert((
+            "codex_shim_behavior_selection_cases".to_string(),
+            "CodexShimBehaviorSelectionCases".to_string(),
+        ));
+    }
+    if !lean_codex_shim_tool_metadata_cases().is_empty() {
+        emitted.insert((
+            "codex_shim_tool_metadata_cases".to_string(),
+            "CodexShimToolMetadataCases".to_string(),
+        ));
+    }
     if !lean_codex_shim_context_usage_cases().is_empty() {
         emitted.insert((
             "codex_shim_context_usage_cases".to_string(),
@@ -927,6 +951,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "codex_shim_subagent_metadata_cases",
         "codex_shim_subagent_listing_cases",
         "codex_shim_subagent_thread_shape_cases",
+        "codex_shim_reasoning_projection_cases",
+        "codex_shim_thread_status_cases",
+        "codex_shim_behavior_selection_cases",
+        "codex_shim_tool_metadata_cases",
         "codex_shim_context_usage_cases",
         "codex_shim_compaction_projection_cases",
         "codex_shim_binding_cases",

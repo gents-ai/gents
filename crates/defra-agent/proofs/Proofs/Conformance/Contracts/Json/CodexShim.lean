@@ -557,6 +557,429 @@ def codexShimSubagentThreadShapeCasesJson : String :=
   jsonArray
     (codexShimSubagentThreadShapeCases.map codexShimSubagentThreadShapeCaseJson)
 
+structure CodexShimReasoningProjectionCase where
+  witness : String
+  leanTheorems : List String
+  itemOpen : Bool
+  cursorPrimed : Bool
+  streamedText : Option String
+  liveDelta : Option String
+  durableText : Option String
+  terminal : Bool
+  projectedEvents : List String
+  projectedDelta : Option String
+  completedText : Option String
+
+def reasoningProjectionEventName : CodexShim.ReasoningProjectionEvent → String
+  | .started => "started"
+  | .rawTextDelta _ => "rawTextDelta"
+  | .completed => "completed"
+
+def codexShimReasoningProjectionCase
+    (witness : String)
+    (leanTheorems : List String)
+    (observation : CodexShim.ReasoningProjectionObservation) :
+    CodexShimReasoningProjectionCase :=
+  { witness := witness
+  , leanTheorems := leanTheorems
+  , itemOpen := observation.itemOpen
+  , cursorPrimed := observation.cursorPrimed
+  , streamedText := observation.streamedText
+  , liveDelta := observation.liveDelta
+  , durableText := observation.durableText
+  , terminal := observation.terminal
+  , projectedEvents :=
+      (CodexShim.reasoningProjectionEvents observation).map
+        reasoningProjectionEventName
+  , projectedDelta := CodexShim.reasoningTextForObservation observation
+  , completedText := CodexShim.completedReasoningText observation
+  }
+
+def codexShimReasoningProjectionCaseJson
+    (witness : CodexShimReasoningProjectionCase) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString witness.witness ++ ","
+    ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
+    ++ "\"item_open\":" ++ boolString witness.itemOpen ++ ","
+    ++ "\"cursor_primed\":" ++ boolString witness.cursorPrimed ++ ","
+    ++ "\"streamed_text\":" ++ jsonOptionalString witness.streamedText ++ ","
+    ++ "\"live_delta\":" ++ jsonOptionalString witness.liveDelta ++ ","
+    ++ "\"durable_text\":" ++ jsonOptionalString witness.durableText ++ ","
+    ++ "\"terminal\":" ++ boolString witness.terminal ++ ","
+    ++ "\"projected_events\":" ++ jsonStringArray witness.projectedEvents ++ ","
+    ++ "\"projected_delta\":" ++ jsonOptionalString witness.projectedDelta ++ ","
+    ++ "\"completed_text\":" ++ jsonOptionalString witness.completedText
+    ++ "}"
+
+def codexShimReasoningProjectionCases : List CodexShimReasoningProjectionCase :=
+  [ codexShimReasoningProjectionCase
+      "codex_shim.reasoning.first_live"
+      [ "CodexShim.first_live_reasoning_projects_raw_lifecycle" ]
+      { itemOpen := false
+      , cursorPrimed := false
+      , streamedText := none
+      , liveDelta := some "inspect"
+      , durableText := none
+      , terminal := false }
+  , codexShimReasoningProjectionCase
+      "codex_shim.reasoning.append_live"
+      [ "CodexShim.appended_live_reasoning_projects_only_delta" ]
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "inspect"
+      , liveDelta := some " then test"
+      , durableText := none
+      , terminal := false }
+  , codexShimReasoningProjectionCase
+      "codex_shim.reasoning.resumed_unchanged"
+      [ "CodexShim.primed_resume_without_new_reasoning_replays_nothing" ]
+      { itemOpen := true
+      , cursorPrimed := true
+      , streamedText := some "already visible"
+      , liveDelta := none
+      , durableText := none
+      , terminal := false }
+  , codexShimReasoningProjectionCase
+      "codex_shim.reasoning.terminal_open"
+      [ "CodexShim.terminal_open_reasoning_completes_without_replay"
+      , "CodexShim.terminal_completed_item_uses_durable_reasoning"
+      ]
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "inspect then test"
+      , liveDelta := none
+      , durableText := some "inspect then test"
+      , terminal := true }
+  , codexShimReasoningProjectionCase
+      "codex_shim.reasoning.terminal_first_observation"
+      [ "CodexShim.terminal_durable_first_observation_projects_lifecycle"
+      , "CodexShim.terminal_completed_item_uses_durable_reasoning"
+      ]
+      { itemOpen := false
+      , cursorPrimed := false
+      , streamedText := none
+      , liveDelta := none
+      , durableText := some "inspect then test"
+      , terminal := true }
+  , codexShimReasoningProjectionCase
+      "codex_shim.reasoning.absent"
+      [ "CodexShim.absent_reasoning_projects_nothing" ]
+      { itemOpen := false
+      , cursorPrimed := false
+      , streamedText := none
+      , liveDelta := none
+      , durableText := none
+      , terminal := true }
+  , codexShimReasoningProjectionCase
+      "codex_shim.reasoning.terminal_durable_suffix"
+      [ "CodexShim.terminal_durable_suffix_projects_before_completion"
+      , "CodexShim.terminal_completed_item_uses_durable_reasoning"
+      ]
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "inspect then test"
+      , liveDelta := some "; durable suffix"
+      , durableText := some "inspect then test; durable suffix"
+      , terminal := true }
+  , codexShimReasoningProjectionCase
+      "codex_shim.reasoning.terminal_streamed_fallback"
+      [ "CodexShim.terminal_without_durable_reasoning_keeps_streamed_text" ]
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "streamed reasoning"
+      , liveDelta := none
+      , durableText := none
+      , terminal := true }
+  ]
+
+def codexShimReasoningProjectionCasesJson : String :=
+  jsonArray
+    (codexShimReasoningProjectionCases.map codexShimReasoningProjectionCaseJson)
+
+def threadPresentationStatusName : CodexShim.ThreadPresentationStatus → String
+  | .active => "active"
+  | .idle => "idle"
+  | .systemError => "systemError"
+
+structure CodexShimThreadStatusCase where
+  witness : String
+  leanTheorems : List String
+  requestState : Option String
+  conversationStatus : String
+  projectedStatus : String
+
+def codexShimThreadStatusCase
+    (witness : String)
+    (leanTheorems : List String)
+    (requestState : Option RequestState)
+    (conversationStatus : String) : CodexShimThreadStatusCase :=
+  { witness
+  , leanTheorems
+  , requestState := requestState.map RequestState.toDefraDB
+  , conversationStatus
+  , projectedStatus :=
+      threadPresentationStatusName
+        (CodexShim.projectThreadStatus requestState conversationStatus)
+  }
+
+def codexShimThreadStatusCaseJson (witness : CodexShimThreadStatusCase) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString witness.witness ++ ","
+    ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
+    ++ "\"request_state\":" ++ jsonOptionalString witness.requestState ++ ","
+    ++ "\"conversation_status\":" ++ jsonString witness.conversationStatus ++ ","
+    ++ "\"projected_status\":" ++ jsonString witness.projectedStatus
+    ++ "}"
+
+def codexShimThreadStatusCases : List CodexShimThreadStatusCase :=
+  [ codexShimThreadStatusCase "codex_shim.thread_status.pending" [] (some .pending) "active"
+  , codexShimThreadStatusCase "codex_shim.thread_status.claimed" [] (some .claimed) "active"
+  , codexShimThreadStatusCase
+      "codex_shim.thread_status.processing"
+      ["CodexShim.active_request_projects_active_thread"]
+      (some .processing) "completed"
+  , codexShimThreadStatusCase "codex_shim.thread_status.input_required" []
+      (some .inputRequired) "active"
+  , codexShimThreadStatusCase
+      "codex_shim.thread_status.completed"
+      ["CodexShim.completed_request_projects_idle_thread"]
+      (some .completed) "error"
+  , codexShimThreadStatusCase
+      "codex_shim.thread_status.failed"
+      ["CodexShim.failed_request_projects_system_error_thread"]
+      (some .failed) "active"
+  , codexShimThreadStatusCase "codex_shim.thread_status.dead" [] (some .dead) "active"
+  , codexShimThreadStatusCase "codex_shim.thread_status.superseded" []
+      (some .superseded) "active"
+  , codexShimThreadStatusCase "codex_shim.thread_status.interrupted" []
+      (some .interrupted) "active"
+  , codexShimThreadStatusCase
+      "codex_shim.thread_status.conversation_error"
+      ["CodexShim.missing_request_error_conversation_projects_system_error"]
+      none "error"
+  , codexShimThreadStatusCase
+      "codex_shim.thread_status.quiescent"
+      ["CodexShim.missing_request_active_conversation_is_quiescent"]
+      none "active"
+  ]
+
+def codexShimThreadStatusCasesJson : String :=
+  jsonArray (codexShimThreadStatusCases.map codexShimThreadStatusCaseJson)
+
+structure CodexShimBehaviorSelectionCase where
+  witness : String
+  leanTheorems : List String
+  rootBehaviorId : String
+  threadBehaviorId : Option String
+  projectedBehaviorId : String
+  rootModel : String
+  projectedChildModel : Option String
+  resolvedChildModel : Option String
+  projectedModel : String
+
+def codexShimBehaviorSelectionCase
+    (witness : String)
+    (leanTheorems : List String)
+    (rootBehaviorId : String)
+    (threadBehaviorId : Option String)
+    (rootModel : String := "root-model")
+    (projectedChildModel : Option String := none)
+    (resolvedChildModel : Option String := none) : CodexShimBehaviorSelectionCase :=
+  { witness
+  , leanTheorems
+  , rootBehaviorId
+  , threadBehaviorId
+  , projectedBehaviorId :=
+      CodexShim.projectionBehaviorId rootBehaviorId threadBehaviorId
+  , rootModel
+  , projectedChildModel
+  , resolvedChildModel
+  , projectedModel :=
+      CodexShim.projectedThreadModel rootModel projectedChildModel resolvedChildModel
+  }
+
+def codexShimBehaviorSelectionCaseJson
+    (witness : CodexShimBehaviorSelectionCase) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString witness.witness ++ ","
+    ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
+    ++ "\"root_behavior_id\":" ++ jsonString witness.rootBehaviorId ++ ","
+    ++ "\"thread_behavior_id\":" ++ jsonOptionalString witness.threadBehaviorId ++ ","
+    ++ "\"projected_behavior_id\":" ++ jsonString witness.projectedBehaviorId ++ ","
+    ++ "\"root_model\":" ++ jsonString witness.rootModel ++ ","
+    ++ "\"projected_child_model\":" ++ jsonOptionalString witness.projectedChildModel ++ ","
+    ++ "\"resolved_child_model\":" ++ jsonOptionalString witness.resolvedChildModel ++ ","
+    ++ "\"projected_model\":" ++ jsonString witness.projectedModel
+    ++ "}"
+
+def codexShimBehaviorSelectionCases : List CodexShimBehaviorSelectionCase :=
+  [ codexShimBehaviorSelectionCase
+      "codex_shim.behavior.child"
+      ["CodexShim.child_behavior_overrides_root_for_response_metadata"]
+      "root" (some "child")
+  , codexShimBehaviorSelectionCase
+      "codex_shim.behavior.root"
+      ["CodexShim.absent_child_behavior_keeps_root_response_metadata"]
+      "root" none
+  , codexShimBehaviorSelectionCase
+      "codex_shim.behavior.resolved_child_model"
+      ["CodexShim.resolved_child_model_has_priority"]
+      "root" (some "child")
+      (projectedChildModel := some "projected-child")
+      (resolvedChildModel := some "resolved-child")
+  , codexShimBehaviorSelectionCase
+      "codex_shim.behavior.projected_child_model"
+      ["CodexShim.projected_child_model_fills_unavailable_behavior"]
+      "root" (some "child")
+      (projectedChildModel := some "projected-child")
+  , codexShimBehaviorSelectionCase
+      "codex_shim.behavior.root_model_fallback"
+      ["CodexShim.unavailable_child_model_falls_back_to_root"]
+      "root" (some "child")
+  ]
+
+def codexShimBehaviorSelectionCasesJson : String :=
+  jsonArray
+    (codexShimBehaviorSelectionCases.map codexShimBehaviorSelectionCaseJson)
+
+structure CodexShimToolMetadataCase where
+  witness : String
+  leanTheorems : List String
+  fallbackServer : String
+  selectedServer : Option String
+  fallbackTool : String
+  selectedTool : Option String
+  denialReason : Option String
+  cancelCause : Option String
+  failureClass : Option String
+  resultFallback : Option String
+  latencyMs : Option Nat
+  startedAtMs : Option Nat
+  completedAtMs : Option Nat
+  persistedEventAtMs : Option Nat
+  observedAtMs : Nat
+  projectedServer : String
+  projectedTool : String
+  projectedFailure : Option String
+  projectedDurationMs : Option Nat
+  projectedEventAtMs : Nat
+
+def codexShimToolMetadataCase
+    (witness : String)
+    (leanTheorems : List String)
+    (fallbackServer : String := "defra")
+    (selectedServer : Option String := none)
+    (fallbackTool : String := "tool")
+    (selectedTool : Option String := none)
+    (denialReason : Option String := none)
+    (cancelCause : Option String := none)
+    (failureClass : Option String := none)
+    (resultFallback : Option String := none)
+    (latencyMs : Option Nat := none)
+    (startedAtMs : Option Nat := none)
+    (completedAtMs : Option Nat := none)
+    (persistedEventAtMs : Option Nat := none)
+    (observedAtMs : Nat := 200) : CodexShimToolMetadataCase :=
+  { witness
+  , leanTheorems
+  , fallbackServer
+  , selectedServer
+  , fallbackTool
+  , selectedTool
+  , denialReason
+  , cancelCause
+  , failureClass
+  , resultFallback
+  , latencyMs
+  , startedAtMs
+  , completedAtMs
+  , persistedEventAtMs
+  , observedAtMs
+  , projectedServer := CodexShim.projectedToolIdentity fallbackServer selectedServer
+  , projectedTool := CodexShim.projectedToolIdentity fallbackTool selectedTool
+  , projectedFailure :=
+      CodexShim.projectedToolFailure denialReason cancelCause failureClass resultFallback
+  , projectedDurationMs :=
+      CodexShim.projectedDurationMs latencyMs startedAtMs completedAtMs
+  , projectedEventAtMs :=
+      CodexShim.projectedEventTimestampMs persistedEventAtMs observedAtMs
+  }
+
+def codexShimToolMetadataCaseJson (witness : CodexShimToolMetadataCase) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString witness.witness ++ ","
+    ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
+    ++ "\"fallback_server\":" ++ jsonString witness.fallbackServer ++ ","
+    ++ "\"selected_server\":" ++ jsonOptionalString witness.selectedServer ++ ","
+    ++ "\"fallback_tool\":" ++ jsonString witness.fallbackTool ++ ","
+    ++ "\"selected_tool\":" ++ jsonOptionalString witness.selectedTool ++ ","
+    ++ "\"denial_reason\":" ++ jsonOptionalString witness.denialReason ++ ","
+    ++ "\"cancel_cause\":" ++ jsonOptionalString witness.cancelCause ++ ","
+    ++ "\"failure_class\":" ++ jsonOptionalString witness.failureClass ++ ","
+    ++ "\"result_fallback\":" ++ jsonOptionalString witness.resultFallback ++ ","
+    ++ "\"latency_ms\":" ++ jsonOptionalNat witness.latencyMs ++ ","
+    ++ "\"started_at_ms\":" ++ jsonOptionalNat witness.startedAtMs ++ ","
+    ++ "\"completed_at_ms\":" ++ jsonOptionalNat witness.completedAtMs ++ ","
+    ++ "\"persisted_event_at_ms\":" ++ jsonOptionalNat witness.persistedEventAtMs ++ ","
+    ++ "\"observed_at_ms\":" ++ toString witness.observedAtMs ++ ","
+    ++ "\"projected_server\":" ++ jsonString witness.projectedServer ++ ","
+    ++ "\"projected_tool\":" ++ jsonString witness.projectedTool ++ ","
+    ++ "\"projected_failure\":" ++ jsonOptionalString witness.projectedFailure ++ ","
+    ++ "\"projected_duration_ms\":" ++ jsonOptionalNat witness.projectedDurationMs ++ ","
+    ++ "\"projected_event_at_ms\":" ++ toString witness.projectedEventAtMs
+    ++ "}"
+
+def codexShimToolMetadataCases : List CodexShimToolMetadataCase :=
+  [ codexShimToolMetadataCase
+      "codex_shim.tool_metadata.selected_identity"
+      ["CodexShim.selected_tool_identity_overrides_model_facing_name"]
+      (selectedServer := some "service-a") (fallbackTool := "alias")
+      (selectedTool := some "native-name")
+  , codexShimToolMetadataCase
+      "codex_shim.tool_metadata.fallback_identity"
+      ["CodexShim.absent_selected_tool_identity_keeps_fallback"]
+      (fallbackTool := "alias")
+  , codexShimToolMetadataCase
+      "codex_shim.tool_metadata.denial"
+      ["CodexShim.denial_diagnostic_has_priority"]
+      (denialReason := some "policy denied") (cancelCause := some "interrupted")
+      (failureClass := some "policyDenied") (resultFallback := some "generic result")
+  , codexShimToolMetadataCase
+      "codex_shim.tool_metadata.cancel"
+      ["CodexShim.cancellation_diagnostic_precedes_failure_class"]
+      (cancelCause := some "deadline") (failureClass := some "timedOut")
+  , codexShimToolMetadataCase
+      "codex_shim.tool_metadata.result_diagnostic"
+      ["CodexShim.result_diagnostic_precedes_failure_class_fallback"]
+      (failureClass := some "argumentInvalid") (resultFallback := some "generic result")
+  , codexShimToolMetadataCase
+      "codex_shim.tool_metadata.failure_class_fallback"
+      ["CodexShim.failure_class_fills_absent_result_diagnostic"]
+      (failureClass := some "argumentInvalid")
+  , codexShimToolMetadataCase
+      "codex_shim.tool_metadata.persisted_latency"
+      ["CodexShim.persisted_latency_precedes_timestamp_duration"]
+      (latencyMs := some 7) (startedAtMs := some 100) (completedAtMs := some 125)
+  , codexShimToolMetadataCase
+      "codex_shim.tool_metadata.timestamp_duration"
+      ["CodexShim.timestamp_duration_fills_absent_latency"]
+      (startedAtMs := some 100) (completedAtMs := some 125)
+  , codexShimToolMetadataCase
+      "codex_shim.tool_metadata.absent_duration"
+      ["CodexShim.incomplete_timestamps_do_not_invent_duration"]
+      (startedAtMs := some 100)
+  , codexShimToolMetadataCase
+      "codex_shim.tool_metadata.persisted_event_time"
+      ["CodexShim.persisted_event_timestamp_precedes_observation"]
+      (persistedEventAtMs := some 100)
+  , codexShimToolMetadataCase
+      "codex_shim.tool_metadata.observed_event_time"
+      ["CodexShim.absent_event_timestamp_uses_observation"]
+  ]
+
+def codexShimToolMetadataCasesJson : String :=
+  jsonArray (codexShimToolMetadataCases.map codexShimToolMetadataCaseJson)
+
 structure CodexShimContextUsageCase where
   witness : String
   leanTheorems : List String

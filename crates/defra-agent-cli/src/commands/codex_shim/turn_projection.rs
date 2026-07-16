@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -11,21 +12,46 @@ use super::compaction_projection::{
     compaction_projection_events, context_compaction_item, CompactionProjectionEvent,
     DefraCompactionProgress,
 };
-use super::progress::{defra_tool_item, DefraToolCallProgress};
+use super::progress::{
+    defra_tool_item, tool_completed_at_ms, tool_started_at_ms, DefraToolCallProgress,
+};
 use super::protocol::{
-    agent_message_item, agent_message_item_with_phase, now_millis, send_notification, turn_value,
+    agent_message_item, agent_message_item_with_phase, now_millis, send_notification,
+    turn_value_with_timing,
 };
 use super::subagent_projection::{collab_tool_item, CollabProjection};
 use super::{Outbound, ShimState};
+
+#[derive(Default)]
+struct ReasoningCompletionTracker {
+    item_ids: HashSet<String>,
+}
+
+impl ReasoningCompletionTracker {
+    fn contains(&self, item_id: &str) -> bool {
+        self.item_ids.contains(item_id)
+    }
+
+    fn record(&mut self, item_id: String) -> bool {
+        self.item_ids.insert(item_id)
+    }
+}
 
 pub(super) struct TurnProjection<'a> {
     state: &'a ShimState,
     pub(super) thread_id: &'a str,
     pub(super) turn_id: &'a str,
     pub(super) cwd: PathBuf,
+    started_at: Option<i64>,
+    completed_at: Option<i64>,
+    response_started_at_ms: Option<i64>,
+    response_completed_at_ms: Option<i64>,
     active_agent_item_id: Option<String>,
     active_agent_text: String,
     rendered_agent_text: String,
+    active_reasoning_item_id: Option<String>,
+    active_reasoning_text: String,
+    completed_reasoning_items: ReasoningCompletionTracker,
     completed_items: Vec<codex::ThreadItem>,
 }
 
@@ -35,17 +61,161 @@ impl<'a> TurnProjection<'a> {
         thread_id: &'a str,
         turn_id: &'a str,
         cwd: PathBuf,
+        started_at: Option<i64>,
     ) -> Self {
         Self {
             state,
             thread_id,
             turn_id,
             cwd,
+            started_at,
+            completed_at: None,
+            response_started_at_ms: None,
+            response_completed_at_ms: None,
             active_agent_item_id: None,
             active_agent_text: String::new(),
             rendered_agent_text: String::new(),
+            active_reasoning_item_id: None,
+            active_reasoning_text: String::new(),
+            completed_reasoning_items: ReasoningCompletionTracker::default(),
             completed_items: Vec::new(),
         }
+    }
+
+    pub(super) fn observe_response_timing(
+        &mut self,
+        started_at_ms: Option<i64>,
+        completed_at_ms: Option<i64>,
+    ) {
+        if self.response_started_at_ms.is_none() {
+            self.response_started_at_ms = started_at_ms;
+        }
+        if self.response_completed_at_ms.is_none() {
+            self.response_completed_at_ms = completed_at_ms;
+        }
+    }
+
+    pub(super) fn reset_response_timing(&mut self) {
+        self.response_started_at_ms = None;
+        self.response_completed_at_ms = None;
+    }
+
+    pub(super) fn set_completed_at(&mut self, completed_at: Option<i64>) {
+        self.completed_at = completed_at;
+    }
+
+    pub(super) async fn append_reasoning_delta(
+        &mut self,
+        outbound: &Outbound,
+        item_id: &str,
+        delta: &str,
+    ) -> Result<()> {
+        if delta.is_empty() {
+            return Ok(());
+        }
+        if self.completed_reasoning_items.contains(item_id) {
+            return Ok(());
+        }
+        if self.active_reasoning_item_id.as_deref() != Some(item_id) {
+            self.complete_active_reasoning(outbound, None).await?;
+            send_notification(
+                outbound,
+                self.state,
+                codex::ServerNotification::ItemStarted(codex::ItemStartedNotification {
+                    item: reasoning_item(item_id, ""),
+                    thread_id: self.thread_id.to_string(),
+                    turn_id: self.turn_id.to_string(),
+                    started_at_ms: self.response_started_at_ms.unwrap_or_else(now_millis),
+                }),
+            )
+            .await?;
+            self.active_reasoning_item_id = Some(item_id.to_string());
+            self.active_reasoning_text.clear();
+        }
+
+        self.active_reasoning_text.push_str(delta);
+        send_notification(
+            outbound,
+            self.state,
+            codex::ServerNotification::ReasoningTextDelta(codex::ReasoningTextDeltaNotification {
+                thread_id: self.thread_id.to_string(),
+                turn_id: self.turn_id.to_string(),
+                item_id: item_id.to_string(),
+                delta: delta.to_string(),
+                content_index: 0,
+            }),
+        )
+        .await
+    }
+
+    pub(super) fn resume_reasoning(&mut self, item_id: String, text: &str) {
+        self.active_reasoning_item_id = Some(item_id);
+        self.active_reasoning_text = text.to_string();
+    }
+
+    pub(super) async fn finish_reasoning(
+        &mut self,
+        outbound: &Outbound,
+        item_id: &str,
+        durable_text: Option<&str>,
+    ) -> Result<()> {
+        if self.completed_reasoning_items.contains(item_id) {
+            return Ok(());
+        }
+        let durable_text = durable_text.filter(|text| !text.trim().is_empty());
+        if self.active_reasoning_item_id.is_none() {
+            if let Some(text) = durable_text {
+                self.append_reasoning_delta(outbound, item_id, text).await?;
+            } else {
+                return Ok(());
+            }
+        } else if self.active_reasoning_item_id.as_deref() != Some(item_id) {
+            self.complete_active_reasoning(outbound, None).await?;
+            if let Some(text) = durable_text {
+                self.append_reasoning_delta(outbound, item_id, text).await?;
+            } else {
+                return Ok(());
+            }
+        } else if let Some(text) = durable_text {
+            if let Some(delta) = text.strip_prefix(&self.active_reasoning_text) {
+                self.append_reasoning_delta(outbound, item_id, delta)
+                    .await?;
+            }
+        }
+
+        self.complete_active_reasoning(outbound, durable_text).await
+    }
+
+    async fn complete_active_reasoning(
+        &mut self,
+        outbound: &Outbound,
+        completed_text: Option<&str>,
+    ) -> Result<()> {
+        let Some(item_id) = self.active_reasoning_item_id.take() else {
+            return Ok(());
+        };
+        let streamed_text = std::mem::take(&mut self.active_reasoning_text);
+        let text = completed_text
+            .filter(|text| !text.trim().is_empty())
+            .unwrap_or(&streamed_text);
+        if text.trim().is_empty() {
+            return Ok(());
+        }
+        let item = reasoning_item(&item_id, text);
+        send_notification(
+            outbound,
+            self.state,
+            codex::ServerNotification::ItemCompleted(codex::ItemCompletedNotification {
+                item: item.clone(),
+                thread_id: self.thread_id.to_string(),
+                turn_id: self.turn_id.to_string(),
+                completed_at_ms: self.response_completed_at_ms.unwrap_or_else(now_millis),
+            }),
+        )
+        .await?;
+        self.completed_reasoning_items.record(item_id);
+        self.completed_items.push(item);
+        Ok(())
     }
 
     pub(super) async fn append_agent_delta(
@@ -78,7 +248,7 @@ impl<'a> TurnProjection<'a> {
                     item: agent_message_item(&item_id, ""),
                     thread_id: self.thread_id.to_string(),
                     turn_id: self.turn_id.to_string(),
-                    started_at_ms: now_millis(),
+                    started_at_ms: self.response_started_at_ms.unwrap_or_else(now_millis),
                 }),
             )
             .await?;
@@ -127,7 +297,7 @@ impl<'a> TurnProjection<'a> {
                 item: completed_item.clone(),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                completed_at_ms: now_millis(),
+                completed_at_ms: self.response_completed_at_ms.unwrap_or_else(now_millis),
             }),
         )
         .await?;
@@ -149,7 +319,7 @@ impl<'a> TurnProjection<'a> {
                 item: defra_tool_item(tool, codex::McpToolCallStatus::InProgress),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                started_at_ms: now_millis(),
+                started_at_ms: tool_started_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
         .await
@@ -171,7 +341,7 @@ impl<'a> TurnProjection<'a> {
                 item: completed_item.clone(),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                completed_at_ms: now_millis(),
+                completed_at_ms: tool_completed_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
         .await?;
@@ -194,7 +364,7 @@ impl<'a> TurnProjection<'a> {
                 item: command_execution_item(&self.cwd, tool, status),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                started_at_ms: now_millis(),
+                started_at_ms: tool_started_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
         .await
@@ -231,7 +401,7 @@ impl<'a> TurnProjection<'a> {
                 item: completed_item.clone(),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                completed_at_ms: now_millis(),
+                completed_at_ms: tool_completed_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
         .await?;
@@ -256,7 +426,7 @@ impl<'a> TurnProjection<'a> {
                 item,
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                started_at_ms: now_millis(),
+                started_at_ms: tool_started_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
         .await
@@ -279,7 +449,7 @@ impl<'a> TurnProjection<'a> {
                 item: collab_tool_item(self.thread_id, tool, &started),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                started_at_ms: now_millis(),
+                started_at_ms: tool_started_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
         .await
@@ -301,7 +471,7 @@ impl<'a> TurnProjection<'a> {
                 item: item.clone(),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                completed_at_ms: now_millis(),
+                completed_at_ms: tool_completed_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
         .await?;
@@ -335,7 +505,7 @@ impl<'a> TurnProjection<'a> {
                 item: item.clone(),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
-                completed_at_ms: now_millis(),
+                completed_at_ms: tool_completed_at_ms(tool).unwrap_or_else(now_millis),
             }),
         )
         .await?;
@@ -505,6 +675,7 @@ impl<'a> TurnProjection<'a> {
         status: codex::TurnStatus,
         error_message: Option<String>,
     ) -> Result<()> {
+        self.complete_active_reasoning(outbound, None).await?;
         self.finish_agent_message_with_phase(outbound, Some(MessagePhase::FinalAnswer))
             .await?;
         let turn_error = if status == codex::TurnStatus::Failed {
@@ -521,7 +692,14 @@ impl<'a> TurnProjection<'a> {
             self.state,
             codex::ServerNotification::TurnCompleted(codex::TurnCompletedNotification {
                 thread_id: self.thread_id.to_string(),
-                turn: turn_value(self.turn_id, status, Vec::new(), turn_error),
+                turn: turn_value_with_timing(
+                    self.turn_id,
+                    status,
+                    Vec::new(),
+                    turn_error,
+                    self.started_at,
+                    self.completed_at,
+                ),
             }),
         )
         .await
@@ -536,13 +714,25 @@ impl<'a> TurnProjection<'a> {
     }
 }
 
+fn reasoning_item(item_id: &str, text: &str) -> codex::ThreadItem {
+    codex::ThreadItem::Reasoning {
+        id: item_id.to_string(),
+        summary: Vec::new(),
+        content: (!text.is_empty())
+            .then(|| vec![text.to_string()])
+            .unwrap_or_default(),
+    }
+}
+
 fn suppress_blank_agent_delta(active_agent_text: &str, delta: &str) -> bool {
     delta.trim().is_empty() && active_agent_text.trim().is_empty()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::suppress_blank_agent_delta;
+    use codex_app_server_protocol as codex;
+
+    use super::{reasoning_item, suppress_blank_agent_delta, ReasoningCompletionTracker};
 
     #[test]
     fn suppresses_blank_delta_that_would_open_phantom_agent_stream() {
@@ -558,5 +748,48 @@ mod tests {
     #[test]
     fn keeps_visible_delta() {
         assert!(!suppress_blank_agent_delta("", "answer"));
+    }
+
+    #[test]
+    fn completed_reasoning_item_is_terminally_idempotent() {
+        let mut completed = ReasoningCompletionTracker::default();
+        assert!(!completed.contains("reasoning-1"));
+        assert!(completed.record("reasoning-1".to_string()));
+        assert!(completed.contains("reasoning-1"));
+        assert!(!completed.record("reasoning-1".to_string()));
+    }
+
+    #[test]
+    fn reasoning_projection_round_trips_through_pinned_codex_protocol() {
+        let item = reasoning_item("reasoning-1", "durable reasoning");
+        let encoded = serde_json::to_value(&item).expect("encode reasoning item");
+        let decoded: codex::ThreadItem =
+            serde_json::from_value(encoded).expect("decode reasoning item");
+        assert!(matches!(
+            decoded,
+            codex::ThreadItem::Reasoning { id, summary, content }
+                if id == "reasoning-1"
+                    && summary.is_empty()
+                    && content == ["durable reasoning"]
+        ));
+
+        let notification =
+            codex::ServerNotification::ReasoningTextDelta(codex::ReasoningTextDeltaNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "reasoning-1".to_string(),
+                delta: "increment".to_string(),
+                content_index: 0,
+            });
+        let encoded = serde_json::to_value(&notification).expect("encode reasoning delta");
+        let decoded: codex::ServerNotification =
+            serde_json::from_value(encoded).expect("decode reasoning delta");
+        assert!(matches!(
+            decoded,
+            codex::ServerNotification::ReasoningTextDelta(delta)
+                if delta.item_id == "reasoning-1"
+                    && delta.delta == "increment"
+                    && delta.content_index == 0
+        ));
     }
 }

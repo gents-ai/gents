@@ -311,6 +311,319 @@ theorem subagent_parent_uses_native_source (parentThreadId : String) :
 theorem subagent_parent_omits_legacy_top_level (parentThreadId : String) :
     (projectSubagentThreadParent parentThreadId).legacyTopLevelParent = none := rfl
 
+/-!
+## Native reasoning presentation
+
+DEFRA owns two views of reasoning: the bounded live `AgentResponse.reasoning`
+preview and the durable `AgentMessage.reasoning` copy materialized before the
+live tail is cleared.  The shim projects both through Codex's raw reasoning
+channel. It must not relabel provider reasoning text as a summary merely to
+make a client render it by default.
+
+`liveDelta` is the append-only text recovered by the adapter's bounded-tail
+cursor. A primed cursor on child-thread resume therefore supplies `none` until
+new reasoning arrives. At terminal observation, durable text is used to create
+the lifecycle when replication skipped every live observation and is always
+the authoritative completed-item payload.
+-/
+
+/-- Codex item notifications emitted for native reasoning text. The event type
+deliberately has only a raw-text delta constructor, so the adapter cannot
+accidentally promote raw reasoning to a summary. -/
+inductive ReasoningProjectionEvent where
+  | started
+  | rawTextDelta (text : String)
+  | completed
+  deriving DecidableEq, Repr
+
+/-- Facts available at one reasoning projection observation. -/
+structure ReasoningProjectionObservation where
+  itemOpen : Bool
+  cursorPrimed : Bool
+  streamedText : Option String
+  liveDelta : Option String
+  durableText : Option String
+  terminal : Bool
+  deriving DecidableEq, Repr
+
+def nonemptyReasoningText : Option String → Option String
+  | some text => if text.isEmpty then none else some text
+  | none => none
+
+def preferReasoningText (preferred fallback : Option String) : Option String :=
+  match nonemptyReasoningText preferred with
+  | some text => some text
+  | none => nonemptyReasoningText fallback
+
+/-- Text to expose at this observation. Live cursor output wins. A durable
+terminal value is streamed only when no item was already opened or primed. -/
+def reasoningTextForObservation
+    (obs : ReasoningProjectionObservation) : Option String :=
+  match nonemptyReasoningText obs.liveDelta with
+  | some text => some text
+  | none =>
+      if obs.terminal && !obs.itemOpen && !obs.cursorPrimed then
+        nonemptyReasoningText obs.durableText
+      else
+        none
+
+def reasoningProjectionEvents
+    (obs : ReasoningProjectionObservation) : List ReasoningProjectionEvent :=
+  let text := reasoningTextForObservation obs
+  let startEvents :=
+    if !obs.itemOpen && text.isSome then [.started] else []
+  let deltaEvents :=
+    match text with
+    | some delta => [.rawTextDelta delta]
+    | none => []
+  let openAfter := obs.itemOpen || text.isSome
+  let completionEvents :=
+    if obs.terminal && openAfter then [.completed] else []
+  startEvents ++ deltaEvents ++ completionEvents
+
+/-- Completed-item content comes from the durable materialized message, never
+from the bounded live preview, when that durable value exists. -/
+def completedReasoningText
+    (obs : ReasoningProjectionObservation) : Option String :=
+  if obs.terminal then preferReasoningText obs.durableText obs.streamedText else none
+
+theorem first_live_reasoning_projects_raw_lifecycle :
+    reasoningProjectionEvents
+      { itemOpen := false
+      , cursorPrimed := false
+      , streamedText := none
+      , liveDelta := some "inspect"
+      , durableText := none
+      , terminal := false } =
+      [.started, .rawTextDelta "inspect"] := rfl
+
+theorem appended_live_reasoning_projects_only_delta :
+    reasoningProjectionEvents
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "inspect"
+      , liveDelta := some " then test"
+      , durableText := none
+      , terminal := false } =
+      [.rawTextDelta " then test"] := rfl
+
+theorem primed_resume_without_new_reasoning_replays_nothing :
+    reasoningProjectionEvents
+      { itemOpen := true
+      , cursorPrimed := true
+      , streamedText := some "already visible"
+      , liveDelta := none
+      , durableText := none
+      , terminal := false } = [] := rfl
+
+theorem terminal_open_reasoning_completes_without_replay :
+    reasoningProjectionEvents
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "inspect then test"
+      , liveDelta := none
+      , durableText := some "inspect then test"
+      , terminal := true } = [.completed] := rfl
+
+theorem terminal_durable_first_observation_projects_lifecycle :
+    reasoningProjectionEvents
+      { itemOpen := false
+      , cursorPrimed := false
+      , streamedText := none
+      , liveDelta := none
+      , durableText := some "inspect then test"
+      , terminal := true } =
+      [.started, .rawTextDelta "inspect then test", .completed] := rfl
+
+theorem absent_reasoning_projects_nothing :
+    reasoningProjectionEvents
+      { itemOpen := false
+      , cursorPrimed := false
+      , streamedText := none
+      , liveDelta := none
+      , durableText := none
+      , terminal := true } = [] := rfl
+
+theorem terminal_completed_item_uses_durable_reasoning :
+    completedReasoningText
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "bounded preview"
+      , liveDelta := none
+      , durableText := some "durable reasoning"
+      , terminal := true } = some "durable reasoning" := rfl
+
+theorem terminal_without_durable_reasoning_keeps_streamed_text :
+    completedReasoningText
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "streamed reasoning"
+      , liveDelta := none
+      , durableText := none
+      , terminal := true } = some "streamed reasoning" := rfl
+
+theorem terminal_durable_suffix_projects_before_completion :
+    reasoningProjectionEvents
+      { itemOpen := true
+      , cursorPrimed := false
+      , streamedText := some "inspect then test"
+      , liveDelta := some "; durable suffix"
+      , durableText := some "inspect then test; durable suffix"
+      , terminal := true } =
+      [.rawTextDelta "; durable suffix", .completed] := rfl
+
+theorem nonterminal_without_live_reasoning_projects_nothing
+    (obs : ReasoningProjectionObservation)
+    (hTerminal : obs.terminal = false)
+    (hDelta : nonemptyReasoningText obs.liveDelta = none) :
+    reasoningProjectionEvents obs = [] := by
+  simp [reasoningProjectionEvents, reasoningTextForObservation, hTerminal, hDelta]
+
+theorem reasoning_completion_requires_an_open_item
+    (obs : ReasoningProjectionObservation)
+    (hClosed : obs.itemOpen = false)
+    (hNoText : reasoningTextForObservation obs = none) :
+    ReasoningProjectionEvent.completed ∉ reasoningProjectionEvents obs := by
+  simp [reasoningProjectionEvents, hClosed, hNoText]
+
+/-!
+## Runtime metadata hydration
+
+The runtime documents remain authoritative for thread liveness, behavior/model
+binding, tool identity and diagnostics, and timestamps. These functions define
+the loss-minimizing choices the stateless shim makes when Codex has fewer
+fields than DEFRA.
+-/
+
+inductive ThreadPresentationStatus where
+  | active
+  | idle
+  | systemError
+  deriving DecidableEq, Repr
+
+def projectThreadStatus
+    (requestState : Option RequestState)
+    (conversationStatus : String) : ThreadPresentationStatus :=
+  match requestState with
+  | some .pending | some .claimed | some .processing | some .inputRequired => .active
+  | some .failed | some .dead => .systemError
+  | some .completed | some .superseded | some .interrupted => .idle
+  | none => if conversationStatus = "error" then .systemError else .idle
+
+def projectionBehaviorId (rootBehaviorId : String)
+    (threadBehaviorId : Option String) : String :=
+  match nonemptyReasoningText threadBehaviorId with
+  | some behaviorId => behaviorId
+  | none => rootBehaviorId
+
+def projectedThreadModel (rootModel : String)
+    (projectedChildModel resolvedChildModel : Option String) : String :=
+  match nonemptyReasoningText resolvedChildModel with
+  | some model => model
+  | none =>
+      match nonemptyReasoningText projectedChildModel with
+      | some model => model
+      | none => rootModel
+
+def projectedToolIdentity (fallback : String) (selected : Option String) : String :=
+  match nonemptyReasoningText selected with
+  | some value => value
+  | none => fallback
+
+def projectedToolFailure
+    (denialReason cancelCause failureClass result : Option String) : Option String :=
+  match nonemptyReasoningText denialReason with
+  | some value => some value
+  | none =>
+      match nonemptyReasoningText cancelCause with
+      | some value => some value
+      | none =>
+          match nonemptyReasoningText result with
+          | some value => some value
+          | none => nonemptyReasoningText failureClass
+
+def projectedDurationMs
+    (latencyMs startedAtMs completedAtMs : Option Nat) : Option Nat :=
+  match latencyMs with
+  | some latency => some latency
+  | none =>
+      match startedAtMs, completedAtMs with
+      | some started, some completed => some (completed - started)
+      | _, _ => none
+
+def projectedEventTimestampMs (persisted : Option Nat) (observed : Nat) : Nat :=
+  persisted.getD observed
+
+theorem active_request_projects_active_thread :
+    projectThreadStatus (some .processing) "completed" = .active := rfl
+
+theorem failed_request_projects_system_error_thread :
+    projectThreadStatus (some .failed) "active" = .systemError := rfl
+
+theorem completed_request_projects_idle_thread :
+    projectThreadStatus (some .completed) "error" = .idle := rfl
+
+theorem missing_request_error_conversation_projects_system_error :
+    projectThreadStatus none "error" = .systemError := rfl
+
+theorem missing_request_active_conversation_is_quiescent :
+    projectThreadStatus none "active" = .idle := rfl
+
+theorem child_behavior_overrides_root_for_response_metadata :
+    projectionBehaviorId "root" (some "child") = "child" := rfl
+
+theorem absent_child_behavior_keeps_root_response_metadata :
+    projectionBehaviorId "root" none = "root" := rfl
+
+theorem resolved_child_model_has_priority :
+    projectedThreadModel "root-model" (some "projected-child")
+      (some "resolved-child") = "resolved-child" := rfl
+
+theorem projected_child_model_fills_unavailable_behavior :
+    projectedThreadModel "root-model" (some "projected-child") none =
+      "projected-child" := rfl
+
+theorem unavailable_child_model_falls_back_to_root :
+    projectedThreadModel "root-model" none none = "root-model" := rfl
+
+theorem selected_tool_identity_overrides_model_facing_name :
+    projectedToolIdentity "defra" (some "service-a") = "service-a" := rfl
+
+theorem absent_selected_tool_identity_keeps_fallback :
+    projectedToolIdentity "defra" none = "defra" := rfl
+
+theorem denial_diagnostic_has_priority :
+    projectedToolFailure
+      (some "policy denied") (some "interrupted") (some "policyDenied")
+      (some "generic result") = some "policy denied" := rfl
+
+theorem cancellation_diagnostic_precedes_failure_class :
+    projectedToolFailure none (some "deadline") (some "timedOut") none =
+      some "deadline" := rfl
+
+theorem result_diagnostic_precedes_failure_class_fallback :
+    projectedToolFailure none none (some "argumentInvalid") (some "generic result") =
+      some "generic result" := rfl
+
+theorem failure_class_fills_absent_result_diagnostic :
+    projectedToolFailure none none (some "argumentInvalid") none =
+      some "argumentInvalid" := rfl
+
+theorem persisted_latency_precedes_timestamp_duration :
+    projectedDurationMs (some 7) (some 100) (some 125) = some 7 := rfl
+
+theorem timestamp_duration_fills_absent_latency :
+    projectedDurationMs none (some 100) (some 125) = some 25 := rfl
+
+theorem incomplete_timestamps_do_not_invent_duration :
+    projectedDurationMs none (some 100) none = none := rfl
+
+theorem persisted_event_timestamp_precedes_observation :
+    projectedEventTimestampMs (some 100) 200 = 100 := rfl
+
+theorem absent_event_timestamp_uses_observation :
+    projectedEventTimestampMs none 200 = 200 := rfl
+
 /-- Automatic compaction runs after the request is accepted and before the
 owned inference/tool loop, so replay places its item between the user request
 and model-derived items. -/

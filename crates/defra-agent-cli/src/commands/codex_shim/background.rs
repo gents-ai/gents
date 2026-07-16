@@ -15,7 +15,8 @@ use super::command_projection::{
     command_execution_item, command_output_payload, tool_projection_status, ToolProjectionStatus,
 };
 use super::progress::{
-    decode_defra_tool_call_progress, defra_tool_progress_query, DefraToolCallProgress,
+    decode_defra_tool_call_progress, defra_tool_progress_query, tool_completed_at_ms,
+    DefraToolCallProgress,
 };
 use super::protocol::{now_millis, send_notification};
 use super::store::query_node_json;
@@ -195,7 +196,7 @@ async fn send_background_tool_completion(
             item: command_execution_item(cwd, tool, status),
             thread_id: thread_id.to_string(),
             turn_id: turn_id.to_string(),
-            completed_at_ms: now_millis(),
+            completed_at_ms: tool_completed_at_ms(tool).unwrap_or_else(now_millis),
         }),
     )
     .await

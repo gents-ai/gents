@@ -99,10 +99,49 @@ pub(super) async fn handle_thread_request(
                     })
                     .cloned()
             });
-            let bound_model_id =
-                load_bound_model_selection_id_for_state(state.node.as_ref(), &state.behavior_id)
-                    .await
-                    .context("resolving bound model selection for ThreadResume")?;
+            let response_behavior_id = record.projection_behavior_id(state.behavior_id.as_ref());
+            let root_model_id = load_bound_model_selection_id_for_state(
+                state.node.as_ref(),
+                state.behavior_id.as_ref(),
+            )
+            .await
+            .context("resolving root bound model selection for ThreadResume")?;
+            let resolved_child_model = if record.is_subagent() {
+                match load_bound_model_selection_id_for_state(
+                    state.node.as_ref(),
+                    response_behavior_id,
+                )
+                .await
+                {
+                    Ok(model_id) => Some(model_id),
+                    Err(error) => {
+                        tracing::debug!(
+                            %error,
+                            behavior_id = response_behavior_id,
+                            thread_id = %record.session_id,
+                            "Codex shim could not load child behavior model metadata; using projected or root model"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let bound_model_id = projected_thread_model(
+                &root_model_id,
+                record
+                    .subagent
+                    .as_ref()
+                    .and_then(|link| link.model.as_deref()),
+                resolved_child_model.as_deref(),
+            );
+            // Stop the prior loaded-child watcher before acknowledging a
+            // repeated resume. The replacement is installed below after the
+            // response, so a runtime update racing the response cannot be
+            // projected once by both generations of the watcher.
+            if record.is_subagent() {
+                connection.stop_child_stream(&record.session_id).await;
+            }
             send_typed_json_result::<codex::ThreadResumeResponse>(
                 outbound,
                 request_id,
@@ -112,24 +151,36 @@ pub(super) async fn handle_thread_request(
             let (total_usage, last_usage) = thread_record_token_usage(state, &record)
                 .await
                 .unwrap_or_default();
-            let context_behavior_id = record
-                .subagent
-                .as_ref()
-                .map(|link| link.behavior_id.as_str())
-                .unwrap_or(state.behavior_id.as_ref());
-            let model_context_window = load_bound_context_window(
+            let context_behavior_id = response_behavior_id;
+            let model_context_window = match load_bound_context_window(
                 state.node.as_ref(),
                 context_behavior_id,
             )
             .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(
-                    %error,
-                    behavior_id = context_behavior_id,
-                    "Codex shim could not load the effective context window; using the runtime default"
-                );
-                defra_agent::DEFAULT_CONTEXT_WINDOW as i64
-            });
+            {
+                Ok(window) => window,
+                Err(child_error) if record.is_subagent() => {
+                    load_bound_context_window(state.node.as_ref(), state.behavior_id.as_ref())
+                        .await
+                        .unwrap_or_else(|root_error| {
+                            tracing::warn!(
+                                %child_error,
+                                %root_error,
+                                behavior_id = context_behavior_id,
+                                "Codex shim could not load child or root context windows; using the runtime default"
+                            );
+                            defra_agent::DEFAULT_CONTEXT_WINDOW as i64
+                        })
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        behavior_id = context_behavior_id,
+                        "Codex shim could not load the effective context window; using the runtime default"
+                    );
+                    defra_agent::DEFAULT_CONTEXT_WINDOW as i64
+                }
+            };
             send_notification(
                 outbound,
                 state,
@@ -454,5 +505,47 @@ pub(super) async fn handle_thread_request(
             "non-thread Codex request routed to thread handler: {}",
             other.method()
         ),
+    }
+}
+
+fn projected_thread_model(
+    root_model: &str,
+    projected_child_model: Option<&str>,
+    resolved_child_model: Option<&str>,
+) -> String {
+    resolved_child_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .or_else(|| {
+            projected_child_model
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+        })
+        .unwrap_or(root_model)
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::projected_thread_model;
+
+    #[test]
+    fn thread_model_fallback_matches_lean_precedence() {
+        assert_eq!(
+            projected_thread_model(
+                "root-model",
+                Some("projected-child"),
+                Some("resolved-child"),
+            ),
+            "resolved-child"
+        );
+        assert_eq!(
+            projected_thread_model("root-model", Some("projected-child"), None),
+            "projected-child"
+        );
+        assert_eq!(
+            projected_thread_model("root-model", None, None),
+            "root-model"
+        );
     }
 }

@@ -15,10 +15,11 @@ use active::{
 pub(super) use stream::{stream_defra_turn, TurnStreamOptions};
 use submission::create_agent_request_with_retry;
 
+use super::progress::timestamp_millis;
 use super::protocol::{
     codex_steering_metadata, codex_turn_metadata, selected_skill_ids_from_input,
-    send_committed_user_message, send_error, send_notification, send_result, turn_value,
-    user_text_from_input,
+    send_committed_user_message, send_error, send_notification, send_result,
+    send_thread_status_changed, timestamp_seconds, turn_value_with_timing, user_text_from_input,
 };
 use super::thread_projection::load_codex_thread;
 use super::turn_projection::TurnProjection;
@@ -91,7 +92,15 @@ pub(super) async fn start_defra_turn(
     };
 
     let turn_id = submitted.request_id.clone();
-    let started_turn = turn_value(&turn_id, codex::TurnStatus::InProgress, Vec::new(), None);
+    let started_at = submitted.created_at.as_deref().and_then(timestamp_seconds);
+    let started_turn = turn_value_with_timing(
+        &turn_id,
+        codex::TurnStatus::InProgress,
+        Vec::new(),
+        None,
+        started_at,
+        None,
+    );
     let (cancel_tx, cancel_rx) = watch::channel(false);
     install_stream_control(connection, thread_id.clone(), turn_id.clone(), cancel_tx).await;
 
@@ -117,10 +126,27 @@ pub(super) async fn start_defra_turn(
         }),
     )
     .await?;
+    send_thread_status_changed(
+        &connection.outbound,
+        state,
+        &thread_id,
+        codex::ThreadStatus::Active {
+            active_flags: Vec::new(),
+        },
+    )
+    .await?;
 
-    send_committed_user_message(&connection.outbound, state, &thread_id, &turn_id, &input).await?;
+    send_committed_user_message(
+        &connection.outbound,
+        state,
+        &thread_id,
+        &turn_id,
+        &input,
+        submitted.created_at.as_deref().and_then(timestamp_millis),
+    )
+    .await?;
 
-    let mut projection = TurnProjection::new(state, &thread_id, &turn_id, cwd.clone());
+    let mut projection = TurnProjection::new(state, &thread_id, &turn_id, cwd.clone(), started_at);
     let result = match stream_defra_turn(
         connection,
         state,
@@ -143,7 +169,14 @@ pub(super) async fn start_defra_turn(
                     codex::TurnStatus::Failed,
                     Some(message),
                 )
-                .await
+                .await?;
+            send_thread_status_changed(
+                &connection.outbound,
+                state,
+                &thread_id,
+                codex::ThreadStatus::SystemError,
+            )
+            .await
         }
     };
 

@@ -77,6 +77,12 @@ fn build_tui_cli(args: &CodexArgs) -> CodexTuiCli {
     cli.dangerously_bypass_approvals_and_sandbox = true;
     cli.no_alt_screen = args.no_alt_screen;
     cli.prompt = args.prompt.clone();
+    // DEFRA persists provider reasoning as raw reasoning text. Stock Codex
+    // already has the correct presentation gate; enable it for the embedded
+    // DEFRA TUI without relabeling raw text as a reasoning summary on the wire.
+    cli.config_overrides
+        .raw_overrides
+        .push("show_raw_agent_reasoning=true".to_string());
     cli
 }
 
@@ -160,6 +166,11 @@ mod tests {
         assert!(cli.dangerously_bypass_approvals_and_sandbox);
         assert!(cli.no_alt_screen);
         assert_eq!(cli.prompt.as_deref(), Some("hello"));
+        assert!(cli
+            .config_overrides
+            .raw_overrides
+            .iter()
+            .any(|value| value == "show_raw_agent_reasoning=true"));
     }
 
     #[test]
