@@ -35,9 +35,17 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
+use codex_app_server_protocol as codex;
 use defra_agent::subagent_target_entry;
+use futures_util::{SinkExt, StreamExt};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
+use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
+
+type FleetShimWebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 const P2P_LOOPBACK_ARGS: &[&str] = &[
     "--p2p-bind-addr",
@@ -74,7 +82,7 @@ const CONVERSATION_COLLECTIONS: &[&str] = &[
 
 const COORDINATOR_SYSTEM_PROMPT: &str = r#"You are a fleet coordinator. You have four remote research subagents named researcher-1, researcher-2, researcher-3, and researcher-4. For any user request asking you to use the fleet, call the spawn_subagent tool exactly once for each of those four researcher names, and each call must set await_mode to "background". Do not use foreground. Do not call spawn_subagent more than four total times. Do not call any other tool. After the four background calls are issued, reply briefly that all four researchers were delegated."#;
 
-const SUBAGENT_SYSTEM_PROMPT: &str = r#"You are a remote research subagent. Answer the assigned question directly in one short paragraph. Do not delegate to other subagents."#;
+const SUBAGENT_SYSTEM_PROMPT: &str = r#"You are a remote research subagent. Answer the assigned question directly in at least five factual paragraphs totaling roughly 500 words. Do not delegate to other subagents. The detail is intentional: this live test observes the response while it is streaming across deployments."#;
 
 struct FleetNode {
     home: PathBuf,
@@ -95,6 +103,7 @@ struct FleetNode {
     backend_id: String,
     inference_profile_id: String,
     model_name: String,
+    codex_shim_port: Option<u16>,
     #[allow(dead_code)]
     serve: ServeProcess,
 }
@@ -110,6 +119,7 @@ struct BridgeRow {
 #[derive(Debug, Clone)]
 struct ChildRow {
     request_id: String,
+    session_id: String,
     agent_did: String,
     behavior_id: String,
     lifecycle_state: Option<String>,
@@ -122,6 +132,7 @@ struct ChildRow {
 struct CompletedChild {
     tool_call_id: String,
     child_request_id: String,
+    child_session_id: String,
     owner_agent_did: String,
     owner_behavior_id: String,
     owner_answer: String,
@@ -155,7 +166,7 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
     let substrate_only = std::env::var("DEFRA_AGENT_FLEET_SUBSTRATE_ONLY").as_deref() == Ok("1");
 
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let fleet = bring_up_fleet(tempdir.path(), fleet_size, &endpoint, &model).await?;
+    let fleet = bring_up_fleet(tempdir.path(), fleet_size, &endpoint, &model, true).await?;
     let (coord, subagents) = fleet
         .split_first()
         .ok_or_else(|| anyhow!("fleet should contain a coordinator"))?;
@@ -216,25 +227,24 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
         .await?;
     }
 
-    let parent_prompt = "Use all four research subagents in parallel with background spawns only. Ask researcher-1 for one concise fact about Mercury, researcher-2 for one concise fact about Venus, researcher-3 for one concise fact about Earth, and researcher-4 for one concise fact about Mars. Make exactly four spawn_subagent calls total, one per researcher, then stop and reply that all four background researchers were delegated.";
-    let submit = run_cli_json(
-        &coord.home,
-        &[
-            "request",
-            "submit",
-            "--graphql",
-            &coord.graphql,
-            "--agent-did",
-            &coord.agent_did,
-            "--behavior-id",
-            &coord.behavior_id,
-            "--content",
-            parent_prompt,
-            "--no-wait",
-        ],
+    let parent_prompt = "Use all four research subagents in parallel with background spawns only. Ask researcher-1 for a detailed five-paragraph report about Mercury, researcher-2 for a detailed five-paragraph report about Venus, researcher-3 for a detailed five-paragraph report about Earth, and researcher-4 for a detailed five-paragraph report about Mars. Make exactly four spawn_subagent calls total, one per researcher, then stop and reply that all four background researchers were delegated.";
+    let shim_port = coord
+        .codex_shim_port
+        .context("coordinator must expose the Codex shim")?;
+    let mut parent_ws = fleet_connect_and_initialize_codex(shim_port).await?;
+    let parent_session_id = fleet_start_codex_thread(&mut parent_ws, &coord.home).await?;
+    let parent_request_id =
+        fleet_start_codex_turn(&mut parent_ws, &parent_session_id, parent_prompt).await?;
+
+    // Read the parent stream and independently navigate a child while it is
+    // still producing real model output on a remote deployment. This is the
+    // end-to-end fence between DEFRA's durable state machine and the native
+    // Codex collaboration/thread protocol.
+    let (parent_capture, live_child) = tokio::try_join!(
+        fleet_capture_parent_turn(&mut parent_ws),
+        fleet_observe_live_child(shim_port, &parent_session_id),
     )?;
-    let parent_request_id = required_output_string(&submit, "request_id")?;
-    let parent_session_id = required_output_string(&submit, "session_id")?;
+    assert_eq!(parent_capture.turn.status, codex::TurnStatus::Completed);
 
     let completed_children = wait_for_all_subagent_children_completed(
         &coord.graphql,
@@ -244,6 +254,25 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
         Duration::from_secs(300),
     )
     .await?;
+
+    let expected_child_threads = completed_children
+        .values()
+        .map(|child| child.child_session_id.clone())
+        .collect::<HashSet<_>>();
+    anyhow::ensure!(
+        expected_child_threads.contains(&live_child.thread_id),
+        "live Codex child {} was not one of the runtime-spawned children: {expected_child_threads:?}",
+        live_child.thread_id
+    );
+    anyhow::ensure!(
+        !live_child.delta.trim().is_empty(),
+        "loaded child {} emitted an empty live delta",
+        live_child.thread_id
+    );
+    assert_fleet_parent_collab_projection(&parent_capture, &expected_child_threads)?;
+    assert_fleet_completed_collab_history(shim_port, &parent_session_id, &expected_child_threads)
+        .await?;
+    assert_fleet_child_thread_is_read_only(shim_port, &live_child.thread_id).await?;
 
     let parent_terminal =
         wait_for_request_terminal(&coord.graphql, &parent_request_id, Duration::from_secs(240))
@@ -265,6 +294,520 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
 
     drop(fleet);
     Ok(())
+}
+
+#[derive(Debug)]
+struct FleetParentTurnCapture {
+    turn: codex::Turn,
+    collab_items: Vec<codex::ThreadItem>,
+}
+
+#[derive(Debug)]
+struct FleetLiveChildObservation {
+    thread_id: String,
+    delta: String,
+}
+
+fn fleet_request_id(value: i64) -> codex::RequestId {
+    codex::RequestId::Integer(value)
+}
+
+async fn fleet_connect_and_initialize_codex(port: u16) -> Result<FleetShimWebSocket> {
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{port}/"))
+        .await
+        .with_context(|| format!("connecting to fleet Codex shim on port {port}"))?;
+    fleet_send_codex_request(
+        &mut ws,
+        codex::ClientRequest::Initialize {
+            request_id: fleet_request_id(1),
+            params: codex::InitializeParams {
+                client_info: codex::ClientInfo {
+                    name: "defra-agent-fleet-live-test".to_string(),
+                    title: None,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                capabilities: None,
+            },
+        },
+    )
+    .await?;
+    let _: codex::InitializeResponse =
+        fleet_read_typed_response(&mut ws, fleet_request_id(1)).await?;
+    fleet_send_codex_notification(&mut ws, codex::ClientNotification::Initialized).await?;
+    Ok(ws)
+}
+
+async fn fleet_start_codex_thread(ws: &mut FleetShimWebSocket, cwd: &Path) -> Result<String> {
+    fleet_send_codex_request(
+        ws,
+        codex::ClientRequest::ThreadStart {
+            request_id: fleet_request_id(2),
+            params: codex::ThreadStartParams {
+                cwd: Some(cwd.display().to_string()),
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let response: codex::ThreadStartResponse =
+        fleet_read_typed_response(ws, fleet_request_id(2)).await?;
+    Ok(response.thread.id)
+}
+
+async fn fleet_start_codex_turn(
+    ws: &mut FleetShimWebSocket,
+    thread_id: &str,
+    prompt: &str,
+) -> Result<String> {
+    fleet_send_codex_request(
+        ws,
+        codex::ClientRequest::TurnStart {
+            request_id: fleet_request_id(3),
+            params: codex::TurnStartParams {
+                thread_id: thread_id.to_string(),
+                input: vec![codex::UserInput::Text {
+                    text: prompt.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let response: codex::TurnStartResponse =
+        fleet_read_typed_response(ws, fleet_request_id(3)).await?;
+    Ok(response.turn.id)
+}
+
+async fn fleet_capture_parent_turn(ws: &mut FleetShimWebSocket) -> Result<FleetParentTurnCapture> {
+    let mut collab_items = Vec::new();
+    loop {
+        match fleet_read_jsonrpc(ws).await? {
+            codex::JSONRPCMessage::Notification(notification) => {
+                match fleet_server_notification(notification)? {
+                    codex::ServerNotification::ItemCompleted(completed)
+                        if matches!(
+                            completed.item,
+                            codex::ThreadItem::CollabAgentToolCall { .. }
+                        ) =>
+                    {
+                        collab_items.push(completed.item);
+                    }
+                    codex::ServerNotification::TurnCompleted(completed) => {
+                        return Ok(FleetParentTurnCapture {
+                            turn: completed.turn,
+                            collab_items,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            codex::JSONRPCMessage::Error(error) => {
+                bail!("fleet Codex shim emitted an error: {}", error.error.message);
+            }
+            codex::JSONRPCMessage::Request(request) => {
+                bail!("fleet Codex shim sent an unexpected request: {request:?}");
+            }
+            codex::JSONRPCMessage::Response(_) => {}
+        }
+    }
+}
+
+async fn fleet_observe_live_child(
+    shim_port: u16,
+    parent_thread_id: &str,
+) -> Result<FleetLiveChildObservation> {
+    let mut list_ws = fleet_connect_and_initialize_codex(shim_port).await?;
+    let mut seen = HashSet::new();
+    let mut observers = tokio::task::JoinSet::new();
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let mut request_sequence = 100_i64;
+
+    loop {
+        while let Some(joined) = observers.try_join_next() {
+            if let Some(observation) = joined.context("fleet child observer task panicked")?? {
+                observers.abort_all();
+                return Ok(observation);
+            }
+        }
+
+        if Instant::now() >= deadline {
+            observers.abort_all();
+            bail!(
+                "no live delta was observed from {} navigable runtime-spawned Codex child threads",
+                seen.len()
+            );
+        }
+
+        let request_id = fleet_request_id(request_sequence);
+        request_sequence += 1;
+        fleet_send_codex_request(
+            &mut list_ws,
+            codex::ClientRequest::ThreadList {
+                request_id: request_id.clone(),
+                params: codex::ThreadListParams {
+                    cursor: None,
+                    limit: Some(200),
+                    sort_key: None,
+                    sort_direction: None,
+                    model_providers: None,
+                    source_kinds: Some(vec![codex::ThreadSourceKind::SubAgentThreadSpawn]),
+                    archived: None,
+                    cwd: None,
+                    use_state_db_only: true,
+                    search_term: None,
+                },
+            },
+        )
+        .await?;
+        let response: codex::ThreadListResponse =
+            fleet_read_typed_response(&mut list_ws, request_id).await?;
+        for thread in response.data {
+            if !seen.insert(thread.id.clone()) {
+                continue;
+            }
+            let thread_id = thread.id;
+            let parent_thread_id = parent_thread_id.to_string();
+            observers.spawn(async move {
+                fleet_observe_child_thread(shim_port, thread_id, parent_thread_id).await
+            });
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn fleet_observe_child_thread(
+    shim_port: u16,
+    thread_id: String,
+    parent_thread_id: String,
+) -> Result<Option<FleetLiveChildObservation>> {
+    let mut ws = fleet_connect_and_initialize_codex(shim_port).await?;
+    fleet_send_codex_request(
+        &mut ws,
+        codex::ClientRequest::ThreadRead {
+            request_id: fleet_request_id(10),
+            params: codex::ThreadReadParams {
+                thread_id: thread_id.clone(),
+                include_turns: true,
+            },
+        },
+    )
+    .await?;
+    let read: codex::ThreadReadResponse =
+        fleet_read_typed_response(&mut ws, fleet_request_id(10)).await?;
+    let read_json = serde_json::to_value(&read.thread)?;
+    anyhow::ensure!(
+        read_json
+            .pointer("/source/subAgent/thread_spawn/parent_thread_id")
+            .and_then(Value::as_str)
+            == Some(parent_thread_id.as_str()),
+        "child thread {thread_id} did not expose native Codex ancestry: {read_json}"
+    );
+    let Some(turn_id) = read
+        .thread
+        .turns
+        .iter()
+        .rev()
+        .find(|turn| turn.status == codex::TurnStatus::InProgress)
+        .map(|turn| turn.id.clone())
+    else {
+        return Ok(None);
+    };
+
+    fleet_send_codex_request(
+        &mut ws,
+        codex::ClientRequest::ThreadResume {
+            request_id: fleet_request_id(11),
+            params: codex::ThreadResumeParams {
+                thread_id: thread_id.clone(),
+                cwd: None,
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+
+    let observation = tokio::time::timeout(Duration::from_secs(60), async {
+        let mut resumed = false;
+        let mut terminal = false;
+        let mut delta = None::<String>;
+        loop {
+            match fleet_read_jsonrpc(&mut ws).await? {
+                codex::JSONRPCMessage::Response(response)
+                    if response.id == fleet_request_id(11) =>
+                {
+                    let resume: codex::ThreadResumeResponse =
+                        serde_json::from_value(response.result)
+                            .context("decoding fleet child thread/resume response")?;
+                    resumed = true;
+                    terminal = !resume.thread.turns.iter().any(|turn| {
+                        turn.id == turn_id && turn.status == codex::TurnStatus::InProgress
+                    });
+                }
+                codex::JSONRPCMessage::Notification(notification) => {
+                    match fleet_server_notification(notification)? {
+                        codex::ServerNotification::AgentMessageDelta(update)
+                            if update.thread_id == thread_id
+                                && update.turn_id == turn_id
+                                && !update.delta.is_empty() =>
+                        {
+                            delta = Some(update.delta);
+                        }
+                        codex::ServerNotification::TurnCompleted(completed)
+                            if completed.thread_id == thread_id && completed.turn.id == turn_id =>
+                        {
+                            terminal = true;
+                        }
+                        _ => {}
+                    }
+                }
+                codex::JSONRPCMessage::Error(error) => {
+                    bail!(
+                        "fleet child {thread_id} emitted an error while resuming: {}",
+                        error.error.message
+                    );
+                }
+                codex::JSONRPCMessage::Request(request) => {
+                    bail!("fleet child {thread_id} sent an unexpected request: {request:?}");
+                }
+                codex::JSONRPCMessage::Response(response) => {
+                    bail!(
+                        "unexpected response while resuming fleet child {thread_id}: {response:?}"
+                    );
+                }
+            }
+
+            if resumed {
+                if let Some(delta) = delta.take() {
+                    return Ok(Some(FleetLiveChildObservation { thread_id, delta }));
+                }
+                if terminal {
+                    return Ok(None);
+                }
+            }
+        }
+    })
+    .await;
+
+    match observation {
+        Ok(result) => result,
+        Err(_) => Ok(None),
+    }
+}
+
+fn assert_fleet_parent_collab_projection(
+    capture: &FleetParentTurnCapture,
+    expected_child_threads: &HashSet<String>,
+) -> Result<()> {
+    let mut projected = HashSet::new();
+    for item in &capture.collab_items {
+        let codex::ThreadItem::CollabAgentToolCall {
+            tool,
+            status,
+            receiver_thread_ids,
+            model,
+            agents_states,
+            ..
+        } = item
+        else {
+            continue;
+        };
+        if *tool != codex::CollabAgentTool::SpawnAgent {
+            continue;
+        }
+        anyhow::ensure!(
+            *status == codex::CollabAgentToolCallStatus::Completed,
+            "spawn projection was not terminal-completed: {item:?}"
+        );
+        anyhow::ensure!(
+            model
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()),
+            "spawn projection omitted the child model: {item:?}"
+        );
+        for thread_id in receiver_thread_ids {
+            anyhow::ensure!(
+                agents_states.contains_key(thread_id),
+                "spawn projection omitted agentsStates for {thread_id}: {item:?}"
+            );
+            projected.insert(thread_id.clone());
+        }
+    }
+    anyhow::ensure!(
+        projected == *expected_child_threads,
+        "native parent collab projection did not match real runtime children; projected={projected:?} expected={expected_child_threads:?} items={:?}",
+        capture.collab_items
+    );
+    Ok(())
+}
+
+async fn assert_fleet_completed_collab_history(
+    shim_port: u16,
+    parent_thread_id: &str,
+    expected_child_threads: &HashSet<String>,
+) -> Result<()> {
+    let mut ws = fleet_connect_and_initialize_codex(shim_port).await?;
+    fleet_send_codex_request(
+        &mut ws,
+        codex::ClientRequest::ThreadRead {
+            request_id: fleet_request_id(20),
+            params: codex::ThreadReadParams {
+                thread_id: parent_thread_id.to_string(),
+                include_turns: true,
+            },
+        },
+    )
+    .await?;
+    let read: codex::ThreadReadResponse =
+        fleet_read_typed_response(&mut ws, fleet_request_id(20)).await?;
+    let mut completed = HashSet::new();
+    for item in read.thread.turns.iter().flat_map(|turn| &turn.items) {
+        if let codex::ThreadItem::CollabAgentToolCall {
+            tool: codex::CollabAgentTool::SpawnAgent,
+            receiver_thread_ids,
+            agents_states,
+            ..
+        } = item
+        {
+            for thread_id in receiver_thread_ids {
+                if agents_states
+                    .get(thread_id)
+                    .is_some_and(|state| state.status == codex::CollabAgentStatus::Completed)
+                {
+                    completed.insert(thread_id.clone());
+                }
+            }
+        }
+    }
+    anyhow::ensure!(
+        completed == *expected_child_threads,
+        "completed parent history did not refresh all native agentsStates; completed={completed:?} expected={expected_child_threads:?}"
+    );
+    Ok(())
+}
+
+async fn assert_fleet_child_thread_is_read_only(
+    shim_port: u16,
+    child_thread_id: &str,
+) -> Result<()> {
+    let mut ws = fleet_connect_and_initialize_codex(shim_port).await?;
+    fleet_send_codex_request(
+        &mut ws,
+        codex::ClientRequest::TurnStart {
+            request_id: fleet_request_id(30),
+            params: codex::TurnStartParams {
+                thread_id: child_thread_id.to_string(),
+                input: vec![codex::UserInput::Text {
+                    text: "this write must be rejected".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    loop {
+        match fleet_read_jsonrpc(&mut ws).await? {
+            codex::JSONRPCMessage::Error(error) if error.id == fleet_request_id(30) => {
+                anyhow::ensure!(
+                    error.error.message.contains("read-only"),
+                    "unexpected child turn/start rejection: {}",
+                    error.error.message
+                );
+                return Ok(());
+            }
+            codex::JSONRPCMessage::Response(response) if response.id == fleet_request_id(30) => {
+                bail!("read-only fleet child accepted turn/start: {response:?}");
+            }
+            codex::JSONRPCMessage::Notification(_) => {}
+            other => bail!("unexpected message awaiting child read-only rejection: {other:?}"),
+        }
+    }
+}
+
+async fn fleet_send_codex_request(
+    ws: &mut FleetShimWebSocket,
+    request: codex::ClientRequest,
+) -> Result<()> {
+    let request: codex::JSONRPCRequest = serde_json::from_value(serde_json::to_value(request)?)
+        .context("building fleet Codex JSON-RPC request")?;
+    fleet_write_jsonrpc(ws, codex::JSONRPCMessage::Request(request)).await
+}
+
+async fn fleet_send_codex_notification(
+    ws: &mut FleetShimWebSocket,
+    notification: codex::ClientNotification,
+) -> Result<()> {
+    let notification: codex::JSONRPCNotification =
+        serde_json::from_value(serde_json::to_value(notification)?)
+            .context("building fleet Codex JSON-RPC notification")?;
+    fleet_write_jsonrpc(ws, codex::JSONRPCMessage::Notification(notification)).await
+}
+
+async fn fleet_write_jsonrpc(
+    ws: &mut FleetShimWebSocket,
+    message: codex::JSONRPCMessage,
+) -> Result<()> {
+    let text = serde_json::to_string(&message).context("encoding fleet Codex JSON-RPC")?;
+    ws.send(WsMessage::Text(text.into()))
+        .await
+        .context("sending fleet Codex JSON-RPC websocket frame")
+}
+
+async fn fleet_read_typed_response<T>(
+    ws: &mut FleetShimWebSocket,
+    expected_id: codex::RequestId,
+) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    loop {
+        match fleet_read_jsonrpc(ws).await? {
+            codex::JSONRPCMessage::Response(response) if response.id == expected_id => {
+                return serde_json::from_value(response.result)
+                    .context("decoding fleet Codex response");
+            }
+            codex::JSONRPCMessage::Error(error) if error.id == expected_id => {
+                bail!(
+                    "fleet Codex shim returned an error for {expected_id}: {}",
+                    error.error.message
+                );
+            }
+            codex::JSONRPCMessage::Notification(_) => {}
+            other => {
+                bail!("unexpected fleet Codex message while waiting for {expected_id}: {other:?}")
+            }
+        }
+    }
+}
+
+async fn fleet_read_jsonrpc(ws: &mut FleetShimWebSocket) -> Result<codex::JSONRPCMessage> {
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(90), ws.next())
+            .await
+            .context("timed out waiting for fleet Codex shim websocket message")?
+            .ok_or_else(|| anyhow!("fleet Codex shim websocket closed"))?
+            .context("reading fleet Codex shim websocket frame")?;
+        let text = match frame {
+            WsMessage::Text(text) => text,
+            WsMessage::Binary(bytes) => String::from_utf8(bytes.to_vec())
+                .context("decoding fleet Codex binary websocket payload")?
+                .into(),
+            WsMessage::Ping(_) | WsMessage::Pong(_) => continue,
+            WsMessage::Close(close) => bail!("fleet Codex shim websocket closed: {close:?}"),
+            WsMessage::Frame(_) => bail!("unexpected raw fleet Codex websocket frame"),
+        };
+        return serde_json::from_str(&text)
+            .with_context(|| format!("decoding fleet Codex JSON-RPC message: {text}"));
+    }
+}
+
+fn fleet_server_notification(
+    notification: codex::JSONRPCNotification,
+) -> Result<codex::ServerNotification> {
+    serde_json::from_value(serde_json::to_value(notification)?)
+        .context("decoding fleet Codex server notification")
 }
 
 // ===========================================================================
@@ -356,7 +899,7 @@ async fn five_process_workflow_orchestration_live() -> Result<()> {
     assert_endpoint_reachable(&endpoint).await?;
 
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let fleet = bring_up_fleet(tempdir.path(), 5, &endpoint, &model).await?;
+    let fleet = bring_up_fleet(tempdir.path(), 5, &endpoint, &model, false).await?;
     let (coord, subagents) = fleet
         .split_first()
         .ok_or_else(|| anyhow!("fleet should contain a coordinator"))?;
@@ -1104,7 +1647,7 @@ async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
     assert_endpoint_reachable(&endpoint).await?;
 
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let fleet = bring_up_fleet(tempdir.path(), 5, &endpoint, &model).await?;
+    let fleet = bring_up_fleet(tempdir.path(), 5, &endpoint, &model, false).await?;
     let (coord, subagents) = fleet
         .split_first()
         .ok_or_else(|| anyhow!("fleet should contain a coordinator"))?;
@@ -1338,7 +1881,7 @@ async fn five_process_workflow_d10_materialized_failure_live() -> Result<()> {
     assert_endpoint_reachable(&endpoint).await?;
 
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let fleet = bring_up_fleet(tempdir.path(), 5, &endpoint, &model).await?;
+    let fleet = bring_up_fleet(tempdir.path(), 5, &endpoint, &model, false).await?;
     let (coord, subagents) = fleet
         .split_first()
         .ok_or_else(|| anyhow!("fleet should contain a coordinator"))?;
@@ -1566,7 +2109,7 @@ async fn five_process_workflow_synthesizer_deleted_midrun_live() -> Result<()> {
     assert_endpoint_reachable(&endpoint).await?;
 
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let fleet = bring_up_fleet(tempdir.path(), 5, &endpoint, &model).await?;
+    let fleet = bring_up_fleet(tempdir.path(), 5, &endpoint, &model, false).await?;
     let (coord, subagents) = fleet
         .split_first()
         .ok_or_else(|| anyhow!("fleet should contain a coordinator"))?;
@@ -1875,6 +2418,7 @@ async fn bring_up_fleet(
     count: usize,
     model_endpoint: &str,
     model_name: &str,
+    coordinator_codex_shim: bool,
 ) -> Result<Vec<FleetNode>> {
     let mut nodes = Vec::with_capacity(count);
     for index in 0..count {
@@ -1910,9 +2454,33 @@ async fn bring_up_fleet(
         let inference_profile_id = init_string(&init, "inference_profile_id")?;
         let model_name = init_string(&init, "model_name")?;
 
+        let codex_shim_port = if index == 0 && coordinator_codex_shim {
+            Some(allocate_port()?)
+        } else {
+            None
+        };
+        let mut serve_args = P2P_LOOPBACK_ARGS
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect::<Vec<_>>();
+        if let Some(shim_port) = codex_shim_port {
+            serve_args.extend([
+                "--codex-shim".to_string(),
+                "--codex-shim-port".to_string(),
+                shim_port.to_string(),
+                "--codex-shim-poll-ms".to_string(),
+                "100".to_string(),
+                "--codex-shim-timeout-secs".to_string(),
+                "900".to_string(),
+            ]);
+        }
+        let serve_arg_refs = serve_args.iter().map(String::as_str).collect::<Vec<_>>();
         let (mut serve, readiness) =
-            spawn_server_with_ready_json(&home, port, P2P_LOOPBACK_ARGS, FAST_RECONCILE_ENVS)?;
+            spawn_server_with_ready_json(&home, port, &serve_arg_refs, FAST_RECONCILE_ENVS)?;
         wait_for_port(port, &mut serve)?;
+        if let Some(shim_port) = codex_shim_port {
+            wait_for_port(shim_port, &mut serve)?;
+        }
         wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
         let peer_id = readiness
             .get("p2p_peer_id")
@@ -1937,6 +2505,7 @@ async fn bring_up_fleet(
             backend_id,
             inference_profile_id,
             model_name,
+            codex_shim_port,
             serve,
         });
     }
@@ -2567,6 +3136,7 @@ async fn wait_for_all_subagent_children_completed(
                 CompletedChild {
                     tool_call_id: bridge.tool_call_id.clone(),
                     child_request_id: child.request_id.clone(),
+                    child_session_id: child.session_id.clone(),
                     owner_agent_did: owner.agent_did.clone(),
                     owner_behavior_id: owner.behavior_id.clone(),
                     owner_answer,
@@ -2703,6 +3273,7 @@ async fn fetch_child_request(graphql: &str, request_id: &str) -> Result<Option<C
             r#"{{
                 AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
                     request_id
+                    session_id
                     agent_did
                     behavior_id
                     lifecycle_state
@@ -2721,6 +3292,11 @@ async fn fetch_child_request(graphql: &str, request_id: &str) -> Result<Option<C
         .map(|row| ChildRow {
             request_id: row
                 .get("request_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            session_id: row
+                .get("session_id")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
