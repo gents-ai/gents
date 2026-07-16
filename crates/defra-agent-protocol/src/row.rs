@@ -345,6 +345,49 @@ pub struct AgentSessionRow {
     pub status: Option<String>,
 }
 
+/// Durable session-scoped autonomous goal state.
+///
+/// Identity fields are required by the document contract; mutable fields stay
+/// permissive so peers can deserialize rows written by an older schema.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GoalRow {
+    pub goal_id: String,
+    pub session_id: String,
+    pub agent_did: String,
+    #[serde(default)]
+    pub objective: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub token_budget: Option<i64>,
+    #[serde(default)]
+    pub tokens_used: Option<i64>,
+    #[serde(default)]
+    pub active_time_seconds: Option<i64>,
+    #[serde(default)]
+    pub active_started_at: Option<String>,
+    #[serde(default)]
+    pub consecutive_blocked_audits: Option<i64>,
+    #[serde(default)]
+    pub last_blocked_request_id: Option<String>,
+    #[serde(default)]
+    pub last_continued_from_request_id: Option<String>,
+    #[serde(default)]
+    pub continuation_sequence: Option<i64>,
+    #[serde(default)]
+    pub wrapup_requested: Option<bool>,
+    #[serde(default)]
+    pub wrapup_completed: Option<bool>,
+    #[serde(default)]
+    pub infrastructure_retry_count: Option<i64>,
+    #[serde(default)]
+    pub last_failure: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentToolCallRow {
     pub tool_call_key: String,

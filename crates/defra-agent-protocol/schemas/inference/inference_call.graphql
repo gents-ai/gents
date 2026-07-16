@@ -23,4 +23,5 @@ type InferenceCall {
 
     prompt_tokens: Int
     completion_tokens: Int
+    cached_input_tokens: Int
 }

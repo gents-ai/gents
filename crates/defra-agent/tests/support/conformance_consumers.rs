@@ -63,6 +63,48 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "conformance::goals::rust_goal_status_vocabulary_and_machine_match_lean_contract",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/conformance/goals.rs",
+            module_path: "conformance::goals",
+            function: "rust_goal_status_vocabulary_and_machine_match_lean_contract",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::goals::generated_goal_decision_cases_fence_runtime_controller",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/conformance/goals.rs",
+            module_path: "conformance::goals",
+            function: "generated_goal_decision_cases_fence_runtime_controller",
+        },
+        ConformanceConsumer::RustTest {
+            id: "goal_continuation_live::durable_goal_continues_with_real_inference_until_model_completes",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/e2e_live/goal_continuation_live.rs",
+            module_path: "goal_continuation_live",
+            function: "durable_goal_continues_with_real_inference_until_model_completes",
+        },
+        ConformanceConsumer::RustTest {
+            id: "cli_goal::goal_set_get_pause_resume_and_clear_are_durable",
+            package: "defra-agent-cli",
+            source_path: "crates/defra-agent-cli/tests/cli_goal.rs",
+            module_path: "cli_goal",
+            function: "goal_set_get_pause_resume_and_clear_are_durable",
+        },
+        ConformanceConsumer::RustTest {
+            id: "cli_codex_shim::thread_goal_round_trip_survives_shim_restart",
+            package: "defra-agent-cli",
+            source_path: "crates/defra-agent-cli/tests/cli_codex_shim.rs",
+            module_path: "cli_codex_shim",
+            function: "thread_goal_round_trip_survives_shim_restart",
+        },
+        ConformanceConsumer::TypeScriptTest {
+            id: "apps/desktop-tauri/tests/durable-goal-card.test.tsx::durable goal transcript card renders persisted goal status, objective, token usage, and active time",
+            app: "desktop-tauri",
+            source_path: "apps/desktop-tauri/tests/durable-goal-card.test.tsx",
+            suite: "durable goal transcript card",
+            test: "renders persisted goal status, objective, token usage, and active time",
+        },
+        ConformanceConsumer::RustTest {
             id: "admission::tests::generated_slot_accounting_fleet_cases_match_admission_runtime_boundary",
             package: "defra-agent",
             source_path: "crates/defra-agent/src/admission/tests.rs",

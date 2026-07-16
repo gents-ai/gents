@@ -22,6 +22,8 @@ pub const AGENT_MESSAGE_NAME: &str = "AgentMessage";
 pub const AGENT_MESSAGE: &str = include_str!("../schemas/agent/agent_message.graphql");
 pub const AGENT_SESSION_NAME: &str = "AgentSession";
 pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.graphql");
+pub const GOAL_NAME: &str = "Goal";
+pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
 pub const AGENT_TOOL_CALL_NAME: &str = "AgentToolCall";
 pub const AGENT_TOOL_CALL: &str = include_str!("../schemas/agent/agent_tool_call.graphql");
 pub const AGENT_TOOL_RESULT_NAME: &str = "AgentToolResult";
@@ -84,6 +86,7 @@ pub const ALL: &[&str] = &[
     AGENT_RESPONSE,
     AGENT_TOOL_RESULT,
     AGENT_SESSION,
+    GOAL,
     AGENT_MESSAGE,
     AGENT_TOOL_CALL,
     COMPACTION_ENTRY,
@@ -117,6 +120,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_RESPONSE_NAME,
     AGENT_TOOL_RESULT_NAME,
     AGENT_SESSION_NAME,
+    GOAL_NAME,
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
     COMPACTION_ENTRY_NAME,
@@ -146,6 +150,7 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     AGENT_RESPONSE_NAME,
     AGENT_TOOL_RESULT_NAME,
     AGENT_SESSION_NAME,
+    GOAL_NAME,
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
     COMPACTION_ENTRY_NAME,
@@ -162,7 +167,7 @@ mod tests {
 
     #[test]
     fn all_contains_every_agent_schema() {
-        assert_eq!(ALL.len(), 29);
+        assert_eq!(ALL.len(), 30);
     }
 
     #[test]

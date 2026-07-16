@@ -8,8 +8,8 @@ use defra_agent_protocol::client_protocol::ClientTurnState;
 use defra_agent_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
     AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
-    CompactionEntryRow, EventTriggerRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow,
-    SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
+    CompactionEntryRow, EventTriggerRow, GoalRow, InferenceBackendRow, InferenceProfileRow,
+    ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
 use serde::Serialize;
 
@@ -25,6 +25,7 @@ pub struct ClientStoreRows {
     pub responses: Vec<AgentResponseRow>,
     pub messages: Vec<AgentMessageRow>,
     pub sessions: Vec<AgentSessionRow>,
+    pub goals: Vec<GoalRow>,
     pub tool_calls: Vec<AgentToolCallRow>,
     pub tool_results: Vec<AgentToolResultRow>,
     pub compaction_entries: Vec<CompactionEntryRow>,
@@ -72,6 +73,7 @@ pub struct ClientStore {
     pub responses: Vec<AgentResponseRow>,
     pub messages: Vec<AgentMessageRow>,
     pub sessions: Vec<AgentSessionRow>,
+    pub goals: Vec<GoalRow>,
     pub tool_calls: Vec<AgentToolCallRow>,
     pub tool_results: Vec<AgentToolResultRow>,
     pub compaction_entries: Vec<CompactionEntryRow>,
@@ -172,6 +174,7 @@ impl ClientStore {
             incoming.session_source_agent_dids,
             session_merge_key,
         );
+        upsert_rows_by_key(&mut rows.goals, incoming.goals, goal_merge_key);
         upsert_rows_with_sources_by_key(
             &mut rows.tool_calls,
             &mut rows.tool_call_source_agent_dids,
@@ -280,6 +283,7 @@ impl ClientStore {
             patch_rows.session_source_agent_dids,
             session_merge_key,
         );
+        upsert_rows_by_key(&mut rows.goals, patch_rows.goals, goal_merge_key);
         upsert_rows_with_sources_by_key(
             &mut rows.tool_calls,
             &mut rows.tool_call_source_agent_dids,
@@ -335,6 +339,7 @@ impl ClientStore {
             responses: self.responses.clone(),
             messages: self.messages.clone(),
             sessions: self.sessions.clone(),
+            goals: self.goals.clone(),
             tool_calls: self.tool_calls.clone(),
             tool_results: self.tool_results.clone(),
             compaction_entries: self.compaction_entries.clone(),
@@ -740,6 +745,7 @@ impl ClientStore {
             + self.responses.len()
             + self.messages.len()
             + self.sessions.len()
+            + self.goals.len()
             + self.tool_calls.len()
             + self.tool_results.len()
             + self.compaction_entries.len()
@@ -883,6 +889,10 @@ fn session_merge_key(row: &AgentSessionRow, source_agent_did: Option<&str>) -> S
         source_agent_did.unwrap_or_default(),
         row.session_id
     )
+}
+
+fn goal_merge_key(row: &GoalRow) -> String {
+    format!("{}\0{}", row.agent_did, row.goal_id)
 }
 
 fn tool_call_merge_key(row: &AgentToolCallRow, source_agent_did: Option<&str>) -> String {

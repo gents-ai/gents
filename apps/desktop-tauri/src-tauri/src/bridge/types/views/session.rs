@@ -156,6 +156,22 @@ pub(crate) enum RenderedTimelineItem {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct GoalView {
+    pub goal_id: String,
+    pub objective: Option<String>,
+    pub status: Option<String>,
+    pub token_budget: Option<i64>,
+    pub tokens_used: i64,
+    pub active_time_seconds: i64,
+    pub consecutive_blocked_audits: i64,
+    pub continuation_sequence: i64,
+    pub wrapup_requested: bool,
+    pub wrapup_completed: bool,
+    pub last_failure: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopSessionSnapshot {
     pub session_id: String,
     pub agent_did: Option<String>,
@@ -163,6 +179,7 @@ pub(crate) struct DesktopSessionSnapshot {
     pub title: Option<String>,
     pub preview_text: Option<String>,
     pub status: Option<String>,
+    pub goal: Option<GoalView>,
     pub turn_state: Option<String>,
     pub latest_request_id: Option<String>,
     pub latest_response: Option<ResponseView>,

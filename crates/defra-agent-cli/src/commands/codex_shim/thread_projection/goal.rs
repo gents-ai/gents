@@ -1,61 +1,34 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use anyhow::Result;
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use codex_app_server_protocol as codex;
-use serde::{Deserialize, Serialize};
 
-use crate::commands::codex_shim::thread_projection::session_token_usage;
+use defra_agent::goal::{
+    delete_goal, load_canonical_goal, refresh_goal_usage, set_goal, GoalDocument, GoalSnapshot,
+    GoalStatus,
+};
+
 use crate::commands::codex_shim::ShimState;
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct StoredGoal {
-    pub(in crate::commands::codex_shim) thread_id: String,
-    pub(in crate::commands::codex_shim) objective: String,
-    pub(in crate::commands::codex_shim) status: codex::ThreadGoalStatus,
-    pub(in crate::commands::codex_shim) token_budget: Option<i64>,
-    pub(in crate::commands::codex_shim) created_at: i64,
-    pub(in crate::commands::codex_shim) updated_at: i64,
-}
 
 pub(in crate::commands::codex_shim) async fn set_codex_thread_goal(
     state: &ShimState,
     params: &codex::ThreadGoalSetParams,
 ) -> Result<Option<codex::ThreadGoal>> {
-    // Don't seed goal state for a thread this shim doesn't own; a later resume of
-    // the same id would otherwise inherit a phantom goal.
     if super::storage::load_scoped_session(state, &params.thread_id)
         .await?
         .is_none()
     {
         return Ok(None);
     }
-    let existing = state.thread_goal(&params.thread_id).await;
-    let now = now_seconds_i64();
-    let status = params
-        .status
-        .as_ref()
-        .copied()
-        .or_else(|| existing.as_ref().map(|goal| goal.status.clone()))
-        .unwrap_or(codex::ThreadGoalStatus::Active);
-    let token_budget = match &params.token_budget {
-        Some(value) => *value,
-        None => existing.as_ref().and_then(|goal| goal.token_budget),
-    };
-    let created_at = existing.as_ref().map(|goal| goal.created_at).unwrap_or(now);
-    let goal = StoredGoal {
-        thread_id: params.thread_id.clone(),
-        objective: params
-            .objective
-            .clone()
-            .or_else(|| existing.as_ref().map(|goal| goal.objective.clone()))
-            .unwrap_or_default(),
+    let status = params.status.map(codex_status_to_goal_status);
+    let goal = set_goal(
+        state.node.as_ref(),
+        state.agent_did.as_ref(),
+        &params.thread_id,
+        params.objective.as_deref(),
         status,
-        token_budget,
-        created_at,
-        updated_at: now,
-    };
-    state.set_thread_goal(&params.thread_id, goal.clone()).await;
+        params.token_budget,
+    )
+    .await?;
     Ok(Some(enrich(state, goal).await?))
 }
 
@@ -63,37 +36,75 @@ pub(in crate::commands::codex_shim) async fn get_codex_thread_goal(
     state: &ShimState,
     thread_id: &str,
 ) -> Result<Option<codex::ThreadGoal>> {
-    match state.thread_goal(thread_id).await {
-        Some(goal) => Ok(Some(enrich(state, goal).await?)),
-        None => Ok(None),
-    }
+    let Some(goal) =
+        load_canonical_goal(state.node.as_ref(), state.agent_did.as_ref(), thread_id).await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(enrich(state, goal).await?))
 }
 
 pub(in crate::commands::codex_shim) async fn clear_codex_thread_goal(
     state: &ShimState,
     thread_id: &str,
 ) -> Result<bool> {
-    Ok(state.clear_thread_goal(thread_id).await)
+    let Some(goal) =
+        load_canonical_goal(state.node.as_ref(), state.agent_did.as_ref(), thread_id).await?
+    else {
+        return Ok(false);
+    };
+    delete_goal(state.node.as_ref(), &goal).await
 }
 
-async fn enrich(state: &ShimState, goal: StoredGoal) -> Result<codex::ThreadGoal> {
-    let tokens_used = session_token_usage(state, &goal.thread_id).await?.total();
-    let time_used_seconds = (now_seconds_i64() - goal.created_at).max(0);
+async fn enrich(state: &ShimState, mut goal: GoalDocument) -> Result<codex::ThreadGoal> {
+    refresh_goal_usage(state.node.as_ref(), &goal).await?;
+    goal = load_canonical_goal(
+        state.node.as_ref(),
+        state.agent_did.as_ref(),
+        &goal.session_id,
+    )
+    .await?
+    .unwrap_or(goal);
+    let snapshot = GoalSnapshot::from_document(&goal, Utc::now());
     Ok(codex::ThreadGoal {
-        thread_id: goal.thread_id,
-        objective: goal.objective,
-        status: goal.status,
-        token_budget: goal.token_budget,
-        tokens_used,
-        time_used_seconds,
-        created_at: goal.created_at,
-        updated_at: goal.updated_at,
+        thread_id: snapshot.session_id,
+        objective: snapshot.objective,
+        status: goal_status_to_codex(&snapshot.status)?,
+        token_budget: snapshot.token_budget,
+        tokens_used: snapshot.tokens_used,
+        time_used_seconds: snapshot.active_time_seconds,
+        created_at: epoch_seconds(snapshot.created_at.as_deref()),
+        updated_at: epoch_seconds(snapshot.updated_at.as_deref()),
     })
 }
 
-fn now_seconds_i64() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
+fn codex_status_to_goal_status(status: codex::ThreadGoalStatus) -> GoalStatus {
+    match status {
+        codex::ThreadGoalStatus::Active => GoalStatus::Active,
+        codex::ThreadGoalStatus::Paused => GoalStatus::Paused,
+        codex::ThreadGoalStatus::Blocked => GoalStatus::Blocked,
+        codex::ThreadGoalStatus::UsageLimited => GoalStatus::UsageLimited,
+        codex::ThreadGoalStatus::BudgetLimited => GoalStatus::BudgetLimited,
+        codex::ThreadGoalStatus::Complete => GoalStatus::Complete,
+    }
+}
+
+fn goal_status_to_codex(status: &str) -> Result<codex::ThreadGoalStatus> {
+    Ok(
+        match GoalStatus::parse(status).context("invalid durable Goal status")? {
+            GoalStatus::Active => codex::ThreadGoalStatus::Active,
+            GoalStatus::Paused => codex::ThreadGoalStatus::Paused,
+            GoalStatus::Blocked => codex::ThreadGoalStatus::Blocked,
+            GoalStatus::UsageLimited => codex::ThreadGoalStatus::UsageLimited,
+            GoalStatus::BudgetLimited => codex::ThreadGoalStatus::BudgetLimited,
+            GoalStatus::Complete => codex::ThreadGoalStatus::Complete,
+        },
+    )
+}
+
+fn epoch_seconds(value: Option<&str>) -> i64 {
+    value
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.timestamp())
         .unwrap_or_default()
 }

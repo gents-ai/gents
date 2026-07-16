@@ -456,6 +456,7 @@ async fn async_main() -> Result<()> {
         Command::Request { command } => commands::request::dispatch(command).await,
         Command::Response { command } => commands::response::dispatch(command).await,
         Command::Session { command } => commands::session::dispatch(command).await,
+        Command::Goal { command } => commands::goal::dispatch(command).await,
         Command::Subagent { command } => commands::subagent::dispatch(command).await,
         Command::Demo(args) => commands::demo::demo(args).await,
         Command::NativeFsRunner(_) => unreachable!("handled before telemetry initialization"),

@@ -28,6 +28,88 @@ fn default_backend_id(agent_did: &str) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let model_name = format!("mock-goal-restart-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
+    let server_port = allocate_port()?;
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-goal-restart-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let server_args = [
+        "--codex-shim",
+        "--codex-shim-port",
+        shim_port_string.as_str(),
+        "--codex-shim-poll-ms",
+        "50",
+    ];
+
+    let mut serve = spawn_server_with_env(&home_dir, server_port, &server_args, &[])?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/")).await?;
+    initialize_config_and_thread(&mut ws, &home_dir).await?;
+    let thread_id = start_thread(&mut ws, &home_dir).await?;
+    let objective = format!("survive restart {}", Uuid::new_v4().simple());
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadGoalSet {
+            request_id: request_id(120),
+            params: codex::ThreadGoalSetParams {
+                thread_id: thread_id.clone(),
+                objective: Some(objective.clone()),
+                status: Some(codex::ThreadGoalStatus::Active),
+                token_budget: Some(Some(12_345)),
+            },
+        },
+    )
+    .await?;
+    let set: codex::ThreadGoalSetResponse = read_typed_response(&mut ws, request_id(120)).await?;
+    assert_eq!(set.goal.objective, objective);
+    ws.close(None).await?;
+    drop(serve);
+
+    let mut restarted = spawn_server_with_env(&home_dir, server_port, &server_args, &[])?;
+    wait_for_port(server_port, &mut restarted)?;
+    wait_for_port(shim_port, &mut restarted)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/")).await?;
+    initialize_config_and_thread(&mut ws, &home_dir).await?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadGoalGet {
+            request_id: request_id(121),
+            params: codex::ThreadGoalGetParams {
+                thread_id: thread_id.clone(),
+            },
+        },
+    )
+    .await?;
+    let get: codex::ThreadGoalGetResponse = read_typed_response(&mut ws, request_id(121)).await?;
+    let goal = get.goal.context("goal disappeared across shim restart")?;
+    assert_eq!(goal.thread_id, thread_id);
+    assert_eq!(goal.objective, objective);
+    assert_eq!(goal.status, codex::ThreadGoalStatus::Active);
+    assert_eq!(goal.token_budget, Some(12_345));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_keeps_running_when_codex_shim_port_is_taken() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");

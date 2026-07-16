@@ -54,6 +54,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("EditMatch", Module("conformance/edit_match.rs")),
         ("EventDelivery", Module("conformance/event_delivery.rs")),
         ("Fleet", Module("conformance/fleet.rs")),
+        ("Goals", Module("conformance/goals.rs")),
         ("Identity", Module("conformance/identity.rs")),
         ("InferenceCall", Module("conformance/inference_call.rs")),
         ("ManagedExec", Module("conformance/managed_exec.rs")),

@@ -32,6 +32,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) process_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub(crate) trigger_dispatch_case_count: usize,
     pub(crate) trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
+    #[serde(default)]
+    pub(crate) goal_decision_cases: Vec<LeanGoalDecisionCase>,
     pub(crate) frontend_client_shell_case_count: usize,
     pub(crate) frontend_client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) desktop_client_shell_case_count: usize,
@@ -251,6 +253,21 @@ pub(crate) struct LeanDeviation {
 pub(crate) struct LeanTransitionPair {
     pub(crate) from: String,
     pub(crate) to: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanGoalDecisionCase {
+    pub(crate) name: String,
+    pub(crate) status: String,
+    pub(crate) terminal: String,
+    pub(crate) session_idle: bool,
+    pub(crate) child_exists: bool,
+    pub(crate) budget_reached: bool,
+    pub(crate) has_activity: bool,
+    pub(crate) infrastructure_retries: i64,
+    pub(crate) wrapup_requested: bool,
+    pub(crate) wrapup_completed: bool,
+    pub(crate) expected_decision: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -798,6 +815,10 @@ pub(crate) fn lean_vocabulary_values(domain: &str) -> Vec<&'static str> {
 
 pub(crate) fn lean_trigger_dispatch_cases() -> &'static [LeanTriggerDispatchCase] {
     &lean_contract_snapshot().trigger_dispatch_cases
+}
+
+pub(crate) fn lean_goal_decision_cases() -> &'static [LeanGoalDecisionCase] {
+    &lean_contract_snapshot().goal_decision_cases
 }
 
 pub(crate) fn lean_trigger_dispatch_case_count() -> usize {

@@ -5,15 +5,15 @@ use defra_agent_protocol::graphql::escape_graphql_string;
 use defra_agent_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
     AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
-    CompactionEntryRow, EventTriggerRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow,
-    SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
+    CompactionEntryRow, EventTriggerRow, GoalRow, InferenceBackendRow, InferenceProfileRow,
+    ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
 use defra_agent_protocol::schemas::{
     AGENT_BEHAVIOR_NAME, AGENT_CONVERSATION_NAME, AGENT_MESSAGE_NAME, AGENT_PRINCIPAL_NAME,
     AGENT_REQUEST_NAME, AGENT_RESPONSE_NAME, AGENT_RUNTIME_NAME, AGENT_SESSION_NAME,
     AGENT_TOOL_CALL_NAME, AGENT_TOOL_RESULT_NAME, COMPACTION_ENTRY_NAME, EVENT_TRIGGER_NAME,
-    INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, SCHEDULE_NAME, SKILL_NAME, TASK_NAME,
-    TOOL_SELECTION_NAME, TOOL_SERVICE_REGISTRY_NAME,
+    GOAL_NAME, INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, SCHEDULE_NAME, SKILL_NAME,
+    TASK_NAME, TOOL_SELECTION_NAME, TOOL_SERVICE_REGISTRY_NAME,
 };
 use defra_node::EmbeddedNode;
 use serde::de::DeserializeOwned;
@@ -34,6 +34,7 @@ const AGENT_REQUEST_FIELDS: &str = "request_id agent_did behavior_id session_id 
 const AGENT_RESPONSE_FIELDS: &str = "response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at";
 const AGENT_MESSAGE_FIELDS: &str = "message_key session_id sequence role content timestamp";
 const AGENT_SESSION_FIELDS: &str = "session_id agent_name behavior_id started ended status";
+const GOAL_FIELDS: &str = "goal_id session_id agent_did objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure created_at updated_at";
 const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id message_sequence tool_name tool_call_id args result status lifecycle_state cancel_policy workflow_group_id workflow_role deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms";
 const AGENT_TOOL_RESULT_FIELDS: &str = "agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted";
 const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at";
@@ -56,6 +57,7 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
         responses: load_agent_responses(node).await?,
         messages: load_agent_messages(node).await?,
         sessions: load_agent_sessions(node).await?,
+        goals: load_goals(node).await?,
         tool_calls: load_agent_tool_calls(node).await?,
         tool_results: load_agent_tool_results(node).await?,
         compaction_entries: load_compaction_entries(node).await?,
@@ -206,6 +208,15 @@ pub async fn load_agent_sessions(node: &EmbeddedNode) -> Result<Vec<AgentSession
     .await
 }
 
+pub async fn load_goals(node: &EmbeddedNode) -> Result<Vec<GoalRow>> {
+    load_rows(
+        node,
+        "Goal",
+        &format!("query {{ Goal {{ {GOAL_FIELDS} }} }}"),
+    )
+    .await
+}
+
 pub async fn load_agent_tool_calls(node: &EmbeddedNode) -> Result<Vec<AgentToolCallRow>> {
     load_rows(
         node,
@@ -323,6 +334,7 @@ pub async fn load_full_snapshot_from_graphql(graphql: &str) -> Result<ClientStor
         responses: parse_remote_rows(&data, "AgentResponse")?,
         messages: parse_remote_rows(&data, "AgentMessage")?,
         sessions: parse_remote_rows(&data, "AgentSession")?,
+        goals: parse_remote_rows(&data, "Goal")?,
         tool_calls: parse_remote_rows(&data, "AgentToolCall")?,
         tool_results: parse_remote_rows(&data, "AgentToolResult")?,
         compaction_entries: parse_remote_rows(&data, "CompactionEntry")?,
@@ -382,6 +394,7 @@ pub async fn load_chat_patch_from_graphql(graphql: &str, request_id: &str) -> Re
         responses: parse_remote_rows(&data, "AgentResponse")?,
         messages: parse_remote_rows(&data, "AgentMessage")?,
         sessions: parse_remote_rows(&data, "AgentSession")?,
+        goals: parse_remote_rows(&data, "Goal")?,
         tool_calls: parse_remote_rows(&data, "AgentToolCall")?,
         tool_results: parse_remote_rows(&data, "AgentToolResult")?,
         compaction_entries: parse_remote_rows(&data, "CompactionEntry")?,
@@ -542,6 +555,7 @@ fn append_rows(target: &mut ClientStoreRows, mut incoming: ClientStoreRows) {
     target.responses.append(&mut incoming.responses);
     target.messages.append(&mut incoming.messages);
     target.sessions.append(&mut incoming.sessions);
+    target.goals.append(&mut incoming.goals);
     target.tool_calls.append(&mut incoming.tool_calls);
     target.tool_results.append(&mut incoming.tool_results);
     target
@@ -621,6 +635,7 @@ query DesktopRemoteChatPatch {{
   AgentResponse(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }}
   AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ message_key session_id sequence role content timestamp }}
   AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ session_id agent_name behavior_id started ended status }}
+  Goal(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {GOAL_FIELDS} }}
   AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_TOOL_CALL_FIELDS} }}
   AgentToolResult(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted }}
   CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at }}
@@ -639,6 +654,7 @@ query DesktopRemoteSnapshot {
   AgentResponse { response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }
   AgentMessage { message_key session_id sequence role content timestamp }
   AgentSession { session_id agent_name behavior_id started ended status }
+  Goal { goal_id session_id agent_did objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure created_at updated_at }
   AgentToolCall { tool_call_key session_id request_id message_sequence tool_name tool_call_id args result status lifecycle_state cancel_policy workflow_group_id workflow_role deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms }
   AgentToolResult { agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted }
   CompactionEntry { compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at }
@@ -736,6 +752,14 @@ pub async fn fetch_doc_patch(
                 node,
                 AGENT_SESSION_NAME,
                 &format!("query {{ {AGENT_SESSION_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_SESSION_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        GOAL_NAME => {
+            rows.goals = load_rows(
+                node,
+                GOAL_NAME,
+                &format!("query {{ {GOAL_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {GOAL_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -912,8 +936,8 @@ pub async fn load_agent_scoped_snapshot(
     }
 
     // Session-keyed collections.
-    let (messages, sessions, tool_calls, compaction_entries) = if session_ids.is_empty() {
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new())
+    let (messages, sessions, goals, tool_calls, compaction_entries) = if session_ids.is_empty() {
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
     } else {
         let session_in = session_ids
             .iter()
@@ -937,6 +961,12 @@ pub async fn load_agent_scoped_snapshot(
             ),
         )
         .await?;
+        let goals: Vec<GoalRow> = load_rows(
+            node,
+            "Goal",
+            &format!("query {{ Goal({session_filter}) {{ {GOAL_FIELDS} }} }}"),
+        )
+        .await?;
         let tool_calls: Vec<AgentToolCallRow> = load_rows(
             node,
             AGENT_TOOL_CALL_NAME,
@@ -949,7 +979,7 @@ pub async fn load_agent_scoped_snapshot(
             &format!("query {{ {COMPACTION_ENTRY_NAME}({session_filter}) {{ {COMPACTION_ENTRY_FIELDS} }} }}"),
         )
         .await?;
-        (messages, sessions, tool_calls, compaction_entries)
+        (messages, sessions, goals, tool_calls, compaction_entries)
     };
 
     // Control-plane (load in full; small).
@@ -970,6 +1000,7 @@ pub async fn load_agent_scoped_snapshot(
         responses,
         messages,
         sessions,
+        goals,
         tool_calls,
         tool_results,
         compaction_entries,

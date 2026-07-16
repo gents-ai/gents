@@ -15,6 +15,54 @@ use lean_vocab_test::{
 use serde_json::json;
 
 #[test]
+fn session_snapshot_projects_durable_goal_state() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        goals: vec![GoalRow {
+            goal_id: "goal-1".to_string(),
+            session_id: "session-goal".to_string(),
+            agent_did: "did:defra:amy".to_string(),
+            objective: Some("Ship the durable controller".to_string()),
+            status: Some("active".to_string()),
+            token_budget: Some(50_000),
+            tokens_used: Some(1_200),
+            active_time_seconds: Some(42),
+            active_started_at: Some("2026-07-15T00:00:00Z".to_string()),
+            consecutive_blocked_audits: Some(2),
+            last_blocked_request_id: Some("request-2".to_string()),
+            last_continued_from_request_id: Some("request-2".to_string()),
+            continuation_sequence: Some(3),
+            wrapup_requested: Some(false),
+            wrapup_completed: Some(false),
+            infrastructure_retry_count: Some(0),
+            last_failure: None,
+            created_at: Some("2026-07-15T00:00:00Z".to_string()),
+            updated_at: Some("2026-07-15T00:01:00Z".to_string()),
+        }],
+        ..ClientStoreRows::default()
+    });
+
+    let snapshot = build_session_snapshot_from_store_for_agent(
+        &store,
+        Some("did:defra:amy"),
+        "session-goal",
+        None,
+    )
+    .expect("goal-only session snapshot");
+    let goal = snapshot.goal.expect("durable goal projection");
+    assert_eq!(goal.goal_id, "goal-1");
+    assert_eq!(
+        goal.objective.as_deref(),
+        Some("Ship the durable controller")
+    );
+    assert_eq!(goal.status.as_deref(), Some("active"));
+    assert_eq!(goal.token_budget, Some(50_000));
+    assert_eq!(goal.tokens_used, 1_200);
+    assert_eq!(goal.active_time_seconds, 42);
+    assert_eq!(goal.consecutive_blocked_audits, 2);
+    assert_eq!(goal.continuation_sequence, 3);
+}
+
+#[test]
 fn session_snapshot_can_be_built_without_conversation_row_when_session_is_observed() {
     let store = ClientStore::from_rows(ClientStoreRows {
         sessions: vec![AgentSessionRow {

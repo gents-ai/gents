@@ -155,6 +155,7 @@ impl ClientStore {
             responses: rows.responses,
             messages: rows.messages,
             sessions: rows.sessions,
+            goals: rows.goals,
             tool_calls: rows.tool_calls,
             tool_results: rows.tool_results,
             compaction_entries: rows.compaction_entries,
