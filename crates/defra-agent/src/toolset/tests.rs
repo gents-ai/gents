@@ -1968,3 +1968,41 @@ async fn edit_file_regex_mode_and_insert_after_operation() {
         "timeout = 3600 # was 1800\nretries = 3\n"
     );
 }
+
+// Review finding 2: non-UTF-8 files are rejected, never lossy-rewritten.
+#[tokio::test]
+async fn edit_file_rejects_non_utf8_instead_of_corrupting() {
+    let root = temp_root("defra-agent-edit-non-utf8");
+    let file = root.join("latin1.txt");
+    std::fs::write(&file, b"caf\xe9 target\n").unwrap();
+    let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
+    let err = crate::llm::tool::Tool::call(&tool, edit_args("latin1.txt", "target", "x"))
+        .await
+        .expect_err("non-UTF-8 must be rejected");
+    assert!(err.to_string().contains("UTF-8"), "{err}");
+    // The file is untouched — no U+FFFD rewrite.
+    assert_eq!(std::fs::read(&file).unwrap(), b"caf\xe9 target\n");
+}
+
+// Review finding 1: concurrent edits to the same file serialize — neither
+// lost-updates the other. (Without the per-path lock this interleaves:
+// both read, both write full content, one edit vanishes.)
+#[tokio::test(flavor = "multi_thread")]
+async fn edit_file_concurrent_edits_do_not_lose_updates() {
+    let root = temp_root("defra-agent-edit-concurrent");
+    let file = root.join("both.txt");
+    let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
+    for round in 0..20 {
+        std::fs::write(&file, "alpha: 0\nbeta: 0\n").unwrap();
+        let a = crate::llm::tool::Tool::call(&tool, edit_args("both.txt", "alpha: 0", "alpha: 1"));
+        let b = crate::llm::tool::Tool::call(&tool, edit_args("both.txt", "beta: 0", "beta: 1"));
+        let (ra, rb) = tokio::join!(a, b);
+        ra.unwrap();
+        rb.unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(
+            text, "alpha: 1\nbeta: 1\n",
+            "round {round}: lost update, file is {text:?}"
+        );
+    }
+}

@@ -356,6 +356,11 @@ fn edit_match_near_miss_is_diagnosed_never_applied() {
 }
 
 #[test]
+fn edit_match_overlapping_windows_apply_disjoint_selection() {
+    edit_match::overlapping_windows_apply_disjoint_selection();
+}
+
+#[test]
 fn generated_process_transition_cases_cover_runtime_status_policy_shape() {
     process::generated_process_transition_cases_cover_runtime_status_policy_shape();
 }

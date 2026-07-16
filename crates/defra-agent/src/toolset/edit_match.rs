@@ -172,14 +172,22 @@ fn desugar(req: &EditRequest<'_>) -> (String, String) {
     let old = req.old_text.to_string();
     match req.operation {
         Operation::Replace => (old, req.new_text.to_string()),
-        Operation::InsertAfter => {
-            let repl = format!("{}{}", req.old_text, req.new_text);
-            (old, repl)
-        }
-        Operation::InsertBefore => {
-            let repl = format!("{}{}", req.new_text, req.old_text);
-            (old, repl)
-        }
+        // In regex mode the pattern SOURCE is not the matched text: inserts
+        // must preserve the actual match via whole-match substitution.
+        Operation::InsertAfter => match req.match_mode {
+            MatchMode::Regex => (old, format!("${{0}}{}", req.new_text)),
+            MatchMode::Ladder => {
+                let repl = format!("{}{}", req.old_text, req.new_text);
+                (old, repl)
+            }
+        },
+        Operation::InsertBefore => match req.match_mode {
+            MatchMode::Regex => (old, format!("{}${{0}}", req.new_text)),
+            MatchMode::Ladder => {
+                let repl = format!("{}{}", req.new_text, req.old_text);
+                (old, repl)
+            }
+        },
         Operation::Delete => (old, String::new()),
     }
 }
@@ -207,9 +215,10 @@ fn decide_regex(content: &str, pattern: &str, replacement: &str, replace_all: bo
             .take(5)
             .map(|m| {
                 let line = 1 + content[..m.start()].matches('\n').count();
+                let end = floor_char_boundary(content, m.end().min(m.start() + 120));
                 OccurrencePreview {
                     line,
-                    text: content[m.start()..m.end().min(m.start() + 120)].to_string(),
+                    text: content[m.start()..end].to_string(),
                 }
             })
             .collect();
@@ -260,9 +269,17 @@ fn decide_ladder(
         return finish(content, result, Strategy::Exact, exact.len());
     }
 
-    // Passes 2-4 — line-window matching with progressively coarser keys.
+    // Passes 2-4 — line-window matching with progressively coarser keys. A
+    // pattern ending in a newline splits into a trailing empty line that
+    // would force the NEXT content line to be empty; drop it (and one
+    // trailing newline of the replacement to keep line structure).
     let content_lines: Vec<&str> = content.split('\n').collect();
-    let pattern_lines: Vec<&str> = pattern.split('\n').collect();
+    let mut pattern_lines: Vec<&str> = pattern.split('\n').collect();
+    let mut replacement = replacement;
+    if pattern_lines.len() > 1 && pattern_lines.last() == Some(&"") {
+        pattern_lines.pop();
+        replacement = replacement.strip_suffix('\n').unwrap_or(replacement);
+    }
     for strategy in [Strategy::TrailingWs, Strategy::Trim, Strategy::Unicode] {
         let occ = window_occurrences(&content_lines, &pattern_lines, strategy);
         if occ.is_empty() {
@@ -328,14 +345,25 @@ fn window_occurrences(
     if pattern_lines.is_empty() || pattern_lines.len() > content_lines.len() {
         return Vec::new();
     }
-    (0..=content_lines.len() - pattern_lines.len())
-        .filter(|&i| {
-            pattern_lines
-                .iter()
-                .enumerate()
-                .all(|(k, p)| line_matches(strategy, content_lines[i + k], p))
-        })
-        .collect()
+    // Greedy non-overlapping selection (matching str::match_indices for the
+    // exact pass): overlapping windows would invalidate each other's line
+    // ranges during right-to-left splicing.
+    let mut occurrences = Vec::new();
+    let mut next_free = 0;
+    for i in 0..=content_lines.len() - pattern_lines.len() {
+        if i < next_free {
+            continue;
+        }
+        let matched = pattern_lines
+            .iter()
+            .enumerate()
+            .all(|(k, p)| line_matches(strategy, content_lines[i + k], p));
+        if matched {
+            occurrences.push(i);
+            next_free = i + pattern_lines.len();
+        }
+    }
+    occurrences
 }
 
 /// Splice replacement lines over each matched window, re-indented to the
@@ -453,6 +481,14 @@ pub fn render_diff(original: &str, result: &str) -> String {
         let _ = writeln!(out, " {:>5} | {}", idx + 1, line);
     }
     out.trim_end().to_string()
+}
+
+/// Largest char boundary <= `index` (std's floor_char_boundary is unstable).
+fn floor_char_boundary(s: &str, mut index: usize) -> usize {
+    while index > 0 && !s.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
 }
 
 fn line_at_offset(content: &str, offset: usize) -> &str {
@@ -772,6 +808,85 @@ mod tests {
                     restore_content(&result, norm.ending, norm.had_bom),
                     "\u{FEFF}key: 2\n"
                 );
+            }
+            other => panic!("expected applied, got {other:?}"),
+        }
+    }
+
+    // Review finding 3: overlapping relaxed windows must not panic (or
+    // double-apply) under replace_all — selection is non-overlapping.
+    #[test]
+    fn overlapping_relaxed_windows_do_not_panic_on_replace_all() {
+        let content = "a \na \na ";
+        let mut request = req("a\na", "");
+        request.operation = Operation::Delete;
+        request.replace_all = true;
+        match decide(content, &request) {
+            EditOutcome::Applied { result, .. } => {
+                assert_eq!(
+                    result, "a ",
+                    "one non-overlapping window deleted: {result:?}"
+                );
+            }
+            other => panic!("expected applied, got {other:?}"),
+        }
+    }
+
+    // Review finding 4: ambiguity previews truncate on char boundaries even
+    // when the 120-byte cap lands inside a multibyte character.
+    #[test]
+    fn regex_ambiguity_preview_truncates_on_char_boundary() {
+        let long_unicode = format!("needle {}", "\u{00e9}".repeat(80));
+        let content = format!("{long_unicode}\n{long_unicode}\n");
+        let mut request = req("needle.*", "x");
+        request.match_mode = MatchMode::Regex;
+        match decide(&content, &request) {
+            EditOutcome::Ambiguous { previews, .. } => assert_eq!(previews.len(), 2),
+            other => panic!("expected ambiguous, got {other:?}"),
+        }
+    }
+
+    // Review finding 5: regex-mode inserts preserve the MATCHED TEXT, not
+    // the pattern source.
+    #[test]
+    fn regex_insert_after_preserves_matched_text_not_pattern() {
+        let content = "timeout = 1800\n";
+        let mut request = req(r"timeout = (\d+)", " # bounded");
+        request.match_mode = MatchMode::Regex;
+        request.operation = Operation::InsertAfter;
+        match decide(content, &request) {
+            EditOutcome::Applied { result, .. } => {
+                assert_eq!(result, "timeout = 1800 # bounded\n");
+            }
+            other => panic!("expected applied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn regex_delete_removes_matched_text() {
+        let content = "keep\ndrop_me = 7\n";
+        let mut request = req(r"drop_me = \d+\n", "");
+        request.match_mode = MatchMode::Regex;
+        request.operation = Operation::Delete;
+        match decide(content, &request) {
+            EditOutcome::Applied { result, .. } => assert_eq!(result, "keep\n"),
+            other => panic!("expected applied, got {other:?}"),
+        }
+    }
+
+    // Review finding 6: a pattern ending in a newline must still match via
+    // the relaxed rungs (the trailing empty pattern line is dropped, from
+    // both pattern and replacement).
+    #[test]
+    fn trailing_newline_pattern_matches_via_relaxed_rungs() {
+        let content = "foo\nnext\n";
+        let out = decide(content, &req("foo   \n", "bar\n"));
+        match out {
+            EditOutcome::Applied {
+                result, strategy, ..
+            } => {
+                assert_eq!(strategy, Strategy::TrailingWs);
+                assert_eq!(result, "bar\nnext\n");
             }
             other => panic!("expected applied, got {other:?}"),
         }

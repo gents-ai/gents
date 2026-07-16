@@ -83,6 +83,48 @@ theorem ladderMatch_sound {doc pat : Doc} {s : Strategy} {occ : List Nat}
   subst hocc
   exact occurrences_sound fold hi
 
+/-! ## E9 — applied windows are pairwise disjoint (no splice overlap) -/
+
+theorem selectDisjointGo_subset {len : Nat} :
+    ∀ (fuel : Nat) (occ : List Nat) (i : Nat),
+      i ∈ selectDisjointGo len fuel occ → i ∈ occ := by
+  intro fuel
+  induction fuel with
+  | zero => intro occ i h; simp [selectDisjointGo] at h
+  | succ n ih =>
+    intro occ i h
+    cases occ with
+    | nil => simp [selectDisjointGo] at h
+    | cons head rest =>
+      simp only [selectDisjointGo, List.mem_cons] at h
+      rcases h with rfl | h
+      · exact List.mem_cons_self ..
+      · exact List.mem_cons_of_mem _ (List.mem_filter.mp (ih _ _ h)).1
+
+theorem selectDisjoint_subset {len : Nat} {occ : List Nat} {i : Nat}
+    (h : i ∈ selectDisjoint len occ) : i ∈ occ :=
+  selectDisjointGo_subset _ _ _ h
+
+/-- Selected positions are pairwise at least a full window apart: with
+    ascending inputs (which `occurrences` produces by construction), splice
+    ranges can never overlap — the runtime panic class the review found. -/
+theorem selectDisjoint_pairwise_gap {len : Nat} :
+    ∀ (fuel : Nat) (occ : List Nat),
+      (selectDisjointGo len fuel occ).Pairwise (fun a b => a + len ≤ b) := by
+  intro fuel
+  induction fuel with
+  | zero => intro occ; simp [selectDisjointGo]
+  | succ n ih =>
+    intro occ
+    cases occ with
+    | nil => simp [selectDisjointGo]
+    | cons head rest =>
+      simp only [selectDisjointGo]
+      refine List.Pairwise.cons ?_ (ih _)
+      intro b hb
+      have hmem := selectDisjointGo_subset (len := len) _ _ _ hb
+      simpa using (List.mem_filter.mp hmem).2
+
 /-! ## E1 — exact matches are never shadowed -/
 
 theorem ladderMatch_exact_priority {doc pat : Doc}
@@ -114,13 +156,15 @@ theorem ambiguous_needs_multiple {doc : Doc} {req : Request} {s : Strategy}
     split at h
     · split at h <;> exact absurd h (by simp)
     · rename_i hcond
-      have hlen : occM.length ≠ 1 := fun h1 => hcond (Or.inl h1)
+      have hlen : (selectDisjoint req.pattern.length occM).length ≠ 1 :=
+        fun h1 => hcond (Or.inl h1)
       have hall : req.replaceAll ≠ true := fun ha => hcond (Or.inr ha)
       simp only [Outcome.ambiguous.injEq] at h
       obtain ⟨hs, hn⟩ := h
       subst hn
       refine ⟨?_, Bool.eq_false_iff.mpr hall⟩
-      -- occurrences from a successful ladder match are nonempty
+      -- occurrences from a successful ladder match are nonempty, and the
+      -- disjoint selection always keeps the head
       have hne : occM ≠ [] := by
         have aux : ∀ ss : List Strategy,
             ladderMatch.go fold doc req.pattern ss = some (sM, occM) →
@@ -137,7 +181,12 @@ theorem ambiguous_needs_multiple {doc : Doc} {req : Request} {s : Strategy}
               cases hgo
               simpa [List.isEmpty_iff] using hnonempty
         exact aux Strategy.ladder heq
-      have hpos : 0 < occM.length := List.length_pos_iff.mpr hne
+      have hsel : selectDisjoint req.pattern.length occM ≠ [] := by
+        cases occM with
+        | nil => exact absurd rfl hne
+        | cons head rest => simp [selectDisjoint, selectDisjointGo]
+      have hpos : 0 < (selectDisjoint req.pattern.length occM).length :=
+        List.length_pos_iff.mpr hsel
       omega
 
 /-! ## E5 + E8 — one decision, honest outcomes -/
@@ -175,9 +224,10 @@ theorem applied_changes {doc result : Doc} {req : Request} {s : Strategy}
 theorem noop_is_honest {doc : Doc} {req : Request} {s : Strategy}
     {occ : List Nat}
     (hl : ladderMatch fold doc req.pattern = some (s, occ))
-    (hg : occ.length = 1 ∨ req.replaceAll = true)
+    (hg : (selectDisjoint req.pattern.length occ).length = 1
+      ∨ req.replaceAll = true)
     (h : decideMatched fold doc req = .noop s) :
-    chosenResult s doc req occ = doc := by
+    chosenResult s doc req (selectDisjoint req.pattern.length occ) = doc := by
   unfold decideMatched at h
   rw [hl] at h
   simp only [hg, if_true] at h

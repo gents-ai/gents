@@ -127,6 +127,25 @@ pub(super) fn operations_desugar_onto_the_single_matcher() {
     }
 }
 
+/// E9 — overlapping relaxed windows: the applied selection is pairwise
+/// disjoint (greedy), so replace_all splicing can never corrupt or panic.
+pub(super) fn overlapping_windows_apply_disjoint_selection() {
+    let content = "a \na \na ";
+    let mut req = ladder_req("a\na", "", true);
+    req.operation = Operation::Delete;
+    match decide(content, &req) {
+        EditOutcome::Applied {
+            result,
+            replacements,
+            ..
+        } => {
+            assert_eq!(replacements, 1);
+            assert_eq!(result, "a ");
+        }
+        other => panic!("E9 violated: {other:?}"),
+    }
+}
+
 /// Diagnostics discipline: similarity scoring may only ever surface in
 /// NotFound diagnostics — a below-ladder near-miss must not be applied.
 pub(super) fn near_miss_is_diagnosed_never_applied() {

@@ -75,6 +75,20 @@ where
       let occ := occurrences fold s doc pat
       if occ.isEmpty then go rest else some (s, occ)
 
+/-- Greedy non-overlapping selection from (ascending) match positions:
+    overlapping windows would invalidate each other's line ranges when
+    splicing. Mirrors the runtime's `window_occurrences` selection. Fuel
+    form (fuel = input length suffices: filtering never grows the list)
+    keeps the proofs structural. -/
+def selectDisjointGo (len : Nat) : Nat → List Nat → List Nat
+  | 0, _ => []
+  | _, [] => []
+  | fuel + 1, i :: rest =>
+    i :: selectDisjointGo len fuel (rest.filter (fun j => i + len ≤ j))
+
+def selectDisjoint (len : Nat) (occ : List Nat) : List Nat :=
+  selectDisjointGo len occ.length occ
+
 /-- Splice `repl` over the `len`-line window at `i`. -/
 def splice (doc : Doc) (i len : Nat) (repl : Doc) : Doc :=
   doc.take i ++ repl ++ doc.drop (i + len)
@@ -135,11 +149,13 @@ def decideMatched (fold : Char → Char) (doc : Doc) (req : Request) : Outcome :
   match ladderMatch fold doc req.pattern with
   | none => .notFound
   | some (s, occ) =>
-    if occ.length = 1 ∨ req.replaceAll = true then
-      if chosenResult s doc req occ = doc then .noop s
-      else .applied (chosenResult s doc req occ) s
+    if (selectDisjoint req.pattern.length occ).length = 1
+        ∨ req.replaceAll = true then
+      if chosenResult s doc req (selectDisjoint req.pattern.length occ) = doc
+      then .noop s
+      else .applied (chosenResult s doc req (selectDisjoint req.pattern.length occ)) s
     else
-      .ambiguous s occ.length
+      .ambiguous s (selectDisjoint req.pattern.length occ).length
 
 /-- The single pure decision shared by dry-run and apply. Order of gates:
     stale precondition, ladder match, uniqueness, no-op. -/

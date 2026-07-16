@@ -3,6 +3,7 @@
 // each tool into its own file would scatter the shared defaults and make
 // cross-tool consistency harder to verify.
 use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
@@ -23,6 +24,23 @@ use super::shared::{cap_output, render_file_contents, ToolContext, ToolError};
 fn content_hash(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+/// Per-path serialization for edit_file's read → hash-check → match → write
+/// sequence: without it, two concurrent edits can both validate the same
+/// pre-edit hash and overwrite each other (lost update). Scope: WITHIN this
+/// process, keyed by canonical path. External writers are outside the lock —
+/// they are caught by the expected_content_hash check at entry and otherwise
+/// race as ordinary last-writer-wins POSIX writes (#724 documents the
+/// optimistic-concurrency boundary; there is no OS-level file lock).
+static EDIT_LOCKS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+fn edit_lock_for(path: &Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut locks = EDIT_LOCKS.lock().expect("edit lock registry poisoned");
+    locks.entry(key).or_default().clone()
 }
 
 const OUTPUT_META_PREFIX: &str = "defra_fs: ";
@@ -593,6 +611,8 @@ impl Tool for EditFileTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let path = self.context.resolve_existing_file(&args.path)?;
         let display = self.context.display_path(&path);
+        let lock = edit_lock_for(&path);
+        let _guard = lock.lock().await;
         let raw = tokio::fs::read(&path).await?;
         let pre_edit_hash = content_hash(&raw);
 
@@ -628,7 +648,14 @@ impl Tool for EditFileTool {
             }
         };
 
-        let raw_text = String::from_utf8_lossy(&raw).into_owned();
+        // Strict UTF-8: a lossy conversion followed by a full-file rewrite
+        // would silently replace every invalid byte with U+FFFD.
+        let raw_text = String::from_utf8(raw).map_err(|error| {
+            anyhow!(
+                "{display} is not valid UTF-8 (first invalid byte at offset {}); edit_file only edits UTF-8 text files",
+                error.utf8_error().valid_up_to()
+            )
+        })?;
         let normalized = edit_match::normalize_content(&raw_text);
         let old_text = args.old_text.replace("\r\n", "\n");
         let new_text = args.new_text.replace("\r\n", "\n");
