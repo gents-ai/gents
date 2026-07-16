@@ -22,6 +22,9 @@ pub(crate) struct LeanCodexShimSubagentToolCase {
     pub(crate) collab_tool: Option<String>,
     pub(crate) reciprocal_link: bool,
     pub(crate) projection_settled: bool,
+    pub(crate) link_settle_expired: bool,
+    pub(crate) runtime_tool_status: Option<String>,
+    pub(crate) projected_collab_status: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -76,6 +79,7 @@ pub(crate) struct LeanCodexShimReasoningProjectionCase {
     pub(crate) witness: String,
     pub(crate) lean_theorems: Vec<String>,
     pub(crate) item_open: bool,
+    pub(crate) item_completed: bool,
     pub(crate) cursor_primed: bool,
     pub(crate) streamed_text: Option<String>,
     pub(crate) live_delta: Option<String>,

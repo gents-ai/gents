@@ -2594,8 +2594,8 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
     .context("timed out waiting for appended child reasoning delta")??;
     assert_eq!(appended_reasoning, reasoning_tail);
 
-    let durable_reasoning = format!("{live_child_reasoning}{reasoning_tail}; durable message wins");
-    let child_completed_at_ms = complete_child_materialized_response(
+    let durable_reasoning = format!("{live_child_reasoning}{reasoning_tail}");
+    let child_materialized_at_ms = materialize_child_response_before_terminal(
         &graphql,
         &agent_did,
         &child_request_id,
@@ -2603,15 +2603,20 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         &durable_reasoning,
     )
     .await?;
-    let (
-        completed_reasoning,
-        durable_delta,
-        completed,
-        child_thread_status,
-        projected_completed_at_ms,
-    ) = tokio::time::timeout(
+    let (completed_reasoning, projected_materialized_at_ms) = tokio::time::timeout(
         Duration::from_secs(15),
-        read_reasoning_completion_and_collab_status(
+        read_child_reasoning_completion(&mut ws, &child_thread_id, &child_request_id),
+    )
+    .await
+    .context("timed out waiting for reasoning completion at the final reset-tail window")??;
+    assert_eq!(completed_reasoning, durable_reasoning);
+    assert_eq!(projected_materialized_at_ms, child_materialized_at_ms);
+
+    let child_completed_at_ms =
+        finalize_child_response_after_materialization(&graphql, &child_request_id).await?;
+    let (completed, child_thread_status, projected_completed_at_ms) = tokio::time::timeout(
+        Duration::from_secs(15),
+        read_terminal_child_without_reasoning_replay(
             &mut ws,
             &child_thread_id,
             &child_request_id,
@@ -2619,9 +2624,7 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         ),
     )
     .await
-    .context("timed out waiting for durable reasoning and refreshed subagent state")??;
-    assert_eq!(completed_reasoning, durable_reasoning);
-    assert_eq!(durable_delta, "; durable message wins");
+    .context("timed out waiting for terminal child state after final reset-tail window")??;
     assert_eq!(completed, codex::CollabAgentStatus::Completed);
     assert_eq!(child_thread_status, codex::ThreadStatus::Idle);
     assert_eq!(projected_completed_at_ms, child_completed_at_ms);
@@ -4794,7 +4797,7 @@ async fn update_streaming_response_reasoning(
     Ok(())
 }
 
-async fn complete_child_materialized_response(
+async fn materialize_child_response_before_terminal(
     graphql: &str,
     agent_did: &str,
     request_id: &str,
@@ -4802,7 +4805,7 @@ async fn complete_child_materialized_response(
     reasoning: &str,
 ) -> Result<i64> {
     let now = chrono::Utc::now().to_rfc3339();
-    let completed_at_ms = chrono::DateTime::parse_from_rfc3339(&now)?.timestamp_millis();
+    let materialized_at_ms = chrono::DateTime::parse_from_rfc3339(&now)?.timestamp_millis();
     let message_key = format!("{session_id}:2");
     let content = r#"{"role":"assistant","id":null,"content":[{"text":"durable child answer"}]}"#;
     let mutation = format!(
@@ -4823,9 +4826,36 @@ async fn complete_child_materialized_response(
                 input: {{
                     content: "",
                     reasoning: "",
-                    status: "complete",
+                    progress_seq: 2,
                     materialized_message_sequence: 2,
-                    materialized_at: "{now}",
+                    materialized_at: "{now}"
+                }}
+            ) {{ _docID }}
+        }}"#,
+        message_key = escape_graphql_string(&message_key),
+        session_id = escape_graphql_string(session_id),
+        agent_did = escape_graphql_string(agent_did),
+        request_id = escape_graphql_string(request_id),
+        content = escape_graphql_string(content),
+        reasoning = escape_graphql_string(reasoning),
+        now = escape_graphql_string(&now),
+    );
+    graphql_query(graphql, &mutation).await?;
+    Ok(materialized_at_ms)
+}
+
+async fn finalize_child_response_after_materialization(
+    graphql: &str,
+    request_id: &str,
+) -> Result<i64> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let completed_at_ms = chrono::DateTime::parse_from_rfc3339(&now)?.timestamp_millis();
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentResponse(
+                filter: {{ response_key: {{ _eq: "{request_id}" }} }},
+                input: {{
+                    status: "complete",
                     completed_at: "{now}"
                 }}
             ) {{ _docID }}
@@ -4838,12 +4868,7 @@ async fn complete_child_materialized_response(
                 }}
             ) {{ _docID }}
         }}"#,
-        message_key = escape_graphql_string(&message_key),
-        session_id = escape_graphql_string(session_id),
-        agent_did = escape_graphql_string(agent_did),
         request_id = escape_graphql_string(request_id),
-        content = escape_graphql_string(content),
-        reasoning = escape_graphql_string(reasoning),
         now = escape_graphql_string(&now),
     );
     graphql_query(graphql, &mutation).await?;
@@ -5542,23 +5567,49 @@ async fn read_child_reasoning_delta(
     }
 }
 
-async fn read_reasoning_completion_and_collab_status(
+async fn read_child_reasoning_completion(
+    ws: &mut ShimWebSocket,
+    child_thread_id: &str,
+    child_turn_id: &str,
+) -> Result<(String, i64)> {
+    loop {
+        match read_jsonrpc(ws).await? {
+            codex::JSONRPCMessage::Notification(notification) => {
+                if let codex::ServerNotification::ItemCompleted(completed) =
+                    server_notification_from_jsonrpc(notification)?
+                {
+                    if completed.thread_id == child_thread_id && completed.turn_id == child_turn_id
+                    {
+                        if let codex::ThreadItem::Reasoning {
+                            content, summary, ..
+                        } = completed.item
+                        {
+                            assert!(summary.is_empty());
+                            return Ok((content.concat(), completed.completed_at_ms));
+                        }
+                    }
+                }
+            }
+            codex::JSONRPCMessage::Error(error) => {
+                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+            }
+            codex::JSONRPCMessage::Request(request) => {
+                bail!("Codex shim sent unexpected server request: {request:?}");
+            }
+            codex::JSONRPCMessage::Response(_) => {}
+        }
+    }
+}
+
+async fn read_terminal_child_without_reasoning_replay(
     ws: &mut ShimWebSocket,
     child_thread_id: &str,
     child_turn_id: &str,
     expected_tool_call_key: &str,
-) -> Result<(
-    String,
-    String,
-    codex::CollabAgentStatus,
-    codex::ThreadStatus,
-    i64,
-)> {
-    let mut completed_reasoning = None;
-    let mut durable_delta = None;
+) -> Result<(codex::CollabAgentStatus, codex::ThreadStatus, i64)> {
     let mut child_status = None;
     let mut thread_status = None;
-    let mut completed_at_ms = None;
+    let mut agent_completed_at_ms = None;
     loop {
         match read_jsonrpc(ws).await? {
             codex::JSONRPCMessage::Notification(notification) => {
@@ -5566,17 +5617,34 @@ async fn read_reasoning_completion_and_collab_status(
                     codex::ServerNotification::ReasoningTextDelta(delta)
                         if delta.thread_id == child_thread_id && delta.turn_id == child_turn_id =>
                     {
-                        durable_delta = Some(delta.delta);
+                        bail!(
+                            "terminal durable reasoning replayed after reset-tail completion: {}",
+                            delta.delta
+                        );
+                    }
+                    codex::ServerNotification::ItemStarted(started)
+                        if started.thread_id == child_thread_id
+                            && started.turn_id == child_turn_id
+                            && matches!(started.item, codex::ThreadItem::Reasoning { .. }) =>
+                    {
+                        bail!(
+                            "terminal durable reasoning opened a duplicate item after reset-tail"
+                        );
                     }
                     codex::ServerNotification::ItemCompleted(completed) => match completed.item {
-                        codex::ThreadItem::Reasoning {
-                            content, summary, ..
-                        } if completed.thread_id == child_thread_id
-                            && completed.turn_id == child_turn_id =>
+                        codex::ThreadItem::Reasoning { .. }
+                            if completed.thread_id == child_thread_id
+                                && completed.turn_id == child_turn_id =>
                         {
-                            assert!(summary.is_empty());
-                            completed_reasoning = Some(content.concat());
-                            completed_at_ms = Some(completed.completed_at_ms);
+                            bail!(
+                                "terminal durable reasoning completed a duplicate item after reset-tail"
+                            );
+                        }
+                        codex::ThreadItem::AgentMessage { .. }
+                            if completed.thread_id == child_thread_id
+                                && completed.turn_id == child_turn_id =>
+                        {
+                            agent_completed_at_ms = Some(completed.completed_at_ms);
                         }
                         codex::ThreadItem::CollabAgentToolCall {
                             id, agents_states, ..
@@ -5604,20 +5672,13 @@ async fn read_reasoning_completion_and_collab_status(
             codex::JSONRPCMessage::Response(_) => {}
         }
 
-        if completed_reasoning.is_some()
-            && durable_delta.is_some()
-            && child_status.is_some()
-            && thread_status.is_some()
-            && completed_at_ms.is_some()
-        {
+        if child_status.is_some() && thread_status.is_some() && agent_completed_at_ms.is_some() {
             return Ok((
-                completed_reasoning.take().expect("checked reasoning"),
-                durable_delta.take().expect("checked durable delta"),
                 child_status.take().expect("checked child status"),
                 thread_status.take().expect("checked thread status"),
-                completed_at_ms
+                agent_completed_at_ms
                     .take()
-                    .expect("checked completion timestamp"),
+                    .expect("checked agent completion timestamp"),
             ));
         }
     }

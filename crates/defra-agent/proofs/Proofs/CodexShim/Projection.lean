@@ -92,10 +92,44 @@ theorem known_subagent_control_projects_collab
 theorem non_control_tool_stays_mcp :
     projectSubagentControl .other = none := rfl
 
+/-- Lifecycle of the Codex collaboration operation itself. This is distinct
+from the child agent state carried in `agentsStates`. -/
+inductive CollabToolCallPhase where
+  | inProgress
+  | completed
+  | failed
+  deriving DecidableEq, Repr
+
+/-- A linked spawn operation is complete once the child exists, even while the
+runtime bridge remains open to follow that child's background lifecycle. Tool
+failure remains authoritative; non-spawn controls retain their runtime phase. -/
+def projectCollabToolCallPhase
+    (tool : SubagentControlTool)
+    (hasReciprocalLink : Bool)
+    (runtimePhase : CollabToolCallPhase) : CollabToolCallPhase :=
+  match runtimePhase with
+  | .failed => .failed
+  | phase =>
+      if tool == .spawn && hasReciprocalLink then .completed else phase
+
+theorem linked_spawn_operation_completes_while_child_runs :
+    projectCollabToolCallPhase .spawn true .inProgress = .completed := rfl
+
+theorem failed_spawn_operation_stays_failed (hasReciprocalLink : Bool) :
+    projectCollabToolCallPhase .spawn hasReciprocalLink .failed = .failed := rfl
+
+theorem non_spawn_control_retains_runtime_phase
+    (tool : SubagentControlTool)
+    (phase : CollabToolCallPhase)
+    (h : tool ≠ .spawn) :
+    projectCollabToolCallPhase tool true phase = phase := by
+  cases phase <;> simp [projectCollabToolCallPhase, h]
+
 /-- Whether a subagent control row is ready to be shown to Codex. A reciprocal
 link authorizes the native collaboration item. While that link may still
-replicate, the item stays deferred; once the enclosing projection is settled,
-the durable MCP row is the visibility-preserving fallback. -/
+replicate, the item stays deferred, including for a bounded settle window after
+the enclosing request becomes terminal. Once that window expires, the durable
+MCP row is the visibility-preserving fallback. -/
 inductive SubagentItemProjection where
   | collab (tool : CollabTool)
   | mcp
@@ -104,33 +138,41 @@ inductive SubagentItemProjection where
 
 def projectSubagentItem
     (tool : SubagentControlTool)
-    (hasReciprocalLink projectionSettled : Bool) : SubagentItemProjection :=
+    (hasReciprocalLink projectionSettled linkSettleExpired : Bool) :
+    SubagentItemProjection :=
   match projectSubagentControl tool with
   | none => .mcp
   | some collab =>
       if hasReciprocalLink then .collab collab
-      else if projectionSettled then .mcp
+      else if projectionSettled && linkSettleExpired then .mcp
       else .deferred
 
 theorem linked_subagent_control_projects_native
     (tool : SubagentControlTool)
     (collab : CollabTool)
     (h : projectSubagentControl tool = some collab) :
-    projectSubagentItem tool true false = .collab collab := by
+    projectSubagentItem tool true false false = .collab collab := by
   simp [projectSubagentItem, h]
 
 theorem unresolved_subagent_control_defers_while_open
     (tool : SubagentControlTool)
     (collab : CollabTool)
     (h : projectSubagentControl tool = some collab) :
-    projectSubagentItem tool false false = .deferred := by
+    projectSubagentItem tool false false false = .deferred := by
   simp [projectSubagentItem, h]
 
-theorem settled_unresolved_subagent_control_stays_visible
+theorem settled_unresolved_subagent_control_defers_during_link_window
     (tool : SubagentControlTool)
     (collab : CollabTool)
     (h : projectSubagentControl tool = some collab) :
-    projectSubagentItem tool false true = .mcp := by
+    projectSubagentItem tool false true false = .deferred := by
+  simp [projectSubagentItem, h]
+
+theorem expired_unresolved_subagent_control_stays_visible
+    (tool : SubagentControlTool)
+    (collab : CollabTool)
+    (h : projectSubagentControl tool = some collab) :
+    projectSubagentItem tool false true true = .mcp := by
   simp [projectSubagentItem, h]
 
 /-- Codex's per-agent status vocabulary.  `shutdown` and `notFound` are local
@@ -339,6 +381,7 @@ inductive ReasoningProjectionEvent where
 /-- Facts available at one reasoning projection observation. -/
 structure ReasoningProjectionObservation where
   itemOpen : Bool
+  itemCompleted : Bool
   cursorPrimed : Bool
   streamedText : Option String
   liveDelta : Option String
@@ -362,7 +405,7 @@ def reasoningTextForObservation
   match nonemptyReasoningText obs.liveDelta with
   | some text => some text
   | none =>
-      if obs.terminal && !obs.itemOpen && !obs.cursorPrimed then
+      if obs.terminal && !obs.itemOpen && !obs.itemCompleted && !obs.cursorPrimed then
         nonemptyReasoningText obs.durableText
       else
         none
@@ -378,18 +421,22 @@ def reasoningProjectionEvents
     | none => []
   let openAfter := obs.itemOpen || text.isSome
   let completionEvents :=
-    if obs.terminal && openAfter then [.completed] else []
+    if obs.terminal && openAfter && !obs.itemCompleted then [.completed] else []
   startEvents ++ deltaEvents ++ completionEvents
 
 /-- Completed-item content comes from the durable materialized message, never
 from the bounded live preview, when that durable value exists. -/
 def completedReasoningText
     (obs : ReasoningProjectionObservation) : Option String :=
-  if obs.terminal then preferReasoningText obs.durableText obs.streamedText else none
+  if obs.terminal && !obs.itemCompleted then
+    preferReasoningText obs.durableText obs.streamedText
+  else
+    none
 
 theorem first_live_reasoning_projects_raw_lifecycle :
     reasoningProjectionEvents
       { itemOpen := false
+      , itemCompleted := false
       , cursorPrimed := false
       , streamedText := none
       , liveDelta := some "inspect"
@@ -400,6 +447,7 @@ theorem first_live_reasoning_projects_raw_lifecycle :
 theorem appended_live_reasoning_projects_only_delta :
     reasoningProjectionEvents
       { itemOpen := true
+      , itemCompleted := false
       , cursorPrimed := false
       , streamedText := some "inspect"
       , liveDelta := some " then test"
@@ -410,6 +458,7 @@ theorem appended_live_reasoning_projects_only_delta :
 theorem primed_resume_without_new_reasoning_replays_nothing :
     reasoningProjectionEvents
       { itemOpen := true
+      , itemCompleted := false
       , cursorPrimed := true
       , streamedText := some "already visible"
       , liveDelta := none
@@ -419,6 +468,7 @@ theorem primed_resume_without_new_reasoning_replays_nothing :
 theorem terminal_open_reasoning_completes_without_replay :
     reasoningProjectionEvents
       { itemOpen := true
+      , itemCompleted := false
       , cursorPrimed := false
       , streamedText := some "inspect then test"
       , liveDelta := none
@@ -428,6 +478,7 @@ theorem terminal_open_reasoning_completes_without_replay :
 theorem terminal_durable_first_observation_projects_lifecycle :
     reasoningProjectionEvents
       { itemOpen := false
+      , itemCompleted := false
       , cursorPrimed := false
       , streamedText := none
       , liveDelta := none
@@ -438,6 +489,7 @@ theorem terminal_durable_first_observation_projects_lifecycle :
 theorem absent_reasoning_projects_nothing :
     reasoningProjectionEvents
       { itemOpen := false
+      , itemCompleted := false
       , cursorPrimed := false
       , streamedText := none
       , liveDelta := none
@@ -447,6 +499,7 @@ theorem absent_reasoning_projects_nothing :
 theorem terminal_completed_item_uses_durable_reasoning :
     completedReasoningText
       { itemOpen := true
+      , itemCompleted := false
       , cursorPrimed := false
       , streamedText := some "bounded preview"
       , liveDelta := none
@@ -456,6 +509,7 @@ theorem terminal_completed_item_uses_durable_reasoning :
 theorem terminal_without_durable_reasoning_keeps_streamed_text :
     completedReasoningText
       { itemOpen := true
+      , itemCompleted := false
       , cursorPrimed := false
       , streamedText := some "streamed reasoning"
       , liveDelta := none
@@ -465,12 +519,33 @@ theorem terminal_without_durable_reasoning_keeps_streamed_text :
 theorem terminal_durable_suffix_projects_before_completion :
     reasoningProjectionEvents
       { itemOpen := true
+      , itemCompleted := false
       , cursorPrimed := false
       , streamedText := some "inspect then test"
       , liveDelta := some "; durable suffix"
       , durableText := some "inspect then test; durable suffix"
       , terminal := true } =
       [.rawTextDelta "; durable suffix", .completed] := rfl
+
+theorem reset_before_terminal_suppresses_durable_replay :
+    reasoningProjectionEvents
+      { itemOpen := false
+      , itemCompleted := true
+      , cursorPrimed := false
+      , streamedText := none
+      , liveDelta := none
+      , durableText := some "already completed reasoning"
+      , terminal := true } = [] := rfl
+
+theorem reset_before_terminal_has_no_second_completed_text :
+    completedReasoningText
+      { itemOpen := false
+      , itemCompleted := true
+      , cursorPrimed := false
+      , streamedText := none
+      , liveDelta := none
+      , durableText := some "already completed reasoning"
+      , terminal := true } = none := rfl
 
 theorem nonterminal_without_live_reasoning_projects_nothing
     (obs : ReasoningProjectionObservation)

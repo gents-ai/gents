@@ -32,6 +32,10 @@ impl ReasoningCompletionTracker {
         self.item_ids.contains(item_id)
     }
 
+    fn is_empty(&self) -> bool {
+        self.item_ids.is_empty()
+    }
+
     fn record(&mut self, item_id: String) -> bool {
         self.item_ids.insert(item_id)
     }
@@ -90,9 +94,7 @@ impl<'a> TurnProjection<'a> {
         if self.response_started_at_ms.is_none() {
             self.response_started_at_ms = started_at_ms;
         }
-        if self.response_completed_at_ms.is_none() {
-            self.response_completed_at_ms = completed_at_ms;
-        }
+        observe_latest_response_completion(&mut self.response_completed_at_ms, completed_at_ms);
     }
 
     pub(super) fn reset_response_timing(&mut self) {
@@ -163,6 +165,14 @@ impl<'a> TurnProjection<'a> {
             return Ok(());
         }
         let durable_text = durable_text.filter(|text| !text.trim().is_empty());
+        if durable_text.is_some()
+            && !terminal_reasoning_backfill_allowed(
+                self.active_reasoning_item_id.is_some(),
+                !self.completed_reasoning_items.is_empty(),
+            )
+        {
+            return Ok(());
+        }
         if self.active_reasoning_item_id.is_none() {
             if let Some(text) = durable_text {
                 self.append_reasoning_delta(outbound, item_id, text).await?;
@@ -728,11 +738,24 @@ fn suppress_blank_agent_delta(active_agent_text: &str, delta: &str) -> bool {
     delta.trim().is_empty() && active_agent_text.trim().is_empty()
 }
 
+fn terminal_reasoning_backfill_allowed(item_open: bool, item_completed: bool) -> bool {
+    item_open || !item_completed
+}
+
+fn observe_latest_response_completion(current: &mut Option<i64>, observed: Option<i64>) {
+    if observed.is_some() {
+        *current = observed;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use codex_app_server_protocol as codex;
 
-    use super::{reasoning_item, suppress_blank_agent_delta, ReasoningCompletionTracker};
+    use super::{
+        observe_latest_response_completion, reasoning_item, suppress_blank_agent_delta,
+        terminal_reasoning_backfill_allowed, ReasoningCompletionTracker,
+    };
 
     #[test]
     fn suppresses_blank_delta_that_would_open_phantom_agent_stream() {
@@ -757,6 +780,22 @@ mod tests {
         assert!(completed.record("reasoning-1".to_string()));
         assert!(completed.contains("reasoning-1"));
         assert!(!completed.record("reasoning-1".to_string()));
+    }
+
+    #[test]
+    fn reset_before_terminal_suppresses_durable_backfill() {
+        assert!(terminal_reasoning_backfill_allowed(false, false));
+        assert!(terminal_reasoning_backfill_allowed(true, true));
+        assert!(!terminal_reasoning_backfill_allowed(false, true));
+    }
+
+    #[test]
+    fn final_response_completion_overwrites_prior_materialization_time() {
+        let mut completed_at_ms = None;
+        observe_latest_response_completion(&mut completed_at_ms, Some(100));
+        observe_latest_response_completion(&mut completed_at_ms, None);
+        observe_latest_response_completion(&mut completed_at_ms, Some(250));
+        assert_eq!(completed_at_ms, Some(250));
     }
 
     #[test]

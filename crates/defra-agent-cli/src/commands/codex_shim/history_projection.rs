@@ -5,7 +5,7 @@ use codex_app_server_protocol as codex;
 use codex_protocol::models::MessagePhase;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent_protocol::transcript::present_persisted_message;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
 
 use super::command_projection::{
@@ -30,32 +30,32 @@ use super::ShimState;
 #[derive(Debug, Clone, Deserialize)]
 struct RequestRow {
     request_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     content: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     status: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     lifecycle_state: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     failure_reason: String,
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
     terminalized_at: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     metadata: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     execution_origin: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct ResponseRow {
     request_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     content: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     reasoning: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     status: String,
     #[serde(default)]
     error_message: Option<String>,
@@ -81,7 +81,7 @@ struct ToolRow {
 struct CompactionRow {
     request_id: String,
     call_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     call_state: String,
     #[serde(default)]
     call_seq: i64,
@@ -90,12 +90,19 @@ struct CompactionRow {
 #[derive(Debug, Clone, Deserialize)]
 struct MessageRow {
     sequence: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     role: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     content: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     reasoning: String,
+}
+
+fn deserialize_nullable_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 pub(super) async fn load_thread_turns(
@@ -706,7 +713,7 @@ fn project_tool(
     tool: &DefraToolCallProgress,
     projection_settled: bool,
 ) -> Option<codex::ThreadItem> {
-    match tool_projection_status_with_settled(tool, projection_settled) {
+    match tool_projection_status_with_settled(tool, projection_settled, true) {
         ToolProjectionStatus::Mcp(status) => Some(defra_tool_item(tool, status)),
         ToolProjectionStatus::Command(status) => {
             Some(command_execution_item(&record.cwd, tool, status))
@@ -906,6 +913,43 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    #[test]
+    fn replicated_nullable_history_scalars_decode_as_empty_text() {
+        let response = json!({
+            "data": {
+                "AgentRequest": [{
+                    "request_id": "request-1",
+                    "content": null,
+                    "status": null,
+                    "lifecycle_state": null,
+                    "failure_reason": null,
+                    "metadata": null,
+                    "execution_origin": null
+                }],
+                "AgentResponse": [{
+                    "request_id": "request-1",
+                    "content": null,
+                    "reasoning": null,
+                    "status": null
+                }],
+                "AgentMessage": [{
+                    "sequence": 1,
+                    "role": null,
+                    "content": null,
+                    "reasoning": null
+                }]
+            }
+        });
+
+        let requests = decode_rows::<RequestRow>(&response, "AgentRequest").unwrap();
+        assert_eq!(requests[0].content, "");
+        assert_eq!(requests[0].failure_reason, "");
+        let responses = decode_rows::<ResponseRow>(&response, "AgentResponse").unwrap();
+        assert_eq!(responses[0].reasoning, "");
+        let messages = decode_rows::<MessageRow>(&response, "AgentMessage").unwrap();
+        assert_eq!(messages[0].role, "");
+    }
 
     #[test]
     fn completed_request_overrides_error_response_status() {
