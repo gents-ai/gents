@@ -47,6 +47,11 @@ pub struct P2pSyncStatusSnapshot {
     /// Milliseconds until the earliest due incomplete pending-DAG retry;
     /// `None` when no incomplete entry is registered.
     pub next_pending_retry_in_ms: Option<u64>,
+    /// Pending-DAG roots quarantined after a deterministic merge rejection
+    /// (defradb #1133).
+    pub pending_dag_terminal_quarantined: u64,
+    /// Current gauge of quarantined pending-DAG roots (defradb #1133).
+    pub quarantined_pending_dags: usize,
 }
 
 /// Typed view of DefraDB's bounded outbound push backlog.

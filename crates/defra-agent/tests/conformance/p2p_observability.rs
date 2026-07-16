@@ -58,6 +58,8 @@ fn pinned_defradb_sync_status_satisfies_agent_observability_contract() {
         pending_dag_retry_dispatched: 61,
         pending_dag_retry_suppressed: 67,
         next_pending_retry_in_ms: Some(71),
+        pending_dag_terminal_quarantined: 73,
+        quarantined_pending_dags: 79,
     };
 
     let wire = serde_json::to_value(upstream).expect("serialize pinned DefraDB SyncStatus");
@@ -96,4 +98,6 @@ fn pinned_defradb_sync_status_satisfies_agent_observability_contract() {
     assert_eq!(adapted.pending_dag_retry_dispatched, 61);
     assert_eq!(adapted.pending_dag_retry_suppressed, 67);
     assert_eq!(adapted.next_pending_retry_in_ms, Some(71));
+    assert_eq!(adapted.pending_dag_terminal_quarantined, 73);
+    assert_eq!(adapted.quarantined_pending_dags, 79);
 }

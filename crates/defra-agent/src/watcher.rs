@@ -133,6 +133,12 @@ impl EventDeliveryRuntimeContract for DefraWatcher {
     };
 }
 
+fn request_update_wakeup(message: &events::Message) -> Option<&events::Update> {
+    // Event origin is deliberately not an eligibility gate. The persisted
+    // AgentRequest query below owns scope and lifecycle validation.
+    message.as_update()
+}
+
 impl Watcher for DefraWatcher {
     async fn next_request(&mut self) -> Option<Result<AgentRequest>> {
         loop {
@@ -171,13 +177,17 @@ impl Watcher for DefraWatcher {
                     }
                 };
 
-            let update = match msg.as_update() {
-                Some(u) if u.is_relay => u,
-                _ => continue,
+            // Local writes and relayed writes are equally eligible wakeups.
+            // The subsequent document query is the authority for agent scope,
+            // lifecycle state, and lineage coherence. Ignoring local updates
+            // can strand a request until the 30-second fallback poll when it
+            // is created just after the loop's pending-request scan.
+            let Some(update) = request_update_wakeup(&msg) else {
+                continue;
             };
 
             let doc_id = &update.doc_id;
-            tracing::trace!(doc_id = %doc_id, "P2P update event received");
+            tracing::trace!(doc_id = %doc_id, is_relay = update.is_relay, "DefraDB update event received");
 
             let dropped = self.subscription.check_and_reset_dropped();
             if dropped > 0 {

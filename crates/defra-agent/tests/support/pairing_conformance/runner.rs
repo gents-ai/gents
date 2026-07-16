@@ -546,7 +546,10 @@ async fn write_peer_pairing_applied(
     } else {
         let collections = graphql_string_set_literal(&applied.collections);
         let replicator_addresses = graphql_string_set_literal(&applied.replicator_addresses);
-        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        // Mirror the production writer's recreate identity: preserving
+        // subsecond precision prevents an immediate reinstall from deriving
+        // the same docID as the row that was just tombstoned.
+        let now = chrono::Utc::now().to_rfc3339();
         let now = escape_graphql_string(&now);
         format!(
             r#"mutation {{

@@ -749,9 +749,10 @@ impl PairingStateStore for GraphqlPairingStateStore {
         let collections = graphql_nullable_string_array(&applied.collections);
         let replicator_addresses = graphql_nullable_string_array(&applied.replicator_addresses);
         let replicator_filter = graphql_nullable_filter_literal(&applied.replicator_filter);
-        let now = escape_graphql_string(
-            &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        );
+        // Keep subsecond precision in the add payload. DefraDB derives document
+        // identity from genesis content, so an immediate delete/recreate with
+        // second-truncated timestamps can regenerate a tombstoned docID.
+        let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let mutation = format!(
             r#"mutation {{
                 upsert_PeerPairingApplied(

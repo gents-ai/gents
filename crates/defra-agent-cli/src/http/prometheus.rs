@@ -633,6 +633,11 @@ fn render_p2p_sync_metrics(
             status.persisted_pending_dag_capacity,
         ),
         (
+            "defra_agent_p2p_quarantined_pending_dags",
+            "Pending DAG roots quarantined after a terminal merge rejection.",
+            status.quarantined_pending_dags,
+        ),
+        (
             "defra_agent_p2p_retained_background_tasks",
             "DefraDB P2P background task handles retained for shutdown.",
             status.retained_background_tasks,
@@ -744,6 +749,11 @@ fn render_p2p_sync_metrics(
             "defra_agent_p2p_already_merged_fast_path_total",
             "Receives skipped because the announced CID was already merged.",
             status.already_merged_fast_path,
+        ),
+        (
+            "defra_agent_p2p_pending_dag_terminal_quarantined_total",
+            "Pending DAG roots quarantined after a deterministic terminal merge rejection.",
+            status.pending_dag_terminal_quarantined,
         ),
     ] {
         push_metric_prelude_with_type(lines, name, help, "counter");
@@ -1472,6 +1482,8 @@ mod tests {
                     pending_dag_retry_dispatched: 61,
                     pending_dag_retry_suppressed: 67,
                     next_pending_retry_in_ms: Some(71),
+                    pending_dag_terminal_quarantined: 73,
+                    quarantined_pending_dags: 79,
                 }),
                 stale: false,
             }),
@@ -1493,6 +1505,7 @@ mod tests {
         assert!(rendered.contains("defra_agent_p2p_push_encode_cache_entries 5"));
         assert!(rendered.contains("defra_agent_p2p_pending_dags 13"));
         assert!(rendered.contains("defra_agent_p2p_persisted_pending_dags 17"));
+        assert!(rendered.contains("defra_agent_p2p_quarantined_pending_dags 79"));
         assert!(rendered.contains("defra_agent_p2p_push_rejected_items_total 5"));
         assert!(rendered.contains("defra_agent_p2p_push_stale_head_retirements_total 17"));
         assert!(rendered.contains("defra_agent_p2p_push_peer_capacity_parks_total 13"));
@@ -1504,6 +1517,7 @@ mod tests {
         assert!(rendered.contains("defra_agent_p2p_pending_dag_capacity_shed_total 59"));
         assert!(rendered.contains("defra_agent_p2p_single_flight_suppressed_total 37"));
         assert!(rendered.contains("defra_agent_p2p_already_merged_fast_path_total 53"));
+        assert!(rendered.contains("defra_agent_p2p_pending_dag_terminal_quarantined_total 73"));
         assert!(rendered.contains(r#"defra_agent_p2p_push_cid_retry_count{cid="bafy-retry"} 19"#));
         assert!(
             rendered.contains(r#"defra_agent_p2p_peer_consecutive_failures{peer_id="peer-a"} 3"#)
