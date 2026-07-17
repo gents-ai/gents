@@ -33,6 +33,7 @@ export type ChatWorkspaceProps = {
   onRenameConversationTitle: (sessionId: string, title: string) => void | Promise<void>;
   onDraftChange: (value: string) => void;
   onSend: (event: FormEvent) => void;
+  onRetryMessage?: (content: string) => void;
 };
 
 export type ActiveChatWorkspaceProps = Omit<
@@ -76,6 +77,7 @@ export function ActiveChatWorkspace({
   onRenameConversationTitle,
   onDraftChange,
   onSend,
+  onRetryMessage,
 }: ActiveChatWorkspaceProps) {
   const activeBehaviorId =
     selectedBehaviorId ?? selectedDeployment.defaultBehaviorId ?? null;
@@ -201,6 +203,7 @@ export function ActiveChatWorkspace({
           <ChatTranscriptPanel
             selectedSessionId={selectedSessionId}
             session={session}
+            onRetryMessage={onRetryMessage}
           />
 
           {interruptResultBanner ? (

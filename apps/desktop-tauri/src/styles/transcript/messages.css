@@ -259,3 +259,65 @@
     }
   }
 }
+
+@layer transcript {
+  .copy-button {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: var(--text-2xs);
+    padding: 0 var(--space-2);
+    cursor: pointer;
+    transition: opacity var(--motion-fast) ease;
+  }
+
+  .copy-button:hover {
+    color: var(--color-text);
+    border-color: var(--border-default);
+  }
+
+  .message-copy {
+    margin-left: auto;
+    opacity: 0;
+  }
+
+  .message-card:hover .message-copy,
+  .message-copy:focus-visible {
+    opacity: 1;
+  }
+
+  .message-role {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .code-block {
+    position: relative;
+  }
+
+  .code-block-copy {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+    opacity: 0;
+    background: var(--color-surface-deep);
+  }
+
+  .code-block:hover .code-block-copy,
+  .code-block-copy:focus-visible {
+    opacity: 1;
+  }
+
+  .response-error-details {
+    color: var(--color-text-soft);
+    font-size: var(--text-sm);
+  }
+
+  .response-error-details pre {
+    margin: var(--space-3) 0 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+}

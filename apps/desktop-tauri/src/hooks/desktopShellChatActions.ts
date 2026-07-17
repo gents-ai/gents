@@ -43,15 +43,14 @@ export function createDesktopShellChatActions({
   setSession,
   shellProjection,
 }: ChatActionParams) {
-  async function onSendMessage(event: FormEvent) {
-    event.preventDefault();
-    if (!selectedDeployment || !draft.trim()) {
-      return;
+  async function submitContent(content: string): Promise<boolean> {
+    if (!selectedDeployment || !content.trim()) {
+      return false;
     }
 
-    if (shellProjection.sendStatus.kind !== "ready") {
-      setError(shellProjection.sendStatus.hint);
-      return;
+    if (shellProjection.nonEmptyContentSendStatus.kind !== "ready") {
+      setError(shellProjection.nonEmptyContentSendStatus.hint);
+      return false;
     }
 
     setLocalWorkflow({
@@ -66,9 +65,8 @@ export function createDesktopShellChatActions({
         agentDid: selectedDeployment.agentDid,
         behaviorId: selectedBehaviorId,
         sessionId: selectedSessionId,
-        content: draft,
+        content,
       });
-      setDraft("");
       newConversationAgentRef.current = null;
       setSelectedSessionId(result.sessionId);
       setLocalWorkflow({
@@ -76,12 +74,26 @@ export function createDesktopShellChatActions({
         sessionId: result.sessionId,
         requestId: result.requestId,
       });
+      return true;
     } catch (err) {
       setLocalWorkflow({ kind: "ready" });
       setError(String(err));
+      return false;
     } finally {
       setSending(false);
     }
+  }
+
+  async function onSendMessage(event: FormEvent) {
+    event.preventDefault();
+    if (await submitContent(draft)) {
+      setDraft("");
+    }
+  }
+
+  /** Re-submit a failed turn's content verbatim (error-card Retry). */
+  function onRetryMessage(content: string) {
+    void submitContent(content);
   }
 
   async function onRenameConversationTitle(sessionId: string, title: string) {
@@ -131,6 +143,7 @@ export function createDesktopShellChatActions({
 
   return {
     onRenameConversationTitle,
+    onRetryMessage,
     onSelectSession,
     onSendMessage,
     onStartNewConversation,
