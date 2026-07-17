@@ -6,6 +6,10 @@ export type RuntimeView = {
   lastReconcileResult?: string | null;
   lastReconcileError?: string | null;
   updatedAt?: string | null;
+  behaviorExecutorCapacity?: number | null;
+  behaviorExecutorQueueDepth?: number | null;
+  runnableBehaviorCount?: number | null;
+  unavailableBehaviorCount?: number | null;
 };
 
 export type AgentPrincipalView = {

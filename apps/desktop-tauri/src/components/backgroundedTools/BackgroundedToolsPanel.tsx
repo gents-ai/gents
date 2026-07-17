@@ -50,6 +50,8 @@ function diagnosticSentence(diag: StuckWorkDiagnosticView): string {
 
 export type BackgroundedToolsPanelProps = {
   rootRequestId?: string | null;
+  /** Selected deployment's runtime doc — carries real executor slot data. */
+  runtime?: import("../../lib/types").RuntimeView | null;
   /** Focus the lineage view on this row's parent request. */
   onOpenLineage?: (requestId: string) => void;
   /** Begin the interrupt (preview + cascade dialog) flow for this row's parent request. */
@@ -58,6 +60,7 @@ export type BackgroundedToolsPanelProps = {
 
 export function BackgroundedToolsPanel({
   rootRequestId,
+  runtime,
   onOpenLineage,
   onInterruptParent,
 }: BackgroundedToolsPanelProps = {}) {
@@ -293,6 +296,22 @@ export function BackgroundedToolsPanel({
             <span className="root"> · {filtered.length} shown</span>
           ) : null}
         </div>
+        {runtime?.behaviorExecutorCapacity != null ? (
+          <div
+            className="live-count"
+            data-testid="ops-slot-capacity"
+            title="Behavior executor slots reported by the agent's runtime document"
+          >
+            capacity <em>{runtime.behaviorExecutorCapacity}</em>
+            {runtime.behaviorExecutorQueueDepth != null &&
+            runtime.behaviorExecutorQueueDepth > 0 ? (
+              <span className="root">
+                {" "}
+                · {runtime.behaviorExecutorQueueDepth} queued
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="tools-table-wrap">
