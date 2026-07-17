@@ -7,6 +7,7 @@ import type {
   ToolSelectionView,
   ToolServiceRegistryView,
 } from "../../lib/types";
+import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
 import {
   ignoreHandledActionError,
@@ -166,60 +167,29 @@ export function ToolSelectionConfigEditor({
   );
 
   useEffect(() => {
-    setSelectionId(toolSelection?.selectionId ?? "");
-    setDisplayName(toolSelection?.displayName ?? toolSelection?.selectionId ?? "");
-    setEnableFileTools(toolSelection?.enableFileTools ?? false);
-    setFileToolsMode(toolSelection?.fileToolsMode ?? "ReadOnly");
-    setFileToolRoot(toolSelection?.fileToolRoot ?? "");
-    setEnableBash(toolSelection?.enableBash ?? false);
-    setBashMode(
-      toolSelection?.bashMode === "ReadWrite"
-        ? "Unrestricted"
-        : (toolSelection?.bashMode ?? "ReadOnly"),
-    );
-    setCommandExecutionPolicy(
-      normalizeCommandExecutionPolicy(toolSelection?.commandExecutionPolicy),
-    );
-    setCommandAllowedArgvPrefixes(
-      (toolSelection?.commandAllowedArgvPrefixes ?? []).join("\n"),
-    );
-    setCommandForbiddenArgvPrefixes(
-      (toolSelection?.commandForbiddenArgvPrefixes ?? []).join("\n"),
-    );
-    setCommandNetworkMode(
-      normalizeCommandNetworkMode(toolSelection?.commandNetworkMode),
-    );
-    setCliToolNames((toolSelection?.cliToolNames ?? []).join("\n"));
-    setEnableMetaTools(toolSelection?.enableMetaTools ?? false);
-    const knownServiceIds = new Set(toolServiceIdKey.split("\n").filter(Boolean));
-    const existingAllowedServiceIds = toolSelection?.allowedMcpServiceIds ?? [];
-    const existingDelegateTo = toolSelection?.delegateTo ?? [];
-    const legacyServiceDelegates =
-      existingAllowedServiceIds.length === 0
-        ? existingDelegateTo.filter((value) => knownServiceIds.has(value))
-        : [];
-    setAllowedMcpServiceIds(
-      (existingAllowedServiceIds.length > 0
-        ? existingAllowedServiceIds
-        : legacyServiceDelegates
-      ).join("\n"),
-    );
-    setDelegateTo(
-      existingDelegateTo.filter((value) => !knownServiceIds.has(value)).join("\n"),
-    );
-    setBackgroundableToolNames(
-      (toolSelection?.backgroundableToolNames ?? []).join("\n"),
-    );
-    setSubagentTargets((toolSelection?.subagentTargets ?? []).join("\n"));
-    setSubagentSpawnEnabled(toolSelection?.subagentSpawnEnabled ?? false);
-    setSubagentSteeringEnabled(toolSelection?.subagentSteeringEnabled ?? false);
-    setSubagentBackgroundEnabled(toolSelection?.subagentBackgroundEnabled ?? false);
-    setCrossDeploymentSpawnTimeoutSeconds(
-      toolSelection?.crossDeploymentSpawnTimeoutSeconds != null
-        ? String(toolSelection.crossDeploymentSpawnTimeoutSeconds)
-        : "",
-    );
-    setDefraQueryCollections((toolSelection?.defraQueryCollections ?? []).join("\n"));
+    const b = toolSelectionFormValues(toolSelection, toolServiceIdKey);
+    setSelectionId(b.selectionId);
+    setDisplayName(b.displayName);
+    setEnableFileTools(b.enableFileTools);
+    setFileToolsMode(b.fileToolsMode);
+    setFileToolRoot(b.fileToolRoot);
+    setEnableBash(b.enableBash);
+    setBashMode(b.bashMode);
+    setCommandExecutionPolicy(b.commandExecutionPolicy);
+    setCommandAllowedArgvPrefixes(b.commandAllowedArgvPrefixes);
+    setCommandForbiddenArgvPrefixes(b.commandForbiddenArgvPrefixes);
+    setCommandNetworkMode(b.commandNetworkMode);
+    setCliToolNames(b.cliToolNames);
+    setEnableMetaTools(b.enableMetaTools);
+    setAllowedMcpServiceIds(b.allowedMcpServiceIds);
+    setDelegateTo(b.delegateTo);
+    setBackgroundableToolNames(b.backgroundableToolNames);
+    setSubagentTargets(b.subagentTargets);
+    setSubagentSpawnEnabled(b.subagentSpawnEnabled);
+    setSubagentSteeringEnabled(b.subagentSteeringEnabled);
+    setSubagentBackgroundEnabled(b.subagentBackgroundEnabled);
+    setCrossDeploymentSpawnTimeoutSeconds(b.crossDeploymentSpawnTimeoutSeconds);
+    setDefraQueryCollections(b.defraQueryCollections);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [toolSelection?.selectionId, toolServiceIdKey]);
 
@@ -286,6 +256,33 @@ export function ToolSelectionConfigEditor({
   return (
     <form className="panel config-editor" onSubmit={submitToolSelection}>
       <ConfigEditorHeader
+        dirty={isDirty(
+          {
+            selectionId,
+            displayName,
+            enableFileTools,
+            fileToolsMode,
+            fileToolRoot,
+            enableBash,
+            bashMode,
+            commandExecutionPolicy,
+            commandAllowedArgvPrefixes,
+            commandForbiddenArgvPrefixes,
+            commandNetworkMode,
+            cliToolNames,
+            enableMetaTools,
+            allowedMcpServiceIds,
+            delegateTo,
+            backgroundableToolNames,
+            subagentTargets,
+            subagentSpawnEnabled,
+            subagentSteeringEnabled,
+            subagentBackgroundEnabled,
+            crossDeploymentSpawnTimeoutSeconds,
+            defraQueryCollections,
+          },
+          toolSelectionFormValues(toolSelection, toolServiceIdKey),
+        )}
         eyebrow="Tool Selection"
         saved={savedStatus === `tool:${selectionId.trim()}`}
         title={displayName || selectionId || "New Tool Selection"}
@@ -693,4 +690,59 @@ function displayToolCeiling(value: ReturnType<typeof normalizeToolCeiling>) {
     default:
       return "unknown";
   }
+}
+
+/** View→form hydration, shared by the reset effect and dirty comparison. */
+function toolSelectionFormValues(
+  toolSelection: ToolSelectionView | null,
+  toolServiceIdKey: string,
+) {
+  const knownServiceIds = new Set(toolServiceIdKey.split("\n").filter(Boolean));
+  const existingAllowedServiceIds = toolSelection?.allowedMcpServiceIds ?? [];
+  const existingDelegateTo = toolSelection?.delegateTo ?? [];
+  const legacyServiceDelegates =
+    existingAllowedServiceIds.length === 0
+      ? existingDelegateTo.filter((value) => knownServiceIds.has(value))
+      : [];
+  return {
+    selectionId: toolSelection?.selectionId ?? "",
+    displayName: toolSelection?.displayName ?? toolSelection?.selectionId ?? "",
+    enableFileTools: toolSelection?.enableFileTools ?? false,
+    fileToolsMode: toolSelection?.fileToolsMode ?? "ReadOnly",
+    fileToolRoot: toolSelection?.fileToolRoot ?? "",
+    enableBash: toolSelection?.enableBash ?? false,
+    bashMode:
+      toolSelection?.bashMode === "ReadWrite"
+        ? "Unrestricted"
+        : (toolSelection?.bashMode ?? "ReadOnly"),
+    commandExecutionPolicy: normalizeCommandExecutionPolicy(
+      toolSelection?.commandExecutionPolicy,
+    ),
+    commandAllowedArgvPrefixes: (toolSelection?.commandAllowedArgvPrefixes ?? []).join(
+      "\n",
+    ),
+    commandForbiddenArgvPrefixes: (
+      toolSelection?.commandForbiddenArgvPrefixes ?? []
+    ).join("\n"),
+    commandNetworkMode: normalizeCommandNetworkMode(toolSelection?.commandNetworkMode),
+    cliToolNames: (toolSelection?.cliToolNames ?? []).join("\n"),
+    enableMetaTools: toolSelection?.enableMetaTools ?? false,
+    allowedMcpServiceIds: (existingAllowedServiceIds.length > 0
+      ? existingAllowedServiceIds
+      : legacyServiceDelegates
+    ).join("\n"),
+    delegateTo: existingDelegateTo
+      .filter((value) => !knownServiceIds.has(value))
+      .join("\n"),
+    backgroundableToolNames: (toolSelection?.backgroundableToolNames ?? []).join("\n"),
+    subagentTargets: (toolSelection?.subagentTargets ?? []).join("\n"),
+    subagentSpawnEnabled: toolSelection?.subagentSpawnEnabled ?? false,
+    subagentSteeringEnabled: toolSelection?.subagentSteeringEnabled ?? false,
+    subagentBackgroundEnabled: toolSelection?.subagentBackgroundEnabled ?? false,
+    crossDeploymentSpawnTimeoutSeconds:
+      toolSelection?.crossDeploymentSpawnTimeoutSeconds != null
+        ? String(toolSelection.crossDeploymentSpawnTimeoutSeconds)
+        : "",
+    defraQueryCollections: (toolSelection?.defraQueryCollections ?? []).join("\n"),
+  };
 }
