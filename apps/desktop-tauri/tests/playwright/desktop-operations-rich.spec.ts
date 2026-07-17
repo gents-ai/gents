@@ -44,9 +44,9 @@ test.describe("desktop operations drawer rich states", () => {
 
     await page.getByRole("tab", { name: /Lineage/ }).click();
     await expect(page.getByRole("tree", { name: "Subagent lineage" })).toBeVisible();
-    await expect(page.getByText("request-child-1")).toBeVisible();
+    await expect(page.locator('[title="request-child-1"]').first()).toBeVisible();
     await page.getByLabel("Live only").check();
-    await expect(page.getByText("request-child-1")).toBeVisible();
+    await expect(page.locator('[title="request-child-1"]').first()).toBeVisible();
 
     await page.getByRole("tab", { name: /Backends/ }).click();
     await page.getByRole("button", { name: /OpenAI Harness/ }).click();
