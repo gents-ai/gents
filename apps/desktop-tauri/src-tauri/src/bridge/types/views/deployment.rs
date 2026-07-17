@@ -22,6 +22,10 @@ pub(crate) struct RuntimeView {
     pub last_reconcile_result: Option<String>,
     pub last_reconcile_error: Option<String>,
     pub updated_at: Option<String>,
+    pub behavior_executor_capacity: Option<i64>,
+    pub behavior_executor_queue_depth: Option<i64>,
+    pub runnable_behavior_count: Option<i64>,
+    pub unavailable_behavior_count: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

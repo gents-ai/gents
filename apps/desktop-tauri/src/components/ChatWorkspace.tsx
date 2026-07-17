@@ -161,6 +161,7 @@ export function ActiveChatWorkspace({
         badge: stuckCount > 0 ? String(stuckCount) : null,
         render: () => (
           <BackgroundedToolsPanel
+            runtime={selectedDeployment?.runtime ?? null}
             onOpenLineage={setLineageRootOverride}
             onInterruptParent={(requestId) => {
               void beginInterrupt(requestId);

@@ -1264,6 +1264,10 @@ function createDeployment(): DeploymentView {
       lastReconcileResult: "ok",
       lastReconcileError: null,
       updatedAt: THIRTY_DAYS_AGO,
+      behaviorExecutorCapacity: 4,
+      behaviorExecutorQueueDepth: 0,
+      runnableBehaviorCount: 2,
+      unavailableBehaviorCount: 0,
     },
     behaviors: [
       {
