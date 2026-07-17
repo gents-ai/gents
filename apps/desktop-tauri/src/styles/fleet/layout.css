@@ -48,7 +48,7 @@
     flex: 0 0 auto;
     border: 1px solid rgb(var(--source-green-rgb) / 0.2);
     border-radius: var(--radius-sm);
-    background: rgb(0 0 0 / 0.58);
+    background: rgb(var(--source-black-rgb) / 0.58);
     object-fit: contain;
     padding: var(--space-2);
   }
@@ -66,7 +66,7 @@
     align-items: center;
     padding: var(--space-5);
     border: 1px solid rgb(var(--source-green-rgb) / 0.18);
-    background: rgb(1 8 6 / 0.72);
+    background: rgb(var(--source-ink-rgb) / 0.72);
   }
 
   .fleet-local-runtime-copy {
