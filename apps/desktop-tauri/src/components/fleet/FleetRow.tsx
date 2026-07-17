@@ -55,7 +55,9 @@ export function FleetRow({
     const label = (editingLabel ?? "").trim();
     setEditingLabel(null);
     if (label && label !== deployment.label && onRenamePeer) {
-      void onRenamePeer(deployment.peerId, label);
+      // Shell handlers rethrow after setting the banner; fire-and-forget
+      // call sites must swallow or the rejection escapes unhandled.
+      void Promise.resolve(onRenamePeer(deployment.peerId, label)).catch(() => {});
     }
   }
   const enabledTaskCount = deployment.tasks.filter(
@@ -248,7 +250,7 @@ export function FleetRow({
             danger
             onConfirm={() => {
               setConfirmingRemove(false);
-              void onRemovePeer?.(deployment.peerId);
+              void Promise.resolve(onRemovePeer?.(deployment.peerId)).catch(() => {});
             }}
             onCancel={() => setConfirmingRemove(false)}
           />
