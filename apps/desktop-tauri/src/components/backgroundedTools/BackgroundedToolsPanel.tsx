@@ -4,6 +4,7 @@ import type {
   DesktopOperationsSnapshotRequest,
   StuckWorkDiagnosticView,
 } from "../../lib/types/operations";
+import { shortId } from "../../lib/shortId";
 import { OperationsRailContext } from "../operations/operationsRailContext";
 import {
   correlateProcess,
@@ -30,24 +31,20 @@ const STATE_LABELS: Record<string, string> = {
   "deadline+": "Past deadline",
 };
 
-function shortRequestId(requestId: string): string {
-  return requestId.length > 14 ? `${requestId.slice(0, 14)}…` : requestId;
-}
-
 /** The bridge's diagnosis, in operator language. */
 function diagnosticSentence(diag: StuckWorkDiagnosticView): string {
   const tool = diag.toolName ?? "a tool";
   switch (diag.reason) {
     case "expiredProcessing":
-      return `Request ${shortRequestId(diag.requestId)} ran past its deadline`;
+      return `Request ${shortId(diag.requestId)} ran past its deadline`;
     case "expiredTool":
-      return `${tool} on ${shortRequestId(diag.requestId)} ran past its deadline`;
+      return `${tool} on ${shortId(diag.requestId)} ran past its deadline`;
     case "stuckTool":
-      return `${tool} on ${shortRequestId(diag.requestId)} has stopped making progress`;
+      return `${tool} on ${shortId(diag.requestId)} has stopped making progress`;
     case "pendingRemoteCancelAck":
-      return `Waiting on a remote node to acknowledge cancelling ${shortRequestId(diag.requestId)}`;
+      return `Waiting on a remote node to acknowledge cancelling ${shortId(diag.requestId)}`;
     default:
-      return `${shortRequestId(diag.requestId)} needs attention`;
+      return `${shortId(diag.requestId)} needs attention`;
   }
 }
 
@@ -239,8 +236,9 @@ export function BackgroundedToolsPanel({
             className={`chip ${parentFilter === p ? "is-active" : ""}`}
             aria-pressed={parentFilter === p}
             onClick={() => setParentFilter(p)}
+            title={p}
           >
-            {p}
+            {shortId(p)}
           </button>
         ))}
       </div>
@@ -365,7 +363,9 @@ export function BackgroundedToolsPanel({
                 >
                   <td className="cell-tool">{row.toolName}</td>
                   <td className="cell-age">{formatAge(row.ageMs ?? 0)}</td>
-                  <td className="cell-parent">{row.requestId}</td>
+                  <td className="cell-parent" title={row.requestId}>
+                    {shortId(row.requestId)}
+                  </td>
                   <td>
                     <span className="pill pill-await" data-mode={row.awaitMode ?? ""}>
                       {row.awaitMode ?? "—"}

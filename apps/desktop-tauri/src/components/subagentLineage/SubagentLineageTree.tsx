@@ -1,3 +1,4 @@
+import { shortId } from "../../lib/shortId";
 import type { AnyNode, FilterState } from "./lineageModel";
 import { nodeId, shortenDid, subtreeHasSurvivor } from "./lineageModel";
 
@@ -89,10 +90,19 @@ export function SubagentTreeRow({
           >
             {node.kind === "req" ? "req" : "tool"}
           </span>
-          <span className="subagent-lineage-id">
+          <span
+            className="subagent-lineage-id"
+            title={
+              node.kind === "req"
+                ? node.node.requestId
+                : (node.edge.parentToolCallId ?? undefined)
+            }
+          >
             {node.kind === "req"
-              ? node.node.requestId
-              : (node.edge.parentToolCallId ?? "—")}
+              ? shortId(node.node.requestId)
+              : node.edge.parentToolCallId
+                ? shortId(node.edge.parentToolCallId)
+                : "—"}
           </span>
           <span className="subagent-lineage-secondary">{nodeSecondary(node)}</span>
         </span>
