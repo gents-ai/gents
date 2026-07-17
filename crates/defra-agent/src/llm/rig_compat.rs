@@ -732,6 +732,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn responses_capture_preserves_optional_tool_parameters() {
+        let mut request = sample_request();
+        request.tools[0].parameters = json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" },
+                "limit": { "type": "integer" }
+            },
+            "required": ["path"]
+        });
+
+        let rendered = rendered_completion_request(&responses_context(false), 0, 0, &request)
+            .expect("render Responses request");
+        let tool = &rendered.tools_json[0];
+
+        assert_eq!(tool["parameters"]["required"], json!(["path"]));
+        assert_ne!(tool.get("strict"), Some(&Value::Bool(true)));
+    }
+
     // ===== #589/#590: argument-shape normalization at both converter seams =====
 
     fn native_tool_call(arguments: Value) -> message::ToolCall {
