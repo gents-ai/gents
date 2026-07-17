@@ -31,6 +31,27 @@ export function ConfigIcon() {
   );
 }
 
+export function PencilIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 20h9" />
+      <path d="m16.5 3.5 4 4L7 21H3v-4L16.5 3.5Z" />
+    </svg>
+  );
+}
+
+export function TrashIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="m18 6-1 14H7L6 6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </svg>
+  );
+}
+
 export function ToolIconGlyph({ kind }: { kind: ToolIconKind }) {
   if (kind === "file") {
     return (

@@ -490,6 +490,23 @@ impl ClientCore {
         }
     }
 
+    pub async fn rename_peer(&self, peer_id: &str, label: &str) -> Result<()> {
+        let peer_id = normalize_required("peer_id", peer_id)?;
+        let label = normalize_required("label", label)?;
+        let mut peer_directory = self.peer_directory.write().await;
+        let record = peer_directory
+            .records()
+            .iter()
+            .find(|record| record.peer_id == peer_id)
+            .cloned()
+            .with_context(|| format!("peer {peer_id} not found"))?;
+        let mut record = record;
+        record.label = label.to_string();
+        peer_directory.upsert(record).await?;
+        self.clear_mutation_error();
+        Ok(())
+    }
+
     pub async fn add_peer(
         &self,
         label: &str,
@@ -690,6 +707,13 @@ impl ClientCore {
         let peer_id = normalize_required("peer_id", peer_id)?;
         let removed = {
             let mut peer_directory = self.peer_directory.write().await;
+            let is_local_runtime = peer_directory.records().iter().any(|record| {
+                record.peer_id == peer_id && record.source.as_deref() == Some("local-standard")
+            });
+            if is_local_runtime {
+                // The local runtime is this machine, not a saved peer.
+                anyhow::bail!("the local runtime deployment cannot be removed");
+            }
             peer_directory.remove(peer_id).await?
         }
         .with_context(|| format!("peer {peer_id} not found"))?;

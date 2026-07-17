@@ -107,6 +107,8 @@ export type DesktopApiAdapter = {
   shutdownDesktopClient: () => Promise<DesktopClientSnapshot>;
   setSelectedAgent: (agentDid: string | null) => Promise<void>;
   addPeer: (request: PeerAddRequest) => Promise<DesktopClientSnapshot>;
+  removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
+  renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
   fetchPeerStatus: (serverAddress: string) => Promise<unknown>;
   repairP2P: () => Promise<DesktopClientSnapshot>;
   fetchSessionSnapshot: (
@@ -178,6 +180,15 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   addPeer(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_peer_add", { request });
+  },
+  removePeer(peerId) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_peer_remove", { peerId });
+  },
+  renamePeer(peerId, label) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_peer_rename", {
+      peerId,
+      label,
+    });
   },
   fetchPeerStatus(serverAddress) {
     return invokeDesktop<unknown>("desktop_peer_status_fetch", {
@@ -329,6 +340,14 @@ export async function setSelectedAgent(agentDid: string | null) {
 
 export async function addPeer(request: PeerAddRequest) {
   return desktopApiAdapter().addPeer(request);
+}
+
+export async function removePeer(peerId: string) {
+  return desktopApiAdapter().removePeer(peerId);
+}
+
+export async function renamePeer(peerId: string, label: string) {
+  return desktopApiAdapter().renamePeer(peerId, label);
 }
 
 export async function fetchPeerStatus(serverAddress: string) {

@@ -373,6 +373,21 @@ export function createDesktopUiHarness(
       notify("peers");
       return snapshot();
     },
+    async removePeer(peerId) {
+      if (peerId !== deployment.peerId) {
+        throw new Error(`peer ${peerId} not found`);
+      }
+      // The harness's single deployment is the local runtime.
+      throw new Error("the local runtime deployment cannot be removed");
+    },
+    async renamePeer(peerId, label) {
+      if (peerId !== deployment.peerId) {
+        throw new Error(`peer ${peerId} not found`);
+      }
+      deployment = { ...deployment, label };
+      notify("peers");
+      return snapshot();
+    },
     async fetchPeerStatus() {
       return {
         label: "Bombadil UI Agent",

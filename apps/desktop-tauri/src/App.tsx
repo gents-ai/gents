@@ -78,6 +78,8 @@ function AppShell() {
           onOpenChat={openChat}
           onOpenCode={openCode}
           onOpenConfig={openConfig}
+          onRemovePeer={shell.onRemovePeer}
+          onRenamePeer={shell.onRenamePeer}
           onRepairP2P={shell.onRepairP2P}
         />
       ) : workspaceView === "chat" || workspaceView === "code" ? (

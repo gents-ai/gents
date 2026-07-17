@@ -39,6 +39,8 @@ pub fn run() {
             tauri_commands::lifecycle::desktop_client_start,
             tauri_commands::lifecycle::desktop_client_shutdown,
             tauri_commands::peers::desktop_peer_add,
+            tauri_commands::peers::desktop_peer_remove,
+            tauri_commands::peers::desktop_peer_rename,
             tauri_commands::peers::desktop_peer_status_fetch,
             tauri_commands::peers::desktop_p2p_repair,
             tauri_commands::lifecycle::desktop_client_snapshot,
