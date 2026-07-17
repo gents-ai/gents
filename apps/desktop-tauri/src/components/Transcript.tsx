@@ -1,5 +1,8 @@
+import { useRef, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+import { CopyButton } from "./CopyButton";
 
 import { parseCommandDenial } from "../lib/commandDenial";
 import type {
@@ -13,10 +16,25 @@ import { CodeToolItem } from "./codeTools/CodeToolItem";
 import { toCodeToolView } from "./codeTools/codeTools";
 import { CommandDenialToolItem } from "./commandDenial";
 
+function CodeBlock(props: { children?: ReactNode }) {
+  const preRef = useRef<HTMLPreElement | null>(null);
+  return (
+    <div className="code-block">
+      <CopyButton
+        className="code-block-copy"
+        getText={() => preRef.current?.textContent ?? ""}
+      />
+      <pre ref={preRef}>{props.children}</pre>
+    </div>
+  );
+}
+
 function MarkdownContent({ value }: { value: string }) {
   return (
     <div className="markdown-content">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: CodeBlock }}>
+        {value}
+      </ReactMarkdown>
     </div>
   );
 }
@@ -217,7 +235,13 @@ export function MessageList({
             return (
               <div className="turn-block" key={timelineKey}>
                 <article className="message-card">
-                  <div className="message-role">user</div>
+                  <div className="message-role">
+                    user
+                    <CopyButton
+                      className="message-copy"
+                      getText={() => normalizeTranscriptText(item.content)}
+                    />
+                  </div>
                   <div className="message-content">
                     <MarkdownContent value={normalizeTranscriptText(item.content)} />
                   </div>
@@ -243,6 +267,12 @@ export function MessageList({
                       <CancelCauseBadge
                         cause={responseCancelCause}
                         className="assistant-turn-cause-badge"
+                      />
+                    ) : null}
+                    {normalizedContent ? (
+                      <CopyButton
+                        className="message-copy"
+                        getText={() => normalizedContent}
                       />
                     ) : null}
                   </div>

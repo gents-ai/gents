@@ -7,11 +7,13 @@ import { MessageList } from "../Transcript";
 export type ChatTranscriptPanelProps = {
   selectedSessionId: string | null;
   session: DesktopSessionSnapshot | null;
+  onRetryMessage?: (content: string) => void;
 };
 
 export function ChatTranscriptPanel({
   selectedSessionId,
   session,
+  onRetryMessage,
 }: ChatTranscriptPanelProps) {
   const transcriptPanelRef = useRef<HTMLElement | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
@@ -117,6 +119,18 @@ export function ChatTranscriptPanel({
       !(lastItem.content?.length || lastItem.reasoning?.length));
   const showThinking = turnActive && assistantSilent && !showResponseError;
 
+  // The failed turn's content, for the error card's Retry.
+  const lastUserContent = useMemo(() => {
+    const items = session?.timelineItems ?? [];
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index];
+      if (item.kind === "userMessage" || item.kind === "pendingUserTurn") {
+        return item.content;
+      }
+    }
+    return null;
+  }, [session?.timelineItems]);
+
   return (
     <section
       className="panel transcript-panel"
@@ -175,9 +189,25 @@ export function ChatTranscriptPanel({
                 role="alert"
               >
                 <div className="message-role">assistant error</div>
-                <div className="message-content response-error-content">
-                  {responseError}
+                <div className="message-content">
+                  The assistant couldn&apos;t complete this turn.
                 </div>
+                <details className="response-error-details">
+                  <summary>Error details</summary>
+                  <pre className="response-error-content">{responseError}</pre>
+                </details>
+                {onRetryMessage && lastUserContent ? (
+                  <div>
+                    <button
+                      className="ghost-button"
+                      data-testid="retry-turn"
+                      type="button"
+                      onClick={() => onRetryMessage(lastUserContent)}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : null}
               </article>
             </div>
           ) : null}

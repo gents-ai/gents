@@ -109,6 +109,7 @@ function AppShell() {
                 void shell.onRenameConversationTitle(sessionId, title)
               }
               onSend={shell.onSendMessage}
+              onRetryMessage={shell.onRetryMessage}
               rowCount={shell.snapshot?.client?.rowCount ?? 0}
               runtimeHealth={shell.runtimeHealth}
               sendHint={
