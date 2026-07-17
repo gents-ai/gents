@@ -5,6 +5,7 @@ import { CodeContextHeader } from "./components/code/CodeContextHeader";
 import { ConfigWorkspace } from "./components/ConfigWorkspace";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FleetDashboard } from "./components/fleet/FleetDashboard";
+import { ErrorBanner } from "./components/ErrorBanner";
 import { Sidebar } from "./components/Sidebar";
 import { useDesktopShell } from "./hooks/useDesktopShell";
 import { installExternalLinkGuard } from "./lib/externalLinks";
@@ -52,9 +53,7 @@ function AppShell() {
   return (
     <main className="app-shell">
       {shell.error ? (
-        <div className="callout error-banner" data-testid="error-banner">
-          {shell.error}
-        </div>
+        <ErrorBanner message={shell.error} onDismiss={shell.onDismissError} />
       ) : null}
 
       {workspaceView === "fleet" ? (
