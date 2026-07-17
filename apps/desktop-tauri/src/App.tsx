@@ -7,6 +7,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FleetDashboard } from "./components/fleet/FleetDashboard";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { applyTheme, loadTheme } from "./lib/theme";
+import { applyShellPlatform } from "./lib/shellPlatform";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
 import { useAppShortcuts } from "./hooks/useAppShortcuts";
 import { Sidebar } from "./components/Sidebar";
@@ -29,6 +30,7 @@ function AppShell() {
   // plain hook-free function, and the e2e harness mounts App directly.
   useEffect(() => {
     applyTheme(loadTheme());
+    applyShellPlatform();
   }, []);
 
   // External links (e.g. markdown links in the transcript) must open in the
@@ -83,6 +85,7 @@ function AppShell() {
 
   return (
     <main className="app-shell">
+      <div aria-hidden="true" className="titlebar-drag-region" data-tauri-drag-region />
       {shell.error ? (
         <ErrorBanner message={shell.error} onDismiss={shell.onDismissError} />
       ) : null}

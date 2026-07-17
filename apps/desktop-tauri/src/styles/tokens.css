@@ -100,6 +100,9 @@
     --motion-fast: 120ms;
     --motion-medium: 150ms;
     --motion-pulse: 1.4s;
+    /* macOS overlay titlebar geometry (traffic-light clearance). */
+    --titlebar-height: 34px;
+    --titlebar-clearance: 44px;
   }
 
   :root[data-theme="light"] {
