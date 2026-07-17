@@ -42,6 +42,47 @@
     min-width: 260px;
   }
 
+  .fleet-status {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    white-space: nowrap;
+  }
+
+  .fleet-status-label {
+    font-size: var(--text-xs);
+    color: var(--color-text-soft);
+  }
+
+  .fleet-status.red .fleet-status-label {
+    color: var(--color-error);
+  }
+
+  .fleet-status.yellow .fleet-status-label {
+    color: var(--color-warning-soft);
+  }
+
+  .fleet-agent-identity {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .fleet-did-copy {
+    opacity: 0;
+  }
+
+  .fleet-agent-cell:hover .fleet-did-copy,
+  .fleet-did-copy:focus-visible {
+    opacity: 1;
+  }
+
+  .fleet-agent-error {
+    color: var(--color-error);
+    font-size: var(--text-xs);
+    max-width: 52ch;
+  }
+
   .fleet-status-dot {
     width: 10px;
     height: 10px;
