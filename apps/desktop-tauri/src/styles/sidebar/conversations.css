@@ -79,7 +79,7 @@
 
   .conversation-status-dot-error {
     background: var(--color-error-strong);
-    box-shadow: 0 0 0 1px rgb(255 111 95 / 0.22);
+    box-shadow: 0 0 0 1px rgb(var(--color-error-strong-rgb) / 0.22);
   }
 
   .conversation-status-dot-running {
@@ -88,8 +88,8 @@
   }
 
   .conversation-status-dot-idle {
-    background: rgb(149 164 157 / 0.55);
-    box-shadow: 0 0 0 1px rgb(149 164 157 / 0.16);
+    background: rgb(var(--color-text-muted-rgb) / 0.55);
+    box-shadow: 0 0 0 1px rgb(var(--color-text-muted-rgb) / 0.16);
   }
 
   .untitled-title {

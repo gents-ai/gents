@@ -8,7 +8,11 @@
     gap: var(--space-6);
     overflow: hidden;
     background:
-      linear-gradient(180deg, rgb(0 0 0 / 0.96) 0%, rgb(2 8 6 / 0.98) 100%),
+      linear-gradient(
+        180deg,
+        rgb(var(--source-black-rgb) / 0.96) 0%,
+        rgb(var(--source-ink-2-rgb) / 0.98) 100%
+      ),
       var(--color-bg);
   }
 
@@ -134,8 +138,8 @@
 
   .error-banner {
     color: var(--color-error);
-    border-color: rgb(255 111 95 / 0.28);
-    background: rgb(72 15 10 / 0.42);
+    border-color: rgb(var(--color-error-strong-rgb) / 0.28);
+    background: rgb(var(--color-error-deep-rgb) / 0.42);
     display: flex;
     align-items: flex-start;
     gap: var(--space-4);

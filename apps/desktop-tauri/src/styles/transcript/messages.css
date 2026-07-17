@@ -29,7 +29,7 @@
   }
 
   .transcript-panel .response-error-card {
-    border-color: rgb(255 111 95 / 0.34);
+    border-color: rgb(var(--color-error-strong-rgb) / 0.34);
     box-shadow: inset 2px 0 0 var(--color-error-strong);
   }
 

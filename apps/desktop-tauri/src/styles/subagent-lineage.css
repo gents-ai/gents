@@ -224,7 +224,7 @@
   }
   .subagent-lineage-kind-tool {
     color: var(--color-info);
-    border-color: rgb(16 203 255 / 0.35);
+    border-color: rgb(var(--source-blue-rgb) / 0.35);
   }
   .subagent-lineage-id {
     color: var(--color-text);

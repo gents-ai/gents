@@ -146,8 +146,8 @@ describe("token ratchets", () => {
     expect(count).toBeLessThanOrEqual(40);
   });
 
-  it("raw rgb() literals do not grow (ceiling 90)", () => {
-    expect(countMatches(/rgb\(\d+ \d+ \d+/g)).toBeLessThanOrEqual(90);
+  it("raw rgb() literals stay eliminated: colors live in tokens.css", () => {
+    expect(countMatches(/rgb\(\d+ \d+ \d+/g)).toBe(0);
   });
 
   it("bespoke box-shadows do not grow (ceiling 38)", () => {
