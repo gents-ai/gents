@@ -165,7 +165,32 @@ export function ConfigWorkspace({
         </div>
       </header>
 
-      <nav className="config-screen-nav" role="tablist" aria-label="Configuration">
+      <nav
+        className="config-screen-nav"
+        role="tablist"
+        aria-label="Configuration"
+        // Roving tabindex needs the arrow keys to actually rove (WAI-ARIA
+        // tabs pattern): Left/Right cycle, Home/End jump, focus follows.
+        onKeyDown={(event) => {
+          const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
+          if (!keys.includes(event.key)) {
+            return;
+          }
+          event.preventDefault();
+          const currentIndex = TABS.findIndex((tab) => tab.id === activeTab);
+          const nextIndex =
+            event.key === "Home"
+              ? 0
+              : event.key === "End"
+                ? TABS.length - 1
+                : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + TABS.length) %
+                  TABS.length;
+          const next = TABS[nextIndex];
+          setActiveTab(next.id);
+          setSavedStatus(null);
+          document.getElementById(`config-tab-control-${next.id}`)?.focus();
+        }}
+      >
         {TABS.map((tab) => (
           <button
             aria-controls={`config-tab-panel-${tab.id}`}
