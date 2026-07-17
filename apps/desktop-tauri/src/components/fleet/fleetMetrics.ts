@@ -13,6 +13,9 @@ export type ToolIcon = {
 export function deploymentStatus(deployment: DeploymentView): {
   title: string;
   tone: StatusTone;
+  /** Visible one-word status — health must not be a hover-only dot. */
+  label: string;
+  lastError: string | null;
 } {
   const p2p = deployment.dialSucceeded ? "connected" : "saved";
   const runtime = deployment.runtime?.processState ?? "unknown";
@@ -28,15 +31,19 @@ export function deploymentStatus(deployment: DeploymentView): {
     .filter(Boolean)
     .join(" | ");
 
-  if (!deployment.dialSucceeded || lastError) {
-    return { title, tone: "red" };
+  if (lastError) {
+    return { title, tone: "red", label: "Error", lastError };
+  }
+
+  if (!deployment.dialSucceeded) {
+    return { title, tone: "red", label: "Not connected", lastError };
   }
 
   if (reconcile !== "idle" && reconcile !== "unknown") {
-    return { title, tone: "yellow" };
+    return { title, tone: "yellow", label: "Syncing", lastError };
   }
 
-  return { title, tone: "green" };
+  return { title, tone: "green", label: "Online", lastError };
 }
 
 export function inferenceBackendTitle(deployment: DeploymentView) {

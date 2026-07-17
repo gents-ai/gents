@@ -1,5 +1,7 @@
 import { isTerminalTurnState } from "../../lib/chat-shell";
+import { formatPeerConnectionError } from "../../lib/peerConnectionErrors";
 import type { BootstrapSummary, DeploymentView } from "../../lib/types";
+import { CopyButton } from "../CopyButton";
 import {
   displayAgentIdentity,
   displayBehaviorLabel,
@@ -62,7 +64,15 @@ export function FleetRow({
     <tr data-testid={`fleet-row-${deployment.peerId}`}>
       <td>
         <div className="fleet-agent-cell">
-          <span className={`fleet-status-dot ${status.tone}`} title={status.title} />
+          <span className={`fleet-status ${status.tone}`} title={status.title}>
+            <span aria-hidden="true" className={`fleet-status-dot ${status.tone}`} />
+            <span
+              className="fleet-status-label"
+              data-testid={`fleet-status-${deployment.peerId}`}
+            >
+              {status.label}
+            </span>
+          </span>
           <div className="fleet-agent-copy">
             <button
               className="fleet-agent-name"
@@ -73,14 +83,27 @@ export function FleetRow({
             >
               {deployment.agentPrincipal.displayName ?? deployment.label}
             </button>
-            <span className="muted mono">
+            <span className="muted mono fleet-agent-identity">
               {[
                 agentIdentity,
                 defaultBehaviorLabel ? `default: ${defaultBehaviorLabel}` : null,
               ]
                 .filter(Boolean)
                 .join(" | ")}
+              <CopyButton
+                className="fleet-did-copy"
+                label="Copy DID"
+                getText={() => deployment.agentDid}
+              />
             </span>
+            {status.lastError ? (
+              <span
+                className="fleet-agent-error"
+                data-testid={`fleet-error-${deployment.peerId}`}
+              >
+                {formatPeerConnectionError(status.lastError, "repair-p2p")}
+              </span>
+            ) : null}
             {graphqlEndpoint ? (
               <span
                 className="fleet-agent-endpoint mono"
