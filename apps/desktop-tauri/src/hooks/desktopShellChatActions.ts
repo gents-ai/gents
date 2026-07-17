@@ -48,8 +48,8 @@ export function createDesktopShellChatActions({
       return false;
     }
 
-    if (shellProjection.sendStatus.kind !== "ready") {
-      setError(shellProjection.sendStatus.hint);
+    if (shellProjection.nonEmptyContentSendStatus.kind !== "ready") {
+      setError(shellProjection.nonEmptyContentSendStatus.hint);
       return false;
     }
 

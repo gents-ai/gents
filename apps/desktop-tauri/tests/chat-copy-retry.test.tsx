@@ -3,11 +3,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatTranscriptPanel } from "../src/components/chat";
 import { MessageList } from "../src/components/Transcript";
+import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
+import {
+  setDesktopApiAdapterForTests,
+  type DesktopApiAdapter,
+} from "../src/lib/desktop-api";
+import { projectChatShell } from "../src/lib/chat-shell";
 import { copyText } from "../src/lib/clipboard";
 import type { DesktopSessionSnapshot } from "../src/lib/types";
+import { deployment } from "./config-panel-wiring/fixtures";
+
+afterEach(() => setDesktopApiAdapterForTests(null));
 
 describe("copyText", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Object.assign(navigator, { clipboard: undefined });
+  });
 
   it("prefers navigator.clipboard and falls back to execCommand", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -17,8 +29,29 @@ describe("copyText", () => {
 
     Object.assign(navigator, { clipboard: undefined });
     document.execCommand = vi.fn().mockReturnValue(true);
+    const copyButton = document.createElement("button");
+    document.body.appendChild(copyButton);
+    copyButton.focus();
     expect(await copyText("legacy")).toBe(true);
     expect(document.execCommand).toHaveBeenCalledWith("copy");
+    expect(copyButton).toHaveFocus();
+    expect(document.body.querySelector("textarea[readonly]")).toBeNull();
+    copyButton.remove();
+  });
+
+  it("restores focus and removes the fallback textarea when execCommand throws", async () => {
+    Object.assign(navigator, { clipboard: undefined });
+    document.execCommand = vi.fn(() => {
+      throw new Error("clipboard denied");
+    });
+    const copyButton = document.createElement("button");
+    document.body.appendChild(copyButton);
+    copyButton.focus();
+
+    expect(await copyText("legacy")).toBe(false);
+    expect(copyButton).toHaveFocus();
+    expect(document.body.querySelector("textarea[readonly]")).toBeNull();
+    copyButton.remove();
   });
 });
 
@@ -106,5 +139,59 @@ describe("error card retry", () => {
   it("omits Retry when no handler is wired", () => {
     render(<ChatTranscriptPanel selectedSessionId="s1" session={session} />);
     expect(screen.queryByTestId("retry-turn")).not.toBeInTheDocument();
+  });
+
+  it("submits retry content through the shell when the composer draft is empty", async () => {
+    const sendChatMessage = vi.fn().mockResolvedValue({
+      agentDid: deployment.agentDid,
+      sessionId: "s1",
+      requestId: "req_retry",
+    });
+    setDesktopApiAdapterForTests({ sendChatMessage } as DesktopApiAdapter);
+    const shellProjection = projectChatShell({
+      clientAvailable: true,
+      selectedAgentDid: deployment.agentDid,
+      selectedSessionId: "s1",
+      draft: "",
+      sending: false,
+      session,
+      selectedConversation: null,
+      localWorkflow: { kind: "ready" },
+    });
+    expect(shellProjection.sendStatus).toMatchObject({
+      kind: "disabled",
+      reason: "composerEmpty",
+    });
+    expect(shellProjection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
+
+    const actions = createDesktopShellChatActions({
+      draft: "",
+      newConversationAgentRef: { current: null },
+      refreshSession: vi.fn(),
+      refreshSnapshot: vi.fn(),
+      selectedBehaviorId: deployment.defaultBehaviorId ?? null,
+      selectedDeployment: deployment,
+      selectedSessionId: "s1",
+      session,
+      setDraft: vi.fn(),
+      setError: vi.fn(),
+      setLocalWorkflow: vi.fn(),
+      setSelectedBehaviorId: vi.fn(),
+      setSelectedSessionId: vi.fn(),
+      setSending: vi.fn(),
+      setSession: vi.fn(),
+      shellProjection,
+    });
+
+    actions.onRetryMessage("the failed ask");
+
+    await waitFor(() =>
+      expect(sendChatMessage).toHaveBeenCalledWith({
+        agentDid: deployment.agentDid,
+        behaviorId: deployment.defaultBehaviorId,
+        sessionId: "s1",
+        content: "the failed ask",
+      }),
+    );
   });
 });

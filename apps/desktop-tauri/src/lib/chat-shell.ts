@@ -48,6 +48,7 @@ type ProjectionInput = {
 export type ChatShellProjection = {
   workflow: ChatWorkflowState;
   sendStatus: SendStatus;
+  nonEmptyContentSendStatus: SendStatus;
   turnState: TurnState | null;
   activeRequestId: string | null;
 };
@@ -209,64 +210,74 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     }
   }
 
-  let sendStatus: SendStatus;
-  if (!input.clientAvailable) {
-    sendStatus = {
-      kind: "disabled",
-      reason: "clientOffline",
-      hint: hintFor("clientOffline"),
-    };
-  } else if (!input.selectedAgentDid) {
-    sendStatus = {
-      kind: "disabled",
-      reason: "agentNotSelected",
-      hint: hintFor("agentNotSelected"),
-    };
-  } else if (!input.draft.trim()) {
-    sendStatus = {
-      kind: "disabled",
-      reason: "composerEmpty",
-      hint: hintFor("composerEmpty"),
-    };
-  } else if (input.sending || input.localWorkflow.kind === "submittingRequest") {
-    sendStatus = {
-      kind: "disabled",
-      reason: "submittingRequest",
-      hint: hintFor("submittingRequest"),
-    };
-  } else if (
-    workflow.kind === "awaitingObservation" &&
-    activeRequestId === workflow.requestId &&
-    pendingRequestId !== workflow.requestId &&
-    observedLatestRequestId !== workflow.requestId
-  ) {
-    sendStatus = {
-      kind: "disabled",
-      reason: "waitingForRequestObservation",
-      hint: hintFor("waitingForRequestObservation"),
-    };
-  } else if (workflow.kind === "blocked") {
-    sendStatus = {
-      kind: "disabled",
-      reason: workflow.reason,
-      hint: hintFor(workflow.reason, workflow.turnState),
-    };
-  } else if (
-    workflow.kind === "turnInProgress" &&
-    !isTerminalTurnState(workflow.turnState)
-  ) {
-    sendStatus = {
-      kind: "disabled",
-      reason: "awaitingTurnTerminality",
-      hint: hintFor("awaitingTurnTerminality", workflow.turnState),
-    };
-  } else {
-    sendStatus = { kind: "ready" };
+  function sendStatusFor(composerEmpty: boolean): SendStatus {
+    if (!input.clientAvailable) {
+      return {
+        kind: "disabled",
+        reason: "clientOffline",
+        hint: hintFor("clientOffline"),
+      };
+    }
+    if (!input.selectedAgentDid) {
+      return {
+        kind: "disabled",
+        reason: "agentNotSelected",
+        hint: hintFor("agentNotSelected"),
+      };
+    }
+    if (composerEmpty) {
+      return {
+        kind: "disabled",
+        reason: "composerEmpty",
+        hint: hintFor("composerEmpty"),
+      };
+    }
+    if (input.sending || input.localWorkflow.kind === "submittingRequest") {
+      return {
+        kind: "disabled",
+        reason: "submittingRequest",
+        hint: hintFor("submittingRequest"),
+      };
+    }
+    if (
+      workflow.kind === "awaitingObservation" &&
+      activeRequestId === workflow.requestId &&
+      pendingRequestId !== workflow.requestId &&
+      observedLatestRequestId !== workflow.requestId
+    ) {
+      return {
+        kind: "disabled",
+        reason: "waitingForRequestObservation",
+        hint: hintFor("waitingForRequestObservation"),
+      };
+    }
+    if (workflow.kind === "blocked") {
+      return {
+        kind: "disabled",
+        reason: workflow.reason,
+        hint: hintFor(workflow.reason, workflow.turnState),
+      };
+    }
+    if (
+      workflow.kind === "turnInProgress" &&
+      !isTerminalTurnState(workflow.turnState)
+    ) {
+      return {
+        kind: "disabled",
+        reason: "awaitingTurnTerminality",
+        hint: hintFor("awaitingTurnTerminality", workflow.turnState),
+      };
+    }
+    return { kind: "ready" };
   }
+
+  const sendStatus = sendStatusFor(!input.draft.trim());
+  const nonEmptyContentSendStatus = sendStatusFor(false);
 
   return {
     workflow,
     sendStatus,
+    nonEmptyContentSendStatus,
     turnState: observedTurnState,
     activeRequestId,
   };
