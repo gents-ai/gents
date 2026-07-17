@@ -342,10 +342,28 @@
     padding: 0 var(--space-5) var(--space-2);
   }
 
+  .code-output {
+    position: relative;
+  }
+
+  .code-output-copy {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+    opacity: 0;
+    background: var(--color-surface-deep);
+  }
+
+  .code-output:hover .code-output-copy,
+  .code-output-copy:focus-visible {
+    opacity: 1;
+  }
+
   .code-terminal {
     margin: 0;
     padding: var(--space-3) var(--space-5);
-    overflow-x: auto;
+    max-height: 320px;
+    overflow: auto;
     background: var(--color-surface-deep);
     border-radius: var(--radius-md, 8px);
     font-size: var(--text-md);

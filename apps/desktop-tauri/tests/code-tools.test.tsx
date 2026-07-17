@@ -123,6 +123,8 @@ describe("toCodeToolView", () => {
       exitCode: 0,
       executionMode: "read_only",
       networkMode: "disabled",
+      durationMs: null,
+      cwd: null,
       timedOut: false,
       failed: false,
       stdout: "test result: ok. 3 passed",
