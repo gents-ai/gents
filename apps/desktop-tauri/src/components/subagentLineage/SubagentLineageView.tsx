@@ -40,7 +40,10 @@ export function SubagentLineageView({
 
   const treeContainerRef = useRef<HTMLUListElement | null>(null);
 
-  // Fetch when root or agent changes.
+  // Fetch when root or agent changes, then keep polling while mounted —
+  // the lineage exists to observe a LIVE turn, so a one-shot snapshot
+  // going stale defeats it. Background refreshes preserve the operator's
+  // expand/collapse choices and only auto-expand genuinely new nodes.
   useEffect(() => {
     let cancelled = false;
     if (!rootRequestId) {
@@ -49,36 +52,63 @@ export function SubagentLineageView({
       setLoading(false);
       return;
     }
-    setLoading(true);
-    setError(null);
-    listSubagentTree({
-      rootRequestId,
-      agentDid: agentDid ?? null,
-      includeTerminal: true,
-    })
-      .then((value) => {
+
+    const treeKeys = (value: SubagentTreeView) => {
+      const keys = new Set<string>();
+      for (const node of value.nodes) keys.add(`req:${node.requestId}`);
+      for (const edge of value.edges) {
+        keys.add(
+          `tool:${edge.parentToolCallId ?? `${edge.parentRequestId}->${edge.childRequestId}`}`,
+        );
+      }
+      return keys;
+    };
+    let seenKeys: Set<string> | null = null;
+
+    const fetchTree = async (background: boolean) => {
+      if (!background) {
+        setLoading(true);
+        setError(null);
+      }
+      try {
+        const value = await listSubagentTree({
+          rootRequestId,
+          agentDid: agentDid ?? null,
+          includeTerminal: true,
+        });
         if (cancelled) return;
+        const keys = treeKeys(value);
         setTree(value);
-        // Expand everything by default so the panel shows useful data on load.
-        const next = new Set<string>();
-        for (const node of value.nodes) next.add(`req:${node.requestId}`);
-        for (const edge of value.edges) {
-          next.add(
-            `tool:${edge.parentToolCallId ?? `${edge.parentRequestId}->${edge.childRequestId}`}`,
-          );
+        if (seenKeys === null) {
+          // Expand everything by default so the panel shows useful data.
+          setExpanded(keys);
+        } else {
+          const previous = seenKeys;
+          setExpanded((current) => {
+            const next = new Set(current);
+            for (const key of keys) {
+              if (!previous.has(key)) next.add(key);
+            }
+            return next;
+          });
         }
-        setExpanded(next);
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
+        seenKeys = keys;
+      } catch (error: unknown) {
+        if (cancelled || background) return;
         setTree(null);
         setError(error instanceof Error ? error.message : String(error));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      } finally {
+        if (!cancelled && !background) setLoading(false);
+      }
+    };
+
+    void fetchTree(false);
+    const handle = window.setInterval(() => {
+      void fetchTree(true);
+    }, 5_000);
     return () => {
       cancelled = true;
+      window.clearInterval(handle);
     };
   }, [rootRequestId, agentDid]);
 
