@@ -16,8 +16,6 @@ import { BackgroundedToolsPanel } from "./backgroundedTools";
 import { useOperationsSnapshot } from "./backgroundedTools/useOperationsSnapshot";
 import { SubagentLineageView } from "./subagentLineage";
 
-const OPS_SNAPSHOT_REQUEST = { rootRequestId: null };
-
 export type ChatWorkspaceProps = {
   selectedDeployment: DeploymentView | null;
   selectedConversationTitle: string | null;
@@ -148,8 +146,17 @@ export function ActiveChatWorkspace({
 
   // Workspace-level poll so the closed drawer can still raise attention —
   // the panels only poll while mounted inside the open drawer.
-  const { snapshot: opsSnapshot } = useOperationsSnapshot(OPS_SNAPSHOT_REQUEST);
-  const stuckCount = opsSnapshot?.stuckDiagnostics.length ?? 0;
+  const opsSnapshotRequest = useMemo(
+    () => ({ agentDid: selectedDeployment.agentDid, rootRequestId: null }),
+    [selectedDeployment.agentDid],
+  );
+  const { snapshot: opsSnapshot } = useOperationsSnapshot(opsSnapshotRequest, {
+    enabled: !operationsOpen,
+  });
+  const stuckCount =
+    opsSnapshot?.agentDid === selectedDeployment.agentDid
+      ? opsSnapshot.stuckDiagnostics.length
+      : 0;
 
   const operationsRailTabs = useMemo<OperationsRailTabDescriptor[]>(() => {
     const rootRequestId = lineageRootOverride ?? session?.latestRequestId ?? null;
@@ -161,6 +168,8 @@ export function ActiveChatWorkspace({
         badge: stuckCount > 0 ? String(stuckCount) : null,
         render: () => (
           <BackgroundedToolsPanel
+            agentDid={selectedDeployment.agentDid}
+            rootRequestId={rootRequestId}
             runtime={selectedDeployment?.runtime ?? null}
             onOpenLineage={setLineageRootOverride}
             onInterruptParent={(requestId) => {

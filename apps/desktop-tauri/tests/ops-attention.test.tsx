@@ -42,7 +42,11 @@ describe("stuck-work attention", () => {
   });
 
   it("renders diagnostics in operator language inside the panel", () => {
-    render(<BackgroundedToolsPanel />);
+    render(<BackgroundedToolsPanel agentDid="did:key:z6MkSelected" />);
+    expect(mockedSnapshot).toHaveBeenCalledWith({
+      agentDid: "did:key:z6MkSelected",
+      rootRequestId: null,
+    });
     const strip = screen.getByTestId("stuck-diagnostics");
     expect(strip).toHaveTextContent(
       "bash on req_0123456789… has stopped making progress",

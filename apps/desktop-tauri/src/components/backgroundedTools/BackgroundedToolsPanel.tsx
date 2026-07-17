@@ -49,6 +49,7 @@ function diagnosticSentence(diag: StuckWorkDiagnosticView): string {
 }
 
 export type BackgroundedToolsPanelProps = {
+  agentDid?: string | null;
   rootRequestId?: string | null;
   /** Selected deployment's runtime doc — carries real executor slot data. */
   runtime?: import("../../lib/types").RuntimeView | null;
@@ -59,6 +60,7 @@ export type BackgroundedToolsPanelProps = {
 };
 
 export function BackgroundedToolsPanel({
+  agentDid,
   rootRequestId,
   runtime,
   onOpenLineage,
@@ -68,8 +70,8 @@ export function BackgroundedToolsPanel({
   // (tests, future standalone surfaces), where tab switching is a no-op.
   const rail = useContext(OperationsRailContext);
   const request: DesktopOperationsSnapshotRequest = useMemo(
-    () => ({ rootRequestId: rootRequestId ?? null }),
-    [rootRequestId],
+    () => ({ agentDid: agentDid ?? null, rootRequestId: rootRequestId ?? null }),
+    [agentDid, rootRequestId],
   );
   const { snapshot, error, isLoading } = useOperationsSnapshot(request);
 
