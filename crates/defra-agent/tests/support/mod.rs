@@ -52,16 +52,40 @@ pub async fn test_db(name: &str) -> TestDb {
     }
 }
 
-/// A store that can carry duplicate `AgentConversation` session_ids (#693).
+/// `AgentConversation` as it exists on stores that predate the unique
+/// `session_id` index — the shape that produced #693 in the field.
 ///
-/// Production stores minted duplicates during the schema-broken era (the
-/// merge path enforces no unique index, and era stores predate it). The
-/// mutation path in a fresh test store DOES enforce `@index(unique: true)`,
-/// so to seed the wound we create the collection first from an era-faithful
-/// SDL whose `session_id` index is non-unique; `ensure_runtime_schemas`
-/// then treats the collection as already existing (indexes are immutable —
-/// they cannot be patched in later, exactly like the live stores).
-pub async fn test_db_with_duplicate_capable_conversations(name: &str) -> TestDb {
+/// The shipped schema declares `session_id: String @index(unique: true)`, and
+/// DefraDB enforces it on create: a duplicate cannot be minted on a fresh
+/// store. But DefraDB also cannot add an index to an *existing* collection
+/// (`add_schema` short-circuits), so a store whose `AgentConversation` was
+/// first registered without the unique index keeps duplicates forever. This SDL
+/// reproduces that store. Identical to the shipped schema except the index on
+/// `session_id` is not unique.
+pub const AGENT_CONVERSATION_NON_UNIQUE_SESSION_ID: &str = r#"
+type AgentConversation @branchable {
+    session_id: String @index
+    agent_name: String @index
+    agent_did: String @index @immutable
+    behavior_id: String @index
+    title: String
+    title_source: String
+    preview_text: String
+    status: String @index
+    created_at: DateTime @index(direction: DESC)
+    updated_at: DateTime @index(direction: DESC)
+    latest_request_id: String @index
+    forked_from_session_id: String @index
+    fork_at_user_turn: Int
+    forked_at: DateTime
+}
+"#;
+
+/// A store whose `AgentConversation` collection lacks the unique `session_id`
+/// index, so duplicate rows can be seeded (#693). Registering the legacy SDL
+/// first makes `ensure_runtime_schemas`' own `add_schema` a no-op for that
+/// collection (it swallows "already exists"), exactly as on an upgraded host.
+pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb {
     let tempdir = tempfile::Builder::new()
         .prefix(&format!("defra-agent-{name}-"))
         .tempdir()
@@ -73,17 +97,9 @@ pub async fn test_db_with_duplicate_capable_conversations(name: &str) -> TestDb 
             .await
             .expect("embedded node"),
     );
-    let canonical = defra_agent_protocol::schemas::AGENT_CONVERSATION;
-    let unique_marker = "session_id: String @index(unique: true)";
-    assert!(
-        canonical.contains(unique_marker),
-        "AgentConversation SDL no longer declares the unique session_id index; \
-         update this helper alongside the schema"
-    );
-    let era_sdl = canonical.replace(unique_marker, "session_id: String @index");
-    node.add_schema(&era_sdl)
+    node.add_schema(AGENT_CONVERSATION_NON_UNIQUE_SESSION_ID)
         .await
-        .expect("era AgentConversation schema");
+        .expect("legacy AgentConversation schema");
     ensure_runtime_schemas(&node)
         .await
         .expect("runtime schemas");
@@ -91,6 +107,98 @@ pub async fn test_db_with_duplicate_capable_conversations(name: &str) -> TestDb 
         node,
         _tempdir: tempdir,
     }
+}
+
+/// Raw `create_AgentConversation`, bypassing the upsert paths that would
+/// collapse duplicates. Returns the new `_docID`.
+///
+/// Two rows sharing a `session_id` must differ in at least one other field:
+/// DefraDB derives the docID from the content, so identical rows would collapse
+/// into one document rather than duplicate.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_conversation_row(
+    node: &EmbeddedNode,
+    session_id: &str,
+    title: &str,
+    preview_text: &str,
+    status: &str,
+    created_at: &str,
+    updated_at: &str,
+    latest_request_id: &str,
+) -> String {
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentConversation(input: {{
+                session_id: "{session_id}",
+                agent_name: "{agent_name}",
+                agent_did: "{agent_did}",
+                behavior_id: "{behavior_id}",
+                title: "{title}",
+                title_source: "placeholder",
+                preview_text: "{preview_text}",
+                status: "{status}",
+                created_at: "{created_at}",
+                updated_at: "{updated_at}",
+                latest_request_id: "{latest_request_id}"
+            }}) {{ _docID }}
+        }}"#,
+        session_id = escape_graphql_string(session_id),
+        agent_name = escape_graphql_string(AGENT_NAME),
+        agent_did = escape_graphql_string(AGENT_DID),
+        behavior_id = escape_graphql_string(AGENT_NAME),
+        title = escape_graphql_string(title),
+        preview_text = escape_graphql_string(preview_text),
+        status = escape_graphql_string(status),
+        created_at = escape_graphql_string(created_at),
+        updated_at = escape_graphql_string(updated_at),
+        latest_request_id = escape_graphql_string(latest_request_id),
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create_AgentConversation failed: {:?}",
+        resp.errors
+    );
+    // DefraDB returns either a single object or an array of rows depending on
+    // the mutation shape; accept both.
+    // DefraDB reports a `create_` mutation under the `add_` alias.
+    let payload = resp
+        .data
+        .as_ref()
+        .and_then(|data| {
+            data.get("create_AgentConversation")
+                .or_else(|| data.get("add_AgentConversation"))
+        })
+        .unwrap_or_else(|| panic!("create_AgentConversation payload missing: {:?}", resp.data));
+    let row = match payload {
+        serde_json::Value::Array(rows) => rows.first().cloned().unwrap_or_default(),
+        other => other.clone(),
+    };
+    row.get("_docID")
+        .and_then(|value| value.as_str())
+        .unwrap_or_else(|| panic!("created conversation _docID missing in {row:?}"))
+        .to_string()
+}
+
+/// The `status` of one conversation doc, addressed by `_docID`.
+pub async fn conversation_status_by_doc_id(node: &EmbeddedNode, doc_id: &str) -> String {
+    let query = format!(
+        r#"{{
+            AgentConversation(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ status }}
+        }}"#,
+        doc_id = escape_graphql_string(doc_id),
+    );
+    let resp = node.execute(&query).await;
+    assert!(!resp.has_errors(), "status query failed: {:?}", resp.errors);
+    resp.data
+        .as_ref()
+        .and_then(|data| data.get("AgentConversation"))
+        .and_then(|value| value.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("status"))
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// P2P admission overrides for multi-node tests that exercise hub backpressure
@@ -399,63 +507,6 @@ pub async fn upsert_conversation(
         "upsert conversation failed: {:?}",
         resp.errors
     );
-}
-
-/// Raw `create_AgentConversation` (no upsert): lets a test seed the #693
-/// wound — two conversation documents sharing one `session_id`, as minted on
-/// production stores during the schema-broken era.
-pub async fn create_conversation_document(
-    node: &EmbeddedNode,
-    session_id: &str,
-    behavior_id: &str,
-    title: &str,
-    status: &str,
-    latest_request_id: &str,
-    updated_at: &str,
-) -> String {
-    let session_id = escape_graphql_string(session_id);
-    let behavior_id = escape_graphql_string(behavior_id);
-    let title = escape_graphql_string(title);
-    let status = escape_graphql_string(status);
-    let latest_request_id = escape_graphql_string(latest_request_id);
-    let updated_at = escape_graphql_string(updated_at);
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentConversation(input: {{
-                session_id: "{session_id}",
-                agent_name: "{AGENT_NAME}",
-                agent_did: "{AGENT_DID}",
-                behavior_id: "{behavior_id}",
-                title: "{title}",
-                preview_text: "seeded",
-                status: "{status}",
-                created_at: "{updated_at}",
-                updated_at: "{updated_at}",
-                latest_request_id: "{latest_request_id}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create conversation document failed: {:?}",
-        resp.errors
-    );
-
-    // Duplicated session_ids are the point of this helper, so requery by the
-    // (session_id, title) pair — callers give each seeded twin a unique title.
-    let query = format!(
-        r#"{{
-            AgentConversation(filter: {{
-                session_id: {{ _eq: "{session_id}" }},
-                title: {{ _eq: "{title}" }}
-            }}) {{
-                _docID
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    first_row::<DocIdRow>(&resp, "AgentConversation").doc_id
 }
 
 pub async fn set_interrupt_requested_at(node: &EmbeddedNode, doc_id: &str, at: &str) {

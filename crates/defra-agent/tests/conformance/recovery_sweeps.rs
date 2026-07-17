@@ -8,7 +8,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        25,
+        28,
         "Lean should emit one row per registered recovery predicate witness"
     );
 
@@ -20,6 +20,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
         "inference_call_recover_all_stale_calls",
         "subagent_liveness_terminalize_expired_children",
         "subagent_liveness_interrupt_queued_descendants",
+        "request_lifecycle_recover_all_conversations",
     ]
     .into_iter()
     .collect::<BTreeSet<_>>();
@@ -49,7 +50,7 @@ pub(super) fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence
     );
     assert_eq!(
         equivalence_cases.len(),
-        25,
+        28,
         "Lean recovery equivalence witness count drifted"
     );
 
@@ -140,6 +141,9 @@ fn expected_recovery_equivalence_theorem(sweep_id: &str) -> &'static str {
         }
         "subagent_liveness_interrupt_queued_descendants" => {
             "Recovery.queuedDescendantRecover_matches_uninterrupted"
+        }
+        "request_lifecycle_recover_all_conversations" => {
+            "Recovery.conversation_recover_matches_uninterrupted"
         }
         other => panic!("unhandled recovery equivalence sweep id {other}"),
     }
@@ -248,6 +252,7 @@ async fn drive_recovery_sweep_case(case: &lean_vocab_test::LeanRecoverySweepCase
         ("AgentResponse", _) => drive_response_recovery_case(case).await,
         ("AgentToolCall", _) => drive_tool_call_recovery_case(case).await,
         ("InferenceCall", _) => drive_inference_call_recovery_case(case).await,
+        ("AgentConversation", _) => drive_conversation_recovery_case(case).await,
         (other, _) => panic!("unhandled recovery collection {other} for {}", case.name),
     }
 }
@@ -1355,4 +1360,178 @@ async fn fetch_inference_recovery_row(
         }}"#
     );
     first_row(&node.execute(&query).await, "InferenceCall")
+}
+
+/// Drive one Lean conversation sweep case against the production recovery
+/// function: seed a stuck conversation whose parent request has the case's
+/// outcome, run the real sweep, and assert the doc reached the terminal state
+/// Lean computed.
+async fn drive_conversation_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
+    let db = test_db("generated-conversation-recovery").await;
+    let session_id = format!("session-{}", case.name);
+    let request_id = format!("request-{}", case.name);
+
+    // The parent request's outcome is what the conversation is terminalized
+    // from: a completed request settles it `completed`, anything else `active`.
+    let request_status = if case.terminal_state == "completed" {
+        "completed"
+    } else {
+        "error"
+    };
+    create_request(
+        &db.node,
+        &request_id,
+        &session_id,
+        request_status,
+        RECOVERY_CREATED_AT,
+    )
+    .await;
+
+    let doc_id = create_conversation_row(
+        &db.node,
+        &session_id,
+        "Conversation",
+        "hello",
+        &case.pre_state,
+        RECOVERY_CREATED_AT,
+        RECOVERY_CREATED_AT,
+        &request_id,
+    )
+    .await;
+
+    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .expect("conversation recovery");
+    assert_eq!(
+        report.conversations_recovered, 1,
+        "case {} must recover exactly one session",
+        case.name
+    );
+    assert_eq!(report.conversations_failed, 0, "case {}", case.name);
+    assert_eq!(
+        conversation_status_by_doc_id(&db.node, &doc_id).await,
+        case.terminal_state,
+        "case {} must reach the Lean-computed terminal state",
+        case.name
+    );
+}
+
+/// #693: the outcome witnesses fence duplicate tolerance and honest counting
+/// against the real sweep.
+///
+/// `write_succeeds: false` rows are not driven against the store — they encode
+/// the *reporting* contract for a refused write (`recovered = 0`, rows left
+/// stale), which the pre-fix code violated by counting attempts. The
+/// duplicate-store rows ARE driven: they are the condition that made the write
+/// fail in the first place.
+pub(super) async fn generated_recovery_outcome_cases_fence_duplicate_tolerant_counting() {
+    let cases = lean_recovery_outcome_cases();
+    assert!(!cases.is_empty(), "Lean emitted no recovery outcome cases");
+
+    for case in cases {
+        assert_eq!(
+            case.collection, "AgentConversation",
+            "outcome cases currently model the conversation sweep only"
+        );
+        assert_eq!(
+            case.sweep_id, "request_lifecycle_recover_all_conversations",
+            "case {}",
+            case.name
+        );
+        // The write must be addressed by _docID: a session_id filter matches
+        // every duplicate and DefraDB refuses it (#693 defect 1).
+        assert_eq!(
+            case.target_selector, "_docID",
+            "case {} must address the canonical doc by _docID",
+            case.name
+        );
+        // A refused write reports zero recoveries and leaves the rows stale
+        // (#693 defect 2).
+        if !case.write_succeeds {
+            assert_eq!(case.expected_recovered, 0, "case {}", case.name);
+            assert!(case.measure_after > 0, "case {}", case.name);
+            continue;
+        }
+        assert!(
+            case.expected_recovered <= 1,
+            "case {} must count sessions, not documents",
+            case.name
+        );
+    }
+
+    drive_duplicate_conversation_outcome_case().await;
+}
+
+/// The duplicate-store case, end to end against the production sweep: two docs
+/// share a `session_id`, the write lands (because it is `_docID`-addressed),
+/// the SESSION counts once, and a second pass converges.
+async fn drive_duplicate_conversation_outcome_case() {
+    let case = lean_recovery_outcome_cases()
+        .iter()
+        .find(|case| case.duplicated && case.write_succeeds && case.expected_recovered == 1)
+        .expect("Lean must emit a recovering duplicate-group case");
+
+    let db =
+        test_db_with_duplicate_tolerant_conversations("generated-conversation-duplicate").await;
+    create_request(
+        &db.node,
+        "dup-request",
+        "session-dup",
+        "completed",
+        RECOVERY_CREATED_AT,
+    )
+    .await;
+
+    let canonical = create_conversation_row(
+        &db.node,
+        "session-dup",
+        "Real conversation",
+        "hello",
+        "processing",
+        RECOVERY_CREATED_AT,
+        "2026-03-23T00:05:00Z",
+        "dup-request",
+    )
+    .await;
+    let duplicate = create_conversation_row(
+        &db.node,
+        "session-dup",
+        "",
+        "",
+        "processing",
+        RECOVERY_CREATED_AT,
+        "2026-03-22T00:00:00Z",
+        "",
+    )
+    .await;
+    assert_eq!(
+        case.doc_count, 2,
+        "the Lean case models a two-document duplicate group"
+    );
+
+    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .expect("recovery must be total on a duplicate store");
+    assert_eq!(report.conversations_recovered, case.expected_recovered);
+    assert_eq!(report.conversations_failed, case.expected_failed);
+    assert_eq!(report.duplicate_conversation_sessions, 1);
+
+    // Both docs terminalized: the group stops being stale, so the sweep
+    // converges (Lean `conversation_recover_zero`).
+    assert_eq!(
+        conversation_status_by_doc_id(&db.node, &canonical).await,
+        "completed"
+    );
+    assert_eq!(
+        conversation_status_by_doc_id(&db.node, &duplicate).await,
+        "completed"
+    );
+
+    let second = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .expect("second pass");
+    assert_eq!(
+        second.conversations_recovered, 0,
+        "an already-recovered store must report no recoveries"
+    );
 }

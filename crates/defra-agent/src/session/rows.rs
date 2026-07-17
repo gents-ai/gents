@@ -33,8 +33,6 @@ pub(super) struct ConversationDocument {
     #[serde(default)]
     pub(super) doc_id: String,
     #[serde(default)]
-    pub(super) updated_at: String,
-    #[serde(default)]
     pub(super) title: String,
     #[serde(default)]
     pub(super) title_source: Option<String>,
@@ -48,6 +46,8 @@ pub(super) struct ConversationDocument {
     pub(super) behavior_id: Option<String>,
     #[serde(default)]
     pub(super) created_at: String,
+    #[serde(default)]
+    pub(super) updated_at: String,
     #[serde(default)]
     #[allow(dead_code)]
     pub(super) agent_did: Option<String>,

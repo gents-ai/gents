@@ -226,6 +226,31 @@ structure RecoverySweepCase where
   deadlineAuditRef : String
   deriving DecidableEq, Repr
 
+/-- Witness for the outcome/report layer (#693): how many docs a stale session
+    carries, how many writes the store accepts, and what the sweep must
+    therefore REPORT. `targetSelector` pins the write addressing mode — a
+    `session_id` filter matches every duplicate and is refused by DefraDB, so
+    the contract demands `_docID`. -/
+structure RecoveryOutcomeCase where
+  name : String
+  sweepId : String
+  collection : String
+  rustFunction : String
+  /-- Docs sharing the session_id (>1 = the #693 duplicate store). -/
+  docCount : Nat
+  duplicated : Bool
+  /-- Whether the store accepts the recovery write for this group. -/
+  writeSucceeds : Bool
+  /-- What the sweep must report. `recovered` counts SUCCESSES, never attempts. -/
+  expectedRecovered : Nat
+  expectedFailed : Nat
+  /-- Stale docs left behind (0 once recovered; unchanged when the write failed). -/
+  measureAfter : Nat
+  /-- Recovery must address docs by `_docID`, never by a `session_id` filter. -/
+  targetSelector : String
+  theoremName : String
+  deriving DecidableEq, Repr
+
 structure RecoveryEquivalenceCase where
   name : String
   sourceSweepCase : String

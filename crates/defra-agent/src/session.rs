@@ -24,8 +24,8 @@ pub use compaction_entries::{load_compaction_entries, save_compaction_entry};
 #[allow(unused_imports)]
 pub(crate) use conversation::{
     conversation_needs_generated_title, load_recent_titles_for_agent,
-    update_conversation_status_if_latest_with_identity, update_conversation_status_with_identity,
-    update_conversation_title_with_source, upsert_conversation_from_request_with_identity,
+    update_conversation_status_if_latest_with_identity, update_conversation_title_with_source,
+    upsert_conversation_from_request_with_identity,
     upsert_conversation_from_request_with_identity_and_requester_did,
     upsert_conversation_from_request_with_identity_and_title, CONVERSATION_TITLE_SOURCE_FALLBACK,
     CONVERSATION_TITLE_SOURCE_GENERATED, CONVERSATION_TITLE_SOURCE_TASK,

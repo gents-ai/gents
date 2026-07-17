@@ -252,12 +252,13 @@ async fn upsert_conversation_from_request_keeps_title_empty_until_generated() {
     )
     .await
     .unwrap();
-    update_conversation_status_with_identity(
+    update_conversation_status_if_latest_with_identity(
         &node,
         "session-1",
         "general",
         agent_did,
         "general",
+        "request-2",
         "completed",
     )
     .await
