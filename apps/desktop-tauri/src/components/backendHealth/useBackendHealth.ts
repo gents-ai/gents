@@ -15,8 +15,10 @@ export function useBackendHealth(): BackendHealthState {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refresh = useCallback(async (background = false) => {
+    if (!background) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const rows = await listBackendsWithHealth();
@@ -24,12 +26,20 @@ export function useBackendHealth(): BackendHealthState {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (!background) {
+        setLoading(false);
+      }
     }
   }, []);
 
+  // Poll like the MCP panel (10 s) so statuses and relative ages stay live
+  // instead of freezing at mount; background refreshes skip the loading flip.
   useEffect(() => {
     void refresh();
+    const handle = window.setInterval(() => {
+      void refresh(true);
+    }, 10_000);
+    return () => window.clearInterval(handle);
   }, [refresh]);
 
   return { backends, loading, error, refresh };
