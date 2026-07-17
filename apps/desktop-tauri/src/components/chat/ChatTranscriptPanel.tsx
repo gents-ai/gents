@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { isTerminalTurnState } from "../../lib/chat-shell";
 import type { DesktopSessionSnapshot } from "../../lib/types";
 import { MessageList } from "../Transcript";
 
@@ -56,6 +57,33 @@ export function ChatTranscriptPanel({
     setAutoFollowTranscript(true);
   }, [selectedSessionId]);
 
+  const lastItem = session?.timelineItems[session.timelineItems.length - 1];
+  // A send may be observed as pending or already materialized. Prefer the
+  // request identity so that pending -> materialized does not look like a
+  // second send; fall back to the user row identity for partial snapshots.
+  const latestUserTurn = useMemo(() => {
+    const items = session?.timelineItems ?? [];
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index];
+      if (item.kind === "userMessage" || item.kind === "pendingUserTurn") {
+        return item;
+      }
+    }
+    return null;
+  }, [session?.timelineItems]);
+  const sendIdentity = session?.latestRequestId
+    ? `request:${session.latestRequestId}`
+    : latestUserTurn?.kind === "pendingUserTurn"
+      ? `request:${latestUserTurn.requestId}`
+      : latestUserTurn
+        ? `message:${latestUserTurn.itemKey}`
+        : null;
+  useEffect(() => {
+    if (sendIdentity) {
+      setAutoFollowTranscript(true);
+    }
+  }, [sendIdentity]);
+
   useEffect(() => {
     if (!autoFollowTranscript) {
       return;
@@ -67,7 +95,11 @@ export function ChatTranscriptPanel({
     }
 
     const frame = window.requestAnimationFrame(() => {
-      scrollTarget.scrollIntoView({ block: "end" });
+      // Instant, not smooth: the panel's CSS smooth-scroll animates
+      // scrollIntoView, and a chunk landing mid-animation left the scroll
+      // short of the bottom — which the scroll handler then misread as the
+      // user scrolling away, silently disengaging follow.
+      scrollTarget.scrollIntoView({ block: "end", behavior: "instant" });
     });
 
     return () => window.cancelAnimationFrame(frame);
@@ -85,6 +117,19 @@ export function ChatTranscriptPanel({
 
   const responseError = session?.latestResponse?.errorMessage?.trim() ?? "";
   const showResponseError = Boolean(responseError);
+
+  // Animated placeholder between send and the assistant's first visible
+  // output — without it the transcript sits inert while the turn runs.
+  const turnActive = Boolean(
+    session?.turnState && !isTerminalTurnState(session.turnState),
+  );
+  const assistantSilent =
+    !lastItem ||
+    lastItem.kind === "userMessage" ||
+    lastItem.kind === "pendingUserTurn" ||
+    (lastItem.kind === "liveAssistant" &&
+      !(lastItem.content?.length || lastItem.reasoning?.length));
+  const showThinking = turnActive && assistantSilent && !showResponseError;
 
   return (
     <section
@@ -119,6 +164,23 @@ export function ChatTranscriptPanel({
               session.latestResponse?.materializedMessageSequence
             }
           />
+          {showThinking ? (
+            <div className="turn-block">
+              <article
+                className="message-card thinking-card"
+                data-testid="assistant-thinking"
+                role="status"
+                aria-label="Assistant is working"
+              >
+                <div className="message-role">assistant</div>
+                <div className="thinking-dots" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              </article>
+            </div>
+          ) : null}
           {showResponseError ? (
             <div className="turn-block">
               <article
@@ -134,6 +196,17 @@ export function ChatTranscriptPanel({
             </div>
           ) : null}
           <div className="transcript-end-anchor" ref={transcriptEndRef} />
+        </div>
+      ) : selectedSessionId ? (
+        <div
+          className="transcript-loading"
+          data-testid="transcript-loading"
+          role="status"
+          aria-label="Loading conversation"
+        >
+          <div className="skeleton-row" />
+          <div className="skeleton-row" />
+          <div className="skeleton-row" />
         </div>
       ) : (
         <div className="empty-transcript compact-empty">
