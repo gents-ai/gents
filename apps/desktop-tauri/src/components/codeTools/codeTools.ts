@@ -31,11 +31,36 @@ export type CommandRunView = {
   exitCode: number | null;
   executionMode: string | null;
   networkMode: string | null;
+  durationMs: number | null;
+  cwd: string | null;
   timedOut: boolean;
   failed: boolean;
   stdout: string;
   stderr: string;
 };
+
+/** Operator-facing duration: 480ms · 1.2s · 2m 14s. */
+export function formatDuration(ms: number): string {
+  if (ms < 1000) {
+    return `${Math.round(ms)}ms`;
+  }
+  if (ms < 60_000) {
+    return `${(ms / 1000).toFixed(1).replace(/\.0$/, "")}s`;
+  }
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = Math.round((ms % 60_000) / 1000);
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+// Terminal escapes the webview can't render: CSI (colors/cursor), OSC
+// (titles/hyperlink wrappers), and stray two-byte escape controls.
+const ANSI_PATTERN =
+  // eslint-disable-next-line no-control-regex
+  /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
+
+export function stripAnsi(value: string): string {
+  return value.replace(ANSI_PATTERN, "");
+}
 
 export type CodeToolView = FileEditView | CommandRunView;
 
@@ -202,7 +227,7 @@ function splitAtMarker(
 }
 
 function normalizeStream(value: string): string {
-  const trimmed = value.replace(/\s+$/, "");
+  const trimmed = stripAnsi(value).replace(/\s+$/, "");
   return trimmed === "(empty)" ? "" : trimmed;
 }
 
@@ -299,12 +324,15 @@ function toCommandRunView(tool: RenderedToolCallView): CommandRunView | null {
     status === "exit_nonzero" ||
     (exitCode != null && exitCode !== 0);
   const { stdout, stderr } = streams;
+  const durationRaw = meta?.["duration_ms"];
   return {
     kind: "command",
     command,
     exitCode,
     executionMode: stringField(meta, "execution_mode"),
     networkMode: stringField(meta, "network_mode"),
+    durationMs: typeof durationRaw === "number" ? durationRaw : null,
+    cwd: stringField(meta, "cwd"),
     timedOut,
     failed,
     stdout,

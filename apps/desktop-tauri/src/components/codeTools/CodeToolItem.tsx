@@ -1,4 +1,11 @@
-import type { CodeToolView } from "./codeTools";
+import { CopyButton } from "../CopyButton";
+import { formatDuration, type CodeToolView, type DiffLine } from "./codeTools";
+
+function diffText(diff: DiffLine[]): string {
+  return diff
+    .map((line) => `${line.kind === "add" ? "+" : "-"}${line.text}`)
+    .join("\n");
+}
 
 // Renders a code tool call as a diff (file edits) or a terminal block (bash),
 // instead of the generic args/result disclosure. Foundation-aligned: the data
@@ -22,19 +29,25 @@ export function CodeToolItem({ view }: { view: CodeToolView }) {
           </span>
           <span className="tool-item-action">diff</span>
         </summary>
-        <pre className="code-diff" data-testid="code-diff">
-          {view.diff.map((line, index) => (
-            <div
-              className={`code-diff-line code-diff-${line.kind}`}
-              key={`${line.kind}-${index}`}
-            >
-              <span aria-hidden="true" className="code-diff-gutter">
-                {line.kind === "add" ? "+" : "-"}
-              </span>
-              <span className="code-diff-text">{line.text}</span>
-            </div>
-          ))}
-        </pre>
+        <div className="code-output">
+          <CopyButton
+            className="code-output-copy"
+            getText={() => diffText(view.diff)}
+          />
+          <pre className="code-diff" data-testid="code-diff">
+            {view.diff.map((line, index) => (
+              <div
+                className={`code-diff-line code-diff-${line.kind}`}
+                key={`${line.kind}-${index}`}
+              >
+                <span aria-hidden="true" className="code-diff-gutter">
+                  {line.kind === "add" ? "+" : "-"}
+                </span>
+                <span className="code-diff-text">{line.text}</span>
+              </div>
+            ))}
+          </pre>
+        </div>
       </details>
     );
   }
@@ -68,21 +81,38 @@ export function CodeToolItem({ view }: { view: CodeToolView }) {
         </span>
       </summary>
       <div className="tool-item-body">
-        {view.executionMode || view.networkMode ? (
+        {view.executionMode ||
+        view.networkMode ||
+        view.durationMs != null ||
+        view.cwd ? (
           <div className="code-command-meta muted small">
+            {view.durationMs != null ? (
+              <span data-testid="code-duration">{formatDuration(view.durationMs)}</span>
+            ) : null}
+            {view.cwd ? (
+              <span className="mono" data-testid="code-cwd">
+                {view.cwd}
+              </span>
+            ) : null}
             {view.executionMode ? <span>sandbox: {view.executionMode}</span> : null}
             {view.networkMode ? <span>network: {view.networkMode}</span> : null}
           </div>
         ) : null}
         {view.stdout ? (
-          <pre className="code-terminal" data-testid="code-terminal">
-            {view.stdout}
-          </pre>
+          <div className="code-output">
+            <CopyButton className="code-output-copy" getText={() => view.stdout} />
+            <pre className="code-terminal" data-testid="code-terminal">
+              {view.stdout}
+            </pre>
+          </div>
         ) : null}
         {view.stderr ? (
           <div className="code-stderr" data-testid="code-stderr">
             <div className="tool-detail-label">stderr</div>
-            <pre className="code-terminal">{view.stderr}</pre>
+            <div className="code-output">
+              <CopyButton className="code-output-copy" getText={() => view.stderr} />
+              <pre className="code-terminal">{view.stderr}</pre>
+            </div>
           </div>
         ) : null}
       </div>
