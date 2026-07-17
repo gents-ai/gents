@@ -1,4 +1,40 @@
 @layer shell {
+  .shortcuts-help {
+    min-width: 320px;
+  }
+
+  .shortcuts-list {
+    margin: var(--space-5) 0 0;
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .shortcuts-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-6);
+  }
+
+  .shortcuts-row dt {
+    flex: none;
+    width: 64px;
+  }
+
+  .shortcuts-row kbd {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    padding: 0 var(--space-2);
+    background: var(--color-surface-strong);
+  }
+
+  .shortcuts-row dd {
+    margin: 0;
+    color: var(--color-text-soft);
+    font-size: var(--text-sm);
+  }
+
   .app-shell {
     position: relative;
     isolation: isolate;
