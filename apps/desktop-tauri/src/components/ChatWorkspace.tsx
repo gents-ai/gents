@@ -9,6 +9,7 @@ import {
 import { BackendHealthPanel } from "./backendHealth";
 import { CascadeCancelDialog } from "./cancelUx";
 import { ChatComposer, ChatHeader, ChatTranscriptPanel } from "./chat";
+import { effectiveBehaviorSkills } from "./chat/slashSkills";
 import { McpHealthPanel } from "./mcpHealth";
 import { OperationsRail, OperationsRailProvider } from "./operations";
 import type { OperationsRailTabDescriptor } from "./operations";
@@ -82,10 +83,16 @@ export function ActiveChatWorkspace({
 }: ActiveChatWorkspaceProps) {
   const activeBehaviorId =
     selectedBehaviorId ?? selectedDeployment.defaultBehaviorId ?? null;
-  const behaviorLabel =
+  const activeBehavior =
     selectedDeployment.behaviors.find(
       (behavior) => behavior.behaviorId === activeBehaviorId,
-    )?.displayName ?? displayBehaviorLabel(activeBehaviorId);
+    ) ?? null;
+  const behaviorLabel =
+    activeBehavior?.displayName ?? displayBehaviorLabel(activeBehaviorId);
+  const activeBehaviorSkills = useMemo(
+    () => effectiveBehaviorSkills(selectedDeployment.skills ?? [], activeBehavior),
+    [activeBehavior, selectedDeployment.skills],
+  );
 
   const [cascade, setCascade] = useState<null | { rootRequestId: string }>(null);
   const [interruptResultBanner, setInterruptResultBanner] = useState<{
@@ -246,7 +253,7 @@ export function ActiveChatWorkspace({
             onDraftChange={onDraftChange}
             onInterruptClick={onInterruptClick}
             onSend={onSend}
-            skills={selectedDeployment.skills ?? []}
+            skills={activeBehaviorSkills}
           />
         </div>
         <OperationsRail

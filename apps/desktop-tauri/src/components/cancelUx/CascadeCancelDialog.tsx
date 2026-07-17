@@ -258,7 +258,9 @@ export function CascadeCancelDialog(
             disabled={phase === "submitting" || !preview}
             onClick={onConfirm}
           >
-            {phase === "submitting" ? "Interrupting…" : "Interrupt all"}
+            {phase === "submitting"
+              ? "Interrupting…"
+              : "Interrupt parent + eligible descendants"}
           </button>
         </footer>
       </div>

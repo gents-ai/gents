@@ -4,15 +4,65 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatComposer } from "../src/components/chat";
 import {
   applySkillSelection,
+  effectiveBehaviorSkills,
   slashSkillSuggestion,
 } from "../src/components/chat/slashSkills";
-import type { SkillView } from "../src/lib/types";
+import type { BehaviorView, SkillView } from "../src/lib/types";
 
 const skills: SkillView[] = [
   { skillId: "review-skill", name: "Review", toolRefs: [], enabled: true },
   { skillId: "deploy-skill", name: "Deploy", toolRefs: [], enabled: true },
   { skillId: "off-skill", name: "Disabled", toolRefs: [], enabled: false },
 ];
+
+describe("effectiveBehaviorSkills", () => {
+  it("inherits principal skills, applies exclusions, and requires behavior opt-in", () => {
+    const behavior: BehaviorView = {
+      behaviorId: "default",
+      displayName: "Default",
+      enabled: true,
+      isDefault: true,
+      skillRefs: ["behavior-selected"],
+      skillExcludes: ["principal-excluded"],
+    };
+    const deploymentSkills: SkillView[] = [
+      {
+        skillId: "principal-inherited",
+        scope: "principal",
+        toolRefs: [],
+        enabled: true,
+      },
+      {
+        skillId: "principal-excluded",
+        scope: "principal",
+        toolRefs: [],
+        enabled: true,
+      },
+      {
+        skillId: "behavior-selected",
+        scope: "behavior",
+        toolRefs: [],
+        enabled: true,
+      },
+      {
+        skillId: "behavior-unselected",
+        scope: "behavior",
+        toolRefs: [],
+        enabled: true,
+      },
+      {
+        skillId: "principal-disabled",
+        scope: "principal",
+        toolRefs: [],
+        enabled: false,
+      },
+    ];
+
+    expect(
+      effectiveBehaviorSkills(deploymentSkills, behavior).map((skill) => skill.skillId),
+    ).toEqual(["principal-inherited", "behavior-selected"]);
+  });
+});
 
 describe("slashSkillSuggestion", () => {
   it("suggests on a leading slash line and filters by prefix", () => {
@@ -93,6 +143,20 @@ describe("composer slash menu", () => {
 
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onDraftChange).toHaveBeenCalledWith("/review-skill\n");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("does not accept a suggestion or submit while IME composition is active", () => {
+    const onDraftChange = vi.fn();
+    const onSend = vi.fn();
+    renderComposer("/", onDraftChange, onSend);
+
+    const input = screen.getByTestId("composer-input");
+    fireEvent.keyUp(input, { target: { selectionStart: 1 } });
+    expect(screen.getByTestId("slash-skill-menu")).toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    expect(onDraftChange).not.toHaveBeenCalled();
     expect(onSend).not.toHaveBeenCalled();
   });
 

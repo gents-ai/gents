@@ -1,4 +1,4 @@
-import type { SkillView } from "../../lib/types";
+import type { BehaviorView, SkillView } from "../../lib/types";
 
 /// Composer support for the runtime's slash-skill convention: leading lines
 /// of a prompt shaped like `/skill-id` are consumed as skill selection
@@ -13,6 +13,27 @@ export type SlashSkillSuggestion = {
   lineEnd: number;
   items: SkillView[];
 };
+
+/** Mirror the runtime's per-behavior skill candidate resolution. */
+export function effectiveBehaviorSkills(
+  skills: SkillView[],
+  behavior: BehaviorView | null | undefined,
+): SkillView[] {
+  if (!behavior) {
+    return [];
+  }
+
+  const refs = new Set(behavior.skillRefs);
+  const excludes = new Set(behavior.skillExcludes);
+  return skills.filter((skill) => {
+    const scope = skill.scope?.trim();
+    return (
+      skill.enabled !== false &&
+      !excludes.has(skill.skillId) &&
+      (scope === "principal" || (scope === "behavior" && refs.has(skill.skillId)))
+    );
+  });
+}
 
 function lineBoundsAt(draft: string, caret: number): { start: number; end: number } {
   const start = draft.lastIndexOf("\n", caret - 1) + 1;

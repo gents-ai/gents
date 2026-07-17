@@ -94,6 +94,10 @@ export function ChatComposer({
   }, [draft]);
 
   function onComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.nativeEvent.isComposing) {
+      return;
+    }
+
     if (suggestion) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
@@ -122,7 +126,6 @@ export function ChatComposer({
       event.altKey ||
       event.ctrlKey ||
       event.metaKey ||
-      event.nativeEvent.isComposing ||
       !canSend
     ) {
       return;

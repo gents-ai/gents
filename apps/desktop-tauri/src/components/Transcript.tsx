@@ -106,14 +106,30 @@ function ToolDetailSection({
   );
 }
 
-/** One-line digest of a call's arguments for the collapsed summary. */
+const SAFE_TOOL_ARG_PREVIEW_FIELDS = new Set([
+  "path",
+  "file_path",
+  "directory",
+  "cwd",
+  "pattern",
+  "query",
+  "command",
+]);
+
+const SENSITIVE_TOOL_ARG_PREVIEW =
+  /(?:^|[^a-z0-9])(?:api[-_]?key|access[-_]?token|refresh[-_]?token|token|password|passwd|secret|authorization|cookie)(?:[^a-z0-9]|$)|\bbearer\s+\S+|\b(?:sk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}/i;
+
+/** One-line digest of a non-sensitive call argument for the collapsed summary. */
 function toolArgsPreview(args?: ToolDetailValueView | null): string | null {
   if (!args) {
     return null;
   }
-  const source = args.fields.find((field) => field.value.trim())?.value ?? args.rawText;
-  const flat = source.replace(/\s+/g, " ").trim();
-  if (!flat) {
+  const source = args.fields.find((field) => {
+    const key = field.key.trim().toLowerCase().replace(/-/g, "_");
+    return SAFE_TOOL_ARG_PREVIEW_FIELDS.has(key) && field.value.trim();
+  })?.value;
+  const flat = source?.replace(/\s+/g, " ").trim();
+  if (!flat || SENSITIVE_TOOL_ARG_PREVIEW.test(flat)) {
     return null;
   }
   return flat.length > 64 ? `${flat.slice(0, 64)}…` : flat;
@@ -147,16 +163,15 @@ function ToolGroups({ tools }: { tools: RenderedToolCallView[] }) {
         if (codeView) {
           return <CodeToolItem key={tool.itemKey} view={codeView} />;
         }
+        const argsPreview = toolArgsPreview(tool.args);
         return (
           <details className="tool-item" key={tool.itemKey}>
             <summary className="tool-item-summary">
               <span className="tool-item-summary-left">
                 <span aria-hidden="true" className={toolStatusClass(tool.statusKind)} />
                 <span className="tool-item-name">{tool.toolName}</span>
-                {toolArgsPreview(tool.args) ? (
-                  <span className="tool-item-preview">
-                    {toolArgsPreview(tool.args)}
-                  </span>
+                {argsPreview ? (
+                  <span className="tool-item-preview">{argsPreview}</span>
                 ) : null}
                 {tool.cancelCause ? (
                   <CancelCauseBadge
