@@ -294,20 +294,92 @@
   }
 
   .code-block {
-    position: relative;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-deep);
+    overflow: hidden;
+  }
+
+  .code-block-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-1) var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--color-surface-strong);
+  }
+
+  .code-block-language {
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    text-transform: lowercase;
+    letter-spacing: 0.04em;
   }
 
   .code-block-copy {
-    position: absolute;
-    top: var(--space-2);
-    right: var(--space-2);
+    margin-left: auto;
     opacity: 0;
-    background: var(--color-surface-deep);
   }
 
   .code-block:hover .code-block-copy,
   .code-block-copy:focus-visible {
     opacity: 1;
+  }
+
+  .code-block pre {
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+  }
+
+  /* highlight.js scopes mapped onto the app palette — no imported theme. */
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-built_in,
+  .hljs-type {
+    color: var(--color-info);
+  }
+
+  .hljs-string,
+  .hljs-regexp,
+  .hljs-addition {
+    color: var(--color-success);
+  }
+
+  .hljs-number,
+  .hljs-literal,
+  .hljs-attr,
+  .hljs-attribute,
+  .hljs-symbol {
+    color: var(--color-warning-soft);
+  }
+
+  .hljs-comment,
+  .hljs-quote,
+  .hljs-meta {
+    color: var(--color-text-muted);
+    font-style: italic;
+  }
+
+  .hljs-title,
+  .hljs-function,
+  .hljs-section,
+  .hljs-name {
+    color: var(--color-accent-strong);
+  }
+
+  .hljs-deletion {
+    color: var(--color-error);
+  }
+
+  .hljs-emphasis {
+    font-style: italic;
+  }
+
+  .hljs-strong {
+    font-weight: 700;
   }
 
   .response-error-details {

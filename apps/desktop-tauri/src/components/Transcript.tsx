@@ -1,5 +1,6 @@
-import { useRef, type ReactNode } from "react";
+import { isValidElement, useRef, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
+import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 
 import { CopyButton } from "./CopyButton";
@@ -16,14 +17,26 @@ import { CodeToolItem } from "./codeTools/CodeToolItem";
 import { toCodeToolView } from "./codeTools/codeTools";
 import { CommandDenialToolItem } from "./commandDenial";
 
+function codeBlockLanguage(children: ReactNode): string | null {
+  if (!isValidElement<{ className?: string }>(children)) {
+    return null;
+  }
+  const match = /language-([\w+-]+)/.exec(children.props.className ?? "");
+  return match ? match[1] : null;
+}
+
 function CodeBlock(props: { children?: ReactNode }) {
   const preRef = useRef<HTMLPreElement | null>(null);
+  const language = codeBlockLanguage(props.children);
   return (
     <div className="code-block">
-      <CopyButton
-        className="code-block-copy"
-        getText={() => preRef.current?.textContent ?? ""}
-      />
+      <div className="code-block-header">
+        {language ? <span className="code-block-language">{language}</span> : null}
+        <CopyButton
+          className="code-block-copy"
+          getText={() => preRef.current?.textContent ?? ""}
+        />
+      </div>
       <pre ref={preRef}>{props.children}</pre>
     </div>
   );
@@ -32,7 +45,11 @@ function CodeBlock(props: { children?: ReactNode }) {
 function MarkdownContent({ value }: { value: string }) {
   return (
     <div className="markdown-content">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: CodeBlock }}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeHighlight]}
+        components={{ pre: CodeBlock }}
+      >
         {value}
       </ReactMarkdown>
     </div>
