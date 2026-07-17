@@ -62,10 +62,24 @@ export function stripAnsi(value: string): string {
   return value.replace(ANSI_PATTERN, "");
 }
 
-export type CodeToolView = FileEditView | CommandRunView;
+export type FileReadTool = "read_file" | "grep" | "glob" | "list_files";
+
+export type FileReadView = {
+  kind: "fileRead";
+  tool: FileReadTool;
+  /** The path or pattern the call targeted, when the args carry one. */
+  target: string | null;
+  returnedCount: number | null;
+  totalCount: number | null;
+  truncated: boolean;
+  body: string;
+};
+
+export type CodeToolView = FileEditView | CommandRunView | FileReadView;
 
 const FILE_EDIT_TOOLS = new Set(["write_file", "edit_file"]);
 const COMMAND_TOOLS = new Set(["bash", "bash_unrestricted"]);
+const FILE_READ_TOOLS = new Set<string>(["read_file", "grep", "glob", "list_files"]);
 
 function safeJsonObject(text?: string | null): Record<string, unknown> | null {
   if (!text) {
@@ -251,7 +265,45 @@ export function toCodeToolView(tool: RenderedToolCallView): CodeToolView | null 
   if (COMMAND_TOOLS.has(name)) {
     return toCommandRunView(tool);
   }
+  if (FILE_READ_TOOLS.has(name)) {
+    return toFileReadView(tool, name as FileReadTool);
+  }
   return null;
+}
+
+function numberField(
+  record: Record<string, unknown> | null,
+  key: string,
+): number | null {
+  const value = record?.[key];
+  return typeof value === "number" ? value : null;
+}
+
+function toFileReadView(
+  tool: RenderedToolCallView,
+  name: FileReadTool,
+): FileReadView | null {
+  const { meta, body } = splitEnvelope(tool.result?.rawText ?? "", "defra_fs: ");
+  // Same honesty rule as edits/commands: no parseable metadata → keep the
+  // generic disclosure instead of projecting a fabricated read result.
+  if (!meta) {
+    return null;
+  }
+  const args = safeJsonObject(tool.args?.rawText);
+  const target =
+    stringField(meta, "path") ??
+    stringField(args, "path") ??
+    stringField(args, "pattern") ??
+    null;
+  return {
+    kind: "fileRead",
+    tool: name,
+    target,
+    returnedCount: numberField(meta, "returned_count"),
+    totalCount: numberField(meta, "total_count"),
+    truncated: meta["truncated"] === true,
+    body: body.replace(/\s+$/, ""),
+  };
 }
 
 function toFileEditView(tool: RenderedToolCallView, name: string): FileEditView | null {
