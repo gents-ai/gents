@@ -115,6 +115,8 @@ export function ScheduleConfigEditor({
   const [concurrency, setConcurrency] = useState("serial");
   const [runStatus, setRunStatus] = useState<TaskRunResult | null>(null);
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   useEffect(() => {
     const b = scheduleFormValues(schedule, selectedTask?.taskId ?? null);
     setScheduleId(b.scheduleId);
@@ -122,6 +124,7 @@ export function ScheduleConfigEditor({
     setIntervalSecs(b.intervalSecs);
     setEnabled(b.enabled);
     setConcurrency(b.concurrency);
+    setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [schedule?.scheduleId, selectedTask?.taskId]);
 
@@ -143,8 +146,9 @@ export function ScheduleConfigEditor({
         concurrency,
       });
       onSaved(nextId);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -168,6 +172,7 @@ export function ScheduleConfigEditor({
         saved={savedStatus === `schedule:${scheduleId.trim()}`}
         title={scheduleId || "New Timer Trigger"}
       />
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
       <div className="grid-2">
         <label className="field">
           <span>Schedule ID</span>

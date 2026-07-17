@@ -9,7 +9,6 @@ import type {
 import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import {
-  ignoreHandledActionError,
   isOptionalFloat,
   isOptionalInt,
   parseOptionalFloat,
@@ -107,6 +106,8 @@ export function InferenceProfileConfigEditor({
   const [streamLivenessSecs, setStreamLivenessSecs] = useState("");
   const [deadlineSecs, setDeadlineSecs] = useState("");
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   useEffect(() => {
     const b = profileFormValues(profile);
     setProfileId(b.profileId);
@@ -118,6 +119,7 @@ export function InferenceProfileConfigEditor({
     setStreamBatchMs(b.streamBatchMs);
     setStreamLivenessSecs(b.streamLivenessSecs);
     setDeadlineSecs(b.deadlineSecs);
+    setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [profile?.profileId]);
 
@@ -145,8 +147,9 @@ export function InferenceProfileConfigEditor({
         deadlineDurationSecs: parseOptionalInt(deadlineSecs),
       });
       onSaved(nextId);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -171,6 +174,7 @@ export function InferenceProfileConfigEditor({
         saved={savedStatus === `profile:${profileId.trim()}`}
         title={displayName || profileId || "New Profile"}
       />
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
       <div className="grid-2">
         <label className="field">
           <span>Profile document ID</span>

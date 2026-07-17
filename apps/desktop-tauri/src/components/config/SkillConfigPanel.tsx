@@ -9,7 +9,7 @@ import type {
 } from "../../lib/types";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { isDirty } from "./configDirty";
-import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
+import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import { ignoreHandledActionError, linesToArray, optionalString } from "./formUtils";
 
 export type SkillConfigPanelProps = {
@@ -112,6 +112,8 @@ export function SkillConfigEditor({
   const [enabled, setEnabled] = useState(true);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   useEffect(() => {
     const base = skillFormValues(skill);
     setSkillId(base.skillId);
@@ -122,6 +124,7 @@ export function SkillConfigEditor({
     setToolRefs(base.toolRefs);
     setDisplayName(base.displayName);
     setEnabled(base.enabled);
+    setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [skill?.skillId]);
@@ -147,8 +150,9 @@ export function SkillConfigEditor({
         enabled,
       });
       onSaved(nextId);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -182,6 +186,7 @@ export function SkillConfigEditor({
         title={name || skillId || "New Skill"}
         dirty={dirty}
       />
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
       <div className="grid-2">
         <label className="field">
           <span>Skill ID</span>

@@ -8,8 +8,8 @@ import type {
   TaskView,
 } from "../../lib/types";
 import { isDirty } from "./configDirty";
-import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
-import { ignoreHandledActionError, optionalString } from "./formUtils";
+import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
+import { optionalString } from "./formUtils";
 
 export type EventTriggerConfigPanelProps = {
   deployment: DeploymentView;
@@ -105,6 +105,8 @@ export function EventTriggerConfigEditor({
   const [enabled, setEnabled] = useState(true);
   const [concurrency, setConcurrency] = useState("serial");
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   useEffect(() => {
     const b = eventTriggerFormValues(eventTrigger, selectedTask?.taskId ?? null);
     setTriggerId(b.triggerId);
@@ -114,6 +116,7 @@ export function EventTriggerConfigEditor({
     setFilter(b.filter);
     setEnabled(b.enabled);
     setConcurrency(b.concurrency);
+    setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [eventTrigger?.triggerId, selectedTask?.taskId]);
 
@@ -131,8 +134,9 @@ export function EventTriggerConfigEditor({
         concurrency,
       });
       onSaved(nextId);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -155,6 +159,7 @@ export function EventTriggerConfigEditor({
         saved={savedStatus === `event-trigger:${triggerId.trim()}`}
         title={triggerId || "New Event Trigger"}
       />
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
       <div className="grid-2">
         <label className="field">
           <span>Trigger ID</span>

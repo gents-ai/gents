@@ -9,12 +9,7 @@ import type {
 } from "../../lib/types";
 import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
-import {
-  ignoreHandledActionError,
-  isOptionalInt,
-  linesToArray,
-  parseOptionalInt,
-} from "./formUtils";
+import { isOptionalInt, linesToArray, parseOptionalInt } from "./formUtils";
 
 const COMMAND_POLICY_OPTIONS = [
   { value: "", label: "Default for bash mode" },
@@ -166,6 +161,8 @@ export function ToolSelectionConfigEditor({
     [toolServiceRegistries],
   );
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   useEffect(() => {
     const b = toolSelectionFormValues(toolSelection, toolServiceIdKey);
     setSelectionId(b.selectionId);
@@ -190,6 +187,7 @@ export function ToolSelectionConfigEditor({
     setSubagentBackgroundEnabled(b.subagentBackgroundEnabled);
     setCrossDeploymentSpawnTimeoutSeconds(b.crossDeploymentSpawnTimeoutSeconds);
     setDefraQueryCollections(b.defraQueryCollections);
+    setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [toolSelection?.selectionId, toolServiceIdKey]);
 
@@ -248,8 +246,9 @@ export function ToolSelectionConfigEditor({
         ),
       });
       onSaved(nextId);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -287,6 +286,7 @@ export function ToolSelectionConfigEditor({
         saved={savedStatus === `tool:${selectionId.trim()}`}
         title={displayName || selectionId || "New Tool Selection"}
       />
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
       <div className="facts">
         <div>
           <dt>Server ceiling</dt>
