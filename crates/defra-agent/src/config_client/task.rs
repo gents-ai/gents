@@ -4,7 +4,9 @@ use serde_json::Value;
 
 use defra_agent_protocol::graphql::graphql_input_literal;
 
-use super::common::{query_documents_by_unique_value, select_existing_document};
+use super::common::{
+    mint_recreate_identity, query_documents_by_unique_value, select_existing_document,
+};
 
 /// Apply-path writer for the `Task` collection.
 ///
@@ -30,7 +32,8 @@ pub async fn write_task_document(
         return create_task_document(txn, task_id, add_doc).await;
     };
     if existing.deleted {
-        return create_task_document(txn, task_id, add_doc).await;
+        let add_doc = mint_recreate_identity(add_doc);
+        return create_task_document(txn, task_id, &add_doc).await;
     }
 
     let input_literal = graphql_input_literal(update_doc)?;

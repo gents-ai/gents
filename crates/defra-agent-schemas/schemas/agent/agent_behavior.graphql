@@ -16,4 +16,5 @@ type AgentBehavior {
     skill_refs: [String!]
     skill_excludes: [String!]
     created_at: String
+    updated_at: DateTime @index(direction: DESC)
 }

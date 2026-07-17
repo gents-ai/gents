@@ -8,6 +8,7 @@ use crate::config::{
     DEFAULT_CONTEXT_WINDOW, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS,
     DEFAULT_MAX_TURNS, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
+use crate::config_client::mint_recreate_identity_timestamp;
 use crate::graphql::escape_graphql_string;
 use crate::retry::execute_graphql_with_conflict_retry;
 
@@ -288,6 +289,10 @@ pub(crate) fn upsert_inference_profile_mutation(profile: &InferenceProfile) -> S
             "retry_interactive_max",
             profile.retry_interactive_max,
         ),
+        Some(format!(
+            r#"updated_at: "{}""#,
+            escape_graphql_string(&mint_recreate_identity_timestamp())
+        )),
     ]
     .into_iter()
     .flatten()

@@ -3,6 +3,7 @@ use defra_agent::graphql::escape_graphql_string;
 use serde_json::json;
 
 use crate::cli::*;
+use crate::config_writes::mint_recreate_identity_timestamp;
 use crate::extract_mutation_doc_id;
 use crate::optional_bool_field;
 use crate::optional_f64_field;
@@ -76,6 +77,10 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
         optional_i64_field("retry_max_resample", args.retry_max_resample),
         optional_bool_field("retry_allow_repair", args.retry_allow_repair),
         optional_i64_field("retry_interactive_max", args.retry_interactive_max),
+        Some(format!(
+            r#"updated_at: "{}""#,
+            escape_graphql_string(&mint_recreate_identity_timestamp())
+        )),
     ]
     .into_iter()
     .flatten()

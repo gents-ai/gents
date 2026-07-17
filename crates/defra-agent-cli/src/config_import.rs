@@ -183,7 +183,8 @@ async fn apply_manifest_pairing_documents(
                         doc.unique_value
                     )
                 })?;
-            let add_literal = graphql_input_literal(&doc.add_doc)?;
+            let add_doc = crate::config_writes::mint_recreate_identity(&doc.add_doc);
+            let add_literal = graphql_input_literal(&add_doc)?;
             let update_literal =
                 graphql_input_literal(doc.update_doc.as_ref().ok_or_else(|| {
                     anyhow::anyhow!("missing update document for PeerPairingDesired")
@@ -356,7 +357,12 @@ fn generic_import_mutation_field(
     override_existing: bool,
 ) -> Result<AliasedMutationField> {
     let alias = format!("doc_{index}");
-    let add_literal = graphql_input_literal(&doc.add_doc)?;
+    let add_doc = if override_existing {
+        crate::config_writes::mint_recreate_identity(&doc.add_doc)
+    } else {
+        doc.add_doc.clone()
+    };
+    let add_literal = graphql_input_literal(&add_doc)?;
     let field = if override_existing {
         // This is the generic production bridge for apply retry convergence:
         // after a partial prefix, rerunning `config apply` recomputes live diff
@@ -403,7 +409,12 @@ async fn apply_generic_import_document(
     doc: &PreparedImportDocument,
     override_existing: bool,
 ) -> Result<()> {
-    let add_literal = graphql_input_literal(&doc.add_doc)?;
+    let add_doc = if override_existing {
+        crate::config_writes::mint_recreate_identity(&doc.add_doc)
+    } else {
+        doc.add_doc.clone()
+    };
+    let add_literal = graphql_input_literal(&add_doc)?;
     let mutation = if override_existing {
         // Per-document fallback preserves the same retry property as the batch
         // path: the unique-field filter makes repeated successful writes land
@@ -501,8 +512,98 @@ async fn query_existing_documents_by_unique_values(
         .iter()
         .map(|doc| doc.unique_value.clone())
         .collect::<Vec<_>>();
-    query_document_refs_by_unique_values(txn, collection_name, unique_field, &unique_values, true)
-        .await
+    // Query live rows independently so an unbounded tombstone history can
+    // never consume the batch limit and make an existing document look
+    // absent. At two rows per requested key, either every valid live row fits
+    // or a duplicated key is represented at least twice and the selector
+    // below rejects it as corruption.
+    let mut by_unique = query_document_refs_by_unique_values(
+        txn,
+        collection_name,
+        unique_field,
+        &unique_values,
+        false,
+    )
+    .await?;
+
+    let without_live = unique_values
+        .into_iter()
+        .filter(|unique_value| !by_unique.contains_key(unique_value))
+        .collect::<Vec<_>>();
+    let tombstones = query_one_historical_document_per_unique_value(
+        txn,
+        collection_name,
+        unique_field,
+        &without_live,
+    )
+    .await?;
+    for (unique_value, rows) in tombstones {
+        by_unique.entry(unique_value).or_default().extend(rows);
+    }
+    Ok(by_unique)
+}
+
+/// Fetch at most one historical row per logical key.
+///
+/// A separate aliased field per key prevents one key's arbitrarily long
+/// tombstone history from starving later keys under a global query limit.
+async fn query_one_historical_document_per_unique_value(
+    txn: &ConfigApplyTxn<'_>,
+    collection_name: &str,
+    unique_field: &str,
+    unique_values: &[String],
+) -> Result<BTreeMap<String, Vec<ExistingDocumentRef>>> {
+    let mut by_unique = BTreeMap::new();
+    for chunk in unique_values.chunks(CONFIG_IMPORT_BATCH_SIZE) {
+        let fields = chunk
+            .iter()
+            .enumerate()
+            .map(|(index, unique_value)| {
+                format!(
+                    r#"lookup_{index}: {collection_name}(
+                        showDeleted: true,
+                        filter: {{ {unique_field}: {{ _eq: "{unique_value}" }} }},
+                        limit: 1
+                    ) {{
+                        _docID
+                        _deleted
+                    }}"#,
+                    unique_value = escape_graphql_string(unique_value),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let response = txn.execute(&format!("{{\n{fields}\n}}")).await?;
+        for (index, unique_value) in chunk.iter().enumerate() {
+            let rows = response
+                .pointer(&format!("/data/lookup_{index}"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for row in rows {
+                let doc_ref = ExistingDocumentRef {
+                    doc_id: row
+                        .get("_docID")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "{collection_name} history row missing _docID for {unique_field}={unique_value}: {row}"
+                            )
+                        })?
+                        .to_string(),
+                    deleted: row
+                        .get("_deleted")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                };
+                by_unique
+                    .entry(unique_value.clone())
+                    .or_insert_with(Vec::new)
+                    .push(doc_ref);
+            }
+        }
+    }
+    Ok(by_unique)
 }
 
 async fn query_document_refs_by_unique_values(
@@ -522,7 +623,11 @@ async fn query_document_refs_by_unique_values(
         ""
     };
     let unique_values_literal = graphql_string_list_literal(unique_values);
-    let limit = unique_values.len().saturating_mul(16).max(16);
+    let limit = if show_deleted {
+        unique_values.len().saturating_mul(16).max(16)
+    } else {
+        unique_values.len().saturating_mul(2).max(2)
+    };
     let query = format!(
         r#"{{
             {collection_name}(
@@ -603,7 +708,15 @@ fn custom_override_mutation_field(
             doc_id = escape_graphql_string(doc_id),
         )
     } else {
-        let add_literal = graphql_input_literal(&doc.add_doc)?;
+        // A tombstone occupies this unique value: identical manifest content
+        // would regenerate the tombstoned docID. Mint a fresh identity for the
+        // new incarnation while leaving a first-time create unchanged.
+        let add_doc = if existing.is_some() {
+            crate::config_writes::mint_recreate_identity(&doc.add_doc)
+        } else {
+            doc.add_doc.clone()
+        };
+        let add_literal = graphql_input_literal(&add_doc)?;
         format!(r#"{alias}: create_{collection_name}(input: {add_literal}) {{ _docID }}"#)
     };
 
@@ -626,14 +739,7 @@ fn select_existing_import_document(
         return Ok(Some((*row).clone()));
     }
 
-    let deleted_rows = rows.iter().filter(|row| row.deleted).collect::<Vec<_>>();
-    if deleted_rows.len() > 1 {
-        anyhow::bail!(
-            "multiple deleted {collection_name} tombstones share {unique_field}={unique_value}"
-        );
-    }
-
-    Ok(deleted_rows.first().map(|row| (*row).clone()))
+    Ok(rows.iter().find(|row| row.deleted).cloned())
 }
 
 async fn apply_custom_override_documents_individually(
@@ -854,6 +960,36 @@ mod tests {
     }
 
     #[test]
+    fn every_apply_collection_schema_has_a_recreate_identity_field() {
+        use defra_agent_protocol::schemas;
+
+        for collection in Collection::ALL {
+            let schema = match collection {
+                Collection::AgentPrincipal => schemas::AGENT_PRINCIPAL,
+                Collection::AgentBehavior => schemas::AGENT_BEHAVIOR,
+                Collection::Skill => schemas::SKILL,
+                Collection::ToolSelection => schemas::TOOL_SELECTION,
+                Collection::InferenceBackend => schemas::INFERENCE_BACKEND,
+                Collection::InferenceProfile => schemas::INFERENCE_PROFILE,
+                Collection::ToolServiceRegistry => schemas::TOOL_SERVICE_REGISTRY,
+                Collection::ProjectionAcpBinding => schemas::PROJECTION_ACP_BINDING,
+                Collection::PeerPairingDesired => schemas::PEER_PAIRING_DESIRED,
+                Collection::Task => schemas::TASK,
+                Collection::Schedule => schemas::SCHEDULE,
+                Collection::EventTrigger => schemas::EVENT_TRIGGER,
+            };
+
+            assert!(
+                schema
+                    .lines()
+                    .any(|line| line.trim_start().starts_with("updated_at:")),
+                "{} must expose updated_at for tombstone-safe recreation",
+                collection.graphql_type()
+            );
+        }
+    }
+
+    #[test]
     fn config_apply_order_has_retry_safe_prefixes() {
         for prefix_len in 0..=CONFIG_APPLY_ORDER_FOR_TESTS.len() {
             let prefix = &CONFIG_APPLY_ORDER_FOR_TESTS[..prefix_len];
@@ -997,6 +1133,95 @@ doc_1: create_Task(input: { task_id: "b" }) { _docID }
     }
 
     #[test]
+    fn generic_override_stamps_only_the_add_branch() {
+        let doc = PreparedImportDocument {
+            unique_value: "tools-a".to_string(),
+            add_doc: json!({
+                "selection_id": "tools-a",
+                "agent_did": "did:example:agent"
+            }),
+            update_doc: Some(json!({ "agent_did": "did:example:agent" })),
+        };
+
+        let field =
+            generic_import_mutation_field(0, "ToolSelection", "selection_id", &doc, true).unwrap();
+
+        let (_, update) = field.field.split_once("update:").unwrap();
+        assert!(field.field.contains("updated_at:"));
+        assert!(!update.contains("updated_at:"));
+    }
+
+    #[tokio::test]
+    async fn generic_override_recreates_a_tombstoned_tool_selection() -> Result<()> {
+        use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
+        use defra_agent::ensure_runtime_schemas;
+
+        let tempdir = tempfile::tempdir()?;
+        let node = EmbeddedNode::builder()
+            .data_path(tempdir.path().join("data"))
+            .with_storage_backend(StorageBackend::RocksDb)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(node);
+        let doc = json!({
+            "selection_id": "tools-a",
+            "agent_did": "did:example:agent",
+            "display_name": "Tools A"
+        });
+
+        let txn = access.begin_apply_txn().await?;
+        apply_import_collection(
+            &txn,
+            "ToolSelection",
+            "selection_id",
+            std::slice::from_ref(&doc),
+            true,
+        )
+        .await?;
+        txn.commit().await?;
+        let first_doc_id = tool_selection_doc_id(&access).await?;
+
+        access
+            .execute(
+                r#"mutation {
+                    delete_ToolSelection(filter: { selection_id: { _eq: "tools-a" } }) { _docID }
+                }"#,
+            )
+            .await?;
+
+        let txn = access.begin_apply_txn().await?;
+        apply_import_collection(
+            &txn,
+            "ToolSelection",
+            "selection_id",
+            std::slice::from_ref(&doc),
+            true,
+        )
+        .await?;
+        txn.commit().await?;
+        let recreated_doc_id = tool_selection_doc_id(&access).await?;
+
+        assert_ne!(first_doc_id, recreated_doc_id);
+        Ok(())
+    }
+
+    async fn tool_selection_doc_id(access: &ConfigAccess) -> Result<String> {
+        let response = access
+            .execute(
+                r#"{
+                    ToolSelection(filter: { selection_id: { _eq: "tools-a" } }) { _docID }
+                }"#,
+            )
+            .await?;
+        response
+            .pointer("/data/ToolSelection/0/_docID")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("live ToolSelection missing after apply: {response}"))
+    }
+
+    #[test]
     fn custom_override_mutation_field_updates_live_doc_by_doc_id() {
         let doc = PreparedImportDocument {
             unique_value: "task-a".to_string(),
@@ -1041,6 +1266,59 @@ doc_1: create_Task(input: { task_id: "b" }) { _docID }
             "expected create field, got {}",
             field.field
         );
+        assert!(field.field.contains("updated_at:"));
+    }
+
+    #[test]
+    fn custom_selector_accepts_arbitrary_tombstone_history() {
+        let rows = (0..32)
+            .map(|index| ExistingDocumentRef {
+                doc_id: format!("deleted-{index}"),
+                deleted: true,
+            })
+            .collect::<Vec<_>>();
+
+        let selected = select_existing_import_document("Task", "task_id", "task-a", &rows)
+            .unwrap()
+            .expect("tombstone history should select recreate");
+        assert!(selected.deleted);
+    }
+
+    #[test]
+    fn custom_selector_prefers_the_only_live_row_over_tombstones() {
+        let mut rows = (0..32)
+            .map(|index| ExistingDocumentRef {
+                doc_id: format!("deleted-{index}"),
+                deleted: true,
+            })
+            .collect::<Vec<_>>();
+        rows.push(ExistingDocumentRef {
+            doc_id: "live".to_string(),
+            deleted: false,
+        });
+
+        let selected = select_existing_import_document("Task", "task_id", "task-a", &rows)
+            .unwrap()
+            .expect("live row should be selected");
+        assert_eq!(selected.doc_id, "live");
+    }
+
+    #[test]
+    fn custom_selector_rejects_multiple_live_rows() {
+        let rows = vec![
+            ExistingDocumentRef {
+                doc_id: "live-a".to_string(),
+                deleted: false,
+            },
+            ExistingDocumentRef {
+                doc_id: "live-b".to_string(),
+                deleted: false,
+            },
+        ];
+
+        let error =
+            select_existing_import_document("Task", "task_id", "task-a", &rows).unwrap_err();
+        assert!(error.to_string().contains("multiple live Task documents"));
     }
 }
 

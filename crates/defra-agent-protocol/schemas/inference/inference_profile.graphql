@@ -22,4 +22,5 @@ type InferenceProfile {
     retry_max_resample: Int
     retry_allow_repair: Boolean
     retry_interactive_max: Int
+    updated_at: DateTime @index(direction: DESC)
 }

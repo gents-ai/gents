@@ -595,3 +595,203 @@ async fn config_apply_rebinds_placeholder_manifest_to_home_identity_locally() ->
 
     Ok(())
 }
+
+/// #706 regression: pruning leaves a terminal tombstone, so reapplying the
+/// same manifest content must mint a distinct document identity and converge.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reapply_recreates_a_pruned_unique_row() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-recreate-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-recreate-{}", Uuid::new_v4().simple());
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    run_cli_text(
+        &home_dir,
+        &[
+            "config",
+            "export",
+            "--root",
+            root.to_str().expect("utf-8 root"),
+        ],
+    )?;
+    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let behavior_id = principal
+        .get("default_behavior_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
+        .to_string();
+
+    let task_id = format!("recreate-task-{}", Uuid::new_v4().simple());
+    let task_dir = root.join("tasks").join(&task_id);
+    let task_object = serde_json::json!({
+        "task_id": task_id.clone(),
+        "name": "Recreate Me",
+        "description": "Tombstoned unique row recreate regression (#706).",
+        "behavior_id": behavior_id,
+        "prompt_template": "Check convergence.",
+        "enabled": false,
+    });
+    write_json_file(&task_dir.join("object.json"), &task_object)?;
+
+    let root_str = root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let explicit_home = home_dir.join(".defra-agent");
+    let explicit_home_str = explicit_home
+        .to_str()
+        .ok_or_else(|| anyhow!("explicit home path is not UTF-8"))?;
+
+    let created = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+        ],
+    )?;
+    assert_eq!(
+        created.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+
+    fs::remove_dir_all(&task_dir).with_context(|| format!("removing {}", task_dir.display()))?;
+    let pruned = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+            "--prune",
+        ],
+    )?;
+    assert_eq!(pruned.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        pruned.pointer("/pruned/tasks").and_then(Value::as_u64),
+        Some(1)
+    );
+
+    write_json_file(&task_dir.join("object.json"), &task_object)?;
+    let recreated = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+        ],
+    )?;
+    assert_eq!(
+        recreated.get("ok").and_then(Value::as_bool),
+        Some(true),
+        "recreating a pruned unique row must converge: {recreated}"
+    );
+    assert_eq!(
+        recreated.pointer("/applied/tasks").and_then(Value::as_u64),
+        Some(1),
+        "the tombstoned task must be recreated: {recreated}"
+    );
+
+    let settled = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "diff",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+        ],
+    )?;
+    assert_eq!(
+        settled.get("ok").and_then(Value::as_bool),
+        Some(true),
+        "diff must be exact after the recreate: {settled}"
+    );
+
+    // Repeat the full cycle. The second delete leaves two terminal documents
+    // with the same logical task_id; recreation must treat both as history,
+    // not as an ambiguous current row.
+    fs::remove_dir_all(&task_dir).with_context(|| format!("removing {}", task_dir.display()))?;
+    let pruned_again = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+            "--prune",
+        ],
+    )?;
+    assert_eq!(
+        pruned_again
+            .pointer("/pruned/tasks")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    write_json_file(&task_dir.join("object.json"), &task_object)?;
+    let recreated_again = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+        ],
+    )?;
+    assert_eq!(
+        recreated_again.get("ok").and_then(Value::as_bool),
+        Some(true),
+        "recreating over multiple tombstones must converge: {recreated_again}"
+    );
+    assert_eq!(
+        recreated_again
+            .pointer("/applied/tasks")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let settled_again = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "diff",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+        ],
+    )?;
+    assert_eq!(
+        settled_again.get("ok").and_then(Value::as_bool),
+        Some(true),
+        "diff must remain exact after repeated recreation: {settled_again}"
+    );
+
+    Ok(())
+}

@@ -51,4 +51,5 @@ type ToolSelection {
     # Opt-in guardrail: get_my_config accepts a patch preview (diff without
     # committing).
     self_config_dry_run: Boolean
+    updated_at: DateTime @index(direction: DESC)
 }

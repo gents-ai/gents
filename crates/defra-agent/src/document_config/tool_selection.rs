@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::graphql_fields;
 use super::serde_helpers;
+use crate::config_client::mint_recreate_identity_timestamp;
 use crate::defra_query::DEFRA_QUERY_TOOL_NAME;
 use crate::document_config::SubagentTarget;
 use crate::graphql::escape_graphql_string;
@@ -933,6 +934,10 @@ pub async fn upsert_tool_selection(
             "self_config_dry_run",
             selection.self_config_dry_run,
         ),
+        Some(format!(
+            r#"updated_at: "{}""#,
+            escape_graphql_string(&mint_recreate_identity_timestamp())
+        )),
     ]
     .into_iter()
     .flatten()

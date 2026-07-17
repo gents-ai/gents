@@ -92,7 +92,7 @@ def allFields : Target → List FieldKey
       , "system_prompt", "request_context_template", "backend_id", "model_name"
       , "tool_selection_id", "inference_profile_id", "compaction_strategy"
       , "compaction_threshold", "enabled", "skill_refs", "skill_excludes"
-      , "created_at" ]
+      , "created_at", "updated_at" ]
   | .toolSelection =>
       [ "selection_id", "agent_did", "display_name", "tool_policy_version"
       , "enable_file_tools", "file_tools_mode", "file_tool_root", "enable_bash"
@@ -107,17 +107,17 @@ def allFields : Target → List FieldKey
       , "enable_session_history_tool", "enable_context_budget"
       , "enable_defra_query", "defra_query_collections", "write_tools"
       , "enable_self_config", "self_config_categories"
-      , "self_config_no_lockout", "self_config_dry_run" ]
+      , "self_config_no_lockout", "self_config_dry_run", "updated_at" ]
   | .inferenceProfile =>
       [ "profile_id", "display_name", "context_window", "max_output_tokens"
       , "max_turns", "temperature", "top_p", "top_k", "min_p", "frequency_penalty", "presence_penalty", "repetition_penalty", "stream_batch_ms"
       , "stream_liveness_timeout_secs", "deadline_duration_secs"
       , "retry_max_transport", "retry_backoff_ms", "retry_max_resample"
-      , "retry_allow_repair", "retry_interactive_max" ]
+      , "retry_allow_repair", "retry_interactive_max", "updated_at" ]
   | .inferenceBackend =>
       [ "backend_id", "name", "provider_kind", "openai_wire_api", "endpoint"
       , "api_key", "api_key_env_var", "max_concurrent", "max_queue_depth"
-      , "enabled", "models", "last_probe", "probe_status" ]
+      , "enabled", "models", "last_probe", "probe_status", "updated_at" ]
   | .toolServiceRegistry =>
       [ "service_id", "display_name", "description", "hostname", "tailscale_ip"
       , "lan_ip", "mcp_port", "mcp_path", "send_agent_did", "status", "version"
@@ -240,6 +240,12 @@ theorem automation_runtime_fields_protected :
       ∧ (["last_attempt_at", "last_fired_source_doc_id", "last_status",
           "last_error", "fire_count"]).all
           (fun k => decide (k ∈ protectedFields .eventTrigger)) := by
+  native_decide
+
+/-- Apply-stamped recreate identities are never writable through self-config. -/
+theorem recreate_identity_field_protected :
+    ∀ t ∈ allTargets,
+      "updated_at" ∈ allFields t → "updated_at" ∈ protectedFields t := by
   native_decide
 
 /-- Every target's gating category is part of the category vocabulary, and the
