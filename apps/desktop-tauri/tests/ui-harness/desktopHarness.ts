@@ -25,6 +25,10 @@ import type {
 const AGENT_DID = "did:key:z6MkBombadilAgent";
 const DEFAULT_BEHAVIOR_ID = "default";
 const STARTED_AT = "2026-06-17T00:00:00.000Z";
+// Relative-time fixtures must be offsets from *now*: a fixed date drifts one
+// label per day and breaks the near-exact visual baselines.
+const THIRTY_DAYS_AGO = new Date(Date.now() - 30 * 86_400_000).toISOString();
+const TWO_HOURS_AGO = new Date(Date.now() - 2 * 3_600_000).toISOString();
 
 export type DesktopUiHarnessScenario =
   | "default"
@@ -82,6 +86,8 @@ export function createDesktopUiHarness(
     agentDid: AGENT_DID,
     behaviorId: DEFAULT_BEHAVIOR_ID,
     title: "introduction-and-greetings",
+    createdAt: THIRTY_DAYS_AGO,
+    updatedAt: TWO_HOURS_AGO,
     previewText: greeting,
     status: activeTurn ? "processing" : "completed",
     turnState: activeTurn ? "processing" : "completed",
@@ -235,8 +241,8 @@ export function createDesktopUiHarness(
         taskName: sessionLineage.get(session.sessionId)?.taskName ?? null,
         triggerId: sessionLineage.get(session.sessionId)?.triggerId ?? null,
         triggerKind: sessionLineage.get(session.sessionId)?.triggerKind ?? null,
-        createdAt: STARTED_AT,
-        updatedAt: STARTED_AT,
+        createdAt: session.createdAt ?? THIRTY_DAYS_AGO,
+        updatedAt: session.updatedAt ?? TWO_HOURS_AGO,
         turnState: session.turnState,
         messageCount: session.timelineItems.filter(
           (item) => item.kind === "userMessage" || item.kind === "assistantMessage",
@@ -1124,7 +1130,7 @@ function createDeployment(): DeploymentView {
       reconcilePhase: "idle",
       lastReconcileResult: "ok",
       lastReconcileError: null,
-      updatedAt: STARTED_AT,
+      updatedAt: THIRTY_DAYS_AGO,
     },
     behaviors: [
       {

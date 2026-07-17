@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { ConversationSummary, DeploymentView, TaskView } from "../../lib/types";
 import { displayConversationTitle } from "../../lib/types";
+import { formatRelativeTime } from "../fleet/fleetMetrics";
+import { PencilIcon } from "../fleet/FleetIcons";
 import { conversationStatusClass } from "./sidebarUtils";
 
 const ALL_TASKS_FILTER = "__all__";
@@ -13,6 +15,10 @@ export type ConversationListSectionProps = {
   selectedAgentDid: string | null;
   selectedSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
+  onRenameConversationTitle?: (
+    sessionId: string,
+    title: string,
+  ) => void | Promise<void>;
 };
 
 export function ConversationListSection({
@@ -21,7 +27,20 @@ export function ConversationListSection({
   selectedAgentDid,
   selectedSessionId,
   onSelectSession,
+  onRenameConversationTitle,
 }: ConversationListSectionProps) {
+  const [query, setQuery] = useState("");
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+
+  function commitRename() {
+    const title = renameDraft.trim();
+    const sessionId = renamingSessionId;
+    setRenamingSessionId(null);
+    if (sessionId && title && onRenameConversationTitle) {
+      void onRenameConversationTitle(sessionId, title);
+    }
+  }
   const selectedDeployment = deployments.find(
     (item) => item.agentDid === selectedAgentDid,
   );
@@ -38,6 +57,8 @@ export function ConversationListSection({
 
   useEffect(() => {
     setSelectedTaskFilter(ALL_TASKS_FILTER);
+    setQuery("");
+    setRenamingSessionId(null);
   }, [selectedAgentDid]);
 
   useEffect(() => {
@@ -55,18 +76,22 @@ export function ConversationListSection({
   }, [hasUntaskedConversations, selectedTaskFilter, taskFilterOptions]);
 
   const filteredConversations = useMemo(() => {
-    if (selectedTaskFilter === ALL_TASKS_FILTER) {
-      return conversations;
-    }
-
+    let rows = conversations;
     if (selectedTaskFilter === UNTASKED_FILTER) {
-      return conversations.filter((conversation) => !conversation.taskId);
+      rows = rows.filter((conversation) => !conversation.taskId);
+    } else if (selectedTaskFilter !== ALL_TASKS_FILTER) {
+      rows = rows.filter((conversation) => conversation.taskId === selectedTaskFilter);
     }
-
-    return conversations.filter(
-      (conversation) => conversation.taskId === selectedTaskFilter,
-    );
-  }, [conversations, selectedTaskFilter]);
+    const needle = query.trim().toLowerCase();
+    if (needle) {
+      rows = rows.filter((conversation) =>
+        `${displayConversationTitle(conversation.title)} ${conversation.previewText ?? ""}`
+          .toLowerCase()
+          .includes(needle),
+      );
+    }
+    return rows;
+  }, [conversations, query, selectedTaskFilter]);
   const showTaskFilter =
     Boolean(selectedAgentDid) &&
     conversations.length > 0 &&
@@ -122,6 +147,16 @@ export function ConversationListSection({
           </select>
         </label>
       ) : null}
+      {selectedAgentDid && conversations.length > 0 ? (
+        <input
+          className="conversation-search"
+          data-testid="conversation-search"
+          onChange={(event) => setQuery(event.currentTarget.value)}
+          placeholder="Search conversations"
+          type="search"
+          value={query}
+        />
+      ) : null}
       {!selectedAgentDid ? (
         <p className="muted">Select a deployment to see conversations.</p>
       ) : !conversations.length ? (
@@ -129,46 +164,94 @@ export function ConversationListSection({
           No conversations yet. Sending the first message will create one automatically.
         </p>
       ) : !filteredConversations.length ? (
-        <p className="muted">No conversations for this task.</p>
+        <p className="muted">
+          {query.trim()
+            ? "No conversations match the search."
+            : "No conversations for this task."}
+        </p>
       ) : (
         <div className="list conversation-list">
-          {filteredConversations.map((conversation) => (
-            <button
-              className={
-                conversation.sessionId === selectedSessionId
-                  ? "list-item selected"
-                  : "list-item"
-              }
-              data-testid={`conversation-${conversation.sessionId}`}
-              key={conversation.sessionId}
-              onClick={() => onSelectSession(conversation.sessionId)}
-              type="button"
-            >
-              <span className="conversation-list-row">
-                <span
-                  aria-hidden="true"
-                  className={conversationStatusClass(conversation)}
+          {filteredConversations.map((conversation) => {
+            const when = conversation.updatedAt ?? conversation.createdAt;
+            if (conversation.sessionId === renamingSessionId) {
+              return (
+                <input
+                  autoFocus
+                  className="conversation-rename-input"
+                  data-testid={`conversation-rename-input-${conversation.sessionId}`}
+                  key={conversation.sessionId}
+                  onBlur={commitRename}
+                  onChange={(event) => setRenameDraft(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      commitRename();
+                    } else if (event.key === "Escape") {
+                      setRenamingSessionId(null);
+                    }
+                  }}
+                  value={renameDraft}
                 />
-                <span
+              );
+            }
+            return (
+              <span className="conversation-row" key={conversation.sessionId}>
+                <button
                   className={
-                    conversation.title
-                      ? "list-item-title conversation-list-title"
-                      : "list-item-title conversation-list-title untitled-title"
+                    conversation.sessionId === selectedSessionId
+                      ? "list-item selected"
+                      : "list-item"
                   }
+                  data-testid={`conversation-${conversation.sessionId}`}
+                  onClick={() => onSelectSession(conversation.sessionId)}
+                  type="button"
                 >
-                  {displayConversationTitle(conversation.title)}
-                </span>
+                  <span className="conversation-list-row">
+                    <span
+                      aria-hidden="true"
+                      className={conversationStatusClass(conversation)}
+                    />
+                    <span
+                      className={
+                        conversation.title
+                          ? "list-item-title conversation-list-title"
+                          : "list-item-title conversation-list-title untitled-title"
+                      }
+                    >
+                      {displayConversationTitle(conversation.title)}
+                    </span>
+                    {when ? (
+                      <span className="conversation-time" title={when}>
+                        {formatRelativeTime(when)}
+                      </span>
+                    ) : null}
+                  </span>
+                  {conversation.taskId ? (
+                    <span
+                      className="conversation-task-tag"
+                      title={displayConversationTaskLabel(conversation)}
+                    >
+                      {displayConversationTaskLabel(conversation)}
+                    </span>
+                  ) : null}
+                </button>
+                {onRenameConversationTitle ? (
+                  <button
+                    aria-label={`Rename ${displayConversationTitle(conversation.title)}`}
+                    className="ghost-button conversation-rename"
+                    data-testid={`conversation-rename-${conversation.sessionId}`}
+                    onClick={() => {
+                      setRenameDraft(displayConversationTitle(conversation.title));
+                      setRenamingSessionId(conversation.sessionId);
+                    }}
+                    title="Rename conversation"
+                    type="button"
+                  >
+                    <PencilIcon />
+                  </button>
+                ) : null}
               </span>
-              {conversation.taskId ? (
-                <span
-                  className="conversation-task-tag"
-                  title={displayConversationTaskLabel(conversation)}
-                >
-                  {displayConversationTaskLabel(conversation)}
-                </span>
-              ) : null}
-            </button>
-          ))}
+            );
+          })}
         </div>
       )}
     </section>
