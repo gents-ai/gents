@@ -203,6 +203,57 @@
     box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.025);
   }
 
+  .composer-input-wrap {
+    position: relative;
+  }
+
+  .slash-skill-menu {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    z-index: 6;
+    margin: 0 0 var(--space-2);
+    padding: var(--space-2);
+    list-style: none;
+    min-width: min(44ch, 100%);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-deep);
+  }
+
+  .slash-skill-menu button {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+    width: 100%;
+    padding: var(--space-2) var(--space-4);
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-soft);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .slash-skill-menu button.is-active,
+  .slash-skill-menu button:hover {
+    background: var(--color-surface-muted);
+    color: var(--color-text);
+  }
+
+  .slash-skill-id {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+  }
+
+  .slash-skill-name {
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .composer-input {
     width: 100%;
     max-width: 100%;
