@@ -103,7 +103,9 @@ fn session_snapshot_deduplicates_persisted_rows_from_multiple_sources() {
     let mut rows = make_streaming_store_with_response_content("").to_rows();
     rows.responses.clear();
 
-    let duplicate_user = rows.messages[0].clone();
+    let mut duplicate_user = rows.messages[0].clone();
+    duplicate_user.sequence = Some(9);
+    duplicate_user.content = Some(user_message_json("later duplicate"));
     rows.messages.push(duplicate_user);
     rows.message_source_agent_dids = vec![None, Some("did:defra:amy".to_string())];
 
@@ -119,7 +121,10 @@ fn session_snapshot_deduplicates_persisted_rows_from_multiple_sources() {
     };
     rows.messages.push(assistant.clone());
     rows.message_source_agent_dids.push(None);
-    rows.messages.push(assistant);
+    let mut duplicate_assistant = assistant;
+    duplicate_assistant.sequence = Some(10);
+    duplicate_assistant.content = Some(assistant_message_json("later duplicate"));
+    rows.messages.push(duplicate_assistant);
     rows.message_source_agent_dids
         .push(Some("did:defra:amy".to_string()));
 
@@ -144,6 +149,22 @@ fn session_snapshot_deduplicates_persisted_rows_from_multiple_sources() {
         })
         .collect::<Vec<_>>();
     assert_eq!(kinds, vec!["user", "assistant"]);
+    assert!(matches!(
+        &snapshot.timeline_items[0],
+        RenderedTimelineItem::UserMessage {
+            sequence: Some(1),
+            content,
+            ..
+        } if content == "hello"
+    ));
+    assert!(matches!(
+        &snapshot.timeline_items[1],
+        RenderedTimelineItem::AssistantMessage {
+            sequence: Some(2),
+            content: Some(content),
+            ..
+        } if content == "hello back"
+    ));
 }
 
 #[test]
