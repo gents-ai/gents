@@ -156,6 +156,18 @@ export type InferenceProfileDeleteRequest = {
   profileId: string;
 };
 
+export type ToolSelectionDeleteRequest = {
+  selectionId: string;
+};
+
+export type ToolServiceDeleteRequest = {
+  serviceId: string;
+};
+
+export type BehaviorDeleteRequest = {
+  behaviorId: string;
+};
+
 export type TaskSaveRequest = {
   taskId: string;
   name: string;

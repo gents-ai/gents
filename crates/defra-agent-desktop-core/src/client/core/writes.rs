@@ -587,6 +587,155 @@ impl ClientCore {
         .await
     }
 
+    pub async fn delete_tool_selection(&self, selection_id: &str) -> Result<()> {
+        let selection_id = normalize_required("selection_id", selection_id)?;
+        let snapshot = self.store.snapshot();
+        if !snapshot
+            .tool_selections
+            .iter()
+            .any(|row| row.selection_id == selection_id)
+        {
+            bail!("no ToolSelection document with selection_id {selection_id:?}");
+        }
+        let referencing = snapshot
+            .behaviors
+            .iter()
+            .filter(|row| row.tool_selection_id.as_deref() == Some(selection_id))
+            .map(|row| row.behavior_id.clone())
+            .collect::<Vec<_>>();
+        if !referencing.is_empty() {
+            bail!(
+                "tool selection {selection_id:?} is referenced by behavior(s) {}; point them elsewhere first",
+                referencing.join(", ")
+            );
+        }
+
+        let result = async {
+            let deleted =
+                mutations::delete_tool_selection(self.node.as_ref(), selection_id).await?;
+            if deleted == 0 {
+                bail!("no ToolSelection document with selection_id {selection_id:?}");
+            }
+            Ok(())
+        }
+        .await;
+        self.finish_automation_delete(
+            result,
+            "delete tool selection",
+            "config_tool_selection_delete",
+            selection_id,
+            |rows| {
+                rows.tool_selections
+                    .retain(|row| row.selection_id != selection_id);
+            },
+        )
+        .await
+    }
+
+    pub async fn delete_tool_service(&self, service_id: &str) -> Result<()> {
+        let service_id = normalize_required("service_id", service_id)?;
+        let snapshot = self.store.snapshot();
+        if !snapshot
+            .tool_service_registries
+            .iter()
+            .any(|row| row.service_id == service_id)
+        {
+            bail!("no ToolServiceRegistry document with service_id {service_id:?}");
+        }
+        let referencing = snapshot
+            .tool_selections
+            .iter()
+            .filter(|row| {
+                row.allowed_mcp_service_ids
+                    .iter()
+                    .any(|id| id == service_id)
+            })
+            .map(|row| row.selection_id.clone())
+            .collect::<Vec<_>>();
+        if !referencing.is_empty() {
+            bail!(
+                "tool service {service_id:?} is allowed by tool selection(s) {}; remove it there first",
+                referencing.join(", ")
+            );
+        }
+
+        let result = async {
+            let deleted =
+                mutations::delete_tool_service_registry(self.node.as_ref(), service_id).await?;
+            if deleted == 0 {
+                bail!("no ToolServiceRegistry document with service_id {service_id:?}");
+            }
+            Ok(())
+        }
+        .await;
+        self.finish_automation_delete(
+            result,
+            "delete tool service",
+            "config_tool_service_delete",
+            service_id,
+            |rows| {
+                rows.tool_service_registries
+                    .retain(|row| row.service_id != service_id);
+            },
+        )
+        .await
+    }
+
+    pub async fn delete_behavior(&self, behavior_id: &str) -> Result<()> {
+        let behavior_id = normalize_required("behavior_id", behavior_id)?;
+        let snapshot = self.store.snapshot();
+        let Some(row) = snapshot
+            .behaviors
+            .iter()
+            .find(|row| row.behavior_id == behavior_id)
+        else {
+            bail!("no AgentBehavior document with behavior_id {behavior_id:?}");
+        };
+        // The default behavior is the request fallback; deleting it strands
+        // every request that names no behavior.
+        let _ = row;
+        let is_default = snapshot
+            .agent_principals
+            .iter()
+            .any(|principal| principal.default_behavior_id.as_deref() == Some(behavior_id));
+        if is_default {
+            bail!(
+                "behavior {behavior_id:?} is the agent's default behavior; make another behavior the default first"
+            );
+        }
+        let referencing = snapshot
+            .tasks
+            .iter()
+            .filter(|task| task.behavior_id.as_deref() == Some(behavior_id))
+            .map(|task| task.task_id.clone())
+            .collect::<Vec<_>>();
+        if !referencing.is_empty() {
+            bail!(
+                "behavior {behavior_id:?} is referenced by task(s) {}; repoint or delete those first",
+                referencing.join(", ")
+            );
+        }
+
+        let result = async {
+            let deleted = mutations::delete_agent_behavior(self.node.as_ref(), behavior_id).await?;
+            if deleted == 0 {
+                bail!("no AgentBehavior document with behavior_id {behavior_id:?}");
+            }
+            Ok(())
+        }
+        .await;
+        self.finish_automation_delete(
+            result,
+            "delete behavior",
+            "config_behavior_delete",
+            behavior_id,
+            |rows| {
+                rows.behaviors.retain(|row| row.behavior_id != behavior_id);
+            },
+        )
+        .await
+    }
+
     /// Shared tail for automation-document deletes: refresh, prune the row
     /// locally so the UI reflects the delete immediately, log, and record or
     /// clear the mutation error.

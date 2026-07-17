@@ -111,6 +111,24 @@ pub(crate) struct InferenceProfileDeleteRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct ToolSelectionDeleteRequest {
+    pub selection_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ToolServiceDeleteRequest {
+    pub service_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BehaviorDeleteRequest {
+    pub behavior_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct BackendSaveRequest {
     pub backend_id: String,
     pub name: String,

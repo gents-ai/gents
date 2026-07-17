@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 
 import type {
   AgentConfigSaveRequest,
+  BehaviorDeleteRequest,
   BehaviorSaveRequest,
   BehaviorView,
   DeploymentView,
@@ -11,6 +12,7 @@ import type {
   SkillView,
   ToolSelectionView,
 } from "../../lib/types";
+import { ConfirmDialog } from "../ConfirmDialog";
 import { isDirty } from "./configDirty";
 import {
   ConfigDocumentList,
@@ -41,6 +43,8 @@ export type BehaviorConfigPanelProps = {
   onSelectBehavior: (behaviorId: string) => void;
   onSaveAgentConfig: (request: AgentConfigSaveRequest) => Promise<unknown>;
   onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
+  onDeleteBehaviorConfig: (request: BehaviorDeleteRequest) => Promise<unknown>;
+  onDeletedBehavior: () => void;
 };
 
 export function BehaviorConfigPanel({
@@ -56,6 +60,8 @@ export function BehaviorConfigPanel({
   onSelectBehavior,
   onSaveAgentConfig,
   onSaveBehaviorConfig,
+  onDeleteBehaviorConfig,
+  onDeletedBehavior,
 }: BehaviorConfigPanelProps) {
   return (
     <section className="config-layout">
@@ -100,6 +106,10 @@ export function BehaviorConfigPanel({
         }}
         onSaveAgentConfig={onSaveAgentConfig}
         onSaveBehaviorConfig={onSaveBehaviorConfig}
+        onDeleteBehaviorConfig={onDeleteBehaviorConfig}
+        onDeleted={() => {
+          onDeletedBehavior();
+        }}
       />
     </section>
   );
@@ -123,6 +133,8 @@ export type BehaviorConfigEditorProps = {
   onSaved: (behaviorId: string) => void;
   onSaveAgentConfig: (request: AgentConfigSaveRequest) => Promise<unknown>;
   onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
+  onDeleteBehaviorConfig: (request: BehaviorDeleteRequest) => Promise<unknown>;
+  onDeleted: () => void;
 };
 
 export function BehaviorConfigEditor({
@@ -143,6 +155,8 @@ export function BehaviorConfigEditor({
   onSaved,
   onSaveAgentConfig,
   onSaveBehaviorConfig,
+  onDeleteBehaviorConfig,
+  onDeleted,
 }: BehaviorConfigEditorProps) {
   const [behaviorId, setBehaviorId] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
@@ -160,6 +174,20 @@ export function BehaviorConfigEditor({
   const [skillRefs, setSkillRefs] = useState<string[]>([]);
   const [skillExcludes, setSkillExcludes] = useState<string[]>([]);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  async function deleteBehavior() {
+    setConfirmingDelete(false);
+    if (!behavior) {
+      return;
+    }
+    try {
+      await onDeleteBehaviorConfig({ behaviorId: behavior.behaviorId });
+      onDeleted();
+    } catch {
+      // Surfaced by the shell error banner; the editor stays put.
+    }
+  }
 
   useEffect(() => {
     const base = behaviorFormValues(behavior);
@@ -515,6 +543,28 @@ export function BehaviorConfigEditor({
       </label>
 
       <div className="config-actions">
+        {behavior && !behavior.isDefault ? (
+          <button
+            className="ghost-button danger-button"
+            data-testid="behavior-delete"
+            disabled={saving}
+            onClick={() => setConfirmingDelete(true)}
+            type="button"
+          >
+            Delete Behavior
+          </button>
+        ) : null}
+        <ConfirmDialog
+          open={confirmingDelete}
+          title="Delete behavior"
+          message={`Delete behavior "${behavior?.behaviorId ?? ""}"? Tasks still pointing at it will block the delete.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            void deleteBehavior();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
         <button
           className="primary-button"
           data-testid="behavior-save"

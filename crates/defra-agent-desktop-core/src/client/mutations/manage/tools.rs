@@ -1,6 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use defra_agent_protocol::row::{ToolSelectionRow, ToolServiceRegistryRow};
 use defra_node::EmbeddedNode;
+use serde_json::Value;
 
 use super::super::graphql::{
     escape_graphql_string, execute_mutation, execute_remote_mutation, graphql_optional_bool_field,
@@ -388,4 +389,66 @@ pub async fn upsert_tool_service_registry(
         update_fields = join_fields(&update_fields),
     );
     execute_mutation(node, &mutation, "upsert_tool_service_registry").await
+}
+
+pub async fn delete_tool_selection(node: &EmbeddedNode, selection_id: &str) -> Result<usize> {
+    let selection_id = normalize_required("selection_id", selection_id)?;
+    let selection_id = escape_graphql_string(selection_id);
+    let mutation = format!(
+        r#"mutation {{
+            delete_ToolSelection(
+                filter: {{ selection_id: {{ _eq: "{selection_id}" }} }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    if response.has_errors() {
+        bail!(
+            "delete_tool_selection failed: {}",
+            response
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("delete_ToolSelection"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0))
+}
+
+pub async fn delete_tool_service_registry(node: &EmbeddedNode, service_id: &str) -> Result<usize> {
+    let service_id = normalize_required("service_id", service_id)?;
+    let service_id = escape_graphql_string(service_id);
+    let mutation = format!(
+        r#"mutation {{
+            delete_ToolServiceRegistry(
+                filter: {{ service_id: {{ _eq: "{service_id}" }} }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    if response.has_errors() {
+        bail!(
+            "delete_tool_service_registry failed: {}",
+            response
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("delete_ToolServiceRegistry"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0))
 }

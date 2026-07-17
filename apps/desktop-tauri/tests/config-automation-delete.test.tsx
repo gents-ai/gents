@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { TaskConfigEditor } from "../src/components/config/TaskConfigPanel";
 import { ScheduleConfigEditor } from "../src/components/config/ScheduleConfigPanel";
 import { BackendConfigEditor } from "../src/components/config/BackendConfigPanel";
+import { BehaviorConfigEditor } from "../src/components/config/BehaviorConfigPanel";
 import type { TaskView } from "../src/lib/types";
 
 const task: TaskView = {
@@ -121,5 +122,66 @@ describe("automation document deletion", () => {
       expect(onDeleteBackendConfig).toHaveBeenCalledWith({ backendId: "openai-main" }),
     );
     await waitFor(() => expect(onDeleted).toHaveBeenCalled());
+  });
+
+  it("hides behavior delete for the default behavior and deletes others", async () => {
+    const onDeleteBehaviorConfig = vi.fn().mockResolvedValue(undefined);
+    const base = {
+      agentDid: "did:key:z6MkAgent",
+      agentDisplayName: "Agent",
+      agentEnabled: true,
+      currentDefaultBehaviorId: "default",
+      inferenceBackends: [],
+      inferenceProfiles: [{ profileId: "p" }],
+      skills: [],
+      toolSelections: [],
+      savedStatus: null,
+      saving: false,
+      onCreateBackend: vi.fn(),
+      onCreateProfile: vi.fn(),
+      onCreateToolSelection: vi.fn(),
+      onSaved: vi.fn(),
+      onSaveAgentConfig: vi.fn(),
+      onSaveBehaviorConfig: vi.fn(),
+      onDeleteBehaviorConfig,
+      onDeleted: vi.fn(),
+    };
+    const { rerender } = render(
+      <BehaviorConfigEditor
+        {...base}
+        behavior={
+          {
+            behaviorId: "default",
+            displayName: "default",
+            systemPrompt: "x",
+            inferenceProfileId: "p",
+            enabled: true,
+            isDefault: true,
+          } as never
+        }
+      />,
+    );
+    expect(screen.queryByTestId("behavior-delete")).not.toBeInTheDocument();
+
+    rerender(
+      <BehaviorConfigEditor
+        {...base}
+        behavior={
+          {
+            behaviorId: "ops",
+            displayName: "ops",
+            systemPrompt: "x",
+            inferenceProfileId: "p",
+            enabled: true,
+            isDefault: false,
+          } as never
+        }
+      />,
+    );
+    fireEvent.click(screen.getByTestId("behavior-delete"));
+    fireEvent.click(screen.getByTestId("confirm-dialog-confirm"));
+    await waitFor(() =>
+      expect(onDeleteBehaviorConfig).toHaveBeenCalledWith({ behaviorId: "ops" }),
+    );
   });
 });

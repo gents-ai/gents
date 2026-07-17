@@ -1,7 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use defra_agent_protocol::row::AgentBehaviorRow;
 use defra_node::EmbeddedNode;
+use serde_json::Value;
 
 use super::super::graphql::{
     escape_graphql_string, execute_mutation, execute_remote_mutation, graphql_optional_bool_field,
@@ -147,4 +148,35 @@ fn build_upsert_agent_behavior_mutation(row: &AgentBehaviorRow) -> Result<String
         add_fields = join_fields(&add_fields),
         update_fields = join_fields(&update_fields),
     ))
+}
+
+pub async fn delete_agent_behavior(node: &EmbeddedNode, behavior_id: &str) -> Result<usize> {
+    let behavior_id = normalize_required("behavior_id", behavior_id)?;
+    let behavior_id = escape_graphql_string(behavior_id);
+    let mutation = format!(
+        r#"mutation {{
+            delete_AgentBehavior(
+                filter: {{ behavior_id: {{ _eq: "{behavior_id}" }} }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    if response.has_errors() {
+        bail!(
+            "delete_agent_behavior failed: {}",
+            response
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("delete_AgentBehavior"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0))
 }

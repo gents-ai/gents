@@ -15,6 +15,9 @@ import {
   deleteEventTriggerConfig,
   deleteBackendConfig,
   deleteInferenceProfileConfig,
+  deleteToolSelectionConfig,
+  deleteToolServiceConfig,
+  deleteBehaviorConfig,
 } from "../lib/desktop-api";
 import type {
   AgentConfigSaveRequest,
@@ -33,6 +36,9 @@ import type {
   EventTriggerDeleteRequest,
   BackendDeleteRequest,
   InferenceProfileDeleteRequest,
+  ToolSelectionDeleteRequest,
+  ToolServiceDeleteRequest,
+  BehaviorDeleteRequest,
 } from "../lib/types";
 
 type ConfigActionParams = {
@@ -197,6 +203,51 @@ export function createDesktopShellConfigActions({
     }
   }
 
+  async function onDeleteToolSelectionConfig(request: ToolSelectionDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteToolSelectionConfig(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteToolServiceConfig(request: ToolServiceDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteToolServiceConfig(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteBehaviorConfig(request: BehaviorDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteBehaviorConfig(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
   async function onSaveBackendConfig(request: BackendSaveRequest) {
     setSavingConfig(true);
     setError(null);
@@ -280,6 +331,9 @@ export function createDesktopShellConfigActions({
     onDeleteEventTriggerConfig,
     onDeleteBackendConfig,
     onDeleteInferenceProfileConfig,
+    onDeleteToolSelectionConfig,
+    onDeleteToolServiceConfig,
+    onDeleteBehaviorConfig,
     onSaveInferenceProfileConfig,
     onSaveSkillConfig,
     onSaveToolSelectionConfig,

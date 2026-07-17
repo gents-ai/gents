@@ -3,10 +3,12 @@ import type { FormEvent } from "react";
 
 import type {
   DeploymentView,
+  ToolSelectionDeleteRequest,
   ToolSelectionSaveRequest,
   ToolSelectionView,
   ToolServiceRegistryView,
 } from "../../lib/types";
+import { ConfirmDialog } from "../ConfirmDialog";
 import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import { isOptionalInt, linesToArray, parseOptionalInt } from "./formUtils";
@@ -33,6 +35,10 @@ export type ToolSelectionConfigPanelProps = {
   onCreateToolSelection: () => void;
   onSavedStatusChange: (value: string) => void;
   onSaveToolSelectionConfig: (request: ToolSelectionSaveRequest) => Promise<unknown>;
+  onDeleteToolSelectionConfig: (
+    request: ToolSelectionDeleteRequest,
+  ) => Promise<unknown>;
+  onDeletedToolSelection: () => void;
   toolCeiling?: string | null;
   toolRoot?: string | null;
 };
@@ -46,6 +52,8 @@ export function ToolSelectionConfigPanel({
   onCreateToolSelection,
   onSavedStatusChange,
   onSaveToolSelectionConfig,
+  onDeleteToolSelectionConfig,
+  onDeletedToolSelection,
   toolCeiling,
   toolRoot,
 }: ToolSelectionConfigPanelProps) {
@@ -94,6 +102,10 @@ export function ToolSelectionConfigPanel({
           onSavedStatusChange(`tool:${selectionId}`);
         }}
         onSaveToolSelectionConfig={onSaveToolSelectionConfig}
+        onDeleteToolSelectionConfig={onDeleteToolSelectionConfig}
+        onDeleted={() => {
+          onDeletedToolSelection();
+        }}
       />
     </section>
   );
@@ -109,6 +121,10 @@ export type ToolSelectionConfigEditorProps = {
   saving: boolean;
   onSaved: (selectionId: string) => void;
   onSaveToolSelectionConfig: (request: ToolSelectionSaveRequest) => Promise<unknown>;
+  onDeleteToolSelectionConfig: (
+    request: ToolSelectionDeleteRequest,
+  ) => Promise<unknown>;
+  onDeleted: () => void;
 };
 
 export function ToolSelectionConfigEditor({
@@ -121,7 +137,23 @@ export function ToolSelectionConfigEditor({
   saving,
   onSaved,
   onSaveToolSelectionConfig,
+  onDeleteToolSelectionConfig,
+  onDeleted,
 }: ToolSelectionConfigEditorProps) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  async function deleteToolSelection() {
+    setConfirmingDelete(false);
+    if (!toolSelection) {
+      return;
+    }
+    try {
+      await onDeleteToolSelectionConfig({ selectionId: toolSelection.selectionId });
+      onDeleted();
+    } catch {
+      // Surfaced by the shell error banner; the editor stays put.
+    }
+  }
   const [selectionId, setSelectionId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [enableFileTools, setEnableFileTools] = useState(false);
@@ -592,6 +624,28 @@ export function ToolSelectionConfigEditor({
         </label>
       </div>
       <div className="config-actions">
+        {toolSelection ? (
+          <button
+            className="ghost-button danger-button"
+            data-testid="tool-selection-delete"
+            disabled={saving}
+            onClick={() => setConfirmingDelete(true)}
+            type="button"
+          >
+            Delete Selection
+          </button>
+        ) : null}
+        <ConfirmDialog
+          open={confirmingDelete}
+          title="Delete tool selection"
+          message={`Delete tool selection "${toolSelection?.selectionId ?? ""}"? Behaviors still pointing at it will block the delete.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            void deleteToolSelection();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
         <button
           className="primary-button"
           data-testid="tool-selection-save"

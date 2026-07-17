@@ -633,6 +633,64 @@ export function createDesktopUiHarness(
       notify("config");
       return snapshot();
     },
+    async deleteToolSelectionConfig(request) {
+      const referencing = deployment.behaviors
+        .filter((behavior) => behavior.toolSelectionId === request.selectionId)
+        .map((behavior) => behavior.behaviorId);
+      if (referencing.length) {
+        throw new Error(
+          `tool selection "${request.selectionId}" is referenced by behavior(s) ${referencing.join(", ")}; point them elsewhere first`,
+        );
+      }
+      deployment = {
+        ...deployment,
+        toolSelections: deployment.toolSelections.filter(
+          (selection) => selection.selectionId !== request.selectionId,
+        ),
+      };
+      notify("config");
+      return snapshot();
+    },
+    async deleteToolServiceConfig(request) {
+      const referencing = deployment.toolSelections
+        .filter((selection) =>
+          (selection.allowedMcpServiceIds ?? []).includes(request.serviceId),
+        )
+        .map((selection) => selection.selectionId);
+      if (referencing.length) {
+        throw new Error(
+          `tool service "${request.serviceId}" is allowed by tool selection(s) ${referencing.join(", ")}; remove it there first`,
+        );
+      }
+      deployment = {
+        ...deployment,
+        toolServices: deployment.toolServices.filter(
+          (service) => service.serviceId !== request.serviceId,
+        ),
+      };
+      notify("config");
+      return snapshot();
+    },
+    async deleteBehaviorConfig(request) {
+      const isDefault =
+        deployment.behaviors.find(
+          (behavior) => behavior.behaviorId === request.behaviorId,
+        )?.isDefault ??
+        deployment.agentPrincipal.defaultBehaviorId === request.behaviorId;
+      if (isDefault) {
+        throw new Error(
+          `behavior "${request.behaviorId}" is the agent's default behavior; make another behavior the default first`,
+        );
+      }
+      deployment = {
+        ...deployment,
+        behaviors: deployment.behaviors.filter(
+          (behavior) => behavior.behaviorId !== request.behaviorId,
+        ),
+      };
+      notify("config");
+      return snapshot();
+    },
     async deleteSkillConfig(request) {
       const skillId = request.skillId.trim();
       deployment = {

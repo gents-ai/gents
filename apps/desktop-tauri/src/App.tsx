@@ -178,6 +178,9 @@ function AppShell() {
             onDeleteEventTriggerConfig={shell.onDeleteEventTriggerConfig}
             onDeleteBackendConfig={shell.onDeleteBackendConfig}
             onDeleteInferenceProfileConfig={shell.onDeleteInferenceProfileConfig}
+            onDeleteToolSelectionConfig={shell.onDeleteToolSelectionConfig}
+            onDeleteToolServiceConfig={shell.onDeleteToolServiceConfig}
+            onDeleteBehaviorConfig={shell.onDeleteBehaviorConfig}
             onSaveAgentConfig={shell.onSaveAgentConfig}
             onRunTask={shell.onRunTask}
             onSaveBackendConfig={shell.onSaveBackendConfig}

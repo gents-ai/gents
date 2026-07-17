@@ -4,10 +4,12 @@ import type { FormEvent } from "react";
 import type {
   DeploymentView,
   ToolServiceRegistryView,
+  ToolServiceDeleteRequest,
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
 } from "../../lib/types";
+import { ConfirmDialog } from "../ConfirmDialog";
 import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import { isOptionalInt, optionalString, parseOptionalInt } from "./formUtils";
@@ -21,6 +23,8 @@ export type ToolServiceConfigPanelProps = {
   onCreateToolService: () => void;
   onSavedStatusChange: (value: string) => void;
   onSaveToolServiceConfig: (request: ToolServiceSaveRequest) => Promise<unknown>;
+  onDeleteToolServiceConfig: (request: ToolServiceDeleteRequest) => Promise<unknown>;
+  onDeletedToolService: () => void;
   onTestToolService: (
     request: ToolServiceTestRequest,
   ) => Promise<ToolServiceTestResult>;
@@ -35,6 +39,8 @@ export function ToolServiceConfigPanel({
   onCreateToolService,
   onSavedStatusChange,
   onSaveToolServiceConfig,
+  onDeleteToolServiceConfig,
+  onDeletedToolService,
   onTestToolService,
 }: ToolServiceConfigPanelProps) {
   const selectedToolService = useMemo(
@@ -75,6 +81,10 @@ export function ToolServiceConfigPanel({
           onSavedStatusChange(`tool-service:${serviceId}`);
         }}
         onSaveToolServiceConfig={onSaveToolServiceConfig}
+        onDeleteToolServiceConfig={onDeleteToolServiceConfig}
+        onDeleted={() => {
+          onDeletedToolService();
+        }}
         onTestToolService={onTestToolService}
       />
     </section>
@@ -87,6 +97,8 @@ export type ToolServiceConfigEditorProps = {
   saving: boolean;
   onSaved: (serviceId: string) => void;
   onSaveToolServiceConfig: (request: ToolServiceSaveRequest) => Promise<unknown>;
+  onDeleteToolServiceConfig: (request: ToolServiceDeleteRequest) => Promise<unknown>;
+  onDeleted: () => void;
   onTestToolService: (
     request: ToolServiceTestRequest,
   ) => Promise<ToolServiceTestResult>;
@@ -98,8 +110,24 @@ export function ToolServiceConfigEditor({
   saving,
   onSaved,
   onSaveToolServiceConfig,
+  onDeleteToolServiceConfig,
+  onDeleted,
   onTestToolService,
 }: ToolServiceConfigEditorProps) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  async function deleteToolService() {
+    setConfirmingDelete(false);
+    if (!toolService) {
+      return;
+    }
+    try {
+      await onDeleteToolServiceConfig({ serviceId: toolService.serviceId });
+      onDeleted();
+    } catch {
+      // Surfaced by the shell error banner; the editor stays put.
+    }
+  }
   const [serviceId, setServiceId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
@@ -318,6 +346,28 @@ export function ToolServiceConfigEditor({
         >
           {testing ? "Testing..." : "Test Service"}
         </button>
+        {toolService ? (
+          <button
+            className="ghost-button danger-button"
+            data-testid="tool-service-delete"
+            disabled={saving}
+            onClick={() => setConfirmingDelete(true)}
+            type="button"
+          >
+            Delete Service
+          </button>
+        ) : null}
+        <ConfirmDialog
+          open={confirmingDelete}
+          title="Delete tool service"
+          message={`Delete tool service "${toolService?.serviceId ?? ""}"? Selections still allowing it will block the delete.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            void deleteToolService();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
         <button
           className="primary-button"
           data-testid="tool-service-save"
