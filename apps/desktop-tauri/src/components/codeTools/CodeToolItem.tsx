@@ -42,7 +42,7 @@ export function CodeToolItem({ view }: { view: CodeToolView }) {
           <span className="tool-item-summary-left">
             <span aria-hidden="true" className="tool-item-dot tool-item-dot-success" />
             <span className="code-tool-kind">
-              {view.created ? "created" : "edited"}
+              {view.created ? "created" : view.overwrite ? "overwrote" : "edited"}
             </span>
             <span className="code-tool-path mono">{view.path}</span>
             {view.replacementsApplied > 1 ? (
@@ -53,25 +53,43 @@ export function CodeToolItem({ view }: { view: CodeToolView }) {
           </span>
           <span className="tool-item-action">diff</span>
         </summary>
-        <div className="code-output">
-          <CopyButton
-            className="code-output-copy"
-            getText={() => diffText(view.diff)}
-          />
-          <pre className="code-diff" data-testid="code-diff">
-            {view.diff.map((line, index) => (
-              <div
-                className={`code-diff-line code-diff-${line.kind}`}
-                key={`${line.kind}-${index}`}
-              >
-                <span aria-hidden="true" className="code-diff-gutter">
-                  {line.kind === "add" ? "+" : "-"}
-                </span>
-                <span className="code-diff-text">{line.text}</span>
-              </div>
-            ))}
-          </pre>
-        </div>
+        {view.overwrite ? (
+          <div className="tool-item-body">
+            <div className="muted small" data-testid="code-overwrite-note">
+              Replaced the file&apos;s previous contents — no diff basis exists. New
+              contents:
+            </div>
+            <div className="code-output">
+              <CopyButton
+                className="code-output-copy"
+                getText={() => view.diff.map((line) => line.text).join("\n")}
+              />
+              <pre className="code-terminal" data-testid="code-overwrite-content">
+                {view.diff.map((line) => line.text).join("\n")}
+              </pre>
+            </div>
+          </div>
+        ) : (
+          <div className="code-output">
+            <CopyButton
+              className="code-output-copy"
+              getText={() => diffText(view.diff)}
+            />
+            <pre className="code-diff" data-testid="code-diff">
+              {view.diff.map((line, index) => (
+                <div
+                  className={`code-diff-line code-diff-${line.kind}`}
+                  key={`${line.kind}-${index}`}
+                >
+                  <span aria-hidden="true" className="code-diff-gutter">
+                    {line.kind === "add" ? "+" : "-"}
+                  </span>
+                  <span className="code-diff-text">{line.text}</span>
+                </div>
+              ))}
+            </pre>
+          </div>
+        )}
       </details>
     );
   }

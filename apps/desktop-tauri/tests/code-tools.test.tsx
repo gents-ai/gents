@@ -44,6 +44,7 @@ describe("toCodeToolView", () => {
       kind: "fileEdit",
       path: "src/main.rs",
       created: false,
+      overwrite: false,
       replacementsApplied: 1,
       diff: [
         { kind: "del", text: "let x = 1;" },
@@ -103,7 +104,11 @@ describe("toCodeToolView", () => {
         ),
       }),
     );
-    expect(overwrote).toMatchObject({ kind: "fileEdit", created: false });
+    expect(overwrote).toMatchObject({
+      kind: "fileEdit",
+      created: false,
+      overwrite: true,
+    });
   });
 
   it("parses the stdout/stderr framing and prefers the envelope's full command line", () => {
@@ -441,5 +446,30 @@ describe("CodeToolItem", () => {
       />,
     );
     expect(screen.getByTestId("code-exit")).toHaveTextContent("timed out");
+  });
+});
+
+describe("overwrite rendering honesty", () => {
+  it("renders an overwrite as replaced contents, not an all-additions diff", () => {
+    render(
+      <CodeToolItem
+        view={{
+          kind: "fileEdit",
+          path: "README.md",
+          created: false,
+          overwrite: true,
+          replacementsApplied: 1,
+          diff: [
+            { kind: "add", text: "brand" },
+            { kind: "add", text: "new" },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("overwrote")).toBeInTheDocument();
+    expect(screen.getByTestId("code-overwrite-note")).toBeInTheDocument();
+    expect(screen.getByTestId("code-overwrite-content")).toHaveTextContent("brand new");
+    expect(screen.queryByTestId("code-diff")).not.toBeInTheDocument();
   });
 });

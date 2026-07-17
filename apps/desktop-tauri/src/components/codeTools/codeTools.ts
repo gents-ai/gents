@@ -20,6 +20,11 @@ export type FileEditView = {
   kind: "fileEdit";
   path: string;
   created: boolean;
+  /**
+   * write_file onto an existing file: the previous contents were replaced
+   * and are unknowable client-side, so an all-additions diff would lie.
+   */
+  overwrite: boolean;
   /** >1 when edit_file replace_all touched multiple sites. */
   replacementsApplied: number;
   diff: DiffLine[];
@@ -321,6 +326,7 @@ function toFileEditView(tool: RenderedToolCallView, name: string): FileEditView 
   }
   // Only write_file's metadata carries `created`; edit_file edits by contract.
   const created = name === "write_file" && meta["created"] === true;
+  const overwrite = name === "write_file" && meta["created"] === false;
   const replacementsRaw = meta["replacements_applied"];
   const replacementsApplied =
     typeof replacementsRaw === "number" && replacementsRaw > 0 ? replacementsRaw : 1;
@@ -333,7 +339,7 @@ function toFileEditView(tool: RenderedToolCallView, name: string): FileEditView 
       ...toDiffLines(stringField(args, "new_text") ?? "", "add"),
     ];
   }
-  return { kind: "fileEdit", path, created, replacementsApplied, diff };
+  return { kind: "fileEdit", path, created, overwrite, replacementsApplied, diff };
 }
 
 function toCommandRunView(tool: RenderedToolCallView): CommandRunView | null {
