@@ -226,6 +226,7 @@ export function ActiveChatWorkspace({
             onDraftChange={onDraftChange}
             onInterruptClick={onInterruptClick}
             onSend={onSend}
+            skills={selectedDeployment.skills ?? []}
           />
         </div>
         <OperationsRail open={operationsOpen} onOpenChange={setOperationsOpen} />
