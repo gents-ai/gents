@@ -72,6 +72,7 @@ export function createDesktopUiHarness(
   let sessionSeq = 1;
   let rowCount = 42;
   let deployment = createDeployment();
+  let removed = false;
 
   const greeting =
     scenario === "long-content"
@@ -171,7 +172,7 @@ export function createDesktopUiHarness(
   }
 
   function snapshot() {
-    const deployments = scenario === "empty-fleet" ? [] : [deployment];
+    const deployments = scenario === "empty-fleet" || removed ? [] : [deployment];
     const health = {
       status: "healthy",
       connectedPeerCount: 1,
@@ -383,8 +384,9 @@ export function createDesktopUiHarness(
       if (peerId !== deployment.peerId) {
         throw new Error(`peer ${peerId} not found`);
       }
-      // The harness's single deployment is the local runtime.
-      throw new Error("the local runtime deployment cannot be removed");
+      removed = true;
+      notify("peers");
+      return snapshot();
     },
     async renamePeer(peerId, label) {
       if (peerId !== deployment.peerId) {
