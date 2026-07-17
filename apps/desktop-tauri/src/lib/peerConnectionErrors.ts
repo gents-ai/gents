@@ -2,6 +2,8 @@ export type PeerConnectionAction =
   | "add-peer"
   | "local-runtime"
   | "peer-status"
+  | "remove-peer"
+  | "rename-peer"
   | "repair-p2p";
 
 export function formatPeerConnectionError(

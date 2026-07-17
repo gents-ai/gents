@@ -69,6 +69,39 @@
     gap: var(--space-2);
   }
 
+  .fleet-rename-input {
+    font-size: var(--text-base);
+    font-weight: 600;
+    min-height: 0;
+    padding: 0 var(--space-2);
+    max-width: 22ch;
+  }
+
+  .fleet-row-icon {
+    width: 22px;
+    height: 22px;
+    min-height: 22px;
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+    opacity: 0;
+  }
+
+  .fleet-row-icon svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 2;
+  }
+
+  .fleet-agent-cell:hover .fleet-row-icon,
+  .fleet-row-icon:focus-visible {
+    opacity: 1;
+  }
+
   .fleet-did-copy {
     opacity: 0;
   }

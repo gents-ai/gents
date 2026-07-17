@@ -27,6 +27,8 @@ type FleetDashboardProps = {
   onOpenChat: (agentDid: string) => void;
   onOpenCode?: (agentDid: string) => void;
   onOpenConfig: (agentDid: string) => void;
+  onRemovePeer?: (peerId: string) => Promise<unknown> | void;
+  onRenamePeer?: (peerId: string, label: string) => Promise<unknown> | void;
   onRepairP2P: () => Promise<unknown>;
 };
 
@@ -51,6 +53,8 @@ export function FleetDashboard({
   onOpenChat,
   onOpenCode,
   onOpenConfig,
+  onRemovePeer,
+  onRenamePeer,
   onRepairP2P,
 }: FleetDashboardProps) {
   const [showAddPeer, setShowAddPeer] = useState(false);
@@ -204,6 +208,8 @@ export function FleetDashboard({
                 onOpenChat={onOpenChat}
                 onOpenCode={onOpenCode}
                 onOpenConfig={onOpenConfig}
+                onRemovePeer={onRemovePeer}
+                onRenamePeer={onRenamePeer}
               />
             ))}
           </tbody>

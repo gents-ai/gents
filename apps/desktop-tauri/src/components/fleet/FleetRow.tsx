@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import { isTerminalTurnState } from "../../lib/chat-shell";
 import { formatPeerConnectionError } from "../../lib/peerConnectionErrors";
 import type { BootstrapSummary, DeploymentView } from "../../lib/types";
@@ -7,7 +9,15 @@ import {
   displayBehaviorLabel,
   displayGraphqlEndpoint,
 } from "../../lib/types";
-import { ChatIcon, CodeIcon, ConfigIcon, ToolIconGlyph } from "./FleetIcons";
+import { ConfirmDialog } from "../ConfirmDialog";
+import {
+  ChatIcon,
+  CodeIcon,
+  ConfigIcon,
+  PencilIcon,
+  ToolIconGlyph,
+  TrashIcon,
+} from "./FleetIcons";
 import {
   deploymentStatus,
   formatRelativeTime,
@@ -23,6 +33,8 @@ export type FleetRowProps = {
   onOpenChat: (agentDid: string) => void;
   onOpenCode?: (agentDid: string) => void;
   onOpenConfig: (agentDid: string) => void;
+  onRemovePeer?: (peerId: string) => Promise<unknown> | void;
+  onRenamePeer?: (peerId: string, label: string) => Promise<unknown> | void;
 };
 
 export function FleetRow({
@@ -31,8 +43,21 @@ export function FleetRow({
   onOpenChat,
   onOpenCode,
   onOpenConfig,
+  onRemovePeer,
+  onRenamePeer,
 }: FleetRowProps) {
+  const [editingLabel, setEditingLabel] = useState<string | null>(null);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const status = deploymentStatus(deployment);
+  const localRuntime = isLocalRuntimeSource(deployment.source);
+
+  function commitRename() {
+    const label = (editingLabel ?? "").trim();
+    setEditingLabel(null);
+    if (label && label !== deployment.label && onRenamePeer) {
+      void onRenamePeer(deployment.peerId, label);
+    }
+  }
   const enabledTaskCount = deployment.tasks.filter(
     (task) => task.enabled !== false,
   ).length;
@@ -76,15 +101,45 @@ export function FleetRow({
             </span>
           </span>
           <div className="fleet-agent-copy">
-            <button
-              className="fleet-agent-name"
-              data-testid={`fleet-chat-name-${deployment.peerId}`}
-              onClick={() => onOpenChat(deployment.agentDid)}
-              title={`Open ${deployment.label} chat`}
-              type="button"
-            >
-              {deployment.agentPrincipal.displayName ?? deployment.label}
-            </button>
+            {editingLabel != null ? (
+              <input
+                autoFocus
+                className="fleet-rename-input"
+                data-testid={`fleet-rename-input-${deployment.peerId}`}
+                onBlur={commitRename}
+                onChange={(event) => setEditingLabel(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    commitRename();
+                  } else if (event.key === "Escape") {
+                    setEditingLabel(null);
+                  }
+                }}
+                value={editingLabel}
+              />
+            ) : (
+              <button
+                className="fleet-agent-name"
+                data-testid={`fleet-chat-name-${deployment.peerId}`}
+                onClick={() => onOpenChat(deployment.agentDid)}
+                title={`Open ${deployment.label} chat`}
+                type="button"
+              >
+                {deployment.agentPrincipal.displayName ?? deployment.label}
+              </button>
+            )}
+            {onRenamePeer && editingLabel == null ? (
+              <button
+                aria-label={`Rename ${deployment.label}`}
+                className="ghost-button fleet-row-icon fleet-rename"
+                data-testid={`fleet-rename-${deployment.peerId}`}
+                onClick={() => setEditingLabel(deployment.label)}
+                title="Rename deployment (saved label)"
+                type="button"
+              >
+                <PencilIcon />
+              </button>
+            ) : null}
             <span className="muted mono fleet-agent-identity">
               {[
                 agentIdentity,
@@ -173,6 +228,30 @@ export function FleetRow({
           >
             <ConfigIcon />
           </button>
+          {onRemovePeer && !localRuntime ? (
+            <button
+              aria-label={`Remove ${deployment.label}`}
+              className="ghost-button fleet-table-action danger-button"
+              data-testid={`fleet-remove-${deployment.peerId}`}
+              onClick={() => setConfirmingRemove(true)}
+              title="Remove saved deployment"
+              type="button"
+            >
+              <TrashIcon />
+            </button>
+          ) : null}
+          <ConfirmDialog
+            open={confirmingRemove}
+            title="Remove deployment"
+            message={`Remove "${deployment.label}" from this desktop's saved deployments? The remote agent itself is not touched.`}
+            confirmLabel="Remove"
+            danger
+            onConfirm={() => {
+              setConfirmingRemove(false);
+              void onRemovePeer?.(deployment.peerId);
+            }}
+            onCancel={() => setConfirmingRemove(false)}
+          />
         </div>
       </td>
     </tr>
