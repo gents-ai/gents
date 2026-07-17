@@ -7,6 +7,8 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FleetDashboard } from "./components/fleet/FleetDashboard";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { applyTheme, loadTheme } from "./lib/theme";
+import { ShortcutsHelp } from "./components/ShortcutsHelp";
+import { useAppShortcuts } from "./hooks/useAppShortcuts";
 import { Sidebar } from "./components/Sidebar";
 import { useDesktopShell } from "./hooks/useDesktopShell";
 import { installExternalLinkGuard } from "./lib/externalLinks";
@@ -35,6 +37,28 @@ function AppShell() {
   const [workspaceView, setWorkspaceView] = useState<
     "fleet" | "chat" | "config" | "code"
   >("fleet");
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  useAppShortcuts({
+    setView: setWorkspaceView,
+    newConversation: () => {
+      const behaviorId =
+        shell.selectedBehaviorId ?? shell.behaviorOptions[0]?.behaviorId ?? null;
+      if (behaviorId) {
+        setWorkspaceView("chat");
+        shell.onStartNewConversation(behaviorId);
+      }
+    },
+    focusComposer: () => {
+      setWorkspaceView("chat");
+      requestAnimationFrame(() => {
+        document
+          .querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]')
+          ?.focus();
+      });
+    },
+    toggleHelp: () => setShortcutsOpen((open) => !open),
+  });
 
   function openChat(agentDid?: string) {
     if (agentDid) {
@@ -62,6 +86,7 @@ function AppShell() {
       {shell.error ? (
         <ErrorBanner message={shell.error} onDismiss={shell.onDismissError} />
       ) : null}
+      <ShortcutsHelp open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
       {workspaceView === "fleet" ? (
         <FleetDashboard
