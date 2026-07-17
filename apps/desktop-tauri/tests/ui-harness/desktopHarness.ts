@@ -103,6 +103,7 @@ export function createDesktopUiHarness(
         itemKey: "intro-assistant",
         sequence: 1,
         content: greeting,
+        timestamp: "2026-06-03T14:05:00Z",
       },
       ...(scenario === "coding"
         ? [
@@ -302,12 +303,14 @@ export function createDesktopUiHarness(
           itemKey: `${requestId}-user`,
           sequence: 1,
           content: prompt,
+          timestamp: new Date().toISOString(),
         },
         {
           kind: "assistantMessage",
           itemKey: `${requestId}-assistant`,
           sequence: 2,
           content: response,
+          timestamp: new Date().toISOString(),
         },
       ],
     };
@@ -422,12 +425,14 @@ export function createDesktopUiHarness(
               itemKey: `${requestId}-user`,
               sequence: nextSequence,
               content,
+              timestamp: new Date().toISOString(),
             },
             {
               kind: "assistantMessage",
               itemKey: `${requestId}-assistant`,
               sequence: nextSequence + 1,
               content: response,
+              timestamp: new Date().toISOString(),
             },
           ],
         };

@@ -169,6 +169,7 @@ pub(super) fn build_rendered_timeline(
                         item_key: message.message_key.clone(),
                         sequence: message.sequence,
                         content,
+                        timestamp: normalize_optional(message.timestamp.as_deref()),
                     });
                 }
             }
@@ -179,6 +180,7 @@ pub(super) fn build_rendered_timeline(
                         sequence: message.sequence,
                         content: normalized_content,
                         reasoning: normalized_reasoning,
+                        timestamp: normalize_optional(message.timestamp.as_deref()),
                     });
                 }
             }

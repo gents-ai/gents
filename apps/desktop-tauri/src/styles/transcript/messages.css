@@ -277,9 +277,21 @@
     border-color: var(--border-default);
   }
 
+  .message-time {
+    margin-left: auto;
+    font-size: var(--text-2xs);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+
   .message-copy {
     margin-left: auto;
     opacity: 0;
+  }
+
+  /* When a timestamp occupies the auto slot, the copy button docks beside it. */
+  .message-time + .message-copy {
+    margin-left: 0;
   }
 
   .message-card:hover .message-copy,
