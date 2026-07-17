@@ -4,9 +4,9 @@ use defra_node::EmbeddedNode;
 use serde_json::Value;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, execute_remote_mutation, graphql_optional_bool_field,
-    graphql_optional_int_field, graphql_string_field, graphql_string_list_field, join_fields,
-    normalize_required,
+    escape_graphql_string, execute_mutation, execute_remote_delete_mutation,
+    execute_remote_mutation, graphql_optional_bool_field, graphql_optional_int_field,
+    graphql_string_field, graphql_string_list_field, join_fields, normalize_required,
 };
 
 pub async fn upsert_tool_selection(node: &EmbeddedNode, row: &ToolSelectionRow) -> Result<()> {
@@ -391,16 +391,12 @@ pub async fn upsert_tool_service_registry(
     execute_mutation(node, &mutation, "upsert_tool_service_registry").await
 }
 
-pub async fn delete_tool_selection(node: &EmbeddedNode, selection_id: &str) -> Result<usize> {
-    let selection_id = normalize_required("selection_id", selection_id)?;
-    let selection_id = escape_graphql_string(selection_id);
-    let mutation = format!(
-        r#"mutation {{
-            delete_ToolSelection(
-                filter: {{ selection_id: {{ _eq: "{selection_id}" }} }}
-            ) {{ _docID }}
-        }}"#
-    );
+pub async fn delete_tool_selection(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    selection_id: &str,
+) -> Result<usize> {
+    let mutation = build_delete_tool_selection_mutation(agent_did, selection_id)?;
     let response = node.execute(&mutation).await;
     if response.has_errors() {
         bail!(
@@ -422,16 +418,43 @@ pub async fn delete_tool_selection(node: &EmbeddedNode, selection_id: &str) -> R
         .unwrap_or(0))
 }
 
-pub async fn delete_tool_service_registry(node: &EmbeddedNode, service_id: &str) -> Result<usize> {
-    let service_id = normalize_required("service_id", service_id)?;
-    let service_id = escape_graphql_string(service_id);
-    let mutation = format!(
+pub async fn delete_tool_selection_from_graphql(
+    graphql: &str,
+    agent_did: &str,
+    selection_id: &str,
+) -> Result<usize> {
+    let graphql = normalize_required("graphql", graphql)?;
+    let mutation = build_delete_tool_selection_mutation(agent_did, selection_id)?;
+    execute_remote_delete_mutation(
+        graphql,
+        &mutation,
+        "delete_tool_selection",
+        "delete_ToolSelection",
+    )
+    .await
+}
+
+fn build_delete_tool_selection_mutation(agent_did: &str, selection_id: &str) -> Result<String> {
+    let agent_did = normalize_required("agent_did", agent_did)?;
+    let selection_id = normalize_required("selection_id", selection_id)?;
+    let agent_did = escape_graphql_string(agent_did);
+    let selection_id = escape_graphql_string(selection_id);
+    Ok(format!(
         r#"mutation {{
-            delete_ToolServiceRegistry(
-                filter: {{ service_id: {{ _eq: "{service_id}" }} }}
+            delete_ToolSelection(
+                filter: {{
+                    _and: [
+                        {{ selection_id: {{ _eq: "{selection_id}" }} }},
+                        {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                    ]
+                }}
             ) {{ _docID }}
         }}"#
-    );
+    ))
+}
+
+pub async fn delete_tool_service_registry(node: &EmbeddedNode, service_id: &str) -> Result<usize> {
+    let mutation = build_delete_tool_service_registry_mutation(service_id)?;
     let response = node.execute(&mutation).await;
     if response.has_errors() {
         bail!(
@@ -451,4 +474,45 @@ pub async fn delete_tool_service_registry(node: &EmbeddedNode, service_id: &str)
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0))
+}
+
+pub async fn delete_tool_service_registry_from_graphql(
+    graphql: &str,
+    service_id: &str,
+) -> Result<usize> {
+    let graphql = normalize_required("graphql", graphql)?;
+    let mutation = build_delete_tool_service_registry_mutation(service_id)?;
+    execute_remote_delete_mutation(
+        graphql,
+        &mutation,
+        "delete_tool_service_registry",
+        "delete_ToolServiceRegistry",
+    )
+    .await
+}
+
+fn build_delete_tool_service_registry_mutation(service_id: &str) -> Result<String> {
+    let service_id = normalize_required("service_id", service_id)?;
+    let service_id = escape_graphql_string(service_id);
+    Ok(format!(
+        r#"mutation {{
+            delete_ToolServiceRegistry(
+                filter: {{ service_id: {{ _eq: "{service_id}" }} }}
+            ) {{ _docID }}
+        }}"#
+    ))
+}
+
+#[cfg(test)]
+mod delete_tests {
+    use super::build_delete_tool_selection_mutation;
+
+    #[test]
+    fn tool_selection_delete_is_scoped_to_agent_and_escapes_values() {
+        let mutation = build_delete_tool_selection_mutation("did:defra:remote", "tools-\"safe\"")
+            .expect("delete mutation");
+
+        assert!(mutation.contains(r#"agent_did: { _eq: "did:defra:remote" }"#));
+        assert!(mutation.contains(r#"selection_id: { _eq: "tools-\"safe\"" }"#));
+    }
 }

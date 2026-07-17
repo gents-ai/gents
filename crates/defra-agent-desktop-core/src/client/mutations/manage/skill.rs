@@ -19,8 +19,9 @@ use defra_node::EmbeddedNode;
 use serde_json::Value;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, graphql_optional_bool_field, graphql_string_field,
-    graphql_string_list_field, join_fields, normalize_required,
+    escape_graphql_string, execute_mutation, execute_remote_delete_mutation,
+    graphql_optional_bool_field, graphql_string_field, graphql_string_list_field, join_fields,
+    normalize_required,
 };
 
 pub async fn upsert_skill(node: &EmbeddedNode, row: &SkillRow) -> Result<()> {
@@ -118,22 +119,7 @@ pub async fn upsert_skill(node: &EmbeddedNode, row: &SkillRow) -> Result<()> {
 }
 
 pub async fn delete_skill(node: &EmbeddedNode, agent_did: &str, skill_id: &str) -> Result<usize> {
-    let agent_did = normalize_required("agent_did", agent_did)?;
-    let skill_id = normalize_required("skill_id", skill_id)?;
-    let agent_did = escape_graphql_string(agent_did);
-    let skill_id = escape_graphql_string(skill_id);
-    let mutation = format!(
-        r#"mutation {{
-            delete_Skill(
-                filter: {{
-                    _and: [
-                        {{ skill_id: {{ _eq: "{skill_id}" }} }},
-                        {{ agent_did: {{ _eq: "{agent_did}" }} }}
-                    ]
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
+    let mutation = build_delete_skill_mutation(agent_did, skill_id)?;
     let response = node.execute(&mutation).await;
     if response.has_errors() {
         bail!(
@@ -153,4 +139,33 @@ pub async fn delete_skill(node: &EmbeddedNode, agent_did: &str, skill_id: &str) 
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0))
+}
+
+pub async fn delete_skill_from_graphql(
+    graphql: &str,
+    agent_did: &str,
+    skill_id: &str,
+) -> Result<usize> {
+    let graphql = normalize_required("graphql", graphql)?;
+    let mutation = build_delete_skill_mutation(agent_did, skill_id)?;
+    execute_remote_delete_mutation(graphql, &mutation, "delete_skill", "delete_Skill").await
+}
+
+fn build_delete_skill_mutation(agent_did: &str, skill_id: &str) -> Result<String> {
+    let agent_did = normalize_required("agent_did", agent_did)?;
+    let skill_id = normalize_required("skill_id", skill_id)?;
+    let agent_did = escape_graphql_string(agent_did);
+    let skill_id = escape_graphql_string(skill_id);
+    Ok(format!(
+        r#"mutation {{
+            delete_Skill(
+                filter: {{
+                    _and: [
+                        {{ skill_id: {{ _eq: "{skill_id}" }} }},
+                        {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                    ]
+                }}
+            ) {{ _docID }}
+        }}"#
+    ))
 }

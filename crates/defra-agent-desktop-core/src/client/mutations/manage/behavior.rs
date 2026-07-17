@@ -5,9 +5,9 @@ use defra_node::EmbeddedNode;
 use serde_json::Value;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, execute_remote_mutation, graphql_optional_bool_field,
-    graphql_optional_float_field, graphql_string_field, graphql_string_list_field, join_fields,
-    normalize_required,
+    escape_graphql_string, execute_mutation, execute_remote_delete_mutation,
+    execute_remote_mutation, graphql_optional_bool_field, graphql_optional_float_field,
+    graphql_string_field, graphql_string_list_field, join_fields, normalize_required,
 };
 
 pub async fn upsert_agent_behavior(node: &EmbeddedNode, row: &AgentBehaviorRow) -> Result<()> {
@@ -150,16 +150,12 @@ fn build_upsert_agent_behavior_mutation(row: &AgentBehaviorRow) -> Result<String
     ))
 }
 
-pub async fn delete_agent_behavior(node: &EmbeddedNode, behavior_id: &str) -> Result<usize> {
-    let behavior_id = normalize_required("behavior_id", behavior_id)?;
-    let behavior_id = escape_graphql_string(behavior_id);
-    let mutation = format!(
-        r#"mutation {{
-            delete_AgentBehavior(
-                filter: {{ behavior_id: {{ _eq: "{behavior_id}" }} }}
-            ) {{ _docID }}
-        }}"#
-    );
+pub async fn delete_agent_behavior(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    behavior_id: &str,
+) -> Result<usize> {
+    let mutation = build_delete_agent_behavior_mutation(agent_did, behavior_id)?;
     let response = node.execute(&mutation).await;
     if response.has_errors() {
         bail!(
@@ -179,4 +175,53 @@ pub async fn delete_agent_behavior(node: &EmbeddedNode, behavior_id: &str) -> Re
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0))
+}
+
+pub async fn delete_agent_behavior_from_graphql(
+    graphql: &str,
+    agent_did: &str,
+    behavior_id: &str,
+) -> Result<usize> {
+    let graphql = normalize_required("graphql", graphql)?;
+    let mutation = build_delete_agent_behavior_mutation(agent_did, behavior_id)?;
+    execute_remote_delete_mutation(
+        graphql,
+        &mutation,
+        "delete_agent_behavior",
+        "delete_AgentBehavior",
+    )
+    .await
+}
+
+fn build_delete_agent_behavior_mutation(agent_did: &str, behavior_id: &str) -> Result<String> {
+    let agent_did = normalize_required("agent_did", agent_did)?;
+    let behavior_id = normalize_required("behavior_id", behavior_id)?;
+    let agent_did = escape_graphql_string(agent_did);
+    let behavior_id = escape_graphql_string(behavior_id);
+    Ok(format!(
+        r#"mutation {{
+            delete_AgentBehavior(
+                filter: {{
+                    _and: [
+                        {{ behavior_id: {{ _eq: "{behavior_id}" }} }},
+                        {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                    ]
+                }}
+            ) {{ _docID }}
+        }}"#
+    ))
+}
+
+#[cfg(test)]
+mod delete_tests {
+    use super::build_delete_agent_behavior_mutation;
+
+    #[test]
+    fn delete_is_scoped_to_agent_and_escapes_values() {
+        let mutation = build_delete_agent_behavior_mutation("did:defra:remote", "say-\"hi\"")
+            .expect("delete mutation");
+
+        assert!(mutation.contains(r#"agent_did: { _eq: "did:defra:remote" }"#));
+        assert!(mutation.contains(r#"behavior_id: { _eq: "say-\"hi\"" }"#));
+    }
 }

@@ -33,6 +33,39 @@ fn is_terminal_lifecycle_state(value: Option<&str>) -> bool {
     )
 }
 
+fn row_matches_source(
+    sources: &[Option<String>],
+    index: usize,
+    source_agent_did: &str,
+    is_remote_source: bool,
+) -> bool {
+    match sources.get(index).and_then(|source| source.as_deref()) {
+        Some(source) => source == source_agent_did,
+        None => !is_remote_source,
+    }
+}
+
+fn retain_sourced_rows<T>(
+    rows: &mut Vec<T>,
+    sources: &mut Vec<Option<String>>,
+    source_agent_did: &str,
+    is_remote_source: bool,
+    should_delete: impl Fn(&T) -> bool,
+) {
+    let previous_rows = std::mem::take(rows);
+    let previous_sources = std::mem::take(sources);
+
+    for (index, row) in previous_rows.into_iter().enumerate() {
+        if should_delete(&row)
+            && row_matches_source(&previous_sources, index, source_agent_did, is_remote_source)
+        {
+            continue;
+        }
+        rows.push(row);
+        sources.push(previous_sources.get(index).cloned().unwrap_or_default());
+    }
+}
+
 fn chat_patch_signature(patch: &ClientStore) -> (usize, usize, u64) {
     let rows = patch.row_count();
     match serde_json::to_vec(&patch.to_rows()) {
@@ -340,22 +373,21 @@ impl ClientCore {
         }
     }
 
-    pub async fn delete_skill(&self, agent_did: &str, skill_id: &str) -> Result<()> {
-        let agent_did = normalize_required("agent_did", agent_did)?;
+    pub async fn delete_skill(&self, skill_id: &str, source_agent_did: &str) -> Result<()> {
         let skill_id = normalize_required("skill_id", skill_id)?;
+        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
+        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
-        if !snapshot
-            .skills
-            .iter()
-            .any(|row| row.skill_id == skill_id && row.agent_did.as_deref() == Some(agent_did))
-        {
-            bail!("no Skill document with skill_id {skill_id:?} for {agent_did}");
+        if !snapshot.skills.iter().any(|row| {
+            row.skill_id == skill_id && row.agent_did.as_deref() == Some(source_agent_did)
+        }) {
+            bail!("no Skill document with skill_id {skill_id:?} for {source_agent_did}");
         }
 
         let affected_behaviors = snapshot
             .behaviors
             .iter()
-            .filter(|row| row.agent_did.as_deref() == Some(agent_did))
+            .filter(|row| row.agent_did.as_deref() == Some(source_agent_did))
             .filter_map(|row| {
                 let mut next = row.clone();
                 let refs_before = next.skill_refs.len();
@@ -369,12 +401,25 @@ impl ClientCore {
             .collect::<Vec<_>>();
 
         let result = async {
-            let deleted = mutations::delete_skill(self.node.as_ref(), agent_did, skill_id).await?;
+            let deleted = match remote_graphql.as_deref() {
+                Some(graphql) => {
+                    mutations::delete_skill_from_graphql(graphql, source_agent_did, skill_id)
+                        .await?
+                }
+                None => {
+                    mutations::delete_skill(self.node.as_ref(), source_agent_did, skill_id).await?
+                }
+            };
             if deleted == 0 {
-                bail!("no Skill document with skill_id {skill_id:?} for {agent_did}");
+                bail!("no Skill document with skill_id {skill_id:?} for {source_agent_did}");
             }
             for behavior in affected_behaviors {
-                mutations::upsert_agent_behavior(self.node.as_ref(), &behavior).await?;
+                match remote_graphql.as_deref() {
+                    Some(graphql) => {
+                        mutations::upsert_agent_behavior_to_graphql(graphql, &behavior).await?
+                    }
+                    None => mutations::upsert_agent_behavior(self.node.as_ref(), &behavior).await?,
+                }
             }
             Ok(())
         }
@@ -382,14 +427,14 @@ impl ClientCore {
 
         match result {
             Ok(()) => {
-                self.refresh_store().await?;
-                self.prune_deleted_skill_from_store(agent_did, skill_id);
+                self.refresh_config_source(source_agent_did).await;
+                self.prune_deleted_skill_from_store(source_agent_did, skill_id);
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "defra_agent_desktop_core::writes",
                     action = "config_skill_delete",
                     row_id = %skill_id,
-                    agent_did,
+                    source_agent_did,
                     "desktop write saved"
                 );
                 Ok(())
@@ -398,16 +443,52 @@ impl ClientCore {
         }
     }
 
-    pub async fn delete_task(&self, task_id: &str) -> Result<()> {
+    pub async fn delete_task(&self, task_id: &str, source_agent_did: &str) -> Result<()> {
         let task_id = normalize_required("task_id", task_id)?;
+        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
+        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
-        if !snapshot.tasks.iter().any(|row| row.task_id == task_id) {
+        if !snapshot.tasks.iter().enumerate().any(|(index, row)| {
+            row.task_id == task_id
+                && row_matches_source(
+                    &snapshot.task_source_agent_dids,
+                    index,
+                    source_agent_did,
+                    remote_graphql.is_some(),
+                )
+        }) {
             bail!("no Task document with task_id {task_id:?}");
         }
         // Dependents block deletion: silently cascading into automation that
         // still fires would be worse than asking the operator to detach it.
-        let schedule_refs = snapshot.schedules_for_tasks(&[task_id]).len();
-        let trigger_refs = snapshot.event_triggers_for_tasks(&[task_id]).len();
+        let schedule_refs = snapshot
+            .schedules
+            .iter()
+            .enumerate()
+            .filter(|(index, row)| {
+                row.task_id.as_deref() == Some(task_id)
+                    && row_matches_source(
+                        &snapshot.schedule_source_agent_dids,
+                        *index,
+                        source_agent_did,
+                        remote_graphql.is_some(),
+                    )
+            })
+            .count();
+        let trigger_refs = snapshot
+            .event_triggers
+            .iter()
+            .enumerate()
+            .filter(|(index, row)| {
+                row.task_id.as_deref() == Some(task_id)
+                    && row_matches_source(
+                        &snapshot.event_trigger_source_agent_dids,
+                        *index,
+                        source_agent_did,
+                        remote_graphql.is_some(),
+                    )
+            })
+            .count();
         if schedule_refs + trigger_refs > 0 {
             bail!(
                 "task {task_id:?} is referenced by {schedule_refs} schedule(s) and {trigger_refs} event trigger(s); delete or detach those first"
@@ -415,7 +496,10 @@ impl ClientCore {
         }
 
         let result = async {
-            let deleted = mutations::delete_task(self.node.as_ref(), task_id).await?;
+            let deleted = match remote_graphql.as_deref() {
+                Some(graphql) => mutations::delete_task_from_graphql(graphql, task_id).await?,
+                None => mutations::delete_task(self.node.as_ref(), task_id).await?,
+            };
             if deleted == 0 {
                 bail!("no Task document with task_id {task_id:?}");
             }
@@ -427,26 +511,44 @@ impl ClientCore {
             "delete task",
             "config_task_delete",
             task_id,
+            source_agent_did,
             |rows| {
-                rows.tasks.retain(|row| row.task_id != task_id);
+                retain_sourced_rows(
+                    &mut rows.tasks,
+                    &mut rows.task_source_agent_dids,
+                    source_agent_did,
+                    remote_graphql.is_some(),
+                    |row| row.task_id == task_id,
+                );
             },
         )
         .await
     }
 
-    pub async fn delete_schedule(&self, schedule_id: &str) -> Result<()> {
+    pub async fn delete_schedule(&self, schedule_id: &str, source_agent_did: &str) -> Result<()> {
         let schedule_id = normalize_required("schedule_id", schedule_id)?;
+        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
+        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
-        if !snapshot
-            .schedules
-            .iter()
-            .any(|row| row.schedule_id == schedule_id)
-        {
+        if !snapshot.schedules.iter().enumerate().any(|(index, row)| {
+            row.schedule_id == schedule_id
+                && row_matches_source(
+                    &snapshot.schedule_source_agent_dids,
+                    index,
+                    source_agent_did,
+                    remote_graphql.is_some(),
+                )
+        }) {
             bail!("no Schedule document with schedule_id {schedule_id:?}");
         }
 
         let result = async {
-            let deleted = mutations::delete_schedule(self.node.as_ref(), schedule_id).await?;
+            let deleted = match remote_graphql.as_deref() {
+                Some(graphql) => {
+                    mutations::delete_schedule_from_graphql(graphql, schedule_id).await?
+                }
+                None => mutations::delete_schedule(self.node.as_ref(), schedule_id).await?,
+            };
             if deleted == 0 {
                 bail!("no Schedule document with schedule_id {schedule_id:?}");
             }
@@ -458,26 +560,53 @@ impl ClientCore {
             "delete schedule",
             "config_schedule_delete",
             schedule_id,
+            source_agent_did,
             |rows| {
-                rows.schedules.retain(|row| row.schedule_id != schedule_id);
+                retain_sourced_rows(
+                    &mut rows.schedules,
+                    &mut rows.schedule_source_agent_dids,
+                    source_agent_did,
+                    remote_graphql.is_some(),
+                    |row| row.schedule_id == schedule_id,
+                );
             },
         )
         .await
     }
 
-    pub async fn delete_event_trigger(&self, trigger_id: &str) -> Result<()> {
+    pub async fn delete_event_trigger(
+        &self,
+        trigger_id: &str,
+        source_agent_did: &str,
+    ) -> Result<()> {
         let trigger_id = normalize_required("trigger_id", trigger_id)?;
+        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
+        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
         if !snapshot
             .event_triggers
             .iter()
-            .any(|row| row.trigger_id == trigger_id)
+            .enumerate()
+            .any(|(index, row)| {
+                row.trigger_id == trigger_id
+                    && row_matches_source(
+                        &snapshot.event_trigger_source_agent_dids,
+                        index,
+                        source_agent_did,
+                        remote_graphql.is_some(),
+                    )
+            })
         {
             bail!("no EventTrigger document with trigger_id {trigger_id:?}");
         }
 
         let result = async {
-            let deleted = mutations::delete_event_trigger(self.node.as_ref(), trigger_id).await?;
+            let deleted = match remote_graphql.as_deref() {
+                Some(graphql) => {
+                    mutations::delete_event_trigger_from_graphql(graphql, trigger_id).await?
+                }
+                None => mutations::delete_event_trigger(self.node.as_ref(), trigger_id).await?,
+            };
             if deleted == 0 {
                 bail!("no EventTrigger document with trigger_id {trigger_id:?}");
             }
@@ -489,28 +618,52 @@ impl ClientCore {
             "delete event trigger",
             "config_event_trigger_delete",
             trigger_id,
+            source_agent_did,
             |rows| {
-                rows.event_triggers
-                    .retain(|row| row.trigger_id != trigger_id);
+                retain_sourced_rows(
+                    &mut rows.event_triggers,
+                    &mut rows.event_trigger_source_agent_dids,
+                    source_agent_did,
+                    remote_graphql.is_some(),
+                    |row| row.trigger_id == trigger_id,
+                );
             },
         )
         .await
     }
 
-    pub async fn delete_inference_backend(&self, backend_id: &str) -> Result<()> {
+    pub async fn delete_inference_backend(
+        &self,
+        backend_id: &str,
+        source_agent_did: &str,
+    ) -> Result<()> {
         let backend_id = normalize_required("backend_id", backend_id)?;
+        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
+        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
         if !snapshot
             .inference_backends
             .iter()
-            .any(|row| row.backend_id == backend_id)
+            .enumerate()
+            .any(|(index, row)| {
+                row.backend_id == backend_id
+                    && row_matches_source(
+                        &snapshot.inference_backend_source_agent_dids,
+                        index,
+                        source_agent_did,
+                        remote_graphql.is_some(),
+                    )
+            })
         {
             bail!("no InferenceBackend document with backend_id {backend_id:?}");
         }
         let referencing = snapshot
             .behaviors
             .iter()
-            .filter(|row| row.backend_id.as_deref() == Some(backend_id))
+            .filter(|row| {
+                row.agent_did.as_deref() == Some(source_agent_did)
+                    && row.backend_id.as_deref() == Some(backend_id)
+            })
             .map(|row| row.behavior_id.clone())
             .collect::<Vec<_>>();
         if !referencing.is_empty() {
@@ -521,8 +674,12 @@ impl ClientCore {
         }
 
         let result = async {
-            let deleted =
-                mutations::delete_inference_backend(self.node.as_ref(), backend_id).await?;
+            let deleted = match remote_graphql.as_deref() {
+                Some(graphql) => {
+                    mutations::delete_inference_backend_from_graphql(graphql, backend_id).await?
+                }
+                None => mutations::delete_inference_backend(self.node.as_ref(), backend_id).await?,
+            };
             if deleted == 0 {
                 bail!("no InferenceBackend document with backend_id {backend_id:?}");
             }
@@ -534,28 +691,52 @@ impl ClientCore {
             "delete inference backend",
             "config_backend_delete",
             backend_id,
+            source_agent_did,
             |rows| {
-                rows.inference_backends
-                    .retain(|row| row.backend_id != backend_id);
+                retain_sourced_rows(
+                    &mut rows.inference_backends,
+                    &mut rows.inference_backend_source_agent_dids,
+                    source_agent_did,
+                    remote_graphql.is_some(),
+                    |row| row.backend_id == backend_id,
+                );
             },
         )
         .await
     }
 
-    pub async fn delete_inference_profile(&self, profile_id: &str) -> Result<()> {
+    pub async fn delete_inference_profile(
+        &self,
+        profile_id: &str,
+        source_agent_did: &str,
+    ) -> Result<()> {
         let profile_id = normalize_required("profile_id", profile_id)?;
+        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
+        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
         if !snapshot
             .inference_profiles
             .iter()
-            .any(|row| row.profile_id == profile_id)
+            .enumerate()
+            .any(|(index, row)| {
+                row.profile_id == profile_id
+                    && row_matches_source(
+                        &snapshot.inference_profile_source_agent_dids,
+                        index,
+                        source_agent_did,
+                        remote_graphql.is_some(),
+                    )
+            })
         {
             bail!("no InferenceProfile document with profile_id {profile_id:?}");
         }
         let referencing = snapshot
             .behaviors
             .iter()
-            .filter(|row| row.inference_profile_id.as_deref() == Some(profile_id))
+            .filter(|row| {
+                row.agent_did.as_deref() == Some(source_agent_did)
+                    && row.inference_profile_id.as_deref() == Some(profile_id)
+            })
             .map(|row| row.behavior_id.clone())
             .collect::<Vec<_>>();
         if !referencing.is_empty() {
@@ -566,8 +747,12 @@ impl ClientCore {
         }
 
         let result = async {
-            let deleted =
-                mutations::delete_inference_profile(self.node.as_ref(), profile_id).await?;
+            let deleted = match remote_graphql.as_deref() {
+                Some(graphql) => {
+                    mutations::delete_inference_profile_from_graphql(graphql, profile_id).await?
+                }
+                None => mutations::delete_inference_profile(self.node.as_ref(), profile_id).await?,
+            };
             if deleted == 0 {
                 bail!("no InferenceProfile document with profile_id {profile_id:?}");
             }
@@ -579,28 +764,41 @@ impl ClientCore {
             "delete inference profile",
             "config_profile_delete",
             profile_id,
+            source_agent_did,
             |rows| {
-                rows.inference_profiles
-                    .retain(|row| row.profile_id != profile_id);
+                retain_sourced_rows(
+                    &mut rows.inference_profiles,
+                    &mut rows.inference_profile_source_agent_dids,
+                    source_agent_did,
+                    remote_graphql.is_some(),
+                    |row| row.profile_id == profile_id,
+                );
             },
         )
         .await
     }
 
-    pub async fn delete_tool_selection(&self, selection_id: &str) -> Result<()> {
+    pub async fn delete_tool_selection(
+        &self,
+        selection_id: &str,
+        source_agent_did: &str,
+    ) -> Result<()> {
         let selection_id = normalize_required("selection_id", selection_id)?;
+        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
+        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
-        if !snapshot
-            .tool_selections
-            .iter()
-            .any(|row| row.selection_id == selection_id)
-        {
+        if !snapshot.tool_selections.iter().any(|row| {
+            row.selection_id == selection_id && row.agent_did.as_deref() == Some(source_agent_did)
+        }) {
             bail!("no ToolSelection document with selection_id {selection_id:?}");
         }
         let referencing = snapshot
             .behaviors
             .iter()
-            .filter(|row| row.tool_selection_id.as_deref() == Some(selection_id))
+            .filter(|row| {
+                row.agent_did.as_deref() == Some(source_agent_did)
+                    && row.tool_selection_id.as_deref() == Some(selection_id)
+            })
             .map(|row| row.behavior_id.clone())
             .collect::<Vec<_>>();
         if !referencing.is_empty() {
@@ -611,8 +809,24 @@ impl ClientCore {
         }
 
         let result = async {
-            let deleted =
-                mutations::delete_tool_selection(self.node.as_ref(), selection_id).await?;
+            let deleted = match remote_graphql.as_deref() {
+                Some(graphql) => {
+                    mutations::delete_tool_selection_from_graphql(
+                        graphql,
+                        source_agent_did,
+                        selection_id,
+                    )
+                    .await?
+                }
+                None => {
+                    mutations::delete_tool_selection(
+                        self.node.as_ref(),
+                        source_agent_did,
+                        selection_id,
+                    )
+                    .await?
+                }
+            };
             if deleted == 0 {
                 bail!("no ToolSelection document with selection_id {selection_id:?}");
             }
@@ -624,21 +838,39 @@ impl ClientCore {
             "delete tool selection",
             "config_tool_selection_delete",
             selection_id,
+            source_agent_did,
             |rows| {
-                rows.tool_selections
-                    .retain(|row| row.selection_id != selection_id);
+                rows.tool_selections.retain(|row| {
+                    row.selection_id != selection_id
+                        || row.agent_did.as_deref() != Some(source_agent_did)
+                });
             },
         )
         .await
     }
 
-    pub async fn delete_tool_service(&self, service_id: &str) -> Result<()> {
+    pub async fn delete_tool_service(
+        &self,
+        service_id: &str,
+        source_agent_did: &str,
+    ) -> Result<()> {
         let service_id = normalize_required("service_id", service_id)?;
+        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
+        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
         if !snapshot
             .tool_service_registries
             .iter()
-            .any(|row| row.service_id == service_id)
+            .enumerate()
+            .any(|(index, row)| {
+                row.service_id == service_id
+                    && row_matches_source(
+                        &snapshot.tool_service_registry_source_agent_dids,
+                        index,
+                        source_agent_did,
+                        remote_graphql.is_some(),
+                    )
+            })
         {
             bail!("no ToolServiceRegistry document with service_id {service_id:?}");
         }
@@ -646,9 +878,11 @@ impl ClientCore {
             .tool_selections
             .iter()
             .filter(|row| {
-                row.allowed_mcp_service_ids
-                    .iter()
-                    .any(|id| id == service_id)
+                row.agent_did.as_deref() == Some(source_agent_did)
+                    && row
+                        .allowed_mcp_service_ids
+                        .iter()
+                        .any(|id| id == service_id)
             })
             .map(|row| row.selection_id.clone())
             .collect::<Vec<_>>();
@@ -660,8 +894,15 @@ impl ClientCore {
         }
 
         let result = async {
-            let deleted =
-                mutations::delete_tool_service_registry(self.node.as_ref(), service_id).await?;
+            let deleted = match remote_graphql.as_deref() {
+                Some(graphql) => {
+                    mutations::delete_tool_service_registry_from_graphql(graphql, service_id)
+                        .await?
+                }
+                None => {
+                    mutations::delete_tool_service_registry(self.node.as_ref(), service_id).await?
+                }
+            };
             if deleted == 0 {
                 bail!("no ToolServiceRegistry document with service_id {service_id:?}");
             }
@@ -673,31 +914,36 @@ impl ClientCore {
             "delete tool service",
             "config_tool_service_delete",
             service_id,
+            source_agent_did,
             |rows| {
-                rows.tool_service_registries
-                    .retain(|row| row.service_id != service_id);
+                retain_sourced_rows(
+                    &mut rows.tool_service_registries,
+                    &mut rows.tool_service_registry_source_agent_dids,
+                    source_agent_did,
+                    remote_graphql.is_some(),
+                    |row| row.service_id == service_id,
+                );
             },
         )
         .await
     }
 
-    pub async fn delete_behavior(&self, behavior_id: &str) -> Result<()> {
+    pub async fn delete_behavior(&self, behavior_id: &str, source_agent_did: &str) -> Result<()> {
         let behavior_id = normalize_required("behavior_id", behavior_id)?;
+        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
+        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
-        let Some(row) = snapshot
-            .behaviors
-            .iter()
-            .find(|row| row.behavior_id == behavior_id)
-        else {
+        if !snapshot.behaviors.iter().any(|row| {
+            row.behavior_id == behavior_id && row.agent_did.as_deref() == Some(source_agent_did)
+        }) {
             bail!("no AgentBehavior document with behavior_id {behavior_id:?}");
-        };
+        }
         // The default behavior is the request fallback; deleting it strands
         // every request that names no behavior.
-        let _ = row;
-        let is_default = snapshot
-            .agent_principals
-            .iter()
-            .any(|principal| principal.default_behavior_id.as_deref() == Some(behavior_id));
+        let is_default = snapshot.agent_principals.iter().any(|principal| {
+            principal.agent_did == source_agent_did
+                && principal.default_behavior_id.as_deref() == Some(behavior_id)
+        });
         if is_default {
             bail!(
                 "behavior {behavior_id:?} is the agent's default behavior; make another behavior the default first"
@@ -706,8 +952,17 @@ impl ClientCore {
         let referencing = snapshot
             .tasks
             .iter()
-            .filter(|task| task.behavior_id.as_deref() == Some(behavior_id))
-            .map(|task| task.task_id.clone())
+            .enumerate()
+            .filter(|(index, task)| {
+                task.behavior_id.as_deref() == Some(behavior_id)
+                    && row_matches_source(
+                        &snapshot.task_source_agent_dids,
+                        *index,
+                        source_agent_did,
+                        remote_graphql.is_some(),
+                    )
+            })
+            .map(|(_index, task)| task.task_id.clone())
             .collect::<Vec<_>>();
         if !referencing.is_empty() {
             bail!(
@@ -715,9 +970,44 @@ impl ClientCore {
                 referencing.join(", ")
             );
         }
+        let subagent_referencing = snapshot
+            .tool_selections
+            .iter()
+            .filter(|selection| {
+                selection.agent_did.as_deref() == Some(source_agent_did)
+                    && selection
+                        .subagent_targets
+                        .iter()
+                        .any(|target| target == behavior_id)
+            })
+            .map(|selection| selection.selection_id.clone())
+            .collect::<Vec<_>>();
+        if !subagent_referencing.is_empty() {
+            bail!(
+                "behavior {behavior_id:?} is a subagent target of tool selection(s) {}; remove it there first",
+                subagent_referencing.join(", ")
+            );
+        }
 
         let result = async {
-            let deleted = mutations::delete_agent_behavior(self.node.as_ref(), behavior_id).await?;
+            let deleted = match remote_graphql.as_deref() {
+                Some(graphql) => {
+                    mutations::delete_agent_behavior_from_graphql(
+                        graphql,
+                        source_agent_did,
+                        behavior_id,
+                    )
+                    .await?
+                }
+                None => {
+                    mutations::delete_agent_behavior(
+                        self.node.as_ref(),
+                        source_agent_did,
+                        behavior_id,
+                    )
+                    .await?
+                }
+            };
             if deleted == 0 {
                 bail!("no AgentBehavior document with behavior_id {behavior_id:?}");
             }
@@ -729,8 +1019,12 @@ impl ClientCore {
             "delete behavior",
             "config_behavior_delete",
             behavior_id,
+            source_agent_did,
             |rows| {
-                rows.behaviors.retain(|row| row.behavior_id != behavior_id);
+                rows.behaviors.retain(|row| {
+                    row.behavior_id != behavior_id
+                        || row.agent_did.as_deref() != Some(source_agent_did)
+                });
             },
         )
         .await
@@ -745,11 +1039,12 @@ impl ClientCore {
         action_label: &str,
         action: &str,
         row_id: &str,
+        source_agent_did: &str,
         prune: impl FnOnce(&mut ClientStoreRows),
     ) -> Result<()> {
         match result {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(source_agent_did).await;
                 let mut rows = self.store.snapshot().to_rows();
                 prune(&mut rows);
                 self.store.replace_snapshot(ClientStore::from_rows(rows));
@@ -763,6 +1058,22 @@ impl ClientCore {
                 Ok(())
             }
             Err(error) => Err(self.record_mutation_error(action_label, error)),
+        }
+    }
+
+    async fn refresh_config_source(&self, source_agent_did: &str) {
+        let refresh_result = match self.refresh_remote_agent(source_agent_did).await {
+            Ok(Some(_version)) => Ok(()),
+            Ok(None) => self.refresh_store().await.map(|_| ()),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = refresh_result {
+            tracing::warn!(
+                target: "defra_agent_desktop_core::writes",
+                source_agent_did,
+                error = %error,
+                "configuration delete succeeded but source refresh failed; pruning confirmed delete locally"
+            );
         }
     }
 
@@ -1442,5 +1753,37 @@ fn append_warning(warning: &mut Option<String>, message: String) {
             existing.push_str(&message);
         }
         None => *warning = Some(message),
+    }
+}
+
+#[cfg(test)]
+mod delete_source_tests {
+    use super::{retain_sourced_rows, row_matches_source};
+
+    #[test]
+    fn source_matching_distinguishes_remote_rows_from_local_rows() {
+        let sources = vec![None, Some("did:remote".to_string())];
+
+        assert!(row_matches_source(&sources, 0, "did:local", false));
+        assert!(!row_matches_source(&sources, 0, "did:remote", true));
+        assert!(row_matches_source(&sources, 1, "did:remote", true));
+        assert!(!row_matches_source(&sources, 1, "did:other", true));
+    }
+
+    #[test]
+    fn sourced_pruning_preserves_same_id_rows_and_parallel_attribution() {
+        let mut rows = vec!["shared", "shared", "other"];
+        let mut sources = vec![
+            None,
+            Some("did:remote".to_string()),
+            Some("did:remote".to_string()),
+        ];
+
+        retain_sourced_rows(&mut rows, &mut sources, "did:remote", true, |row| {
+            *row == "shared"
+        });
+
+        assert_eq!(rows, vec!["shared", "other"]);
+        assert_eq!(sources, vec![None, Some("did:remote".to_string())]);
     }
 }

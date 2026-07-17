@@ -4,9 +4,9 @@ use defra_node::EmbeddedNode;
 use serde_json::Value;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, graphql_optional_bool_field,
-    graphql_optional_float_field, graphql_optional_int_field, graphql_optional_int_list_field,
-    graphql_string_field, join_fields, normalize_required,
+    escape_graphql_string, execute_mutation, execute_remote_delete_mutation,
+    graphql_optional_bool_field, graphql_optional_float_field, graphql_optional_int_field,
+    graphql_optional_int_list_field, graphql_string_field, join_fields, normalize_required,
 };
 
 pub async fn upsert_inference_profile(
@@ -172,15 +172,7 @@ pub async fn upsert_inference_profile(
 }
 
 pub async fn delete_inference_profile(node: &EmbeddedNode, profile_id: &str) -> Result<usize> {
-    let profile_id = normalize_required("profile_id", profile_id)?;
-    let profile_id = escape_graphql_string(profile_id);
-    let mutation = format!(
-        r#"mutation {{
-            delete_InferenceProfile(
-                filter: {{ profile_id: {{ _eq: "{profile_id}" }} }}
-            ) {{ _docID }}
-        }}"#
-    );
+    let mutation = build_delete_inference_profile_mutation(profile_id)?;
     let response = node.execute(&mutation).await;
     if response.has_errors() {
         bail!(
@@ -200,4 +192,31 @@ pub async fn delete_inference_profile(node: &EmbeddedNode, profile_id: &str) -> 
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0))
+}
+
+pub async fn delete_inference_profile_from_graphql(
+    graphql: &str,
+    profile_id: &str,
+) -> Result<usize> {
+    let graphql = normalize_required("graphql", graphql)?;
+    let mutation = build_delete_inference_profile_mutation(profile_id)?;
+    execute_remote_delete_mutation(
+        graphql,
+        &mutation,
+        "delete_inference_profile",
+        "delete_InferenceProfile",
+    )
+    .await
+}
+
+fn build_delete_inference_profile_mutation(profile_id: &str) -> Result<String> {
+    let profile_id = normalize_required("profile_id", profile_id)?;
+    let profile_id = escape_graphql_string(profile_id);
+    Ok(format!(
+        r#"mutation {{
+            delete_InferenceProfile(
+                filter: {{ profile_id: {{ _eq: "{profile_id}" }} }}
+            ) {{ _docID }}
+        }}"#
+    ))
 }
