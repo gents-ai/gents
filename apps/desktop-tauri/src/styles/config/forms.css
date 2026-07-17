@@ -1,4 +1,9 @@
 @layer config {
+  .field-hint-error {
+    color: var(--color-error);
+    font-size: var(--text-xs);
+  }
+
   .config-icon-button {
     width: 28px;
     height: 28px;

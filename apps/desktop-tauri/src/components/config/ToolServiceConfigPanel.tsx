@@ -9,7 +9,7 @@ import type {
   ToolServiceTestResult,
 } from "../../lib/types";
 import { isDirty } from "./configDirty";
-import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
+import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import {
   ignoreHandledActionError,
   isOptionalInt,
@@ -278,6 +278,7 @@ export function ToolServiceConfigEditor({
             type="number"
             value={mcpPort}
           />
+          <FieldHint show={!mcpPortValid}>Port between 1 and 65535</FieldHint>
         </label>
         <label className="field">
           <span>MCP path</span>

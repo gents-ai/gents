@@ -9,7 +9,7 @@ import type {
   TaskView,
 } from "../../lib/types";
 import { isDirty } from "./configDirty";
-import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
+import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import { ignoreHandledActionError, isOptionalInt, parseOptionalInt } from "./formUtils";
 
 export type ScheduleConfigPanelProps = {
@@ -210,6 +210,7 @@ export function ScheduleConfigEditor({
             type="number"
             value={intervalSecs}
           />
+          <FieldHint show={!intervalValid}>Whole number of 1 or more</FieldHint>
         </label>
         <label className="field">
           <span>Concurrency</span>

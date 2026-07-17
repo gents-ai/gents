@@ -7,7 +7,7 @@ import type {
   InferenceBackendView,
 } from "../../lib/types";
 import { isDirty } from "./configDirty";
-import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
+import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import {
   ignoreHandledActionError,
   isOptionalInt,
@@ -254,6 +254,7 @@ export function BackendConfigEditor({
             type="number"
             value={maxConcurrent}
           />
+          <FieldHint show={!maxConcurrentValid}>Whole number of 1 or more</FieldHint>
         </label>
         <label className="field">
           <span>Max queue depth</span>
@@ -263,6 +264,7 @@ export function BackendConfigEditor({
             type="number"
             value={maxQueueDepth}
           />
+          <FieldHint show={!maxQueueDepthValid}>Whole number of 1 or more</FieldHint>
         </label>
         <label className="checkbox">
           <input
