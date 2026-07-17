@@ -1,6 +1,6 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -12,6 +12,7 @@ use defra_agent_protocol::row::{
 use super::super::mutations::{
     self, CreatedConversation, PeerMutationResult, SubmitRequestOptions, SubmittedRequest,
 };
+use super::super::observe::ObservedStore;
 use super::super::peer_directory::PeerRecord;
 use super::super::query::load_chat_patch_from_graphql;
 use super::super::schema::subscribed_collection_names;
@@ -427,15 +428,15 @@ impl ClientCore {
 
         match result {
             Ok(()) => {
-                self.refresh_config_source(source_agent_did).await;
-                self.prune_deleted_skill_from_store(source_agent_did, skill_id);
-                self.clear_mutation_error();
-                tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
-                    action = "config_skill_delete",
-                    row_id = %skill_id,
-                    source_agent_did,
-                    "desktop write saved"
+                let refresh_result = self.refresh_config_source(source_agent_did).await;
+                complete_confirmed_delete(
+                    self.store.as_ref(),
+                    &self.last_mutation_error,
+                    refresh_result,
+                    "delete skill",
+                    "config_skill_delete",
+                    skill_id,
+                    |rows| prune_deleted_skill_rows(rows, source_agent_did, skill_id),
                 );
                 Ok(())
             }
@@ -970,18 +971,11 @@ impl ClientCore {
                 referencing.join(", ")
             );
         }
-        let subagent_referencing = snapshot
-            .tool_selections
-            .iter()
-            .filter(|selection| {
-                selection.agent_did.as_deref() == Some(source_agent_did)
-                    && selection
-                        .subagent_targets
-                        .iter()
-                        .any(|target| target == behavior_id)
-            })
-            .map(|selection| selection.selection_id.clone())
-            .collect::<Vec<_>>();
+        let subagent_referencing = tool_selections_referencing_behavior(
+            &snapshot.tool_selections,
+            source_agent_did,
+            behavior_id,
+        );
         if !subagent_referencing.is_empty() {
             bail!(
                 "behavior {behavior_id:?} is a subagent target of tool selection(s) {}; remove it there first",
@@ -1044,16 +1038,15 @@ impl ClientCore {
     ) -> Result<()> {
         match result {
             Ok(()) => {
-                self.refresh_config_source(source_agent_did).await;
-                let mut rows = self.store.snapshot().to_rows();
-                prune(&mut rows);
-                self.store.replace_snapshot(ClientStore::from_rows(rows));
-                self.clear_mutation_error();
-                tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
-                    action = %action,
-                    row_id = %row_id,
-                    "desktop write saved"
+                let refresh_result = self.refresh_config_source(source_agent_did).await;
+                complete_confirmed_delete(
+                    self.store.as_ref(),
+                    &self.last_mutation_error,
+                    refresh_result,
+                    action_label,
+                    action,
+                    row_id,
+                    prune,
                 );
                 Ok(())
             }
@@ -1061,53 +1054,11 @@ impl ClientCore {
         }
     }
 
-    async fn refresh_config_source(&self, source_agent_did: &str) {
-        let refresh_result = match self.refresh_remote_agent(source_agent_did).await {
-            Ok(Some(_version)) => Ok(()),
-            Ok(None) => self.refresh_store().await.map(|_| ()),
-            Err(error) => Err(error),
-        };
-        if let Err(error) = refresh_result {
-            tracing::warn!(
-                target: "defra_agent_desktop_core::writes",
-                source_agent_did,
-                error = %error,
-                "configuration delete succeeded but source refresh failed; pruning confirmed delete locally"
-            );
+    async fn refresh_config_source(&self, source_agent_did: &str) -> Result<u64> {
+        match self.refresh_remote_agent(source_agent_did).await? {
+            Some(version) => Ok(version),
+            None => self.refresh_store().await,
         }
-    }
-
-    fn prune_deleted_skill_from_store(&self, agent_did: &str, skill_id: &str) {
-        let snapshot = self.store.snapshot();
-        let mut rows = snapshot.to_rows();
-        let mut pruned_skills = Vec::with_capacity(rows.skills.len());
-        let mut pruned_skill_sources = Vec::with_capacity(rows.skill_source_agent_dids.len());
-
-        for (index, row) in rows.skills.into_iter().enumerate() {
-            if row.skill_id == skill_id && row.agent_did.as_deref() == Some(agent_did) {
-                continue;
-            }
-            pruned_skill_sources.push(
-                rows.skill_source_agent_dids
-                    .get(index)
-                    .cloned()
-                    .unwrap_or_default(),
-            );
-            pruned_skills.push(row);
-        }
-        rows.skills = pruned_skills;
-        rows.skill_source_agent_dids = pruned_skill_sources;
-
-        for behavior in rows
-            .behaviors
-            .iter_mut()
-            .filter(|row| row.agent_did.as_deref() == Some(agent_did))
-        {
-            behavior.skill_refs.retain(|id| id != skill_id);
-            behavior.skill_excludes.retain(|id| id != skill_id);
-        }
-
-        self.store.replace_snapshot(ClientStore::from_rows(rows));
     }
 
     pub async fn resend_request(&self, stale_request_id: &str) -> Result<SubmittedRequest> {
@@ -1746,6 +1697,111 @@ impl ClientCore {
     }
 }
 
+fn retain_rows_with_sources<T>(
+    rows: &mut Vec<T>,
+    sources: &mut Vec<Option<String>>,
+    mut keep: impl FnMut(&T) -> bool,
+) {
+    let mut kept_rows = Vec::with_capacity(rows.len());
+    let mut kept_sources = Vec::with_capacity(rows.len());
+
+    for (index, row) in rows.drain(..).enumerate() {
+        if keep(&row) {
+            kept_rows.push(row);
+            kept_sources.push(sources.get(index).cloned().unwrap_or_default());
+        }
+    }
+
+    *rows = kept_rows;
+    *sources = kept_sources;
+}
+
+fn prune_deleted_skill_rows(rows: &mut ClientStoreRows, agent_did: &str, skill_id: &str) {
+    retain_rows_with_sources(&mut rows.skills, &mut rows.skill_source_agent_dids, |row| {
+        !(row.skill_id == skill_id && row.agent_did.as_deref() == Some(agent_did))
+    });
+
+    for behavior in rows
+        .behaviors
+        .iter_mut()
+        .filter(|row| row.agent_did.as_deref() == Some(agent_did))
+    {
+        behavior.skill_refs.retain(|id| id != skill_id);
+        behavior.skill_excludes.retain(|id| id != skill_id);
+    }
+}
+
+fn tool_selections_referencing_behavior(
+    selections: &[ToolSelectionRow],
+    agent_did: &str,
+    behavior_id: &str,
+) -> Vec<String> {
+    let mut referencing = selections
+        .iter()
+        .filter(|selection| selection.agent_did.as_deref() == Some(agent_did))
+        .filter(|selection| {
+            selection.subagent_targets.iter().any(|entry| {
+                let Ok(target) = serde_json::from_str::<serde_json::Value>(entry) else {
+                    return false;
+                };
+                target.get("agent_did").and_then(serde_json::Value::as_str) == Some(agent_did)
+                    && target
+                        .get("behavior_id")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(behavior_id)
+            })
+        })
+        .map(|selection| selection.selection_id.clone())
+        .collect::<Vec<_>>();
+    referencing.sort();
+    referencing.dedup();
+    referencing
+}
+
+fn complete_confirmed_delete(
+    store: &ObservedStore,
+    last_mutation_error: &StdRwLock<Option<String>>,
+    refresh_result: Result<u64>,
+    action_label: &str,
+    action: &str,
+    row_id: &str,
+    prune: impl FnOnce(&mut ClientStoreRows),
+) {
+    match refresh_result {
+        Ok(_) => {
+            *last_mutation_error
+                .write()
+                .expect("mutation error lock poisoned") = None;
+        }
+        Err(error) => {
+            let warning = format!(
+                "{action_label} succeeded, but refreshing the source snapshot failed: {error}"
+            );
+            *last_mutation_error
+                .write()
+                .expect("mutation error lock poisoned") = Some(warning);
+            tracing::warn!(
+                target: "defra_agent_desktop_core::writes",
+                action = %action,
+                row_id = %row_id,
+                error = %error,
+                "desktop write saved, but refreshing the source snapshot failed"
+            );
+        }
+    }
+
+    let mut rows = store.snapshot().to_rows();
+    prune(&mut rows);
+    store.replace_snapshot(ClientStore::from_rows(rows));
+
+    tracing::info!(
+        target: "defra_agent_desktop_core::writes",
+        action = %action,
+        row_id = %row_id,
+        "desktop write saved"
+    );
+}
+
 fn append_warning(warning: &mut Option<String>, message: String) {
     match warning {
         Some(existing) => {
@@ -1758,7 +1814,26 @@ fn append_warning(warning: &mut Option<String>, message: String) {
 
 #[cfg(test)]
 mod delete_source_tests {
-    use super::{retain_sourced_rows, row_matches_source};
+    use super::*;
+    use anyhow::anyhow;
+    use serde_json::json;
+
+    fn task(task_id: &str) -> TaskRow {
+        serde_json::from_value(json!({ "task_id": task_id })).expect("task row")
+    }
+
+    fn tool_selection(
+        selection_id: &str,
+        agent_did: &str,
+        subagent_targets: Vec<String>,
+    ) -> ToolSelectionRow {
+        serde_json::from_value(json!({
+            "selection_id": selection_id,
+            "agent_did": agent_did,
+            "subagent_targets": subagent_targets,
+        }))
+        .expect("tool selection row")
+    }
 
     #[test]
     fn source_matching_distinguishes_remote_rows_from_local_rows() {
@@ -1785,5 +1860,78 @@ mod delete_source_tests {
 
         assert_eq!(rows, vec!["shared", "other"]);
         assert_eq!(sources, vec![None, Some("did:remote".to_string())]);
+    }
+
+    #[test]
+    fn confirmed_delete_prunes_locally_and_warns_when_refresh_fails() {
+        let rows = ClientStoreRows {
+            tasks: vec![task("deleted"), task("retained")],
+            task_source_agent_dids: vec![None, Some("did:key:remote".to_string())],
+            ..ClientStoreRows::default()
+        };
+        let (store, _version_rx) = ObservedStore::new(ClientStore::from_rows(rows));
+        let last_mutation_error = StdRwLock::new(None);
+
+        complete_confirmed_delete(
+            store.as_ref(),
+            &last_mutation_error,
+            Err(anyhow!("replica unavailable")),
+            "delete task",
+            "config_task_delete",
+            "deleted",
+            |rows| {
+                retain_rows_with_sources(
+                    &mut rows.tasks,
+                    &mut rows.task_source_agent_dids,
+                    |row| row.task_id != "deleted",
+                );
+            },
+        );
+
+        let snapshot = store.snapshot();
+        assert_eq!(snapshot.tasks.len(), 1);
+        assert_eq!(snapshot.tasks[0].task_id, "retained");
+        assert_eq!(
+            snapshot.task_source_agent_dids,
+            vec![Some("did:key:remote".to_string())]
+        );
+        assert_eq!(
+            last_mutation_error
+                .read()
+                .expect("mutation error lock poisoned")
+                .as_deref(),
+            Some(
+                "delete task succeeded, but refreshing the source snapshot failed: replica unavailable"
+            )
+        );
+    }
+
+    #[test]
+    fn subagent_behavior_references_are_scoped_to_the_owning_agent() {
+        let local_target = json!({
+            "name": "local",
+            "agent_did": "did:key:alpha",
+            "behavior_id": "research",
+        })
+        .to_string();
+        let remote_target = json!({
+            "name": "remote",
+            "agent_did": "did:key:beta",
+            "behavior_id": "research",
+        })
+        .to_string();
+        let selections = vec![
+            tool_selection("alpha-local", "did:key:alpha", vec![local_target.clone()]),
+            tool_selection("alpha-remote", "did:key:alpha", vec![remote_target]),
+            tool_selection("beta-local", "did:key:beta", vec![local_target]),
+        ];
+
+        assert_eq!(
+            tool_selections_referencing_behavior(&selections, "did:key:alpha", "research"),
+            vec!["alpha-local"]
+        );
+        assert!(
+            tool_selections_referencing_behavior(&selections, "did:key:alpha", "writer").is_empty()
+        );
     }
 }
