@@ -153,8 +153,11 @@ export function useConfigWorkspaceSelection(
     selectedToolServiceId,
   ]);
 
-  function selectConfigBehavior(behaviorId: string) {
+  function selectConfigBehavior(behaviorId: string | null) {
     setSelectedConfigBehaviorId(behaviorId);
+    if (behaviorId == null) {
+      return;
+    }
     const behavior = selectedDeployment?.behaviors.find(
       (candidate) => candidate.behaviorId === behaviorId,
     );

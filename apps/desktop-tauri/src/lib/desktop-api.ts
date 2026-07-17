@@ -27,6 +27,9 @@ import type {
   EventTriggerDeleteRequest,
   BackendDeleteRequest,
   InferenceProfileDeleteRequest,
+  ToolSelectionDeleteRequest,
+  ToolServiceDeleteRequest,
+  BehaviorDeleteRequest,
   SkillSaveRequest,
   SubagentTreeView,
   TaskRunRequest,
@@ -145,6 +148,15 @@ export type DesktopApiAdapter = {
   deleteInferenceProfileConfig: (
     request: InferenceProfileDeleteRequest,
   ) => Promise<DesktopClientSnapshot>;
+  deleteToolSelectionConfig: (
+    request: ToolSelectionDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  deleteToolServiceConfig: (
+    request: ToolServiceDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  deleteBehaviorConfig: (
+    request: BehaviorDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
   saveBackendConfig: (request: BackendSaveRequest) => Promise<DesktopClientSnapshot>;
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
@@ -261,6 +273,19 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
     return invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_delete", {
       request,
     });
+  },
+  deleteToolSelectionConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_tool_selection_delete", {
+      request,
+    });
+  },
+  deleteToolServiceConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_tool_service_delete", {
+      request,
+    });
+  },
+  deleteBehaviorConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_behavior_delete", { request });
   },
   saveBackendConfig(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_backend_save", { request });
@@ -455,6 +480,18 @@ export async function deleteInferenceProfileConfig(
   request: InferenceProfileDeleteRequest,
 ) {
   return desktopApiAdapter().deleteInferenceProfileConfig(request);
+}
+
+export async function deleteToolSelectionConfig(request: ToolSelectionDeleteRequest) {
+  return desktopApiAdapter().deleteToolSelectionConfig(request);
+}
+
+export async function deleteToolServiceConfig(request: ToolServiceDeleteRequest) {
+  return desktopApiAdapter().deleteToolServiceConfig(request);
+}
+
+export async function deleteBehaviorConfig(request: BehaviorDeleteRequest) {
+  return desktopApiAdapter().deleteBehaviorConfig(request);
 }
 
 export async function saveBackendConfig(request: BackendSaveRequest) {

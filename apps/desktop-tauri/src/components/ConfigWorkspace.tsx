@@ -20,6 +20,9 @@ import type {
   EventTriggerDeleteRequest,
   BackendDeleteRequest,
   InferenceProfileDeleteRequest,
+  ToolSelectionDeleteRequest,
+  ToolServiceDeleteRequest,
+  BehaviorDeleteRequest,
 } from "../lib/types";
 import { NEW_DOCUMENT_ID, TABS } from "./config-workspace/model";
 import { useConfigWorkspaceSelection } from "./config-workspace/useConfigWorkspaceSelection";
@@ -63,6 +66,11 @@ type ConfigWorkspaceProps = {
   onDeleteInferenceProfileConfig: (
     request: InferenceProfileDeleteRequest,
   ) => Promise<unknown>;
+  onDeleteToolSelectionConfig: (
+    request: ToolSelectionDeleteRequest,
+  ) => Promise<unknown>;
+  onDeleteToolServiceConfig: (request: ToolServiceDeleteRequest) => Promise<unknown>;
+  onDeleteBehaviorConfig: (request: BehaviorDeleteRequest) => Promise<unknown>;
   onSaveSkillConfig: (request: SkillSaveRequest) => Promise<unknown>;
   onSaveTaskConfig: (request: TaskSaveRequest) => Promise<unknown>;
   onSaveScheduleConfig: (request: ScheduleSaveRequest) => Promise<unknown>;
@@ -91,6 +99,9 @@ export function ConfigWorkspace({
   onDeleteEventTriggerConfig,
   onDeleteBackendConfig,
   onDeleteInferenceProfileConfig,
+  onDeleteToolSelectionConfig,
+  onDeleteToolServiceConfig,
+  onDeleteBehaviorConfig,
   onSaveSkillConfig,
   onSaveTaskConfig,
   onSaveScheduleConfig,
@@ -248,6 +259,8 @@ export function ConfigWorkspace({
 
         {activeTab === "behavior" ? (
           <BehaviorConfigPanel
+            onDeleteBehaviorConfig={onDeleteBehaviorConfig}
+            onDeletedBehavior={() => selectConfigBehavior(null)}
             deployment={selectedDeployment}
             savedStatus={savedStatus}
             saving={saving}
@@ -324,6 +337,8 @@ export function ConfigWorkspace({
 
         {activeTab === "toolSelections" ? (
           <ToolSelectionConfigPanel
+            onDeleteToolSelectionConfig={onDeleteToolSelectionConfig}
+            onDeletedToolSelection={() => setSelectedToolSelectionId(null)}
             deployment={selectedDeployment}
             savedStatus={savedStatus}
             saving={saving}
@@ -339,6 +354,8 @@ export function ConfigWorkspace({
 
         {activeTab === "metaTools" ? (
           <ToolServiceConfigPanel
+            onDeleteToolServiceConfig={onDeleteToolServiceConfig}
+            onDeletedToolService={() => setSelectedToolServiceId(null)}
             deployment={selectedDeployment}
             savedStatus={savedStatus}
             saving={saving}
