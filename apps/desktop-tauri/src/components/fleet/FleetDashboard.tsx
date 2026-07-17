@@ -24,6 +24,7 @@ type FleetDashboardProps = {
   onFetchPeerStatus: (serverAddress: string) => Promise<unknown>;
   onInitLocalRuntime: (label?: string | null) => Promise<unknown>;
   onOpenChat: (agentDid: string) => void;
+  onOpenCode?: (agentDid: string) => void;
   onOpenConfig: (agentDid: string) => void;
   onRepairP2P: () => Promise<unknown>;
 };
@@ -47,6 +48,7 @@ export function FleetDashboard({
   onFetchPeerStatus,
   onInitLocalRuntime,
   onOpenChat,
+  onOpenCode,
   onOpenConfig,
   onRepairP2P,
 }: FleetDashboardProps) {
@@ -198,6 +200,7 @@ export function FleetDashboard({
                 deployment={deployment}
                 key={deployment.peerId}
                 onOpenChat={onOpenChat}
+                onOpenCode={onOpenCode}
                 onOpenConfig={onOpenConfig}
               />
             ))}

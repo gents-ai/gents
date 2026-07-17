@@ -7,7 +7,7 @@ import {
   displayBehaviorLabel,
   displayGraphqlEndpoint,
 } from "../../lib/types";
-import { ChatIcon, ConfigIcon, ToolIconGlyph } from "./FleetIcons";
+import { ChatIcon, CodeIcon, ConfigIcon, ToolIconGlyph } from "./FleetIcons";
 import {
   deploymentStatus,
   formatRelativeTime,
@@ -21,6 +21,7 @@ export type FleetRowProps = {
   bootstrap: BootstrapSummary | null;
   deployment: DeploymentView;
   onOpenChat: (agentDid: string) => void;
+  onOpenCode?: (agentDid: string) => void;
   onOpenConfig: (agentDid: string) => void;
 };
 
@@ -28,6 +29,7 @@ export function FleetRow({
   bootstrap,
   deployment,
   onOpenChat,
+  onOpenCode,
   onOpenConfig,
 }: FleetRowProps) {
   const status = deploymentStatus(deployment);
@@ -149,6 +151,18 @@ export function FleetRow({
           >
             <ChatIcon />
           </button>
+          {onOpenCode ? (
+            <button
+              aria-label={`Open ${deployment.label} in Code mode`}
+              className="ghost-button fleet-table-action"
+              data-testid={`fleet-code-${deployment.peerId}`}
+              onClick={() => onOpenCode(deployment.agentDid)}
+              title="Open Code mode"
+              type="button"
+            >
+              <CodeIcon />
+            </button>
+          ) : null}
           <button
             aria-label={`Configure ${deployment.label}`}
             className="ghost-button fleet-table-action"
