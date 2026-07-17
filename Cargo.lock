@@ -17790,7 +17790,7 @@ dependencies = [
 [[package]]
 name = "rig-core"
 version = "0.35.0"
-source = "git+https://github.com/sourcenetwork/rig?rev=81c34131627e1331f02d36bd12742155d1fa9865#81c34131627e1331f02d36bd12742155d1fa9865"
+source = "git+https://github.com/sourcenetwork/rig?rev=1ebeeaee3b569bb6e242e000c11df1ed2c0cca90#1ebeeaee3b569bb6e242e000c11df1ed2c0cca90"
 dependencies = [
  "as-any",
  "async-stream",
