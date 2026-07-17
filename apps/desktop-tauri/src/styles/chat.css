@@ -73,6 +73,18 @@
     outline-offset: 2px;
   }
 
+  .operations-rail-attention {
+    min-width: var(--space-7);
+    padding: 0 var(--space-1);
+    border-radius: var(--radius-pill);
+    background: var(--color-warning);
+    color: var(--source-black);
+    font-size: var(--text-2xs);
+    font-weight: 700;
+    text-align: center;
+    writing-mode: horizontal-tb;
+  }
+
   .operations-rail-header {
     display: flex;
     align-items: flex-start;

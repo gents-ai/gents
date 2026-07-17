@@ -15,12 +15,16 @@ test.describe("desktop operations drawer rich states", () => {
     await page.getByRole("button", { name: /open operations drawer/i }).click();
 
     await expect(page.getByRole("complementary", { name: "Operations" })).toBeVisible();
-    await expect(page.getByText("cargo test")).toBeVisible();
+    await expect(
+      page.getByRole("gridcell", { name: "cargo test", exact: true }),
+    ).toBeVisible();
     await expect(page.getByText("query_logs")).toBeVisible();
     await expect(page.getByText("2 live")).toBeVisible();
 
     await page.getByRole("button", { name: "Stuck" }).click();
-    await expect(page.getByText("cargo test")).toBeVisible();
+    await expect(
+      page.getByRole("gridcell", { name: "cargo test", exact: true }),
+    ).toBeVisible();
     await expect(page.getByText("query_logs")).toHaveCount(0);
     await expect(
       page.getByRole("button", { name: /Open lineage for cargo test/ }),
