@@ -114,6 +114,8 @@ export function TaskConfigEditor({
   const [runArgs, setRunArgs] = useState("{}");
   const [runStatus, setRunStatus] = useState<TaskRunResult | null>(null);
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   useEffect(() => {
     const b = taskFormValues(task, selectedBehavior?.behaviorId ?? null);
     setTaskId(b.taskId);
@@ -123,6 +125,7 @@ export function TaskConfigEditor({
     setPromptTemplate(b.promptTemplate);
     setOutputSchemaRef(b.outputSchemaRef);
     setEnabled(b.enabled);
+    setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [selectedBehavior?.behaviorId, task?.taskId]);
 
@@ -146,8 +149,9 @@ export function TaskConfigEditor({
         outputSchemaRef: optionalString(outputSchemaRef),
       });
       onSaved(nextId);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -182,6 +186,7 @@ export function TaskConfigEditor({
         saved={savedStatus === `task:${taskId.trim()}`}
         title={name || taskId || "New Task"}
       />
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
       <div className="grid-2">
         <label className="field">
           <span>Task ID</span>

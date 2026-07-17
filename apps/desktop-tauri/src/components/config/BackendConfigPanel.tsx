@@ -8,12 +8,7 @@ import type {
 } from "../../lib/types";
 import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
-import {
-  ignoreHandledActionError,
-  isOptionalInt,
-  linesToArray,
-  parseOptionalInt,
-} from "./formUtils";
+import { isOptionalInt, linesToArray, parseOptionalInt } from "./formUtils";
 
 export type BackendConfigPanelProps = {
   deployment: DeploymentView;
@@ -101,6 +96,8 @@ export function BackendConfigEditor({
   const [maxQueueDepth, setMaxQueueDepth] = useState("");
   const [enabled, setEnabled] = useState(true);
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   useEffect(() => {
     const base = backendFormValues(backend);
     setBackendId(base.backendId);
@@ -114,6 +111,7 @@ export function BackendConfigEditor({
     setMaxConcurrent(base.maxConcurrent);
     setMaxQueueDepth(base.maxQueueDepth);
     setEnabled(base.enabled);
+    setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backend?.backendId]);
@@ -156,8 +154,9 @@ export function BackendConfigEditor({
         enabled,
       });
       onSaved(nextId);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -169,6 +168,7 @@ export function BackendConfigEditor({
         title={name || backendId || "New Backend"}
         dirty={dirty}
       />
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
       <div className="grid-2">
         <label className="field">
           <span>Backend ID</span>

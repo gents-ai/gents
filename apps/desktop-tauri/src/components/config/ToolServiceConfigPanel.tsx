@@ -10,12 +10,7 @@ import type {
 } from "../../lib/types";
 import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
-import {
-  ignoreHandledActionError,
-  isOptionalInt,
-  optionalString,
-  parseOptionalInt,
-} from "./formUtils";
+import { isOptionalInt, optionalString, parseOptionalInt } from "./formUtils";
 
 export type ToolServiceConfigPanelProps = {
   deployment: DeploymentView;
@@ -118,6 +113,8 @@ export function ToolServiceConfigEditor({
   const [testResult, setTestResult] = useState<ToolServiceTestResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   useEffect(() => {
     const b = toolServiceFormValues(toolService);
     setServiceId(b.serviceId);
@@ -131,6 +128,7 @@ export function ToolServiceConfigEditor({
     setStatus(b.status);
     setTestResult(null);
     setTestError(null);
+    setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [toolService?.serviceId]);
 
@@ -166,8 +164,9 @@ export function ToolServiceConfigEditor({
         status: optionalString(status) || "online",
       });
       onSaved(nextId);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -206,6 +205,7 @@ export function ToolServiceConfigEditor({
         saved={savedStatus === `tool-service:${serviceId.trim()}`}
         title={displayName || serviceId || "New Service"}
       />
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
       <div className="grid-2">
         <label className="field">
           <span>Service ID</span>

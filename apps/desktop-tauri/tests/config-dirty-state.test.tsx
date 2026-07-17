@@ -135,4 +135,24 @@ describe("config dirty state", () => {
     });
     expect(screen.getByTestId("unsaved-chip")).toBeInTheDocument();
   });
+
+  it("renders a save failure next to the form, not just the global banner", async () => {
+    const onSaveSkillConfig = vi.fn().mockRejectedValue(new Error("schema mismatch"));
+    render(
+      <SkillConfigPanel
+        deployment={makeDeployment()}
+        selectedSkillId="review-skill"
+        saving={false}
+        savedStatus={null}
+        onSelectSkill={vi.fn()}
+        onCreateSkill={vi.fn()}
+        onDeletedSkill={vi.fn()}
+        onSavedStatusChange={vi.fn()}
+        onDeleteSkillConfig={vi.fn()}
+        onSaveSkillConfig={onSaveSkillConfig}
+      />,
+    );
+    fireEvent.submit(screen.getByTestId("skill-save").closest("form")!);
+    expect(await screen.findByText(/Save failed: schema mismatch/)).toBeInTheDocument();
+  });
 });
