@@ -15,6 +15,9 @@ import type {
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
+  TaskDeleteRequest,
+  ScheduleDeleteRequest,
+  EventTriggerDeleteRequest,
 } from "../lib/types";
 import { NEW_DOCUMENT_ID, TABS } from "./config-workspace/model";
 import { useConfigWorkspaceSelection } from "./config-workspace/useConfigWorkspaceSelection";
@@ -51,6 +54,9 @@ type ConfigWorkspaceProps = {
   ) => Promise<ToolServiceTestResult>;
   onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
   onDeleteSkillConfig: (request: SkillDeleteRequest) => Promise<unknown>;
+  onDeleteTaskConfig: (request: TaskDeleteRequest) => Promise<unknown>;
+  onDeleteScheduleConfig: (request: ScheduleDeleteRequest) => Promise<unknown>;
+  onDeleteEventTriggerConfig: (request: EventTriggerDeleteRequest) => Promise<unknown>;
   onSaveSkillConfig: (request: SkillSaveRequest) => Promise<unknown>;
   onSaveTaskConfig: (request: TaskSaveRequest) => Promise<unknown>;
   onSaveScheduleConfig: (request: ScheduleSaveRequest) => Promise<unknown>;
@@ -74,6 +80,9 @@ export function ConfigWorkspace({
   onTestToolService,
   onSaveBehaviorConfig,
   onDeleteSkillConfig,
+  onDeleteTaskConfig,
+  onDeleteScheduleConfig,
+  onDeleteEventTriggerConfig,
   onSaveSkillConfig,
   onSaveTaskConfig,
   onSaveScheduleConfig,
@@ -339,6 +348,8 @@ export function ConfigWorkspace({
             selectedBehavior={selectedBehavior}
             selectedTaskId={selectedTaskId}
             onCreateTask={() => setSelectedTaskId(NEW_DOCUMENT_ID)}
+            onDeleteTaskConfig={onDeleteTaskConfig}
+            onDeletedTask={() => setSelectedTaskId(null)}
             onRunTask={onRunTask}
             onSaveTaskConfig={onSaveTaskConfig}
             onSavedStatusChange={setSavedStatus}
@@ -348,6 +359,8 @@ export function ConfigWorkspace({
 
         {activeTab === "timerTriggers" ? (
           <ScheduleConfigPanel
+            onDeleteScheduleConfig={onDeleteScheduleConfig}
+            onDeletedSchedule={() => setSelectedScheduleId(null)}
             deployment={selectedDeployment}
             runningTask={runningTask}
             savedStatus={savedStatus}
@@ -364,6 +377,8 @@ export function ConfigWorkspace({
 
         {activeTab === "eventTriggers" ? (
           <EventTriggerConfigPanel
+            onDeleteEventTriggerConfig={onDeleteEventTriggerConfig}
+            onDeletedEventTrigger={() => setSelectedEventTriggerId(null)}
             deployment={selectedDeployment}
             savedStatus={savedStatus}
             saving={saving}

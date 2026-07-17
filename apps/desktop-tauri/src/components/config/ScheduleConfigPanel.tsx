@@ -3,11 +3,13 @@ import type { FormEvent } from "react";
 
 import type {
   DeploymentView,
+  ScheduleDeleteRequest,
   ScheduleSaveRequest,
   ScheduleView,
   TaskRunResult,
   TaskView,
 } from "../../lib/types";
+import { ConfirmDialog } from "../ConfirmDialog";
 import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import { ignoreHandledActionError, isOptionalInt, parseOptionalInt } from "./formUtils";
@@ -23,6 +25,8 @@ export type ScheduleConfigPanelProps = {
   onCreateSchedule: () => void;
   onSavedStatusChange: (value: string) => void;
   onSaveScheduleConfig: (request: ScheduleSaveRequest) => Promise<unknown>;
+  onDeleteScheduleConfig: (request: ScheduleDeleteRequest) => Promise<unknown>;
+  onDeletedSchedule: () => void;
   onRunSchedule: (request: { scheduleId: string }) => Promise<TaskRunResult>;
 };
 
@@ -37,6 +41,8 @@ export function ScheduleConfigPanel({
   onCreateSchedule,
   onSavedStatusChange,
   onSaveScheduleConfig,
+  onDeleteScheduleConfig,
+  onDeletedSchedule,
   onRunSchedule,
 }: ScheduleConfigPanelProps) {
   const selectedSchedule = useMemo(
@@ -80,6 +86,10 @@ export function ScheduleConfigPanel({
           onSavedStatusChange(`schedule:${scheduleId}`);
         }}
         onSaveScheduleConfig={onSaveScheduleConfig}
+        onDeleteScheduleConfig={onDeleteScheduleConfig}
+        onDeleted={() => {
+          onDeletedSchedule();
+        }}
       />
     </section>
   );
@@ -94,6 +104,8 @@ export type ScheduleConfigEditorProps = {
   runningTask: boolean;
   onSaved: (scheduleId: string) => void;
   onSaveScheduleConfig: (request: ScheduleSaveRequest) => Promise<unknown>;
+  onDeleteScheduleConfig: (request: ScheduleDeleteRequest) => Promise<unknown>;
+  onDeleted: () => void;
   onRunSchedule: (request: { scheduleId: string }) => Promise<TaskRunResult>;
 };
 
@@ -106,8 +118,24 @@ export function ScheduleConfigEditor({
   runningTask,
   onSaved,
   onSaveScheduleConfig,
+  onDeleteScheduleConfig,
+  onDeleted,
   onRunSchedule,
 }: ScheduleConfigEditorProps) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  async function deleteSchedule() {
+    setConfirmingDelete(false);
+    if (!schedule) {
+      return;
+    }
+    try {
+      await onDeleteScheduleConfig({ scheduleId: schedule.scheduleId });
+      onDeleted();
+    } catch {
+      // Surfaced by the shell error banner; the editor stays put.
+    }
+  }
   const [scheduleId, setScheduleId] = useState("");
   const [taskId, setTaskId] = useState("");
   const [intervalSecs, setIntervalSecs] = useState("");
@@ -262,6 +290,28 @@ export function ScheduleConfigEditor({
         </div>
       </div>
       <div className="config-actions">
+        {schedule ? (
+          <button
+            className="ghost-button danger-button"
+            data-testid="schedule-delete"
+            disabled={saving}
+            onClick={() => setConfirmingDelete(true)}
+            type="button"
+          >
+            Delete Schedule
+          </button>
+        ) : null}
+        <ConfirmDialog
+          open={confirmingDelete}
+          title="Delete schedule"
+          message={`Delete schedule "${schedule?.scheduleId ?? ""}"? This automation stops firing immediately.`}
+          confirmLabel="Delete Schedule"
+          danger
+          onConfirm={() => {
+            void deleteSchedule();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
         <button
           className="primary-button"
           data-testid="schedule-save"

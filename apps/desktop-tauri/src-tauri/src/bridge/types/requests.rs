@@ -81,6 +81,24 @@ pub(crate) struct SkillDeleteRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct TaskDeleteRequest {
+    pub task_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ScheduleDeleteRequest {
+    pub schedule_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EventTriggerDeleteRequest {
+    pub trigger_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct BackendSaveRequest {
     pub backend_id: String,
     pub name: String,

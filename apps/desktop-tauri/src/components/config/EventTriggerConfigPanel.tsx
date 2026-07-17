@@ -3,10 +3,12 @@ import type { FormEvent } from "react";
 
 import type {
   DeploymentView,
+  EventTriggerDeleteRequest,
   EventTriggerSaveRequest,
   EventTriggerView,
   TaskView,
 } from "../../lib/types";
+import { ConfirmDialog } from "../ConfirmDialog";
 import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import { optionalString } from "./formUtils";
@@ -21,6 +23,8 @@ export type EventTriggerConfigPanelProps = {
   onCreateEventTrigger: () => void;
   onSavedStatusChange: (value: string) => void;
   onSaveEventTriggerConfig: (request: EventTriggerSaveRequest) => Promise<unknown>;
+  onDeleteEventTriggerConfig: (request: EventTriggerDeleteRequest) => Promise<unknown>;
+  onDeletedEventTrigger: () => void;
 };
 
 export function EventTriggerConfigPanel({
@@ -33,6 +37,8 @@ export function EventTriggerConfigPanel({
   onCreateEventTrigger,
   onSavedStatusChange,
   onSaveEventTriggerConfig,
+  onDeleteEventTriggerConfig,
+  onDeletedEventTrigger,
 }: EventTriggerConfigPanelProps) {
   const selectedEventTrigger = useMemo(
     () =>
@@ -73,6 +79,10 @@ export function EventTriggerConfigPanel({
           onSavedStatusChange(`event-trigger:${triggerId}`);
         }}
         onSaveEventTriggerConfig={onSaveEventTriggerConfig}
+        onDeleteEventTriggerConfig={onDeleteEventTriggerConfig}
+        onDeleted={() => {
+          onDeletedEventTrigger();
+        }}
       />
     </section>
   );
@@ -86,6 +96,8 @@ export type EventTriggerConfigEditorProps = {
   saving: boolean;
   onSaved: (triggerId: string) => void;
   onSaveEventTriggerConfig: (request: EventTriggerSaveRequest) => Promise<unknown>;
+  onDeleteEventTriggerConfig: (request: EventTriggerDeleteRequest) => Promise<unknown>;
+  onDeleted: () => void;
 };
 
 export function EventTriggerConfigEditor({
@@ -96,7 +108,23 @@ export function EventTriggerConfigEditor({
   saving,
   onSaved,
   onSaveEventTriggerConfig,
+  onDeleteEventTriggerConfig,
+  onDeleted,
 }: EventTriggerConfigEditorProps) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  async function deleteEventTrigger() {
+    setConfirmingDelete(false);
+    if (!eventTrigger) {
+      return;
+    }
+    try {
+      await onDeleteEventTriggerConfig({ triggerId: eventTrigger.triggerId });
+      onDeleted();
+    } catch {
+      // Surfaced by the shell error banner; the editor stays put.
+    }
+  }
   const [triggerId, setTriggerId] = useState("");
   const [taskId, setTaskId] = useState("");
   const [sourceCollection, setSourceCollection] = useState("AgentRequest");
@@ -268,6 +296,28 @@ export function EventTriggerConfigEditor({
         </div>
       </div>
       <div className="config-actions">
+        {eventTrigger ? (
+          <button
+            className="ghost-button danger-button"
+            data-testid="event-trigger-delete"
+            disabled={saving}
+            onClick={() => setConfirmingDelete(true)}
+            type="button"
+          >
+            Delete EventTrigger
+          </button>
+        ) : null}
+        <ConfirmDialog
+          open={confirmingDelete}
+          title="Delete event-trigger"
+          message={`Delete event trigger "${eventTrigger?.triggerId ?? ""}"? This automation stops firing immediately.`}
+          confirmLabel="Delete EventTrigger"
+          danger
+          onConfirm={() => {
+            void deleteEventTrigger();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
         <button
           className="primary-button"
           data-testid="event-trigger-save"
