@@ -5,9 +5,11 @@ import type {
   BehaviorView,
   DeploymentView,
   TaskRunResult,
+  TaskDeleteRequest,
   TaskSaveRequest,
   TaskView,
 } from "../../lib/types";
+import { ConfirmDialog } from "../ConfirmDialog";
 import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import { ignoreHandledActionError, optionalString } from "./formUtils";
@@ -23,6 +25,8 @@ export type TaskConfigPanelProps = {
   onCreateTask: () => void;
   onSavedStatusChange: (value: string) => void;
   onSaveTaskConfig: (request: TaskSaveRequest) => Promise<unknown>;
+  onDeleteTaskConfig: (request: TaskDeleteRequest) => Promise<unknown>;
+  onDeletedTask: () => void;
   onRunTask: (request: { taskId: string; args?: unknown }) => Promise<TaskRunResult>;
 };
 
@@ -37,6 +41,8 @@ export function TaskConfigPanel({
   onCreateTask,
   onSavedStatusChange,
   onSaveTaskConfig,
+  onDeleteTaskConfig,
+  onDeletedTask,
   onRunTask,
 }: TaskConfigPanelProps) {
   const selectedTask = useMemo(
@@ -71,6 +77,10 @@ export function TaskConfigPanel({
         selectedBehavior={selectedBehavior}
         task={selectedTask}
         onRunTask={onRunTask}
+        onDeleteTaskConfig={onDeleteTaskConfig}
+        onDeleted={() => {
+          onDeletedTask();
+        }}
         onSaved={(taskId) => {
           onSelectTask(taskId);
           onSavedStatusChange(`task:${taskId}`);
@@ -90,6 +100,8 @@ export type TaskConfigEditorProps = {
   runningTask: boolean;
   onSaved: (taskId: string) => void;
   onSaveTaskConfig: (request: TaskSaveRequest) => Promise<unknown>;
+  onDeleteTaskConfig: (request: TaskDeleteRequest) => Promise<unknown>;
+  onDeleted: () => void;
   onRunTask: (request: { taskId: string; args?: unknown }) => Promise<TaskRunResult>;
 };
 
@@ -102,8 +114,24 @@ export function TaskConfigEditor({
   runningTask,
   onSaved,
   onSaveTaskConfig,
+  onDeleteTaskConfig,
+  onDeleted,
   onRunTask,
 }: TaskConfigEditorProps) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  async function deleteTask() {
+    setConfirmingDelete(false);
+    if (!task) {
+      return;
+    }
+    try {
+      await onDeleteTaskConfig({ taskId: task.taskId });
+      onDeleted();
+    } catch {
+      // Surfaced by the shell error banner; the editor stays put.
+    }
+  }
   const [taskId, setTaskId] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -264,6 +292,28 @@ export function TaskConfigEditor({
         />
       </label>
       <div className="config-actions">
+        {task ? (
+          <button
+            className="ghost-button danger-button"
+            data-testid="task-delete"
+            disabled={saving}
+            onClick={() => setConfirmingDelete(true)}
+            type="button"
+          >
+            Delete Task
+          </button>
+        ) : null}
+        <ConfirmDialog
+          open={confirmingDelete}
+          title="Delete task"
+          message={`Delete task "${task?.taskId ?? ""}"? Schedules or triggers still referencing it will block the delete.`}
+          confirmLabel="Delete Task"
+          danger
+          onConfirm={() => {
+            void deleteTask();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
         <button
           className="primary-button"
           data-testid="task-save"

@@ -15,7 +15,7 @@ use super::super::mutations::{
 use super::super::peer_directory::PeerRecord;
 use super::super::query::load_chat_patch_from_graphql;
 use super::super::schema::subscribed_collection_names;
-use super::super::store::ClientStore;
+use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::{
     add_replicator_with_retry_until, branchable_pair_sync_enabled, connect_peer_with_retry_until,
     normalize_required, p2p_pairing_enabled_for_graphql, sync_branchable_collections_with_retry,
@@ -395,6 +395,135 @@ impl ClientCore {
                 Ok(())
             }
             Err(error) => Err(self.record_mutation_error("delete skill", error)),
+        }
+    }
+
+    pub async fn delete_task(&self, task_id: &str) -> Result<()> {
+        let task_id = normalize_required("task_id", task_id)?;
+        let snapshot = self.store.snapshot();
+        if !snapshot.tasks.iter().any(|row| row.task_id == task_id) {
+            bail!("no Task document with task_id {task_id:?}");
+        }
+        // Dependents block deletion: silently cascading into automation that
+        // still fires would be worse than asking the operator to detach it.
+        let schedule_refs = snapshot.schedules_for_tasks(&[task_id]).len();
+        let trigger_refs = snapshot.event_triggers_for_tasks(&[task_id]).len();
+        if schedule_refs + trigger_refs > 0 {
+            bail!(
+                "task {task_id:?} is referenced by {schedule_refs} schedule(s) and {trigger_refs} event trigger(s); delete or detach those first"
+            );
+        }
+
+        let result = async {
+            let deleted = mutations::delete_task(self.node.as_ref(), task_id).await?;
+            if deleted == 0 {
+                bail!("no Task document with task_id {task_id:?}");
+            }
+            Ok(())
+        }
+        .await;
+        self.finish_automation_delete(
+            result,
+            "delete task",
+            "config_task_delete",
+            task_id,
+            |rows| {
+                rows.tasks.retain(|row| row.task_id != task_id);
+            },
+        )
+        .await
+    }
+
+    pub async fn delete_schedule(&self, schedule_id: &str) -> Result<()> {
+        let schedule_id = normalize_required("schedule_id", schedule_id)?;
+        let snapshot = self.store.snapshot();
+        if !snapshot
+            .schedules
+            .iter()
+            .any(|row| row.schedule_id == schedule_id)
+        {
+            bail!("no Schedule document with schedule_id {schedule_id:?}");
+        }
+
+        let result = async {
+            let deleted = mutations::delete_schedule(self.node.as_ref(), schedule_id).await?;
+            if deleted == 0 {
+                bail!("no Schedule document with schedule_id {schedule_id:?}");
+            }
+            Ok(())
+        }
+        .await;
+        self.finish_automation_delete(
+            result,
+            "delete schedule",
+            "config_schedule_delete",
+            schedule_id,
+            |rows| {
+                rows.schedules.retain(|row| row.schedule_id != schedule_id);
+            },
+        )
+        .await
+    }
+
+    pub async fn delete_event_trigger(&self, trigger_id: &str) -> Result<()> {
+        let trigger_id = normalize_required("trigger_id", trigger_id)?;
+        let snapshot = self.store.snapshot();
+        if !snapshot
+            .event_triggers
+            .iter()
+            .any(|row| row.trigger_id == trigger_id)
+        {
+            bail!("no EventTrigger document with trigger_id {trigger_id:?}");
+        }
+
+        let result = async {
+            let deleted = mutations::delete_event_trigger(self.node.as_ref(), trigger_id).await?;
+            if deleted == 0 {
+                bail!("no EventTrigger document with trigger_id {trigger_id:?}");
+            }
+            Ok(())
+        }
+        .await;
+        self.finish_automation_delete(
+            result,
+            "delete event trigger",
+            "config_event_trigger_delete",
+            trigger_id,
+            |rows| {
+                rows.event_triggers
+                    .retain(|row| row.trigger_id != trigger_id);
+            },
+        )
+        .await
+    }
+
+    /// Shared tail for automation-document deletes: refresh, prune the row
+    /// locally so the UI reflects the delete immediately, log, and record or
+    /// clear the mutation error.
+    async fn finish_automation_delete(
+        &self,
+        result: Result<()>,
+        action_label: &str,
+        action: &str,
+        row_id: &str,
+        prune: impl FnOnce(&mut ClientStoreRows),
+    ) -> Result<()> {
+        match result {
+            Ok(()) => {
+                self.refresh_store().await?;
+                let mut rows = self.store.snapshot().to_rows();
+                prune(&mut rows);
+                self.store.replace_snapshot(ClientStore::from_rows(rows));
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop_core::writes",
+                    action = %action,
+                    row_id = %row_id,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error(action_label, error)),
         }
     }
 

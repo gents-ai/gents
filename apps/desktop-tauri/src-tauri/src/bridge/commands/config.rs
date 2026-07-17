@@ -6,8 +6,9 @@ use defra_agent_protocol::row::{
 };
 
 use super::super::types::{
-    AgentConfigSaveRequest, BackendSaveRequest, BehaviorSaveRequest, InferenceProfileSaveRequest,
-    SkillDeleteRequest, SkillSaveRequest, ToolSelectionSaveRequest,
+    AgentConfigSaveRequest, BackendSaveRequest, BehaviorSaveRequest, EventTriggerDeleteRequest,
+    InferenceProfileSaveRequest, ScheduleDeleteRequest, SkillDeleteRequest, SkillSaveRequest,
+    TaskDeleteRequest, ToolSelectionSaveRequest,
 };
 use super::util::{require_trimmed, sanitize_id_list, trim_optional};
 
@@ -160,6 +161,33 @@ pub(crate) async fn delete_skill_config(
     let skill_id = require_trimmed("skill_id", request.skill_id)?;
     let agent_did = require_trimmed("agent_did", request.agent_did)?;
     core.delete_skill(&agent_did, &skill_id).await
+}
+
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) async fn delete_task_config(
+    core: &ClientCore,
+    request: TaskDeleteRequest,
+) -> Result<()> {
+    let task_id = require_trimmed("task_id", request.task_id)?;
+    core.delete_task(&task_id).await
+}
+
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) async fn delete_schedule_config(
+    core: &ClientCore,
+    request: ScheduleDeleteRequest,
+) -> Result<()> {
+    let schedule_id = require_trimmed("schedule_id", request.schedule_id)?;
+    core.delete_schedule(&schedule_id).await
+}
+
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) async fn delete_event_trigger_config(
+    core: &ClientCore,
+    request: EventTriggerDeleteRequest,
+) -> Result<()> {
+    let trigger_id = require_trimmed("trigger_id", request.trigger_id)?;
+    core.delete_event_trigger(&trigger_id).await
 }
 
 pub(crate) async fn save_backend_config(

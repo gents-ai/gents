@@ -10,6 +10,9 @@ import {
   saveToolSelectionConfig,
   saveToolServiceConfig,
   testToolService,
+  deleteTaskConfig,
+  deleteScheduleConfig,
+  deleteEventTriggerConfig,
 } from "../lib/desktop-api";
 import type {
   AgentConfigSaveRequest,
@@ -23,6 +26,9 @@ import type {
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
+  TaskDeleteRequest,
+  ScheduleDeleteRequest,
+  EventTriggerDeleteRequest,
 } from "../lib/types";
 
 type ConfigActionParams = {
@@ -110,6 +116,51 @@ export function createDesktopShellConfigActions({
     }
   }
 
+  async function onDeleteTaskConfig(request: TaskDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteTaskConfig(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteScheduleConfig(request: ScheduleDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteScheduleConfig(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteEventTriggerConfig(request: EventTriggerDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteEventTriggerConfig(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
   async function onSaveBackendConfig(request: BackendSaveRequest) {
     setSavingConfig(true);
     setError(null);
@@ -188,6 +239,9 @@ export function createDesktopShellConfigActions({
     onSaveBackendConfig,
     onSaveBehaviorConfig,
     onDeleteSkillConfig,
+    onDeleteTaskConfig,
+    onDeleteScheduleConfig,
+    onDeleteEventTriggerConfig,
     onSaveInferenceProfileConfig,
     onSaveSkillConfig,
     onSaveToolSelectionConfig,

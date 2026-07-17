@@ -37,6 +37,7 @@ use defra_agent::{
 use defra_agent_protocol::graphql::normalize_optional_rfc3339;
 use defra_agent_protocol::row::{EventTriggerRow, ScheduleRow, TaskRow};
 use defra_node::EmbeddedNode;
+use serde_json::Value;
 
 use super::super::graphql::{
     escape_graphql_string, execute_mutation, graphql_optional_bool_field,
@@ -444,4 +445,97 @@ pub async fn upsert_event_trigger(node: &EmbeddedNode, row: &EventTriggerRow) ->
         update_fields = join_fields(&update_fields),
     );
     execute_mutation(node, &mutation, "upsert_event_trigger").await
+}
+
+pub async fn delete_task(node: &EmbeddedNode, task_id: &str) -> Result<usize> {
+    let task_id = normalize_required("task_id", task_id)?;
+    let task_id = escape_graphql_string(task_id);
+    let mutation = format!(
+        r#"mutation {{
+            delete_Task(
+                filter: {{ task_id: {{ _eq: "{task_id}" }} }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    if response.has_errors() {
+        bail!(
+            "delete_task failed: {}",
+            response
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("delete_Task"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0))
+}
+
+pub async fn delete_schedule(node: &EmbeddedNode, schedule_id: &str) -> Result<usize> {
+    let schedule_id = normalize_required("schedule_id", schedule_id)?;
+    let schedule_id = escape_graphql_string(schedule_id);
+    let mutation = format!(
+        r#"mutation {{
+            delete_Schedule(
+                filter: {{ schedule_id: {{ _eq: "{schedule_id}" }} }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    if response.has_errors() {
+        bail!(
+            "delete_schedule failed: {}",
+            response
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("delete_Schedule"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0))
+}
+
+pub async fn delete_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> Result<usize> {
+    let trigger_id = normalize_required("trigger_id", trigger_id)?;
+    let trigger_id = escape_graphql_string(trigger_id);
+    let mutation = format!(
+        r#"mutation {{
+            delete_EventTrigger(
+                filter: {{ trigger_id: {{ _eq: "{trigger_id}" }} }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    if response.has_errors() {
+        bail!(
+            "delete_event_trigger failed: {}",
+            response
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("delete_EventTrigger"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0))
 }

@@ -558,6 +558,45 @@ export function createDesktopUiHarness(
       };
       return snapshot();
     },
+    async deleteTaskConfig(request) {
+      const schedules = deployment.schedules.filter(
+        (schedule) => schedule.taskId === request.taskId,
+      ).length;
+      const triggers = deployment.eventTriggers.filter(
+        (trigger) => trigger.taskId === request.taskId,
+      ).length;
+      if (schedules + triggers > 0) {
+        throw new Error(
+          `task "${request.taskId}" is referenced by ${schedules} schedule(s) and ${triggers} event trigger(s); delete or detach those first`,
+        );
+      }
+      deployment = {
+        ...deployment,
+        tasks: deployment.tasks.filter((task) => task.taskId !== request.taskId),
+      };
+      notify("config");
+      return snapshot();
+    },
+    async deleteScheduleConfig(request) {
+      deployment = {
+        ...deployment,
+        schedules: deployment.schedules.filter(
+          (schedule) => schedule.scheduleId !== request.scheduleId,
+        ),
+      };
+      notify("config");
+      return snapshot();
+    },
+    async deleteEventTriggerConfig(request) {
+      deployment = {
+        ...deployment,
+        eventTriggers: deployment.eventTriggers.filter(
+          (trigger) => trigger.triggerId !== request.triggerId,
+        ),
+      };
+      notify("config");
+      return snapshot();
+    },
     async deleteSkillConfig(request) {
       const skillId = request.skillId.trim();
       deployment = {

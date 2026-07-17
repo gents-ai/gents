@@ -22,6 +22,9 @@ import type {
   ScheduleRunRequest,
   ScheduleSaveRequest,
   SkillDeleteRequest,
+  TaskDeleteRequest,
+  ScheduleDeleteRequest,
+  EventTriggerDeleteRequest,
   SkillSaveRequest,
   SubagentTreeView,
   TaskRunRequest,
@@ -127,6 +130,13 @@ export type DesktopApiAdapter = {
   saveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<DesktopClientSnapshot>;
   saveSkillConfig: (request: SkillSaveRequest) => Promise<DesktopClientSnapshot>;
   deleteSkillConfig: (request: SkillDeleteRequest) => Promise<DesktopClientSnapshot>;
+  deleteTaskConfig: (request: TaskDeleteRequest) => Promise<DesktopClientSnapshot>;
+  deleteScheduleConfig: (
+    request: ScheduleDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  deleteEventTriggerConfig: (
+    request: EventTriggerDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
   saveBackendConfig: (request: BackendSaveRequest) => Promise<DesktopClientSnapshot>;
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
@@ -224,6 +234,17 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   deleteSkillConfig(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_skill_delete", { request });
+  },
+  deleteTaskConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_task_delete", { request });
+  },
+  deleteScheduleConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_schedule_delete", { request });
+  },
+  deleteEventTriggerConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_event_trigger_delete", {
+      request,
+    });
   },
   saveBackendConfig(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_backend_save", { request });
@@ -396,6 +417,18 @@ export async function saveSkillConfig(request: SkillSaveRequest) {
 
 export async function deleteSkillConfig(request: SkillDeleteRequest) {
   return desktopApiAdapter().deleteSkillConfig(request);
+}
+
+export async function deleteTaskConfig(request: TaskDeleteRequest) {
+  return desktopApiAdapter().deleteTaskConfig(request);
+}
+
+export async function deleteScheduleConfig(request: ScheduleDeleteRequest) {
+  return desktopApiAdapter().deleteScheduleConfig(request);
+}
+
+export async function deleteEventTriggerConfig(request: EventTriggerDeleteRequest) {
+  return desktopApiAdapter().deleteEventTriggerConfig(request);
 }
 
 export async function saveBackendConfig(request: BackendSaveRequest) {

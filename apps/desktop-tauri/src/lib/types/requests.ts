@@ -136,6 +136,18 @@ export type SkillDeleteRequest = {
   agentDid: string;
 };
 
+export type TaskDeleteRequest = {
+  taskId: string;
+};
+
+export type ScheduleDeleteRequest = {
+  scheduleId: string;
+};
+
+export type EventTriggerDeleteRequest = {
+  triggerId: string;
+};
+
 export type TaskSaveRequest = {
   taskId: string;
   name: string;

@@ -173,6 +173,9 @@ function AppShell() {
             bootstrap={shell.snapshot?.bootstrap ?? null}
             onBack={() => setWorkspaceView("chat")}
             onDeleteSkillConfig={shell.onDeleteSkillConfig}
+            onDeleteTaskConfig={shell.onDeleteTaskConfig}
+            onDeleteScheduleConfig={shell.onDeleteScheduleConfig}
+            onDeleteEventTriggerConfig={shell.onDeleteEventTriggerConfig}
             onSaveAgentConfig={shell.onSaveAgentConfig}
             onRunTask={shell.onRunTask}
             onSaveBackendConfig={shell.onSaveBackendConfig}
