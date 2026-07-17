@@ -38,7 +38,9 @@ export function ConversationListSection({
     const sessionId = renamingSessionId;
     setRenamingSessionId(null);
     if (sessionId && title && onRenameConversationTitle) {
-      void onRenameConversationTitle(sessionId, title);
+      // Shell handlers rethrow after setting the banner; fire-and-forget
+      // call sites must swallow or the rejection escapes unhandled.
+      void Promise.resolve(onRenameConversationTitle(sessionId, title)).catch(() => {});
     }
   }
   const selectedDeployment = deployments.find(
