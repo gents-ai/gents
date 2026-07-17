@@ -224,13 +224,17 @@ export function CascadeCancelDialog(
             <>
               {renderGroup(
                 "will-interrupt",
-                "Will request interrupt by cascade",
+                "Will be interrupted",
                 preview.willInterrupt,
               )}
-              {renderGroup("will-detach", "Will continue detached", preview.willDetach)}
+              {renderGroup(
+                "will-detach",
+                "Will keep running detached",
+                preview.willDetach,
+              )}
               {renderGroup(
                 "already-terminal",
-                "Already terminal",
+                "Already finished",
                 preview.alreadyTerminal,
               )}
               {renderUnknownPolicy(preview.unknownPolicy)}
@@ -254,7 +258,7 @@ export function CascadeCancelDialog(
             disabled={phase === "submitting" || !preview}
             onClick={onConfirm}
           >
-            {phase === "submitting" ? "Cancelling…" : "Interrupt parent and cascade"}
+            {phase === "submitting" ? "Interrupting…" : "Interrupt all"}
           </button>
         </footer>
       </div>
@@ -293,7 +297,7 @@ function renderUnknownPolicy(items: CascadeAffectedRequest[]) {
   return (
     <section className="group unknown-policy">
       <h4>
-        Policy unknown — will be left running{" "}
+        No cancellation policy — will be left running{" "}
         <span className="count">{items.length}</span>
       </h4>
       <ul>
@@ -307,8 +311,8 @@ function renderUnknownPolicy(items: CascadeAffectedRequest[]) {
           </li>
         ))}
         <li className="warning-row">
-          These descendants have no cancel_policy on their bridge row. Confirming will
-          NOT interrupt them.
+          These background tasks don&apos;t declare how they handle cancellation, so
+          confirming will leave them running.
         </li>
       </ul>
     </section>
