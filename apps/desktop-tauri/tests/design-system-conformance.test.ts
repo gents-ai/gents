@@ -153,8 +153,10 @@ describe("token ratchets", () => {
   it("bespoke box-shadows do not grow (ceiling 38)", () => {
     // 'none' and pure --shadow-* token values are conformant, not bespoke:
     // tokenizing shadows must lower this pressure, not preserve it.
+    // The lookahead sits before \s* — a backtrackable \s* ahead of the
+    // lookahead let "box-shadow: none" slip back into the count.
     expect(
-      countMatches(/box-shadow:\s*(?!none[;}\s]|var\(--shadow-)[^;{}]+/gi),
+      countMatches(/box-shadow:(?!\s*none\s*[;}]|\s*var\(--shadow-)[^;{}]+/gi),
     ).toBeLessThanOrEqual(38);
   });
 });
