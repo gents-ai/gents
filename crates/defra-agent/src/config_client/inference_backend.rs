@@ -2,7 +2,7 @@ use crate::graphql::escape_graphql_string;
 use crate::{BackendProviderKind, OpenAiWireApi};
 use anyhow::Result;
 
-use super::ConfigAccess;
+use super::{mint_recreate_identity_timestamp, ConfigAccess};
 use defra_agent_protocol::graphql::{
     graphql_bool_literal, nullable_string_field, string_list_field,
 };
@@ -28,6 +28,7 @@ pub async fn write_inference_backend_document(
     access: &ConfigAccess,
     backend: &InferenceBackendUpsertDocument,
 ) -> Result<String> {
+    let recreate_identity = escape_graphql_string(&mint_recreate_identity_timestamp());
     let models_add = string_list_field("models", &backend.models_on_add)
         .ok_or_else(|| anyhow::anyhow!("backend models field could not be rendered"))?;
     let models_update = backend
@@ -88,7 +89,8 @@ pub async fn write_inference_backend_document(
                     max_queue_depth: {max_queue_depth},
                     enabled: {enabled},
                     {models_add},
-                    probe_status: "{probe_status}"
+                    probe_status: "{probe_status}",
+                    updated_at: "{recreate_identity}"
                 }},
                 update: {{
                     {update_fields}
@@ -111,6 +113,7 @@ pub async fn write_inference_backend_document(
         enabled = graphql_bool_literal(backend.enabled),
         models_add = models_add,
         probe_status = escape_graphql_string(&backend.probe_status),
+        recreate_identity = recreate_identity,
         update_fields = update_fields,
     );
     let response = access.execute(&mutation).await?;

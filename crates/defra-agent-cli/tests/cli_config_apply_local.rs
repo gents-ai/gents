@@ -729,5 +729,69 @@ async fn reapply_recreates_a_pruned_unique_row() -> Result<()> {
         "diff must be exact after the recreate: {settled}"
     );
 
+    // Repeat the full cycle. The second delete leaves two terminal documents
+    // with the same logical task_id; recreation must treat both as history,
+    // not as an ambiguous current row.
+    fs::remove_dir_all(&task_dir).with_context(|| format!("removing {}", task_dir.display()))?;
+    let pruned_again = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+            "--prune",
+        ],
+    )?;
+    assert_eq!(
+        pruned_again
+            .pointer("/pruned/tasks")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    write_json_file(&task_dir.join("object.json"), &task_object)?;
+    let recreated_again = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+        ],
+    )?;
+    assert_eq!(
+        recreated_again.get("ok").and_then(Value::as_bool),
+        Some(true),
+        "recreating over multiple tombstones must converge: {recreated_again}"
+    );
+    assert_eq!(
+        recreated_again
+            .pointer("/applied/tasks")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let settled_again = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "diff",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+        ],
+    )?;
+    assert_eq!(
+        settled_again.get("ok").and_then(Value::as_bool),
+        Some(true),
+        "diff must remain exact after repeated recreation: {settled_again}"
+    );
+
     Ok(())
 }

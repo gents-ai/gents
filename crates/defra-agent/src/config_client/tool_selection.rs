@@ -2,7 +2,7 @@ use crate::graphql::escape_graphql_string;
 use crate::ToolSelectionDocument;
 use anyhow::Result;
 
-use super::ConfigAccess;
+use super::{mint_recreate_identity_timestamp, ConfigAccess};
 use defra_agent_protocol::graphql::{
     optional_bool_field, optional_string_field, string_list_field,
 };
@@ -19,7 +19,11 @@ pub async fn write_tool_selection_document_with_clear_fields(
     selection: &ToolSelectionDocument,
     clear_update_fields: &[&str],
 ) -> Result<String> {
-    let add_fields = tool_selection_fields(selection, true);
+    let add_fields = format!(
+        "{},\n                    updated_at: \"{}\"",
+        tool_selection_fields(selection, true),
+        escape_graphql_string(&mint_recreate_identity_timestamp()),
+    );
     let mut update_fields = tool_selection_fields(selection, false);
     if !clear_update_fields.is_empty() {
         if !update_fields.is_empty() {

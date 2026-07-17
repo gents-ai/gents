@@ -512,8 +512,98 @@ async fn query_existing_documents_by_unique_values(
         .iter()
         .map(|doc| doc.unique_value.clone())
         .collect::<Vec<_>>();
-    query_document_refs_by_unique_values(txn, collection_name, unique_field, &unique_values, true)
-        .await
+    // Query live rows independently so an unbounded tombstone history can
+    // never consume the batch limit and make an existing document look
+    // absent. At two rows per requested key, either every valid live row fits
+    // or a duplicated key is represented at least twice and the selector
+    // below rejects it as corruption.
+    let mut by_unique = query_document_refs_by_unique_values(
+        txn,
+        collection_name,
+        unique_field,
+        &unique_values,
+        false,
+    )
+    .await?;
+
+    let without_live = unique_values
+        .into_iter()
+        .filter(|unique_value| !by_unique.contains_key(unique_value))
+        .collect::<Vec<_>>();
+    let tombstones = query_one_historical_document_per_unique_value(
+        txn,
+        collection_name,
+        unique_field,
+        &without_live,
+    )
+    .await?;
+    for (unique_value, rows) in tombstones {
+        by_unique.entry(unique_value).or_default().extend(rows);
+    }
+    Ok(by_unique)
+}
+
+/// Fetch at most one historical row per logical key.
+///
+/// A separate aliased field per key prevents one key's arbitrarily long
+/// tombstone history from starving later keys under a global query limit.
+async fn query_one_historical_document_per_unique_value(
+    txn: &ConfigApplyTxn<'_>,
+    collection_name: &str,
+    unique_field: &str,
+    unique_values: &[String],
+) -> Result<BTreeMap<String, Vec<ExistingDocumentRef>>> {
+    let mut by_unique = BTreeMap::new();
+    for chunk in unique_values.chunks(CONFIG_IMPORT_BATCH_SIZE) {
+        let fields = chunk
+            .iter()
+            .enumerate()
+            .map(|(index, unique_value)| {
+                format!(
+                    r#"lookup_{index}: {collection_name}(
+                        showDeleted: true,
+                        filter: {{ {unique_field}: {{ _eq: "{unique_value}" }} }},
+                        limit: 1
+                    ) {{
+                        _docID
+                        _deleted
+                    }}"#,
+                    unique_value = escape_graphql_string(unique_value),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let response = txn.execute(&format!("{{\n{fields}\n}}")).await?;
+        for (index, unique_value) in chunk.iter().enumerate() {
+            let rows = response
+                .pointer(&format!("/data/lookup_{index}"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for row in rows {
+                let doc_ref = ExistingDocumentRef {
+                    doc_id: row
+                        .get("_docID")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "{collection_name} history row missing _docID for {unique_field}={unique_value}: {row}"
+                            )
+                        })?
+                        .to_string(),
+                    deleted: row
+                        .get("_deleted")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                };
+                by_unique
+                    .entry(unique_value.clone())
+                    .or_insert_with(Vec::new)
+                    .push(doc_ref);
+            }
+        }
+    }
+    Ok(by_unique)
 }
 
 async fn query_document_refs_by_unique_values(
@@ -533,7 +623,11 @@ async fn query_document_refs_by_unique_values(
         ""
     };
     let unique_values_literal = graphql_string_list_literal(unique_values);
-    let limit = unique_values.len().saturating_mul(16).max(16);
+    let limit = if show_deleted {
+        unique_values.len().saturating_mul(16).max(16)
+    } else {
+        unique_values.len().saturating_mul(2).max(2)
+    };
     let query = format!(
         r#"{{
             {collection_name}(
@@ -645,14 +739,7 @@ fn select_existing_import_document(
         return Ok(Some((*row).clone()));
     }
 
-    let deleted_rows = rows.iter().filter(|row| row.deleted).collect::<Vec<_>>();
-    if deleted_rows.len() > 1 {
-        anyhow::bail!(
-            "multiple deleted {collection_name} tombstones share {unique_field}={unique_value}"
-        );
-    }
-
-    Ok(deleted_rows.first().map(|row| (*row).clone()))
+    Ok(rows.iter().find(|row| row.deleted).cloned())
 }
 
 async fn apply_custom_override_documents_individually(
@@ -1180,6 +1267,58 @@ doc_1: create_Task(input: { task_id: "b" }) { _docID }
             field.field
         );
         assert!(field.field.contains("updated_at:"));
+    }
+
+    #[test]
+    fn custom_selector_accepts_arbitrary_tombstone_history() {
+        let rows = (0..32)
+            .map(|index| ExistingDocumentRef {
+                doc_id: format!("deleted-{index}"),
+                deleted: true,
+            })
+            .collect::<Vec<_>>();
+
+        let selected = select_existing_import_document("Task", "task_id", "task-a", &rows)
+            .unwrap()
+            .expect("tombstone history should select recreate");
+        assert!(selected.deleted);
+    }
+
+    #[test]
+    fn custom_selector_prefers_the_only_live_row_over_tombstones() {
+        let mut rows = (0..32)
+            .map(|index| ExistingDocumentRef {
+                doc_id: format!("deleted-{index}"),
+                deleted: true,
+            })
+            .collect::<Vec<_>>();
+        rows.push(ExistingDocumentRef {
+            doc_id: "live".to_string(),
+            deleted: false,
+        });
+
+        let selected = select_existing_import_document("Task", "task_id", "task-a", &rows)
+            .unwrap()
+            .expect("live row should be selected");
+        assert_eq!(selected.doc_id, "live");
+    }
+
+    #[test]
+    fn custom_selector_rejects_multiple_live_rows() {
+        let rows = vec![
+            ExistingDocumentRef {
+                doc_id: "live-a".to_string(),
+                deleted: false,
+            },
+            ExistingDocumentRef {
+                doc_id: "live-b".to_string(),
+                deleted: false,
+            },
+        ];
+
+        let error =
+            select_existing_import_document("Task", "task_id", "task-a", &rows).unwrap_err();
+        assert!(error.to_string().contains("multiple live Task documents"));
     }
 }
 
