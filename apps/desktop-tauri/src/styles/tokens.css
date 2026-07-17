@@ -25,8 +25,10 @@
     --source-white: #ffffff;
     --source-blue: #10cbff;
     --source-orange: #ffa011;
-    --source-white-rgb: 255 255 255;
-    --source-black-rgb: 0 0 0;
+    /* Highlight washes (hover tints) and shade washes (card/scrim fills);
+       the light theme inverts both. */
+    --overlay-rgb: 255 255 255;
+    --scrim-rgb: 0 0 0;
     --source-green-rgb: 6 178 80;
     --source-dark-green-rgb: 28 39 36;
     --source-blue-rgb: 16 203 255;
@@ -98,5 +100,40 @@
     --motion-fast: 120ms;
     --motion-medium: 150ms;
     --motion-pulse: 1.4s;
+  }
+
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --color-bg: #f4f7f5;
+    --color-surface: #ffffff;
+    --color-surface-strong: #eef3f0;
+    --color-surface-deep: #e7ede9;
+    --color-surface-muted: #f0f4f2;
+    --source-ink-rgb: 248 250 249;
+    --source-ink-2-rgb: 244 247 245;
+    --source-ink-3-rgb: 238 243 240;
+    --overlay-rgb: 2 8 6;
+    --scrim-rgb: 255 255 255;
+    --color-text: #0d1612;
+    --color-text-muted: #52615a;
+    --color-text-muted-rgb: 82 97 90;
+    --color-text-soft: #2c3a33;
+    --color-text-warm: #14261c;
+    --color-accent-strong: #0c8f43;
+    --color-accent-strong-rgb: 12 143 67;
+    --color-accent-muted: #1d7a44;
+    --color-success: #0c7a3c;
+    --color-success-rgb: 12 122 60;
+    --color-warning-soft: #8a5b00;
+    --color-error: #a8321f;
+    --color-error-strong: #c73a26;
+    --color-error-strong-rgb: 199 58 38;
+    --color-error-deep-rgb: 255 214 208;
+    --color-error-soft: #7c2015;
+    --color-error-tint: #93301f;
+    --border-subtle: rgb(var(--source-green-rgb) / 0.16);
+    --border-default: rgb(var(--source-green-rgb) / 0.26);
+    --border-strong: rgb(var(--source-green-rgb) / 0.38);
+    --border-selected: rgb(var(--source-green-rgb) / 0.55);
   }
 }

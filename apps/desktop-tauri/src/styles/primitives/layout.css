@@ -3,8 +3,8 @@
     border: 1px solid var(--border-default);
     background: var(--color-surface);
     box-shadow:
-      inset 0 1px 0 rgb(var(--source-white-rgb) / 0.04),
-      0 18px 60px rgb(var(--source-black-rgb) / 0.22);
+      inset 0 1px 0 rgb(var(--overlay-rgb) / 0.04),
+      0 18px 60px rgb(var(--scrim-rgb) / 0.22);
     padding: var(--space-7);
   }
 
@@ -42,7 +42,7 @@
     text-align: left;
     border-radius: var(--radius-lg);
     border: 1px solid var(--border-subtle);
-    background: rgb(var(--source-black-rgb) / 0.58);
+    background: rgb(var(--scrim-rgb) / 0.58);
     padding: var(--space-5) var(--space-6);
     display: grid;
     gap: var(--space-1);
@@ -93,7 +93,7 @@
   .centered-panel {
     border-radius: var(--radius-lg);
     border: 1px solid var(--border-subtle);
-    background: rgb(var(--source-black-rgb) / 0.58);
+    background: rgb(var(--scrim-rgb) / 0.58);
   }
 
   .callout,

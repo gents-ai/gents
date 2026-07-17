@@ -6,6 +6,7 @@ import { ConfigWorkspace } from "./components/ConfigWorkspace";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FleetDashboard } from "./components/fleet/FleetDashboard";
 import { ErrorBanner } from "./components/ErrorBanner";
+import { applyTheme, loadTheme } from "./lib/theme";
 import { Sidebar } from "./components/Sidebar";
 import { useDesktopShell } from "./hooks/useDesktopShell";
 import { installExternalLinkGuard } from "./lib/externalLinks";
@@ -21,6 +22,12 @@ function App() {
 
 function AppShell() {
   const shell = useDesktopShell();
+
+  // Boot lives here, not in App: the boundary test inspects App() as a
+  // plain hook-free function, and the e2e harness mounts App directly.
+  useEffect(() => {
+    applyTheme(loadTheme());
+  }, []);
 
   // External links (e.g. markdown links in the transcript) must open in the
   // OS browser — an unguarded anchor click navigates the whole webview away.

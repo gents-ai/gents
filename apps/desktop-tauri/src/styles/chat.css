@@ -17,7 +17,7 @@
     border: 1px solid rgb(var(--source-green-rgb) / 0.16);
     background: rgb(var(--source-ink-2-rgb) / 0.94);
     box-shadow:
-      inset 0 1px 0 rgb(var(--source-white-rgb) / 0.025),
+      inset 0 1px 0 rgb(var(--overlay-rgb) / 0.025),
       inset 2px 0 0 rgb(var(--source-green-rgb) / 0.16);
   }
 
@@ -31,8 +31,8 @@
     /* Fully opaque: the transcript must not ghost through the open drawer. */
     background: rgb(var(--source-ink-2-rgb));
     box-shadow:
-      0 20px 80px rgb(var(--source-black-rgb) / 0.5),
-      inset 0 1px 0 rgb(var(--source-white-rgb) / 0.025),
+      0 20px 80px rgb(var(--scrim-rgb) / 0.5),
+      inset 0 1px 0 rgb(var(--overlay-rgb) / 0.025),
       inset 2px 0 0 rgb(var(--source-green-rgb) / 0.16);
   }
 
@@ -198,7 +198,7 @@
       linear-gradient(180deg, rgb(var(--source-green-rgb) / 0.035), transparent 42%),
       var(--color-surface-strong);
     border-color: rgb(var(--source-green-rgb) / 0.16);
-    box-shadow: inset 0 1px 0 rgb(var(--source-white-rgb) / 0.025);
+    box-shadow: inset 0 1px 0 rgb(var(--overlay-rgb) / 0.025);
   }
 
   .composer-actions {
@@ -212,7 +212,7 @@
     padding-top: var(--space-6);
     background: var(--color-surface-strong);
     border-color: rgb(var(--source-green-rgb) / 0.16);
-    box-shadow: inset 0 1px 0 rgb(var(--source-white-rgb) / 0.025);
+    box-shadow: inset 0 1px 0 rgb(var(--overlay-rgb) / 0.025);
   }
 
   .composer-input-wrap {

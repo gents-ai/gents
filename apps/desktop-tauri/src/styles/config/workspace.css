@@ -42,7 +42,7 @@
     flex: 0 0 auto;
     border: 1px solid rgb(var(--source-green-rgb) / 0.2);
     border-radius: var(--radius-sm);
-    background: rgb(var(--source-black-rgb) / 0.58);
+    background: rgb(var(--scrim-rgb) / 0.58);
     object-fit: contain;
     padding: var(--space-2);
   }
@@ -76,7 +76,7 @@
     width: 10px;
     height: 10px;
     border-radius: var(--radius-pill);
-    box-shadow: 0 0 0 3px rgb(var(--source-white-rgb) / 0.04);
+    box-shadow: 0 0 0 3px rgb(var(--overlay-rgb) / 0.04);
   }
 
   .config-status-dot.green {

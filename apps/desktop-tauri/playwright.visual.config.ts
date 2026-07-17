@@ -16,7 +16,9 @@ export default defineConfig({
   expect: {
     timeout: 10_000,
     toHaveScreenshot: {
-      maxDiffPixelRatio: 0.01,
+      // Near-exact: a 1% ratio (~13k px at 1440x900) once hid an entire
+      // status-label redesign. 64px covers antialiasing jitter, nothing more.
+      maxDiffPixels: 64,
     },
   },
   use: {

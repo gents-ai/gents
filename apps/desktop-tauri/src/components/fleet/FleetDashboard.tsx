@@ -9,6 +9,7 @@ import type {
 import { formatPeerConnectionError } from "../../lib/peerConnectionErrors";
 import { AddPeerForm } from "./AddPeerForm";
 import { BrandLockup } from "./BrandLockup";
+import { ThemeToggle } from "../ThemeToggle";
 import { FleetRow } from "./FleetRow";
 import { validateAgentDid } from "./peerConnectionImport";
 
@@ -137,6 +138,7 @@ export function FleetDashboard({
       <header className="fleet-header">
         <BrandLockup />
         <div className="fleet-header-actions">
+          <ThemeToggle />
           {needsP2PRepair ? (
             <button
               className="ghost-button"
