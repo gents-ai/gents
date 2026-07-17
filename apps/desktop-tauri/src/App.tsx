@@ -70,6 +70,7 @@ function AppShell() {
           onFetchPeerStatus={shell.onFetchPeerStatus}
           onInitLocalRuntime={shell.onInitLocalRuntime}
           onOpenChat={openChat}
+          onOpenCode={openCode}
           onOpenConfig={openConfig}
           onRepairP2P={shell.onRepairP2P}
         />

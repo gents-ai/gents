@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { FleetRow, type FleetRowProps } from "../src/components/fleet/FleetRow";
@@ -45,5 +45,24 @@ describe("fleet health visibility", () => {
     renderRow({ ...deployment, dialSucceeded: true, lastError: null });
     expect(screen.getByRole("button", { name: "Copy DID" })).toBeInTheDocument();
     expect(screen.queryByTestId("fleet-error-peer-1")).not.toBeInTheDocument();
+  });
+
+  it("offers a Code-mode action when wired", () => {
+    const onOpenCode = vi.fn();
+    render(
+      <table>
+        <tbody>
+          <FleetRow
+            bootstrap={null}
+            deployment={{ ...deployment, dialSucceeded: true, lastError: null }}
+            onOpenChat={vi.fn()}
+            onOpenCode={onOpenCode}
+            onOpenConfig={vi.fn()}
+          />
+        </tbody>
+      </table>,
+    );
+    fireEvent.click(screen.getByTestId("fleet-code-peer-1"));
+    expect(onOpenCode).toHaveBeenCalledWith(deployment.agentDid);
   });
 });
