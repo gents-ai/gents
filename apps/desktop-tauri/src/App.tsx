@@ -117,6 +117,10 @@ function AppShell() {
             onOpenCode={(agentDid) => openCode(agentDid)}
             onOpenFleet={() => setWorkspaceView("fleet")}
             onSelectBehavior={shell.setSelectedBehaviorId}
+            onSelectAgent={(agentDid) => {
+              shell.setSelectedAgentDid(agentDid);
+              shell.setSelectedSessionId(null);
+            }}
             onSelectSession={shell.onSelectSession}
             onRenameConversationTitle={shell.onRenameConversationTitle}
             onStartNewConversation={shell.onStartNewConversation}
