@@ -7,6 +7,30 @@ function diffText(diff: DiffLine[]): string {
     .join("\n");
 }
 
+const READ_TOOL_LABELS: Record<string, { verb: string; noun: string }> = {
+  read_file: { verb: "read", noun: "lines" },
+  grep: { verb: "grep", noun: "matches" },
+  glob: { verb: "glob", noun: "files" },
+  list_files: { verb: "ls", noun: "entries" },
+};
+
+function readCountLabel(view: {
+  tool: string;
+  returnedCount: number | null;
+  totalCount: number | null;
+  truncated: boolean;
+}): string | null {
+  const noun = READ_TOOL_LABELS[view.tool]?.noun ?? "items";
+  if (view.returnedCount == null) {
+    return null;
+  }
+  const of =
+    view.totalCount != null && view.totalCount !== view.returnedCount
+      ? ` of ${view.totalCount}`
+      : "";
+  return `${view.returnedCount}${of} ${noun}${view.truncated ? " · truncated" : ""}`;
+}
+
 // Renders a code tool call as a diff (file edits) or a terminal block (bash),
 // instead of the generic args/result disclosure. Foundation-aligned: the data
 // is already on the persisted tool call; this is a projection, not new state.
@@ -47,6 +71,45 @@ export function CodeToolItem({ view }: { view: CodeToolView }) {
               </div>
             ))}
           </pre>
+        </div>
+      </details>
+    );
+  }
+
+  if (view.kind === "fileRead") {
+    const counts = readCountLabel(view);
+    return (
+      <details className="tool-item code-tool" data-testid="code-file-read">
+        <summary className="tool-item-summary">
+          <span className="tool-item-summary-left">
+            <span aria-hidden="true" className="tool-item-dot tool-item-dot-success" />
+            <span className="code-tool-kind">
+              {READ_TOOL_LABELS[view.tool]?.verb ?? view.tool}
+            </span>
+            {view.target ? (
+              <span className="code-tool-path mono">{view.target}</span>
+            ) : null}
+            {counts ? (
+              <span className="code-read-counts" data-testid="code-read-counts">
+                {counts}
+              </span>
+            ) : null}
+          </span>
+          <span aria-hidden="true" className="tool-item-action">
+            ▸
+          </span>
+        </summary>
+        <div className="tool-item-body">
+          {view.body ? (
+            <div className="code-output">
+              <CopyButton className="code-output-copy" getText={() => view.body} />
+              <pre className="code-terminal" data-testid="code-read-body">
+                {view.body}
+              </pre>
+            </div>
+          ) : (
+            <div className="muted small">No results.</div>
+          )}
         </div>
       </details>
     );
