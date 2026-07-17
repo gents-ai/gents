@@ -181,7 +181,9 @@ pub(super) fn build_rendered_timeline(
             (false, None)
         };
         if let Some(item) = item {
-            rendered_message.insert(message.message_key.clone(), item);
+            rendered_message
+                .entry(message.message_key.clone())
+                .or_insert(item);
         }
         // Presentation dedup token: the desktop only dedups by presentation when
         // the message carries a sequence (None opts out). Serialize the same
