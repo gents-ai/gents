@@ -8,6 +8,7 @@ import type {
   TaskRunResult,
   TaskView,
 } from "../../lib/types";
+import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
 import { ignoreHandledActionError, isOptionalInt, parseOptionalInt } from "./formUtils";
 
@@ -115,13 +116,12 @@ export function ScheduleConfigEditor({
   const [runStatus, setRunStatus] = useState<TaskRunResult | null>(null);
 
   useEffect(() => {
-    setScheduleId(schedule?.scheduleId ?? "");
-    setTaskId(schedule?.taskId ?? selectedTask?.taskId ?? "");
-    setIntervalSecs(
-      schedule?.intervalSecs != null ? String(schedule.intervalSecs) : "",
-    );
-    setEnabled(schedule?.enabled ?? true);
-    setConcurrency(schedule?.concurrency ?? "serial");
+    const b = scheduleFormValues(schedule, selectedTask?.taskId ?? null);
+    setScheduleId(b.scheduleId);
+    setTaskId(b.taskId);
+    setIntervalSecs(b.intervalSecs);
+    setEnabled(b.enabled);
+    setConcurrency(b.concurrency);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [schedule?.scheduleId, selectedTask?.taskId]);
 
@@ -160,6 +160,10 @@ export function ScheduleConfigEditor({
   return (
     <form className="panel config-editor" onSubmit={submitSchedule}>
       <ConfigEditorHeader
+        dirty={isDirty(
+          { scheduleId, taskId, intervalSecs, enabled, concurrency },
+          scheduleFormValues(schedule, selectedTask?.taskId ?? null),
+        )}
         eyebrow="Timer Trigger"
         saved={savedStatus === `schedule:${scheduleId.trim()}`}
         title={scheduleId || "New Timer Trigger"}
@@ -294,4 +298,18 @@ export function ScheduleConfigEditor({
       </section>
     </form>
   );
+}
+
+/** View→form hydration, shared by the reset effect and dirty comparison. */
+function scheduleFormValues(
+  schedule: ScheduleView | null,
+  fallbackTaskId: string | null,
+) {
+  return {
+    scheduleId: schedule?.scheduleId ?? "",
+    taskId: schedule?.taskId ?? fallbackTaskId ?? "",
+    intervalSecs: schedule?.intervalSecs != null ? String(schedule.intervalSecs) : "",
+    enabled: schedule?.enabled ?? true,
+    concurrency: schedule?.concurrency ?? "serial",
+  };
 }

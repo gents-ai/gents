@@ -8,6 +8,7 @@ import type {
   TaskSaveRequest,
   TaskView,
 } from "../../lib/types";
+import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
 import { ignoreHandledActionError, optionalString } from "./formUtils";
 
@@ -114,13 +115,14 @@ export function TaskConfigEditor({
   const [runStatus, setRunStatus] = useState<TaskRunResult | null>(null);
 
   useEffect(() => {
-    setTaskId(task?.taskId ?? "");
-    setName(task?.name ?? task?.taskId ?? "");
-    setDescription(task?.description ?? "");
-    setBehaviorId(task?.behaviorId ?? selectedBehavior?.behaviorId ?? "");
-    setPromptTemplate(task?.promptTemplate ?? "");
-    setOutputSchemaRef(task?.outputSchemaRef ?? "");
-    setEnabled(task?.enabled ?? true);
+    const b = taskFormValues(task, selectedBehavior?.behaviorId ?? null);
+    setTaskId(b.taskId);
+    setName(b.name);
+    setDescription(b.description);
+    setBehaviorId(b.behaviorId);
+    setPromptTemplate(b.promptTemplate);
+    setOutputSchemaRef(b.outputSchemaRef);
+    setEnabled(b.enabled);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [selectedBehavior?.behaviorId, task?.taskId]);
 
@@ -164,6 +166,18 @@ export function TaskConfigEditor({
   return (
     <form className="panel config-editor" onSubmit={submitTask}>
       <ConfigEditorHeader
+        dirty={isDirty(
+          {
+            taskId,
+            name,
+            description,
+            behaviorId,
+            promptTemplate,
+            outputSchemaRef,
+            enabled,
+          },
+          taskFormValues(task, selectedBehavior?.behaviorId ?? null),
+        )}
         eyebrow="Task"
         saved={savedStatus === `task:${taskId.trim()}`}
         title={name || taskId || "New Task"}
@@ -363,4 +377,17 @@ function displayTaskListTitle(task: TaskView) {
   }
 
   return task.taskId;
+}
+
+/** View→form hydration, shared by the reset effect and dirty comparison. */
+function taskFormValues(task: TaskView | null, fallbackBehaviorId: string | null) {
+  return {
+    taskId: task?.taskId ?? "",
+    name: task?.name ?? task?.taskId ?? "",
+    description: task?.description ?? "",
+    behaviorId: task?.behaviorId ?? fallbackBehaviorId ?? "",
+    promptTemplate: task?.promptTemplate ?? "",
+    outputSchemaRef: task?.outputSchemaRef ?? "",
+    enabled: task?.enabled ?? true,
+  };
 }

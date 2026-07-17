@@ -7,6 +7,7 @@ import type {
   EventTriggerView,
   TaskView,
 } from "../../lib/types";
+import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
 import { ignoreHandledActionError, optionalString } from "./formUtils";
 
@@ -105,13 +106,14 @@ export function EventTriggerConfigEditor({
   const [concurrency, setConcurrency] = useState("serial");
 
   useEffect(() => {
-    setTriggerId(eventTrigger?.triggerId ?? "");
-    setTaskId(eventTrigger?.taskId ?? selectedTask?.taskId ?? "");
-    setSourceCollection(eventTrigger?.sourceCollection ?? "AgentRequest");
-    setEventKind("created");
-    setFilter(eventTrigger?.filter ?? "");
-    setEnabled(eventTrigger?.enabled ?? true);
-    setConcurrency(eventTrigger?.concurrency ?? "serial");
+    const b = eventTriggerFormValues(eventTrigger, selectedTask?.taskId ?? null);
+    setTriggerId(b.triggerId);
+    setTaskId(b.taskId);
+    setSourceCollection(b.sourceCollection);
+    setEventKind(b.eventKind);
+    setFilter(b.filter);
+    setEnabled(b.enabled);
+    setConcurrency(b.concurrency);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [eventTrigger?.triggerId, selectedTask?.taskId]);
 
@@ -137,6 +139,18 @@ export function EventTriggerConfigEditor({
   return (
     <form className="panel config-editor" onSubmit={submitEventTrigger}>
       <ConfigEditorHeader
+        dirty={isDirty(
+          {
+            triggerId,
+            taskId,
+            sourceCollection,
+            eventKind,
+            filter,
+            enabled,
+            concurrency,
+          },
+          eventTriggerFormValues(eventTrigger, selectedTask?.taskId ?? null),
+        )}
         eyebrow="Event Trigger"
         saved={savedStatus === `event-trigger:${triggerId.trim()}`}
         title={triggerId || "New Event Trigger"}
@@ -266,4 +280,20 @@ export function EventTriggerConfigEditor({
       </div>
     </form>
   );
+}
+
+/** View→form hydration, shared by the reset effect and dirty comparison. */
+function eventTriggerFormValues(
+  eventTrigger: EventTriggerView | null,
+  fallbackTaskId: string | null,
+) {
+  return {
+    triggerId: eventTrigger?.triggerId ?? "",
+    taskId: eventTrigger?.taskId ?? fallbackTaskId ?? "",
+    sourceCollection: eventTrigger?.sourceCollection ?? "AgentRequest",
+    eventKind: "created",
+    filter: eventTrigger?.filter ?? "",
+    enabled: eventTrigger?.enabled ?? true,
+    concurrency: eventTrigger?.concurrency ?? "serial",
+  };
 }

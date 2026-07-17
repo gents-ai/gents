@@ -6,6 +6,7 @@ import type {
   InferenceProfileSaveRequest,
   InferenceProfileView,
 } from "../../lib/types";
+import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
 import {
   ignoreHandledActionError,
@@ -107,27 +108,16 @@ export function InferenceProfileConfigEditor({
   const [deadlineSecs, setDeadlineSecs] = useState("");
 
   useEffect(() => {
-    setProfileId(profile?.profileId ?? "");
-    setDisplayName(profile?.displayName ?? profile?.profileId ?? "");
-    setContextWindow(
-      profile?.contextWindow != null ? String(profile.contextWindow) : "",
-    );
-    setMaxOutputTokens(
-      profile?.maxOutputTokens != null ? String(profile.maxOutputTokens) : "",
-    );
-    setMaxTurns(profile?.maxTurns != null ? String(profile.maxTurns) : "");
-    setTemperature(profile?.temperature != null ? String(profile.temperature) : "");
-    setStreamBatchMs(
-      profile?.streamBatchMs != null ? String(profile.streamBatchMs) : "",
-    );
-    setStreamLivenessSecs(
-      profile?.streamLivenessTimeoutSecs != null
-        ? String(profile.streamLivenessTimeoutSecs)
-        : "",
-    );
-    setDeadlineSecs(
-      profile?.deadlineDurationSecs != null ? String(profile.deadlineDurationSecs) : "",
-    );
+    const b = profileFormValues(profile);
+    setProfileId(b.profileId);
+    setDisplayName(b.displayName);
+    setContextWindow(b.contextWindow);
+    setMaxOutputTokens(b.maxOutputTokens);
+    setMaxTurns(b.maxTurns);
+    setTemperature(b.temperature);
+    setStreamBatchMs(b.streamBatchMs);
+    setStreamLivenessSecs(b.streamLivenessSecs);
+    setDeadlineSecs(b.deadlineSecs);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [profile?.profileId]);
 
@@ -163,6 +153,20 @@ export function InferenceProfileConfigEditor({
   return (
     <form className="panel config-editor" onSubmit={submitProfile}>
       <ConfigEditorHeader
+        dirty={isDirty(
+          {
+            profileId,
+            displayName,
+            contextWindow,
+            maxOutputTokens,
+            maxTurns,
+            temperature,
+            streamBatchMs,
+            streamLivenessSecs,
+            deadlineSecs,
+          },
+          profileFormValues(profile),
+        )}
         eyebrow="Profile"
         saved={savedStatus === `profile:${profileId.trim()}`}
         title={displayName || profileId || "New Profile"}
@@ -286,4 +290,24 @@ export function InferenceProfileConfigEditor({
       </div>
     </form>
   );
+}
+
+/** View→form hydration, shared by the reset effect and dirty comparison. */
+function profileFormValues(profile: InferenceProfileView | null) {
+  return {
+    profileId: profile?.profileId ?? "",
+    displayName: profile?.displayName ?? profile?.profileId ?? "",
+    contextWindow: profile?.contextWindow != null ? String(profile.contextWindow) : "",
+    maxOutputTokens:
+      profile?.maxOutputTokens != null ? String(profile.maxOutputTokens) : "",
+    maxTurns: profile?.maxTurns != null ? String(profile.maxTurns) : "",
+    temperature: profile?.temperature != null ? String(profile.temperature) : "",
+    streamBatchMs: profile?.streamBatchMs != null ? String(profile.streamBatchMs) : "",
+    streamLivenessSecs:
+      profile?.streamLivenessTimeoutSecs != null
+        ? String(profile.streamLivenessTimeoutSecs)
+        : "",
+    deadlineSecs:
+      profile?.deadlineDurationSecs != null ? String(profile.deadlineDurationSecs) : "",
+  };
 }
