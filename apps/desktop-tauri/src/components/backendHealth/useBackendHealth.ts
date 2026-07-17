@@ -7,6 +7,7 @@ export type BackendHealthState = {
   backends: BackendHealth[] | null;
   loading: boolean;
   error: string | null;
+  now: Date;
   refresh: () => Promise<void>;
 };
 
@@ -14,8 +15,12 @@ export function useBackendHealth(): BackendHealthState {
   const [backends, setBackends] = useState<BackendHealth[] | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(() => new Date());
 
   const refresh = useCallback(async (background = false) => {
+    // Advance relative-age labels even if the bridge returns the same rows or
+    // the refresh fails and the panel keeps displaying its last-good data.
+    setNow(new Date());
     if (!background) {
       setLoading(true);
     }
@@ -42,5 +47,5 @@ export function useBackendHealth(): BackendHealthState {
     return () => window.clearInterval(handle);
   }, [refresh]);
 
-  return { backends, loading, error, refresh };
+  return { backends, loading, error, now, refresh };
 }

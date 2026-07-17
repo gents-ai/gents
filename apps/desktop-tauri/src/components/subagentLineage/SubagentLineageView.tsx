@@ -77,6 +77,10 @@ export function SubagentLineageView({
           includeTerminal: true,
         });
         if (cancelled) return;
+        // A successful background retry must recover the visible panel after
+        // an initial transient failure; otherwise the stale error branch keeps
+        // winning even though a fresh tree has arrived.
+        setError(null);
         const keys = treeKeys(value);
         setTree(value);
         if (seenKeys === null) {

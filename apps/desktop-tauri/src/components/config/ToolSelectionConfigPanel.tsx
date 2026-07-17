@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import type {
@@ -192,10 +192,16 @@ export function ToolSelectionConfigEditor({
         .join("\n"),
     [toolServiceRegistries],
   );
+  // Service registrations are a derived input used only when a document is
+  // hydrated. Keep that input stable for the selected document: replicated
+  // service-list churn must not reset the rest of an in-progress form or move
+  // legacy delegates behind the operator's back.
+  const hydrationToolServiceIdKey = useRef(toolServiceIdKey);
 
   const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
+    hydrationToolServiceIdKey.current = toolServiceIdKey;
     const b = toolSelectionFormValues(toolSelection, toolServiceIdKey);
     setSelectionId(b.selectionId);
     setDisplayName(b.displayName);
@@ -221,7 +227,8 @@ export function ToolSelectionConfigEditor({
     setDefraQueryCollections(b.defraQueryCollections);
     setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
-  }, [toolSelection?.selectionId, toolServiceIdKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toolSelection?.selectionId]);
 
   function toggleAllowedMcpService(serviceId: string, checked: boolean) {
     const values = new Set(linesToArray(allowedMcpServiceIds));
@@ -312,7 +319,7 @@ export function ToolSelectionConfigEditor({
             crossDeploymentSpawnTimeoutSeconds,
             defraQueryCollections,
           },
-          toolSelectionFormValues(toolSelection, toolServiceIdKey),
+          toolSelectionFormValues(toolSelection, hydrationToolServiceIdKey.current),
         )}
         eyebrow="Tool Selection"
         saved={savedStatus === `tool:${selectionId.trim()}`}

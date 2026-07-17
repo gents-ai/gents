@@ -215,6 +215,12 @@ export function BehaviorConfigEditor({
     [profileId, behavior?.inferenceProfileId ?? ""],
     inferenceProfiles,
   );
+  // The select needs an available value to render, but a temporary profile
+  // registry dropout must not rewrite the document's actual reference when an
+  // operator saves an unrelated field. A deliberate selection updates
+  // profileId and therefore still wins here.
+  const submittedProfileId =
+    profileId || behavior?.inferenceProfileId || effectiveProfileId;
 
   const behaviorScopedSkills = skills.filter((skill) => skill.scope === "behavior");
   const principalScopedSkills = skills.filter((skill) => skill.scope === "principal");
@@ -288,7 +294,7 @@ export function BehaviorConfigEditor({
         displayName: nextId,
         systemPrompt,
         backendId: optionalString(backendId),
-        inferenceProfileId: effectiveProfileId,
+        inferenceProfileId: submittedProfileId,
         toolSelectionId: optionalString(toolSelectionId),
         compactionStrategy: optionalString(compactionStrategy),
         compactionThreshold: parseOptionalFloat(compactionThreshold),

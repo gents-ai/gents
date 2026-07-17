@@ -1,5 +1,3 @@
-import { useMemo } from "react";
-
 import { BackendHealthRow } from "./BackendHealthRow";
 import type { BackendDisplayState, BackendHealth } from "./types";
 import { useBackendHealth } from "./useBackendHealth";
@@ -97,9 +95,7 @@ export function BackendHealthPanel({
   const error = initialBackends ? null : live.error;
   const loading = initialBackends ? false : live.loading;
 
-  // Stable "now" for age display so the panel doesn't re-render every tick.
-  // Components that need wall-clock currency should re-mount or call refresh.
-  const now = useMemo(() => providedNow ?? new Date(), [providedNow]);
+  const now = providedNow ?? live.now;
 
   return (
     <section className="backend-health" aria-labelledby="backend-health-title">
