@@ -196,6 +196,9 @@ test.describe("desktop UI harness", () => {
       "Harness rejected behavior save",
     );
 
+    await page.getByTestId("error-banner-dismiss").click();
+    await expect(page.getByTestId("error-banner")).toHaveCount(0);
+
     await gotoHarness(page, "backend-health-error");
     await openChat(page);
     await page.getByRole("button", { name: /open operations drawer/i }).click();

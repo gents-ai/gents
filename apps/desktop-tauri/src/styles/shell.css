@@ -136,6 +136,53 @@
     color: var(--color-error);
     border-color: rgb(255 111 95 / 0.28);
     background: rgb(72 15 10 / 0.42);
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-4);
+  }
+
+  .error-banner-icon {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 2;
+  }
+
+  .error-banner-message {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .error-banner-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: none;
+  }
+
+  .error-banner-dismiss {
+    width: 28px;
+    height: 28px;
+    min-height: 28px;
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+    color: inherit;
+  }
+
+  .error-banner-dismiss svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-width: 2;
   }
 
   @media (max-width: 760px) {

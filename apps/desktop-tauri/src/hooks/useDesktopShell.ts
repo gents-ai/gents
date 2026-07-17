@@ -313,6 +313,10 @@ export function useDesktopShell() {
     setSnapshot,
   });
 
+  function onDismissError() {
+    setError(null);
+  }
+
   return {
     snapshot,
     session,
@@ -326,6 +330,7 @@ export function useDesktopShell() {
     repairingP2P,
     runningTask,
     error,
+    onDismissError,
     selectedAgentDid,
     selectedSessionId,
     selectedBehaviorId,
