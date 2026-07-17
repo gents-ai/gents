@@ -8,6 +8,7 @@ import type {
   ToolServiceTestRequest,
   ToolServiceTestResult,
 } from "../../lib/types";
+import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
 import {
   ignoreHandledActionError,
@@ -118,15 +119,16 @@ export function ToolServiceConfigEditor({
   const [testError, setTestError] = useState<string | null>(null);
 
   useEffect(() => {
-    setServiceId(toolService?.serviceId ?? "");
-    setDisplayName(toolService?.displayName ?? toolService?.serviceId ?? "");
-    setDescription(toolService?.description ?? "");
-    setHostname(toolService?.hostname ?? "");
-    setTailscaleIp(toolService?.tailscaleIp ?? "");
-    setLanIp(toolService?.lanIp ?? "");
-    setMcpPort(toolService?.mcpPort != null ? String(toolService.mcpPort) : "");
-    setMcpPath(toolService?.mcpPath ?? "/mcp");
-    setStatus(toolService?.status ?? "online");
+    const b = toolServiceFormValues(toolService);
+    setServiceId(b.serviceId);
+    setDisplayName(b.displayName);
+    setDescription(b.description);
+    setHostname(b.hostname);
+    setTailscaleIp(b.tailscaleIp);
+    setLanIp(b.lanIp);
+    setMcpPort(b.mcpPort);
+    setMcpPath(b.mcpPath);
+    setStatus(b.status);
     setTestResult(null);
     setTestError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
@@ -186,6 +188,20 @@ export function ToolServiceConfigEditor({
   return (
     <form className="panel config-editor" onSubmit={submitToolService}>
       <ConfigEditorHeader
+        dirty={isDirty(
+          {
+            serviceId,
+            displayName,
+            description,
+            hostname,
+            tailscaleIp,
+            lanIp,
+            mcpPort,
+            mcpPath,
+            status,
+          },
+          toolServiceFormValues(toolService),
+        )}
         eyebrow="HTTP MCP Service"
         saved={savedStatus === `tool-service:${serviceId.trim()}`}
         title={displayName || serviceId || "New Service"}
@@ -350,4 +366,19 @@ export function ToolServiceConfigEditor({
       ) : null}
     </form>
   );
+}
+
+/** View→form hydration, shared by the reset effect and dirty comparison. */
+function toolServiceFormValues(toolService: ToolServiceRegistryView | null) {
+  return {
+    serviceId: toolService?.serviceId ?? "",
+    displayName: toolService?.displayName ?? toolService?.serviceId ?? "",
+    description: toolService?.description ?? "",
+    hostname: toolService?.hostname ?? "",
+    tailscaleIp: toolService?.tailscaleIp ?? "",
+    lanIp: toolService?.lanIp ?? "",
+    mcpPort: toolService?.mcpPort != null ? String(toolService.mcpPort) : "",
+    mcpPath: toolService?.mcpPath ?? "/mcp",
+    status: toolService?.status ?? "online",
+  };
 }

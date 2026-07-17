@@ -1,7 +1,11 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { BackendConfigPanel, SkillConfigPanel } from "../src/components/config";
+import {
+  BackendConfigPanel,
+  ScheduleConfigPanel,
+  SkillConfigPanel,
+} from "../src/components/config";
 import type { DeploymentView } from "../src/lib/types";
 
 function makeDeployment(): DeploymentView {
@@ -94,6 +98,40 @@ describe("config dirty state", () => {
     expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
     fireEvent.change(screen.getByTestId("skill-name"), {
       target: { value: "Edited" },
+    });
+    expect(screen.getByTestId("unsaved-chip")).toBeInTheDocument();
+  });
+
+  it("marks the schedule editor dirty on edit", () => {
+    const dep = makeDeployment();
+    dep.tasks = [];
+    dep.schedules = [
+      {
+        scheduleId: "sched-1",
+        taskId: null,
+        intervalSecs: 60,
+        enabled: true,
+        concurrency: "serial",
+      },
+    ];
+    render(
+      <ScheduleConfigPanel
+        deployment={dep}
+        selectedScheduleId="sched-1"
+        selectedTaskId={null}
+        saving={false}
+        runningTask={false}
+        savedStatus={null}
+        onSelectSchedule={vi.fn()}
+        onCreateSchedule={vi.fn()}
+        onSavedStatusChange={vi.fn()}
+        onSaveScheduleConfig={vi.fn()}
+        onRunSchedule={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("schedule-interval-secs"), {
+      target: { value: "120" },
     });
     expect(screen.getByTestId("unsaved-chip")).toBeInTheDocument();
   });
