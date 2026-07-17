@@ -2,16 +2,28 @@ export type ConfigEditorHeaderProps = {
   eyebrow: string;
   saved: boolean;
   title: string;
+  dirty?: boolean;
 };
 
-export function ConfigEditorHeader({ eyebrow, saved, title }: ConfigEditorHeaderProps) {
+export function ConfigEditorHeader({
+  eyebrow,
+  saved,
+  title,
+  dirty = false,
+}: ConfigEditorHeaderProps) {
   return (
     <div className="panel-header">
       <div>
         <p className="eyebrow">{eyebrow}</p>
         <h3>{title}</h3>
       </div>
-      {saved ? <span className="chip chip-green">Saved</span> : null}
+      {dirty ? (
+        <span className="chip chip-amber" data-testid="unsaved-chip">
+          Unsaved changes
+        </span>
+      ) : saved ? (
+        <span className="chip chip-green">Saved</span>
+      ) : null}
     </div>
   );
 }

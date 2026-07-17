@@ -145,6 +145,12 @@
     border-color: rgb(var(--source-green-rgb) / 0.24);
   }
 
+  .chip-amber {
+    background: transparent;
+    color: var(--color-warning-soft);
+    border-color: var(--color-warning);
+  }
+
   .chip-button {
     --button-border: rgb(var(--source-green-rgb) / 0.2);
     --button-rail-width: 2px;

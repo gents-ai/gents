@@ -6,6 +6,7 @@ import type {
   DeploymentView,
   InferenceBackendView,
 } from "../../lib/types";
+import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
 import {
   ignoreHandledActionError,
@@ -101,27 +102,38 @@ export function BackendConfigEditor({
   const [enabled, setEnabled] = useState(true);
 
   useEffect(() => {
-    setBackendId(backend?.backendId ?? "");
-    setName(backend?.name ?? backend?.backendId ?? "");
-    setProviderKind(
-      backend?.providerKind === "OpenRouter" || backend?.providerKind === "openrouter"
-        ? "openrouter"
-        : "openai",
-    );
-    setEndpoint(backend?.endpoint ?? "");
-    setApiKey("");
-    setApiKeyEnvVar(backend?.apiKeyEnvVar ?? "");
-    setClearApiKey(false);
-    setModels((backend?.models ?? []).join("\n"));
-    setMaxConcurrent(
-      backend?.maxConcurrent != null ? String(backend.maxConcurrent) : "",
-    );
-    setMaxQueueDepth(
-      backend?.maxQueueDepth != null ? String(backend.maxQueueDepth) : "",
-    );
-    setEnabled(backend?.enabled ?? true);
+    const base = backendFormValues(backend);
+    setBackendId(base.backendId);
+    setName(base.name);
+    setProviderKind(base.providerKind);
+    setEndpoint(base.endpoint);
+    setApiKey(base.apiKey);
+    setApiKeyEnvVar(base.apiKeyEnvVar);
+    setClearApiKey(base.clearApiKey);
+    setModels(base.models);
+    setMaxConcurrent(base.maxConcurrent);
+    setMaxQueueDepth(base.maxQueueDepth);
+    setEnabled(base.enabled);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backend?.backendId]);
+
+  const dirty = isDirty(
+    {
+      backendId,
+      name,
+      providerKind,
+      endpoint,
+      apiKey,
+      apiKeyEnvVar,
+      clearApiKey,
+      models,
+      maxConcurrent,
+      maxQueueDepth,
+      enabled,
+    },
+    backendFormValues(backend),
+  );
 
   const maxConcurrentValid = isOptionalInt(maxConcurrent, { min: 1 });
   const maxQueueDepthValid = isOptionalInt(maxQueueDepth, { min: 1 });
@@ -155,6 +167,7 @@ export function BackendConfigEditor({
         eyebrow="Backend"
         saved={savedStatus === `backend:${backendId.trim()}`}
         title={name || backendId || "New Backend"}
+        dirty={dirty}
       />
       <div className="grid-2">
         <label className="field">
@@ -292,4 +305,24 @@ export function BackendConfigEditor({
       </div>
     </form>
   );
+}
+
+/** View→form hydration, shared by the reset effect and dirty comparison. */
+function backendFormValues(backend: InferenceBackendView | null) {
+  return {
+    backendId: backend?.backendId ?? "",
+    name: backend?.name ?? backend?.backendId ?? "",
+    providerKind:
+      backend?.providerKind === "OpenRouter" || backend?.providerKind === "openrouter"
+        ? "openrouter"
+        : "openai",
+    endpoint: backend?.endpoint ?? "",
+    apiKey: "",
+    apiKeyEnvVar: backend?.apiKeyEnvVar ?? "",
+    clearApiKey: false,
+    models: (backend?.models ?? []).join("\n"),
+    maxConcurrent: backend?.maxConcurrent != null ? String(backend.maxConcurrent) : "",
+    maxQueueDepth: backend?.maxQueueDepth != null ? String(backend.maxQueueDepth) : "",
+    enabled: backend?.enabled ?? true,
+  };
 }

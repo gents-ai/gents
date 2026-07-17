@@ -8,6 +8,7 @@ import type {
   SkillView,
 } from "../../lib/types";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
 import { ignoreHandledActionError, linesToArray, optionalString } from "./formUtils";
 
@@ -112,16 +113,23 @@ export function SkillConfigEditor({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   useEffect(() => {
-    setSkillId(skill?.skillId ?? "");
-    setName(skill?.name ?? skill?.skillId ?? "");
-    setScope(skill?.scope ?? "behavior");
-    setDescription(skill?.description ?? "");
-    setInstructions(skill?.instructions ?? "");
-    setToolRefs((skill?.toolRefs ?? []).join("\n"));
-    setDisplayName(skill?.displayName ?? "");
-    setEnabled(skill?.enabled ?? true);
+    const base = skillFormValues(skill);
+    setSkillId(base.skillId);
+    setName(base.name);
+    setScope(base.scope);
+    setDescription(base.description);
+    setInstructions(base.instructions);
+    setToolRefs(base.toolRefs);
+    setDisplayName(base.displayName);
+    setEnabled(base.enabled);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [skill?.skillId]);
+
+  const dirty = isDirty(
+    { skillId, name, scope, description, instructions, toolRefs, displayName, enabled },
+    skillFormValues(skill),
+  );
 
   async function submitSkill(event: FormEvent) {
     event.preventDefault();
@@ -172,6 +180,7 @@ export function SkillConfigEditor({
         eyebrow="Skill"
         saved={savedStatus === `skill:${skillId.trim()}`}
         title={name || skillId || "New Skill"}
+        dirty={dirty}
       />
       <div className="grid-2">
         <label className="field">
@@ -290,6 +299,20 @@ export function SkillConfigEditor({
       </div>
     </form>
   );
+}
+
+/** View→form hydration, shared by the reset effect and dirty comparison. */
+function skillFormValues(skill: SkillView | null) {
+  return {
+    skillId: skill?.skillId ?? "",
+    name: skill?.name ?? skill?.skillId ?? "",
+    scope: skill?.scope ?? "behavior",
+    description: skill?.description ?? "",
+    instructions: skill?.instructions ?? "",
+    toolRefs: (skill?.toolRefs ?? []).join("\n"),
+    displayName: skill?.displayName ?? "",
+    enabled: skill?.enabled ?? true,
+  };
 }
 
 function displaySkillListTitle(skill: SkillView) {
