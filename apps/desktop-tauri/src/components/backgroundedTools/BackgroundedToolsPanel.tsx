@@ -22,9 +22,13 @@ type SortKey =
   | "processLabel";
 type SortDir = "ascending" | "descending";
 
-// 8-slot ceiling per the operator-surfaces spec §"Panel 1". Hardcoded
-// until the bridge exposes a per-agent backgrounded-tool capacity.
-const MAX_BACKGROUND_SLOTS = 8;
+const STATE_LABELS: Record<string, string> = {
+  running: "Running",
+  background: "Background",
+  stuck: "Stuck",
+  cancelPending: "CancelPending",
+  "deadline+": "Past deadline",
+};
 
 function shortRequestId(requestId: string): string {
   return requestId.length > 14 ? `${requestId.slice(0, 14)}…` : requestId;
@@ -133,6 +137,28 @@ export function BackgroundedToolsPanel({
     [projected],
   );
 
+  // Chips are derived from the rows actually present (plus any engaged
+  // filter, so clearing stays possible) — an offered filter always matches.
+  const stateOptions = useMemo(
+    () =>
+      Array.from(
+        new Set([...projected.map((r) => r.derivedState), ...stateFilters]),
+      ).sort(),
+    [projected, stateFilters],
+  );
+  const awaitOptions = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...projected
+            .map((r) => r.awaitMode)
+            .filter((mode): mode is string => mode != null),
+          ...awaitFilters,
+        ]),
+      ).sort(),
+    [projected, awaitFilters],
+  );
+
   const onSort = useCallback(
     (key: SortKey) => {
       if (sortKey === key) {
@@ -159,8 +185,9 @@ export function BackgroundedToolsPanel({
       return next;
     });
 
-  // Error state
-  if (error) {
+  // Full error state only when there is nothing to show — a single failed
+  // poll must not replace a live table with an error screen.
+  if (error && !snapshot) {
     return (
       <section className="background-tools-panel" aria-label="Background tools">
         <div className="empty-state">
@@ -177,6 +204,11 @@ export function BackgroundedToolsPanel({
 
   return (
     <section className="background-tools-panel" aria-label="Background tools">
+      {error ? (
+        <div className="muted small" data-testid="ops-stale-note" role="status">
+          Live updates interrupted — showing the last snapshot. ({error})
+        </div>
+      ) : null}
       {diagnostics.length > 0 ? (
         <div className="stuck-diagnostics" data-testid="stuck-diagnostics" role="alert">
           {diagnostics.map((diag, index) => (
@@ -212,44 +244,38 @@ export function BackgroundedToolsPanel({
           </button>
         ))}
       </div>
-      <div className="chip-row" role="group" aria-label="Filter by state">
-        <span className="chip-label">State</span>
-        {(
-          [
-            "running",
-            "background",
-            "stuck",
-            "cancelPending",
-            "deadline+",
-          ] as DerivedState[]
-        ).map((s) => (
-          <button
-            key={s}
-            type="button"
-            className={`chip ${stateFilters.has(s) ? "is-active" : ""}`}
-            aria-pressed={stateFilters.has(s)}
-            onClick={() => toggleStateFilter(s)}
-          >
-            {s === "deadline+"
-              ? "Past deadline"
-              : s.charAt(0).toUpperCase() + s.slice(1)}
-          </button>
-        ))}
-      </div>
-      <div className="chip-row" role="group" aria-label="Filter by await mode">
-        <span className="chip-label">Await</span>
-        {["background", "bridge", "detach"].map((a) => (
-          <button
-            key={a}
-            type="button"
-            className={`chip ${awaitFilters.has(a) ? "is-active" : ""}`}
-            aria-pressed={awaitFilters.has(a)}
-            onClick={() => toggleAwaitFilter(a)}
-          >
-            {a}
-          </button>
-        ))}
-      </div>
+      {stateOptions.length > 0 ? (
+        <div className="chip-row" role="group" aria-label="Filter by state">
+          <span className="chip-label">State</span>
+          {stateOptions.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={`chip ${stateFilters.has(s) ? "is-active" : ""}`}
+              aria-pressed={stateFilters.has(s)}
+              onClick={() => toggleStateFilter(s)}
+            >
+              {STATE_LABELS[s] ?? s}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {awaitOptions.length > 0 ? (
+        <div className="chip-row" role="group" aria-label="Filter by await mode">
+          <span className="chip-label">Await</span>
+          {awaitOptions.map((a) => (
+            <button
+              key={a}
+              type="button"
+              className={`chip ${awaitFilters.has(a) ? "is-active" : ""}`}
+              aria-pressed={awaitFilters.has(a)}
+              onClick={() => toggleAwaitFilter(a)}
+            >
+              {a}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="chip-row">
         <span className="chip-label">Threshold</span>
         <label className="toggle">
@@ -263,9 +289,11 @@ export function BackgroundedToolsPanel({
       </div>
 
       <div className="panel-summary">
-        <div className="live-count">
-          <em>{filtered.length}</em> live{" "}
-          <span className="root">/ {MAX_BACKGROUND_SLOTS} max</span>
+        <div className="live-count" data-testid="ops-live-count">
+          <em>{projected.length}</em> backgrounded
+          {filtered.length !== projected.length ? (
+            <span className="root"> · {filtered.length} shown</span>
+          ) : null}
         </div>
       </div>
 
