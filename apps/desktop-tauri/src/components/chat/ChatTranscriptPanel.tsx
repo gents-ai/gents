@@ -57,18 +57,32 @@ export function ChatTranscriptPanel({
     setAutoFollowTranscript(true);
   }, [selectedSessionId]);
 
-  // The user's own send always re-engages following — matching every chat
-  // app's behavior — even if they had scrolled up to read history.
   const lastItem = session?.timelineItems[session.timelineItems.length - 1];
-  const pendingSendKey =
-    lastItem?.kind === "pendingUserTurn"
-      ? `${session?.timelineItems.length}:${lastItem.content}`
-      : null;
+  // A send may be observed as pending or already materialized. Prefer the
+  // request identity so that pending -> materialized does not look like a
+  // second send; fall back to the user row identity for partial snapshots.
+  const latestUserTurn = useMemo(() => {
+    const items = session?.timelineItems ?? [];
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index];
+      if (item.kind === "userMessage" || item.kind === "pendingUserTurn") {
+        return item;
+      }
+    }
+    return null;
+  }, [session?.timelineItems]);
+  const sendIdentity = session?.latestRequestId
+    ? `request:${session.latestRequestId}`
+    : latestUserTurn?.kind === "pendingUserTurn"
+      ? `request:${latestUserTurn.requestId}`
+      : latestUserTurn
+        ? `message:${latestUserTurn.itemKey}`
+        : null;
   useEffect(() => {
-    if (pendingSendKey) {
+    if (sendIdentity) {
       setAutoFollowTranscript(true);
     }
-  }, [pendingSendKey]);
+  }, [sendIdentity]);
 
   useEffect(() => {
     if (!autoFollowTranscript) {

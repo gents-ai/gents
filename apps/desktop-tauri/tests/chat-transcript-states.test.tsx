@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatTranscriptPanel } from "../src/components/chat";
@@ -102,5 +102,70 @@ describe("ChatTranscriptPanel states", () => {
       block: "end",
       behavior: "instant",
     });
+  });
+
+  it("re-engages follow when an identical retry is first observed as a materialized user message", async () => {
+    const scrollSpy = vi
+      .spyOn(HTMLElement.prototype, "scrollIntoView")
+      .mockImplementation(() => {});
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0);
+      return 0;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+
+    const { rerender } = render(
+      <ChatTranscriptPanel
+        selectedSessionId="s1"
+        session={makeSession({
+          turnState: "failed",
+          latestRequestId: "req_1",
+          timelineItems: [
+            {
+              kind: "userMessage",
+              itemKey: "user_1",
+              content: "do the thing",
+            },
+          ],
+        })}
+      />,
+    );
+
+    const panel = screen.getByTestId("transcript-panel");
+    Object.defineProperties(panel, {
+      scrollHeight: { configurable: true, value: 1000 },
+      scrollTop: { configurable: true, value: 100 },
+      clientHeight: { configurable: true, value: 400 },
+    });
+    fireEvent.scroll(panel);
+    scrollSpy.mockClear();
+
+    rerender(
+      <ChatTranscriptPanel
+        selectedSessionId="s1"
+        session={makeSession({
+          latestRequestId: "req_2",
+          timelineItems: [
+            {
+              kind: "userMessage",
+              itemKey: "user_1",
+              content: "do the thing",
+            },
+            {
+              kind: "userMessage",
+              itemKey: "user_2",
+              content: "do the thing",
+            },
+          ],
+        })}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(scrollSpy).toHaveBeenCalledWith({
+        block: "end",
+        behavior: "instant",
+      }),
+    );
   });
 });
