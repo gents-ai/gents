@@ -19,7 +19,7 @@ test.describe("desktop operations drawer rich states", () => {
       page.getByRole("gridcell", { name: "cargo test", exact: true }),
     ).toBeVisible();
     await expect(page.getByText("query_logs")).toBeVisible();
-    await expect(page.getByText("2 live")).toBeVisible();
+    await expect(page.getByTestId("ops-live-count")).toContainText("2 backgrounded");
 
     await page.getByRole("button", { name: "Stuck" }).click();
     await expect(
