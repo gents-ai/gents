@@ -13,6 +13,8 @@ import {
   deleteTaskConfig,
   deleteScheduleConfig,
   deleteEventTriggerConfig,
+  deleteBackendConfig,
+  deleteInferenceProfileConfig,
 } from "../lib/desktop-api";
 import type {
   AgentConfigSaveRequest,
@@ -29,6 +31,8 @@ import type {
   TaskDeleteRequest,
   ScheduleDeleteRequest,
   EventTriggerDeleteRequest,
+  BackendDeleteRequest,
+  InferenceProfileDeleteRequest,
 } from "../lib/types";
 
 type ConfigActionParams = {
@@ -161,6 +165,38 @@ export function createDesktopShellConfigActions({
     }
   }
 
+  async function onDeleteBackendConfig(request: BackendDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteBackendConfig(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteInferenceProfileConfig(
+    request: InferenceProfileDeleteRequest,
+  ) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteInferenceProfileConfig(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
   async function onSaveBackendConfig(request: BackendSaveRequest) {
     setSavingConfig(true);
     setError(null);
@@ -242,6 +278,8 @@ export function createDesktopShellConfigActions({
     onDeleteTaskConfig,
     onDeleteScheduleConfig,
     onDeleteEventTriggerConfig,
+    onDeleteBackendConfig,
+    onDeleteInferenceProfileConfig,
     onSaveInferenceProfileConfig,
     onSaveSkillConfig,
     onSaveToolSelectionConfig,

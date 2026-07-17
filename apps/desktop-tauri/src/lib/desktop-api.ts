@@ -25,6 +25,8 @@ import type {
   TaskDeleteRequest,
   ScheduleDeleteRequest,
   EventTriggerDeleteRequest,
+  BackendDeleteRequest,
+  InferenceProfileDeleteRequest,
   SkillSaveRequest,
   SubagentTreeView,
   TaskRunRequest,
@@ -137,6 +139,12 @@ export type DesktopApiAdapter = {
   deleteEventTriggerConfig: (
     request: EventTriggerDeleteRequest,
   ) => Promise<DesktopClientSnapshot>;
+  deleteBackendConfig: (
+    request: BackendDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  deleteInferenceProfileConfig: (
+    request: InferenceProfileDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
   saveBackendConfig: (request: BackendSaveRequest) => Promise<DesktopClientSnapshot>;
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
@@ -243,6 +251,14 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   deleteEventTriggerConfig(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_event_trigger_delete", {
+      request,
+    });
+  },
+  deleteBackendConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_backend_delete", { request });
+  },
+  deleteInferenceProfileConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_delete", {
       request,
     });
   },
@@ -429,6 +445,16 @@ export async function deleteScheduleConfig(request: ScheduleDeleteRequest) {
 
 export async function deleteEventTriggerConfig(request: EventTriggerDeleteRequest) {
   return desktopApiAdapter().deleteEventTriggerConfig(request);
+}
+
+export async function deleteBackendConfig(request: BackendDeleteRequest) {
+  return desktopApiAdapter().deleteBackendConfig(request);
+}
+
+export async function deleteInferenceProfileConfig(
+  request: InferenceProfileDeleteRequest,
+) {
+  return desktopApiAdapter().deleteInferenceProfileConfig(request);
 }
 
 export async function saveBackendConfig(request: BackendSaveRequest) {

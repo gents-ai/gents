@@ -43,6 +43,8 @@ export type {
   TaskDeleteRequest,
   ScheduleDeleteRequest,
   EventTriggerDeleteRequest,
+  BackendDeleteRequest,
+  InferenceProfileDeleteRequest,
   SkillSaveRequest,
   TaskRunRequest,
   TaskRunResult,

@@ -597,6 +597,42 @@ export function createDesktopUiHarness(
       notify("config");
       return snapshot();
     },
+    async deleteBackendConfig(request) {
+      const referencing = deployment.behaviors
+        .filter((behavior) => behavior.backendId === request.backendId)
+        .map((behavior) => behavior.behaviorId);
+      if (referencing.length) {
+        throw new Error(
+          `backend "${request.backendId}" is referenced by behavior(s) ${referencing.join(", ")}; point them elsewhere first`,
+        );
+      }
+      deployment = {
+        ...deployment,
+        inferenceBackends: deployment.inferenceBackends.filter(
+          (backend) => backend.backendId !== request.backendId,
+        ),
+      };
+      notify("config");
+      return snapshot();
+    },
+    async deleteInferenceProfileConfig(request) {
+      const referencing = deployment.behaviors
+        .filter((behavior) => behavior.inferenceProfileId === request.profileId)
+        .map((behavior) => behavior.behaviorId);
+      if (referencing.length) {
+        throw new Error(
+          `profile "${request.profileId}" is referenced by behavior(s) ${referencing.join(", ")}; point them elsewhere first`,
+        );
+      }
+      deployment = {
+        ...deployment,
+        inferenceProfiles: deployment.inferenceProfiles.filter(
+          (profile) => profile.profileId !== request.profileId,
+        ),
+      };
+      notify("config");
+      return snapshot();
+    },
     async deleteSkillConfig(request) {
       const skillId = request.skillId.trim();
       deployment = {

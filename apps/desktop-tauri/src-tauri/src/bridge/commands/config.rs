@@ -6,9 +6,10 @@ use defra_agent_protocol::row::{
 };
 
 use super::super::types::{
-    AgentConfigSaveRequest, BackendSaveRequest, BehaviorSaveRequest, EventTriggerDeleteRequest,
-    InferenceProfileSaveRequest, ScheduleDeleteRequest, SkillDeleteRequest, SkillSaveRequest,
-    TaskDeleteRequest, ToolSelectionSaveRequest,
+    AgentConfigSaveRequest, BackendDeleteRequest, BackendSaveRequest, BehaviorSaveRequest,
+    EventTriggerDeleteRequest, InferenceProfileDeleteRequest, InferenceProfileSaveRequest,
+    ScheduleDeleteRequest, SkillDeleteRequest, SkillSaveRequest, TaskDeleteRequest,
+    ToolSelectionSaveRequest,
 };
 use super::util::{require_trimmed, sanitize_id_list, trim_optional};
 
@@ -188,6 +189,24 @@ pub(crate) async fn delete_event_trigger_config(
 ) -> Result<()> {
     let trigger_id = require_trimmed("trigger_id", request.trigger_id)?;
     core.delete_event_trigger(&trigger_id).await
+}
+
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) async fn delete_backend_config(
+    core: &ClientCore,
+    request: BackendDeleteRequest,
+) -> Result<()> {
+    let backend_id = require_trimmed("backend_id", request.backend_id)?;
+    core.delete_inference_backend(&backend_id).await
+}
+
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) async fn delete_inference_profile_config(
+    core: &ClientCore,
+    request: InferenceProfileDeleteRequest,
+) -> Result<()> {
+    let profile_id = require_trimmed("profile_id", request.profile_id)?;
+    core.delete_inference_profile(&profile_id).await
 }
 
 pub(crate) async fn save_backend_config(

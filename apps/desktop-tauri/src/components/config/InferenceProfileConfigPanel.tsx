@@ -3,9 +3,11 @@ import type { FormEvent } from "react";
 
 import type {
   DeploymentView,
+  InferenceProfileDeleteRequest,
   InferenceProfileSaveRequest,
   InferenceProfileView,
 } from "../../lib/types";
+import { ConfirmDialog } from "../ConfirmDialog";
 import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import {
@@ -26,6 +28,10 @@ export type InferenceProfileConfigPanelProps = {
   onSaveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<unknown>;
+  onDeleteInferenceProfileConfig: (
+    request: InferenceProfileDeleteRequest,
+  ) => Promise<unknown>;
+  onDeletedProfile: () => void;
 };
 
 export function InferenceProfileConfigPanel({
@@ -37,6 +43,8 @@ export function InferenceProfileConfigPanel({
   onCreateProfile,
   onSavedStatusChange,
   onSaveInferenceProfileConfig,
+  onDeleteInferenceProfileConfig,
+  onDeletedProfile,
 }: InferenceProfileConfigPanelProps) {
   const selectedProfile = useMemo(
     () =>
@@ -74,6 +82,10 @@ export function InferenceProfileConfigPanel({
           onSavedStatusChange(`profile:${profileId}`);
         }}
         onSaveInferenceProfileConfig={onSaveInferenceProfileConfig}
+        onDeleteInferenceProfileConfig={onDeleteInferenceProfileConfig}
+        onDeleted={() => {
+          onDeletedProfile();
+        }}
       />
     </section>
   );
@@ -87,6 +99,10 @@ export type InferenceProfileConfigEditorProps = {
   onSaveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<unknown>;
+  onDeleteInferenceProfileConfig: (
+    request: InferenceProfileDeleteRequest,
+  ) => Promise<unknown>;
+  onDeleted: () => void;
 };
 
 export function InferenceProfileConfigEditor({
@@ -95,7 +111,23 @@ export function InferenceProfileConfigEditor({
   saving,
   onSaved,
   onSaveInferenceProfileConfig,
+  onDeleteInferenceProfileConfig,
+  onDeleted,
 }: InferenceProfileConfigEditorProps) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  async function deleteInferenceProfile() {
+    setConfirmingDelete(false);
+    if (!profile) {
+      return;
+    }
+    try {
+      await onDeleteInferenceProfileConfig({ profileId: profile.profileId });
+      onDeleted();
+    } catch {
+      // Surfaced by the shell error banner; the editor stays put.
+    }
+  }
   const [profileId, setProfileId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [contextWindow, setContextWindow] = useState("");
@@ -279,6 +311,28 @@ export function InferenceProfileConfigEditor({
         </label>
       </div>
       <div className="config-actions">
+        {profile ? (
+          <button
+            className="ghost-button danger-button"
+            data-testid="profile-delete"
+            disabled={saving}
+            onClick={() => setConfirmingDelete(true)}
+            type="button"
+          >
+            Delete Profile
+          </button>
+        ) : null}
+        <ConfirmDialog
+          open={confirmingDelete}
+          title="Delete profile"
+          message={`Delete profile "${profile?.profileId ?? ""}"? Behaviors still pointing at it will block the delete.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            void deleteInferenceProfile();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
         <button
           className="primary-button"
           data-testid="profile-save"

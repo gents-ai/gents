@@ -56,6 +56,8 @@ pub fn run() {
             tauri_commands::config::desktop_task_delete,
             tauri_commands::config::desktop_schedule_delete,
             tauri_commands::config::desktop_event_trigger_delete,
+            tauri_commands::config::desktop_backend_delete,
+            tauri_commands::config::desktop_inference_profile_delete,
             tauri_commands::config::desktop_backend_save,
             tauri_commands::config::desktop_inference_profile_save,
             tauri_commands::config::desktop_tool_selection_save,

@@ -148,6 +148,14 @@ export type EventTriggerDeleteRequest = {
   triggerId: string;
 };
 
+export type BackendDeleteRequest = {
+  backendId: string;
+};
+
+export type InferenceProfileDeleteRequest = {
+  profileId: string;
+};
+
 export type TaskSaveRequest = {
   taskId: string;
   name: string;
