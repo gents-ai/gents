@@ -1,6 +1,9 @@
 import { useCallback, useContext, useMemo, useState } from "react";
 
-import type { DesktopOperationsSnapshotRequest } from "../../lib/types/operations";
+import type {
+  DesktopOperationsSnapshotRequest,
+  StuckWorkDiagnosticView,
+} from "../../lib/types/operations";
 import { OperationsRailContext } from "../operations/operationsRailContext";
 import {
   correlateProcess,
@@ -22,6 +25,27 @@ type SortDir = "ascending" | "descending";
 // 8-slot ceiling per the operator-surfaces spec §"Panel 1". Hardcoded
 // until the bridge exposes a per-agent backgrounded-tool capacity.
 const MAX_BACKGROUND_SLOTS = 8;
+
+function shortRequestId(requestId: string): string {
+  return requestId.length > 14 ? `${requestId.slice(0, 14)}…` : requestId;
+}
+
+/** The bridge's diagnosis, in operator language. */
+function diagnosticSentence(diag: StuckWorkDiagnosticView): string {
+  const tool = diag.toolName ?? "a tool";
+  switch (diag.reason) {
+    case "expiredProcessing":
+      return `Request ${shortRequestId(diag.requestId)} ran past its deadline`;
+    case "expiredTool":
+      return `${tool} on ${shortRequestId(diag.requestId)} ran past its deadline`;
+    case "stuckTool":
+      return `${tool} on ${shortRequestId(diag.requestId)} has stopped making progress`;
+    case "pendingRemoteCancelAck":
+      return `Waiting on a remote node to acknowledge cancelling ${shortRequestId(diag.requestId)}`;
+    default:
+      return `${shortRequestId(diag.requestId)} needs attention`;
+  }
+}
 
 export type BackgroundedToolsPanelProps = {
   rootRequestId?: string | null;
@@ -149,8 +173,23 @@ export function BackgroundedToolsPanel({
     );
   }
 
+  const diagnostics = snapshot?.stuckDiagnostics ?? [];
+
   return (
     <section className="background-tools-panel" aria-label="Background tools">
+      {diagnostics.length > 0 ? (
+        <div className="stuck-diagnostics" data-testid="stuck-diagnostics" role="alert">
+          {diagnostics.map((diag, index) => (
+            <div
+              className={`stuck-diagnostic is-${diag.severity}`}
+              key={`${diag.requestId}-${diag.toolCallId ?? index}`}
+            >
+              <span aria-hidden="true" className="stuck-diagnostic-dot" />
+              {diagnosticSentence(diag)}
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="chip-row" role="group" aria-label="Filter by parent">
         <span className="chip-label">Parent</span>
         <button

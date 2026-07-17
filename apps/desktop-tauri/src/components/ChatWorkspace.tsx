@@ -13,7 +13,10 @@ import { McpHealthPanel } from "./mcpHealth";
 import { OperationsRail, OperationsRailProvider } from "./operations";
 import type { OperationsRailTabDescriptor } from "./operations";
 import { BackgroundedToolsPanel } from "./backgroundedTools";
+import { useOperationsSnapshot } from "./backgroundedTools/useOperationsSnapshot";
 import { SubagentLineageView } from "./subagentLineage";
+
+const OPS_SNAPSHOT_REQUEST = { rootRequestId: null };
 
 export type ChatWorkspaceProps = {
   selectedDeployment: DeploymentView | null;
@@ -143,6 +146,11 @@ export function ActiveChatWorkspace({
     [selectedDeployment.agentDid],
   );
 
+  // Workspace-level poll so the closed drawer can still raise attention —
+  // the panels only poll while mounted inside the open drawer.
+  const { snapshot: opsSnapshot } = useOperationsSnapshot(OPS_SNAPSHOT_REQUEST);
+  const stuckCount = opsSnapshot?.stuckDiagnostics.length ?? 0;
+
   const operationsRailTabs = useMemo<OperationsRailTabDescriptor[]>(() => {
     const rootRequestId = lineageRootOverride ?? session?.latestRequestId ?? null;
     const lineageAgentDid = selectedDeployment.agentDid;
@@ -150,6 +158,7 @@ export function ActiveChatWorkspace({
       {
         id: "background-tools",
         label: "Background",
+        badge: stuckCount > 0 ? String(stuckCount) : null,
         render: () => (
           <BackgroundedToolsPanel
             onOpenLineage={setLineageRootOverride}
@@ -185,6 +194,7 @@ export function ActiveChatWorkspace({
     selectedDeployment.agentDid,
     lineageRootOverride,
     beginInterrupt,
+    stuckCount,
   ]);
 
   function onInterruptClick() {
@@ -229,7 +239,11 @@ export function ActiveChatWorkspace({
             skills={selectedDeployment.skills ?? []}
           />
         </div>
-        <OperationsRail open={operationsOpen} onOpenChange={setOperationsOpen} />
+        <OperationsRail
+          open={operationsOpen}
+          onOpenChange={setOperationsOpen}
+          attentionCount={stuckCount}
+        />
         {interruptResultBanner ? (
           <div
             className={`chat-toast${

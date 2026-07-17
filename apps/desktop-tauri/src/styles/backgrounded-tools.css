@@ -16,6 +16,39 @@
 
   /* ── Chip row / filter row ─────────────────────────────────────────────── */
 
+  .background-tools-panel .stuck-diagnostics {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--color-warning);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-deep);
+  }
+
+  .background-tools-panel .stuck-diagnostic {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    color: var(--color-text-soft);
+    font-size: var(--text-sm);
+  }
+
+  .background-tools-panel .stuck-diagnostic-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-pill);
+    background: var(--color-warning);
+    animation: thinking-pulse var(--motion-pulse) ease-in-out infinite;
+  }
+
+  .background-tools-panel .stuck-diagnostic.is-critical .stuck-diagnostic-dot {
+    background: var(--color-error-strong);
+  }
+
+  .background-tools-panel .stuck-diagnostic.is-critical {
+    color: var(--color-error);
+  }
+
   .background-tools-panel .chip-row {
     display: flex;
     flex-wrap: wrap;
