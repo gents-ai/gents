@@ -17,6 +17,10 @@ export type SidebarProps = {
   onOpenCode?: (agentDid: string) => void;
   onSelectBehavior: (behaviorId: string) => void;
   onSelectSession: (sessionId: string) => void;
+  onRenameConversationTitle?: (
+    sessionId: string,
+    title: string,
+  ) => void | Promise<void>;
   onStartNewConversation: (behaviorId: string) => void;
 };
 
@@ -32,6 +36,7 @@ export function Sidebar({
   onOpenCode,
   onSelectBehavior,
   onSelectSession,
+  onRenameConversationTitle,
   onStartNewConversation,
 }: SidebarProps) {
   return (
@@ -58,6 +63,7 @@ export function Sidebar({
         selectedAgentDid={selectedAgentDid}
         selectedSessionId={selectedSessionId}
         onSelectSession={onSelectSession}
+        onRenameConversationTitle={onRenameConversationTitle}
       />
     </aside>
   );
