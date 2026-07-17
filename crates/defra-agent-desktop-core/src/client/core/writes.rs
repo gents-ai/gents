@@ -8,6 +8,7 @@ use defra_agent_protocol::row::{
     AgentBehaviorRow, AgentPrincipalRow, AgentRequestRow, EventTriggerRow, InferenceBackendRow,
     InferenceProfileRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
+use defra_p2p_adapter::P2POperations as P2POps;
 
 use super::super::mutations::{
     self, CreatedConversation, PeerMutationResult, SubmitRequestOptions, SubmittedRequest,
@@ -22,6 +23,7 @@ use super::bootstrap::{
     normalize_required, p2p_pairing_enabled_for_graphql, sync_branchable_collections_with_retry,
     BRANCHABLE_PAIR_SYNC_ENV, REMOTE_P2P_PAIRING_ENV,
 };
+use super::p2p_ops::{p2p_disconnect_peer, p2p_remove_replicator};
 use super::{ClientCore, ClientPeerStatus, PEER_ADD_OPERATION_TIMEOUT};
 
 const REMOTE_REQUEST_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -1335,36 +1337,99 @@ impl ClientCore {
 
     pub async fn remove_peer(&self, peer_id: &str) -> Result<PeerMutationResult> {
         let peer_id = normalize_required("peer_id", peer_id)?;
-        let removed = {
-            let mut peer_directory = self.peer_directory.write().await;
-            let is_local_runtime = peer_directory.records().iter().any(|record| {
-                record.peer_id == peer_id && record.source.as_deref() == Some("local-standard")
-            });
-            if is_local_runtime {
+        let record = {
+            let peer_directory = self.peer_directory.read().await;
+            let record = peer_directory
+                .records()
+                .iter()
+                .find(|record| record.peer_id == peer_id)
+                .cloned()
+                .with_context(|| format!("peer {peer_id} not found"))?;
+            if record.source.as_deref() == Some("local-standard") {
                 // The local runtime is this machine, not a saved peer.
                 anyhow::bail!("the local runtime deployment cannot be removed");
             }
-            peer_directory.remove(peer_id).await?
-        }
-        .with_context(|| format!("peer {peer_id} not found"))?;
+            record
+        };
 
-        let previous_status = {
+        if let Err(error) = cleanup_saved_peer_p2p(&self.p2p, &record).await {
+            tracing::warn!(
+                target: "defra_agent_desktop_core::peer",
+                peer_id = %record.peer_id,
+                label = %record.label,
+                error = %error,
+                "desktop deployment P2P cleanup failed; deployment retained"
+            );
+            return Err(self.record_mutation_error("remove deployment", error));
+        }
+
+        let removed_result = {
+            let mut peer_directory = self.peer_directory.write().await;
+            let remove_result = peer_directory
+                .remove(peer_id)
+                .await
+                .with_context(|| {
+                    format!(
+                        "P2P cleanup succeeded but removing peer {peer_id} from saved deployments failed"
+                    )
+                })
+                .and_then(|removed| {
+                    removed.with_context(|| format!("peer {peer_id} not found after P2P cleanup"))
+                });
+            match remove_result {
+                Ok(removed) => Ok(removed),
+                Err(remove_error) => match peer_directory.upsert(record.clone()).await {
+                    Ok(()) => Err(anyhow::anyhow!(
+                        "{remove_error}; saved deployment restored and retry is safe"
+                    )),
+                    Err(restore_error) => Err(anyhow::anyhow!(
+                        "{remove_error}; restoring saved deployment also failed: {restore_error}"
+                    )),
+                },
+            }
+        };
+        let removed = match removed_result {
+            Ok(removed) => removed,
+            Err(error) => return Err(self.record_mutation_error("remove deployment", error)),
+        };
+
+        if let Err(desired_error) =
+            delete_peer_pairing_desired(self.node.as_ref(), &record.peer_id).await
+        {
+            let restore_result = {
+                let mut peer_directory = self.peer_directory.write().await;
+                peer_directory.upsert(record.clone()).await
+            };
+            let error = match restore_result {
+                Ok(()) => anyhow::anyhow!(
+                    "P2P teardown succeeded but pairing desired-state deletion failed: {desired_error}; saved deployment restored and retry is safe"
+                ),
+                Err(restore_error) => anyhow::anyhow!(
+                    "P2P teardown succeeded but pairing desired-state deletion failed: {desired_error}; restoring saved deployment also failed: {restore_error}"
+                ),
+            };
+            tracing::warn!(
+                target: "defra_agent_desktop_core::peer",
+                peer_id = %record.peer_id,
+                label = %record.label,
+                error = %error,
+                "desktop pairing desired-state deletion failed after P2P cleanup"
+            );
+            return Err(self.record_mutation_error("remove deployment", error));
+        }
+
+        {
             let mut statuses = self
                 .peer_statuses
                 .write()
                 .expect("peer status lock poisoned");
-            statuses
+            if let Some(index) = statuses
                 .iter()
                 .position(|status| status.peer_id == removed.peer_id)
-                .map(|index| statuses.remove(index))
-        };
-
-        let warning = previous_status
-            .filter(|status| status.dial_succeeded)
-            .map(|_| {
-                "saved deployment removed; any active transport connection remains until restart"
-                    .to_string()
-            });
+            {
+                statuses.remove(index);
+            }
+        }
 
         self.clear_mutation_error();
         tracing::info!(
@@ -1378,7 +1443,7 @@ impl ClientCore {
             label: removed.label,
             addr: removed.addr,
             connected: false,
-            warning,
+            warning: None,
         })
     }
 
@@ -1800,6 +1865,80 @@ fn complete_confirmed_delete(
         row_id = %row_id,
         "desktop write saved"
     );
+}
+
+pub(super) async fn cleanup_saved_peer_p2p(
+    p2p: &Arc<dyn P2POps>,
+    record: &PeerRecord,
+) -> Result<()> {
+    let collections = subscribed_collection_names()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let replicator_result = p2p_remove_replicator(p2p, collections, &record.addr).await;
+    // The pinned transport defines disconnect as idempotent for absent peers,
+    // so always attempt it even when the deployment never connected or the
+    // replicator cleanup failed.
+    let disconnect_result = p2p_disconnect_peer(p2p, &record.addr).await;
+
+    match (replicator_result, disconnect_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(replicator_error), Ok(())) => anyhow::bail!(
+            "transport disconnected but replicator cleanup failed for {} at {}: {}; saved deployment retained",
+            record.label,
+            record.addr,
+            replicator_error
+        ),
+        (Ok(()), Err(disconnect_error)) => anyhow::bail!(
+            "replicator removed but transport disconnect failed for {} at {}: {}; saved deployment retained",
+            record.label,
+            record.addr,
+            disconnect_error
+        ),
+        (Err(replicator_error), Err(disconnect_error)) => anyhow::bail!(
+            "replicator cleanup failed for {} at {}: {}; transport disconnect also failed: {}; saved deployment retained",
+            record.label,
+            record.addr,
+            replicator_error,
+            disconnect_error
+        ),
+    }
+}
+
+async fn delete_peer_pairing_desired(
+    node: &defra_node::EmbeddedNode,
+    peer_id: &str,
+) -> Result<bool> {
+    use defra_agent_protocol::graphql::escape_graphql_string;
+
+    let peer_id = escape_graphql_string(peer_id);
+    let mutation = format!(
+        r#"mutation {{
+            delete_PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
+                _docID
+            }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "delete PeerPairingDesired failed; saved deployment retained: {}",
+            response
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+
+    let deleted = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("delete_PeerPairingDesired"))
+        .and_then(|rows| rows.as_array())
+        .context("delete PeerPairingDesired returned no result rows")?;
+    Ok(!deleted.is_empty())
 }
 
 fn append_warning(warning: &mut Option<String>, message: String) {

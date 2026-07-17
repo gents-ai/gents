@@ -330,7 +330,12 @@ async fn add_and_remove_peer_persists_peer_directory() -> Result<()> {
 
     let addr = wait_for_connectable_iroh_addr(&remote).await?;
     let added = local
-        .add_peer("Workshop Bay", &addr, "did:defra:workshop", None)
+        .add_peer(
+            "Workshop Bay",
+            &addr,
+            "did:defra:workshop",
+            Some("http://127.0.0.1:1/api/v0/graphql"),
+        )
         .await?;
 
     assert_eq!(added.label, "Workshop Bay");
@@ -339,16 +344,54 @@ async fn add_and_remove_peer_persists_peer_directory() -> Result<()> {
     assert_eq!(local.configured_peer_count(), 1);
     assert_eq!(local.dialed_peer_count(), 1);
     assert_eq!(local.peer_records().await.len(), 1);
+    assert_eq!(
+        peer_pairing_desired_count(local.node(), &added.peer_id).await?,
+        1
+    );
 
     let removed = local.remove_peer(&added.peer_id).await?;
 
     assert_eq!(removed.peer_id, added.peer_id);
-    assert!(removed.warning.is_some());
+    assert!(!removed.connected);
+    assert!(removed.warning.is_none());
     assert!(local.peer_records().await.is_empty());
     assert_eq!(local.configured_peer_count(), 0);
+    assert_eq!(local.dialed_peer_count(), 0);
+    assert!(local.p2p().connected_peers().await?.is_empty());
+    assert!(local.p2p().get_replicators().await?.is_empty());
+    assert_eq!(
+        peer_pairing_desired_count(local.node(), &added.peer_id).await?,
+        0
+    );
     local.shutdown().await?;
     remote.shutdown().await?;
     Ok(())
+}
+
+async fn peer_pairing_desired_count(
+    node: &defra_node::EmbeddedNode,
+    peer_id: &str,
+) -> Result<usize> {
+    let peer_id = defra_agent_protocol::graphql::escape_graphql_string(peer_id);
+    let response = node
+        .execute(&format!(
+            r#"query {{
+                PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
+                    _docID
+                }}
+            }}"#
+        ))
+        .await;
+    if response.has_errors() {
+        bail!("query PeerPairingDesired failed: {:?}", response.errors);
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("PeerPairingDesired"))
+        .and_then(|rows| rows.as_array())
+        .map(Vec::len)
+        .unwrap_or_default())
 }
 
 async fn query_single<T>(node: &defra_node::EmbeddedNode, query: &str, root: &str) -> Result<T>

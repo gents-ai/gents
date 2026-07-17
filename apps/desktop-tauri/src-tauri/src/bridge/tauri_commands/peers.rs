@@ -5,7 +5,9 @@ use tauri::{AppHandle, State};
 
 use super::super::commands::{add_peer, remove_peer, rename_peer, repair_p2p};
 use super::super::state::{current_core, DesktopAppState};
-use super::super::types::{DesktopClientSnapshot, PeerAddRequest, PeerStatusFetchRequest};
+use super::super::types::{
+    DesktopClientSnapshot, PeerAddRequest, PeerRemoveResponse, PeerStatusFetchRequest,
+};
 use super::emit_config_update_and_snapshot;
 
 #[tauri::command]
@@ -59,16 +61,17 @@ pub(crate) fn desktop_peer_remove(
     app: AppHandle,
     peer_id: String,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, String> {
+) -> Result<PeerRemoveResponse, String> {
     let Some(core) = current_core(&state) else {
         return Err("desktop client is not running".to_string());
     };
 
     tauri::async_runtime::block_on(async move {
-        remove_peer(core.as_ref(), peer_id)
+        let mutation = remove_peer(core.as_ref(), peer_id)
             .await
             .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
+        let snapshot = emit_config_update_and_snapshot(&app, &core).await?;
+        Ok(PeerRemoveResponse::new(snapshot, mutation))
     })
 }
 

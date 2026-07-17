@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use defra_agent_desktop_core::client::ClientCore;
+use defra_agent_desktop_core::client::{ClientCore, PeerMutationResult};
 
 use super::super::types::PeerAddRequest;
 use super::util::{require_trimmed, trim_optional};
@@ -22,10 +22,9 @@ pub(crate) async fn repair_p2p(core: &ClientCore, settle_delay: Duration) -> Res
     Ok(())
 }
 
-pub(crate) async fn remove_peer(core: &ClientCore, peer_id: String) -> Result<()> {
+pub(crate) async fn remove_peer(core: &ClientCore, peer_id: String) -> Result<PeerMutationResult> {
     let peer_id = require_trimmed("peer_id", peer_id)?;
-    core.remove_peer(&peer_id).await?;
-    Ok(())
+    core.remove_peer(&peer_id).await
 }
 
 pub(crate) async fn rename_peer(core: &ClientCore, peer_id: String, label: String) -> Result<()> {

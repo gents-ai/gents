@@ -42,6 +42,15 @@ pub(super) async fn p2p_connect_peer(p2p: &Arc<dyn P2POps>, addr: &str) -> Resul
     }
 }
 
+pub(super) async fn p2p_disconnect_peer(p2p: &Arc<dyn P2POps>, addr: &str) -> Result<()> {
+    match timeout(P2P_OPERATION_TIMEOUT, p2p.disconnect_peer(addr)).await {
+        Ok(result) => result
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("disconnecting desktop P2P peer {addr}")),
+        Err(_) => anyhow::bail!("timed out disconnecting desktop P2P peer {addr}"),
+    }
+}
+
 pub(super) async fn p2p_notify_network_change(p2p: &Arc<dyn P2POps>) -> Result<()> {
     match timeout(P2P_OPERATION_TIMEOUT, p2p.notify_network_change()).await {
         Ok(result) => result
@@ -83,6 +92,24 @@ pub(super) async fn p2p_add_replicator(
             .map_err(anyhow::Error::msg)
             .with_context(|| format!("adding desktop P2P replicator for {addr}")),
         Err(_) => anyhow::bail!("timed out adding desktop P2P replicator for {addr}"),
+    }
+}
+
+pub(super) async fn p2p_remove_replicator(
+    p2p: &Arc<dyn P2POps>,
+    collections: Vec<String>,
+    addr: &str,
+) -> Result<()> {
+    match timeout(
+        P2P_OPERATION_TIMEOUT,
+        p2p.remove_replicator(collections, Some(addr)),
+    )
+    .await
+    {
+        Ok(result) => result
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("removing desktop P2P replicator for {addr}")),
+        Err(_) => anyhow::bail!("timed out removing desktop P2P replicator for {addr}"),
     }
 }
 
