@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 
 import type {
+  BackendDeleteRequest,
   BackendSaveRequest,
   DeploymentView,
   InferenceBackendView,
 } from "../../lib/types";
+import { ConfirmDialog } from "../ConfirmDialog";
 import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import { isOptionalInt, linesToArray, parseOptionalInt } from "./formUtils";
@@ -19,6 +21,8 @@ export type BackendConfigPanelProps = {
   onCreateBackend: () => void;
   onSavedStatusChange: (value: string) => void;
   onSaveBackendConfig: (request: BackendSaveRequest) => Promise<unknown>;
+  onDeleteBackendConfig: (request: BackendDeleteRequest) => Promise<unknown>;
+  onDeletedBackend: () => void;
 };
 
 export function BackendConfigPanel({
@@ -30,6 +34,8 @@ export function BackendConfigPanel({
   onCreateBackend,
   onSavedStatusChange,
   onSaveBackendConfig,
+  onDeleteBackendConfig,
+  onDeletedBackend,
 }: BackendConfigPanelProps) {
   const selectedBackend = useMemo(
     () =>
@@ -64,6 +70,10 @@ export function BackendConfigPanel({
           onSavedStatusChange(`backend:${backendId}`);
         }}
         onSaveBackendConfig={onSaveBackendConfig}
+        onDeleteBackendConfig={onDeleteBackendConfig}
+        onDeleted={() => {
+          onDeletedBackend();
+        }}
       />
     </section>
   );
@@ -75,6 +85,8 @@ export type BackendConfigEditorProps = {
   saving: boolean;
   onSaved: (backendId: string) => void;
   onSaveBackendConfig: (request: BackendSaveRequest) => Promise<unknown>;
+  onDeleteBackendConfig: (request: BackendDeleteRequest) => Promise<unknown>;
+  onDeleted: () => void;
 };
 
 export function BackendConfigEditor({
@@ -83,7 +95,23 @@ export function BackendConfigEditor({
   saving,
   onSaved,
   onSaveBackendConfig,
+  onDeleteBackendConfig,
+  onDeleted,
 }: BackendConfigEditorProps) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  async function deleteBackend() {
+    setConfirmingDelete(false);
+    if (!backend) {
+      return;
+    }
+    try {
+      await onDeleteBackendConfig({ backendId: backend.backendId });
+      onDeleted();
+    } catch {
+      // Surfaced by the shell error banner; the editor stays put.
+    }
+  }
   const [backendId, setBackendId] = useState("");
   const [name, setName] = useState("");
   const [providerKind, setProviderKind] = useState("openai");
@@ -288,6 +316,28 @@ export function BackendConfigEditor({
         </label>
       ) : null}
       <div className="config-actions">
+        {backend ? (
+          <button
+            className="ghost-button danger-button"
+            data-testid="backend-delete"
+            disabled={saving}
+            onClick={() => setConfirmingDelete(true)}
+            type="button"
+          >
+            Delete Backend
+          </button>
+        ) : null}
+        <ConfirmDialog
+          open={confirmingDelete}
+          title="Delete backend"
+          message={`Delete backend "${backend?.backendId ?? ""}"? Behaviors still pointing at it will block the delete.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            void deleteBackend();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
         <button
           className="primary-button"
           data-testid="backend-save"

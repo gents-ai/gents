@@ -497,6 +497,96 @@ impl ClientCore {
         .await
     }
 
+    pub async fn delete_inference_backend(&self, backend_id: &str) -> Result<()> {
+        let backend_id = normalize_required("backend_id", backend_id)?;
+        let snapshot = self.store.snapshot();
+        if !snapshot
+            .inference_backends
+            .iter()
+            .any(|row| row.backend_id == backend_id)
+        {
+            bail!("no InferenceBackend document with backend_id {backend_id:?}");
+        }
+        let referencing = snapshot
+            .behaviors
+            .iter()
+            .filter(|row| row.backend_id.as_deref() == Some(backend_id))
+            .map(|row| row.behavior_id.clone())
+            .collect::<Vec<_>>();
+        if !referencing.is_empty() {
+            bail!(
+                "backend {backend_id:?} is referenced by behavior(s) {}; point them elsewhere first",
+                referencing.join(", ")
+            );
+        }
+
+        let result = async {
+            let deleted =
+                mutations::delete_inference_backend(self.node.as_ref(), backend_id).await?;
+            if deleted == 0 {
+                bail!("no InferenceBackend document with backend_id {backend_id:?}");
+            }
+            Ok(())
+        }
+        .await;
+        self.finish_automation_delete(
+            result,
+            "delete inference backend",
+            "config_backend_delete",
+            backend_id,
+            |rows| {
+                rows.inference_backends
+                    .retain(|row| row.backend_id != backend_id);
+            },
+        )
+        .await
+    }
+
+    pub async fn delete_inference_profile(&self, profile_id: &str) -> Result<()> {
+        let profile_id = normalize_required("profile_id", profile_id)?;
+        let snapshot = self.store.snapshot();
+        if !snapshot
+            .inference_profiles
+            .iter()
+            .any(|row| row.profile_id == profile_id)
+        {
+            bail!("no InferenceProfile document with profile_id {profile_id:?}");
+        }
+        let referencing = snapshot
+            .behaviors
+            .iter()
+            .filter(|row| row.inference_profile_id.as_deref() == Some(profile_id))
+            .map(|row| row.behavior_id.clone())
+            .collect::<Vec<_>>();
+        if !referencing.is_empty() {
+            bail!(
+                "profile {profile_id:?} is referenced by behavior(s) {}; point them elsewhere first",
+                referencing.join(", ")
+            );
+        }
+
+        let result = async {
+            let deleted =
+                mutations::delete_inference_profile(self.node.as_ref(), profile_id).await?;
+            if deleted == 0 {
+                bail!("no InferenceProfile document with profile_id {profile_id:?}");
+            }
+            Ok(())
+        }
+        .await;
+        self.finish_automation_delete(
+            result,
+            "delete inference profile",
+            "config_profile_delete",
+            profile_id,
+            |rows| {
+                rows.inference_profiles
+                    .retain(|row| row.profile_id != profile_id);
+            },
+        )
+        .await
+    }
+
     /// Shared tail for automation-document deletes: refresh, prune the row
     /// locally so the UI reflects the delete immediately, log, and record or
     /// clear the mutation error.

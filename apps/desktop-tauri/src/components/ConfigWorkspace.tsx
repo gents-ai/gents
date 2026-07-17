@@ -18,6 +18,8 @@ import type {
   TaskDeleteRequest,
   ScheduleDeleteRequest,
   EventTriggerDeleteRequest,
+  BackendDeleteRequest,
+  InferenceProfileDeleteRequest,
 } from "../lib/types";
 import { NEW_DOCUMENT_ID, TABS } from "./config-workspace/model";
 import { useConfigWorkspaceSelection } from "./config-workspace/useConfigWorkspaceSelection";
@@ -57,6 +59,10 @@ type ConfigWorkspaceProps = {
   onDeleteTaskConfig: (request: TaskDeleteRequest) => Promise<unknown>;
   onDeleteScheduleConfig: (request: ScheduleDeleteRequest) => Promise<unknown>;
   onDeleteEventTriggerConfig: (request: EventTriggerDeleteRequest) => Promise<unknown>;
+  onDeleteBackendConfig: (request: BackendDeleteRequest) => Promise<unknown>;
+  onDeleteInferenceProfileConfig: (
+    request: InferenceProfileDeleteRequest,
+  ) => Promise<unknown>;
   onSaveSkillConfig: (request: SkillSaveRequest) => Promise<unknown>;
   onSaveTaskConfig: (request: TaskSaveRequest) => Promise<unknown>;
   onSaveScheduleConfig: (request: ScheduleSaveRequest) => Promise<unknown>;
@@ -83,6 +89,8 @@ export function ConfigWorkspace({
   onDeleteTaskConfig,
   onDeleteScheduleConfig,
   onDeleteEventTriggerConfig,
+  onDeleteBackendConfig,
+  onDeleteInferenceProfileConfig,
   onSaveSkillConfig,
   onSaveTaskConfig,
   onSaveScheduleConfig,
@@ -286,6 +294,8 @@ export function ConfigWorkspace({
 
         {activeTab === "backends" ? (
           <BackendConfigPanel
+            onDeleteBackendConfig={onDeleteBackendConfig}
+            onDeletedBackend={() => setSelectedBackendId(null)}
             deployment={selectedDeployment}
             savedStatus={savedStatus}
             saving={saving}
@@ -299,6 +309,8 @@ export function ConfigWorkspace({
 
         {activeTab === "profiles" ? (
           <InferenceProfileConfigPanel
+            onDeleteInferenceProfileConfig={onDeleteInferenceProfileConfig}
+            onDeletedProfile={() => setSelectedProfileId(null)}
             deployment={selectedDeployment}
             savedStatus={savedStatus}
             saving={saving}

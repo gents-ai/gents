@@ -7,9 +7,9 @@ mod task;
 mod tools;
 
 pub use behavior::{upsert_agent_behavior, upsert_agent_behavior_to_graphql};
-pub use inference::upsert_inference_backend;
+pub use inference::{delete_inference_backend, upsert_inference_backend};
 pub use principal::{upsert_agent_principal, upsert_agent_principal_to_graphql};
-pub use profile::upsert_inference_profile;
+pub use profile::{delete_inference_profile, upsert_inference_profile};
 pub use skill::{delete_skill, upsert_skill};
 pub use task::{
     delete_event_trigger, delete_schedule, delete_task, fire_schedule_now, fire_task_now,

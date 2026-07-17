@@ -16,9 +16,10 @@ mod util;
 pub(crate) use chat::{rename_conversation, send_chat_message};
 #[cfg_attr(test, allow(unused_imports))]
 pub(crate) use config::{
-    delete_event_trigger_config, delete_schedule_config, delete_skill_config, delete_task_config,
-    save_agent_config, save_backend_config, save_behavior_config, save_inference_profile_config,
-    save_skill_config, save_tool_selection_config,
+    delete_backend_config, delete_event_trigger_config, delete_inference_profile_config,
+    delete_schedule_config, delete_skill_config, delete_task_config, save_agent_config,
+    save_backend_config, save_behavior_config, save_inference_profile_config, save_skill_config,
+    save_tool_selection_config,
 };
 pub(crate) use peer::{add_peer, remove_peer, rename_peer, repair_p2p};
 pub(crate) use task::{

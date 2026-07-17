@@ -99,6 +99,18 @@ pub(crate) struct EventTriggerDeleteRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct BackendDeleteRequest {
+    pub backend_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InferenceProfileDeleteRequest {
+    pub profile_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct BackendSaveRequest {
     pub backend_id: String,
     pub name: String,

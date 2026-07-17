@@ -1,6 +1,7 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use defra_agent_protocol::row::InferenceBackendRow;
 use defra_node::EmbeddedNode;
+use serde_json::Value;
 
 use super::super::graphql::{
     escape_graphql_string, execute_mutation, graphql_optional_bool_field,
@@ -106,4 +107,35 @@ pub async fn upsert_inference_backend(
         update_fields = join_fields(&update_fields),
     );
     execute_mutation(node, &mutation, "upsert_inference_backend").await
+}
+
+pub async fn delete_inference_backend(node: &EmbeddedNode, backend_id: &str) -> Result<usize> {
+    let backend_id = normalize_required("backend_id", backend_id)?;
+    let backend_id = escape_graphql_string(backend_id);
+    let mutation = format!(
+        r#"mutation {{
+            delete_InferenceBackend(
+                filter: {{ backend_id: {{ _eq: "{backend_id}" }} }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    if response.has_errors() {
+        bail!(
+            "delete_inference_backend failed: {}",
+            response
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("delete_InferenceBackend"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0))
 }
