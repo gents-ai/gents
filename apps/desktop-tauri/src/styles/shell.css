@@ -10,7 +10,7 @@
     background:
       linear-gradient(
         180deg,
-        rgb(var(--source-black-rgb) / 0.96) 0%,
+        rgb(var(--scrim-rgb) / 0.96) 0%,
         rgb(var(--source-ink-2-rgb) / 0.98) 100%
       ),
       var(--color-bg);

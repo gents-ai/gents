@@ -4,7 +4,7 @@
     overflow: auto;
     border: 1px solid var(--border-default);
     background: var(--color-surface-row);
-    box-shadow: inset 0 1px 0 rgb(var(--source-white-rgb) / 0.03);
+    box-shadow: inset 0 1px 0 rgb(var(--overlay-rgb) / 0.03);
   }
 
   .fleet-table {
@@ -23,7 +23,7 @@
 
   .fleet-table th {
     color: var(--color-text-muted);
-    background: rgb(var(--source-black-rgb) / 0.88);
+    background: rgb(var(--scrim-rgb) / 0.88);
     font-size: var(--text-xs);
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -36,7 +36,8 @@
 
   .fleet-agent-cell {
     display: grid;
-    grid-template-columns: 14px minmax(0, 1fr);
+    /* auto, not a fixed dot-width: the status column carries a text label. */
+    grid-template-columns: auto minmax(0, 1fr);
     gap: var(--space-5);
     align-items: center;
     min-width: 260px;
@@ -87,7 +88,7 @@
     width: 10px;
     height: 10px;
     border-radius: var(--radius-pill);
-    box-shadow: 0 0 0 3px rgb(var(--source-white-rgb) / 0.04);
+    box-shadow: 0 0 0 3px rgb(var(--overlay-rgb) / 0.04);
     cursor: help;
   }
 
@@ -234,7 +235,7 @@
       var(--color-surface-row),
       var(--color-surface-row)
     );
-    box-shadow: -10px 0 10px -10px rgb(var(--source-black-rgb) / 0.7);
+    box-shadow: -10px 0 10px -10px rgb(var(--scrim-rgb) / 0.7);
   }
 
   .fleet-table tbody tr:hover td.fleet-actions-cell {

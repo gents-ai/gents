@@ -1,4 +1,23 @@
 @layer fleet {
+  .theme-toggle {
+    width: 32px;
+    height: 32px;
+    min-height: 32px;
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+  }
+
+  .theme-toggle svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+  }
+
   .fleet-dashboard {
     display: grid;
     grid-template-rows: auto auto minmax(0, 1fr);
@@ -48,7 +67,9 @@
     flex: 0 0 auto;
     border: 1px solid rgb(var(--source-green-rgb) / 0.2);
     border-radius: var(--radius-sm);
-    background: rgb(var(--source-black-rgb) / 0.58);
+    /* Theme-stable dark tile: the brand glyph is white and must stay
+       visible on the light theme. */
+    background: var(--source-dark-green);
     object-fit: contain;
     padding: var(--space-2);
   }

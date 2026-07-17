@@ -146,6 +146,24 @@ describe("token ratchets", () => {
     expect(count).toBeLessThanOrEqual(40);
   });
 
+  it("light-theme overrides only redefine tokens the dark root declares", () => {
+    const tokens = stripComments(readFileSync(join(STYLES_ROOT, "tokens.css"), "utf8"));
+    const blockTokens = (open: string) => {
+      const start = tokens.indexOf(open);
+      expect(start).toBeGreaterThan(-1);
+      const body = tokens.slice(start, tokens.indexOf("}", start));
+      return new Set([...body.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
+    };
+    const root = blockTokens(":root {");
+    const light = blockTokens(':root[data-theme="light"] {');
+    expect(light.size).toBeGreaterThan(0);
+    for (const token of light) {
+      expect(root, `${token} overridden in light but undefined in dark root`).toContain(
+        token,
+      );
+    }
+  });
+
   it("raw rgb() literals stay eliminated: colors live in tokens.css", () => {
     expect(countMatches(/rgb\(\d+ \d+ \d+/g)).toBe(0);
   });
