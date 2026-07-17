@@ -274,6 +274,7 @@ export function useDesktopShell() {
 
   const {
     onRenameConversationTitle,
+    onRetryMessage,
     onSelectSession,
     onSendMessage,
     onStartNewConversation,
@@ -349,6 +350,7 @@ export function useDesktopShell() {
     onInitLocalRuntime,
     onRepairP2P,
     onSendMessage,
+    onRetryMessage,
     onRenameConversationTitle,
     onSaveAgentConfig,
     onSaveBehaviorConfig,
