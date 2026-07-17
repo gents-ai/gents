@@ -8,7 +8,7 @@ import type {
   ToolServiceRegistryView,
 } from "../../lib/types";
 import { isDirty } from "./configDirty";
-import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
+import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import {
   ignoreHandledActionError,
   isOptionalInt,
@@ -553,6 +553,9 @@ export function ToolSelectionConfigEditor({
             }
             value={crossDeploymentSpawnTimeoutSeconds}
           />
+          <FieldHint show={!crossDeploymentSpawnTimeoutValid}>
+            Whole number of 1 or more
+          </FieldHint>
         </label>
       </div>
       <div className="grid-2">

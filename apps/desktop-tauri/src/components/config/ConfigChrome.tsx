@@ -1,3 +1,5 @@
+import type React from "react";
+
 export type ConfigEditorHeaderProps = {
   eyebrow: string;
   saved: boolean;
@@ -25,6 +27,25 @@ export function ConfigEditorHeader({
         <span className="chip chip-green">Saved</span>
       ) : null}
     </div>
+  );
+}
+
+/** Inline validation reason — invalid input must explain itself, not just
+ * disable Save. */
+export function FieldHint({
+  show,
+  children,
+}: {
+  show: boolean;
+  children: React.ReactNode;
+}) {
+  if (!show) {
+    return null;
+  }
+  return (
+    <span className="field-hint-error" role="alert">
+      {children}
+    </span>
   );
 }
 

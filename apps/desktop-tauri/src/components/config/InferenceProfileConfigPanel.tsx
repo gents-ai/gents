@@ -7,7 +7,7 @@ import type {
   InferenceProfileView,
 } from "../../lib/types";
 import { isDirty } from "./configDirty";
-import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
+import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import {
   ignoreHandledActionError,
   isOptionalFloat,
@@ -206,6 +206,7 @@ export function InferenceProfileConfigEditor({
             type="number"
             value={contextWindow}
           />
+          <FieldHint show={!contextWindowValid}>Whole number of 1 or more</FieldHint>
         </label>
         <label className="field">
           <span>Max output tokens</span>
@@ -215,6 +216,7 @@ export function InferenceProfileConfigEditor({
             type="number"
             value={maxOutputTokens}
           />
+          <FieldHint show={!maxOutputTokensValid}>Whole number of 1 or more</FieldHint>
         </label>
         <label className="field">
           <span>Max turns</span>
@@ -224,6 +226,7 @@ export function InferenceProfileConfigEditor({
             type="number"
             value={maxTurns}
           />
+          <FieldHint show={!maxTurnsValid}>Whole number of 1 or more</FieldHint>
         </label>
       </div>
       <div className="grid-3">
@@ -236,6 +239,7 @@ export function InferenceProfileConfigEditor({
             type="number"
             value={temperature}
           />
+          <FieldHint show={!temperatureValid}>Number of 0 or more</FieldHint>
         </label>
         <label className="field">
           <span>Stream batch ms</span>
@@ -245,6 +249,7 @@ export function InferenceProfileConfigEditor({
             type="number"
             value={streamBatchMs}
           />
+          <FieldHint show={!streamBatchValid}>Whole number of 0 or more</FieldHint>
         </label>
         <label className="field">
           <span>Stream liveness seconds</span>
@@ -254,6 +259,7 @@ export function InferenceProfileConfigEditor({
             type="number"
             value={streamLivenessSecs}
           />
+          <FieldHint show={!streamLivenessValid}>Whole number of 1 or more</FieldHint>
         </label>
       </div>
       <div className="grid-3">
@@ -265,6 +271,7 @@ export function InferenceProfileConfigEditor({
             type="number"
             value={deadlineSecs}
           />
+          <FieldHint show={!deadlineValid}>Whole number of 1 or more</FieldHint>
         </label>
       </div>
       <div className="config-actions">

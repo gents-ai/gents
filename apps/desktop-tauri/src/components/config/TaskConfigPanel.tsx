@@ -9,7 +9,7 @@ import type {
   TaskView,
 } from "../../lib/types";
 import { isDirty } from "./configDirty";
-import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
+import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import { ignoreHandledActionError, optionalString } from "./formUtils";
 
 export type TaskConfigPanelProps = {
@@ -344,6 +344,7 @@ export function TaskConfigEditor({
             onChange={(event) => setRunArgs(event.currentTarget.value)}
             value={runArgs}
           />
+          <FieldHint show={!runArgsValid}>Must be a JSON object</FieldHint>
         </label>
         <div className="config-actions">
           <button

@@ -11,7 +11,7 @@ import type {
   SkillView,
   ToolSelectionView,
 } from "../../lib/types";
-import { ConfigDocumentList, PlusIcon } from "./ConfigChrome";
+import { ConfigDocumentList, FieldHint, PlusIcon } from "./ConfigChrome";
 import {
   boolText,
   ignoreHandledActionError,
@@ -425,6 +425,9 @@ export function BehaviorConfigEditor({
               type="number"
               value={compactionThreshold}
             />
+            <FieldHint show={!compactionThresholdValid}>
+              Number between 0 and 1
+            </FieldHint>
           </label>
         </div>
       </section>
