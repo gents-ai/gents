@@ -132,6 +132,7 @@ export function createDesktopShellConfigActions({
     try {
       const next = await deleteTaskConfig(request);
       setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
       return next;
     } catch (err) {
       setError(String(err));
@@ -147,6 +148,7 @@ export function createDesktopShellConfigActions({
     try {
       const next = await deleteScheduleConfig(request);
       setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
       return next;
     } catch (err) {
       setError(String(err));
@@ -162,6 +164,7 @@ export function createDesktopShellConfigActions({
     try {
       const next = await deleteEventTriggerConfig(request);
       setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
       return next;
     } catch (err) {
       setError(String(err));
@@ -177,6 +180,7 @@ export function createDesktopShellConfigActions({
     try {
       const next = await deleteBackendConfig(request);
       setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
       return next;
     } catch (err) {
       setError(String(err));
@@ -194,6 +198,7 @@ export function createDesktopShellConfigActions({
     try {
       const next = await deleteInferenceProfileConfig(request);
       setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
       return next;
     } catch (err) {
       setError(String(err));
@@ -209,6 +214,7 @@ export function createDesktopShellConfigActions({
     try {
       const next = await deleteToolSelectionConfig(request);
       setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
       return next;
     } catch (err) {
       setError(String(err));
@@ -224,6 +230,7 @@ export function createDesktopShellConfigActions({
     try {
       const next = await deleteToolServiceConfig(request);
       setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
       return next;
     } catch (err) {
       setError(String(err));
@@ -239,6 +246,7 @@ export function createDesktopShellConfigActions({
     try {
       const next = await deleteBehaviorConfig(request);
       setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
       return next;
     } catch (err) {
       setError(String(err));

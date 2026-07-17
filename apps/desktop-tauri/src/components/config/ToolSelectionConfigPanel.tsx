@@ -148,7 +148,10 @@ export function ToolSelectionConfigEditor({
       return;
     }
     try {
-      await onDeleteToolSelectionConfig({ selectionId: toolSelection.selectionId });
+      await onDeleteToolSelectionConfig({
+        selectionId: toolSelection.selectionId,
+        agentDid: toolSelection.agentDid ?? agentDid,
+      });
       onDeleted();
     } catch {
       // Surfaced by the shell error banner; the editor stays put.

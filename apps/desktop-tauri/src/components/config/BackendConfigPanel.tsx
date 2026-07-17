@@ -62,6 +62,7 @@ export function BackendConfigPanel({
       />
 
       <BackendConfigEditor
+        agentDid={deployment.agentDid}
         backend={selectedBackend}
         savedStatus={savedStatus}
         saving={saving}
@@ -80,6 +81,7 @@ export function BackendConfigPanel({
 }
 
 export type BackendConfigEditorProps = {
+  agentDid: string;
   backend: InferenceBackendView | null;
   savedStatus: string | null;
   saving: boolean;
@@ -90,6 +92,7 @@ export type BackendConfigEditorProps = {
 };
 
 export function BackendConfigEditor({
+  agentDid,
   backend,
   savedStatus,
   saving,
@@ -106,7 +109,7 @@ export function BackendConfigEditor({
       return;
     }
     try {
-      await onDeleteBackendConfig({ backendId: backend.backendId });
+      await onDeleteBackendConfig({ backendId: backend.backendId, agentDid });
       onDeleted();
     } catch {
       // Surfaced by the shell error banner; the editor stays put.

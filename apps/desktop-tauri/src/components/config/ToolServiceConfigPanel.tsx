@@ -73,6 +73,7 @@ export function ToolServiceConfigPanel({
       />
 
       <ToolServiceConfigEditor
+        agentDid={deployment.agentDid}
         savedStatus={savedStatus}
         saving={saving}
         toolService={selectedToolService}
@@ -92,6 +93,7 @@ export function ToolServiceConfigPanel({
 }
 
 export type ToolServiceConfigEditorProps = {
+  agentDid: string;
   toolService: ToolServiceRegistryView | null;
   savedStatus: string | null;
   saving: boolean;
@@ -105,6 +107,7 @@ export type ToolServiceConfigEditorProps = {
 };
 
 export function ToolServiceConfigEditor({
+  agentDid,
   toolService,
   savedStatus,
   saving,
@@ -122,7 +125,7 @@ export function ToolServiceConfigEditor({
       return;
     }
     try {
-      await onDeleteToolServiceConfig({ serviceId: toolService.serviceId });
+      await onDeleteToolServiceConfig({ serviceId: toolService.serviceId, agentDid });
       onDeleted();
     } catch {
       // Surfaced by the shell error banner; the editor stays put.

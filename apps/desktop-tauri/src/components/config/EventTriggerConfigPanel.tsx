@@ -69,6 +69,7 @@ export function EventTriggerConfigPanel({
       />
 
       <EventTriggerConfigEditor
+        agentDid={deployment.agentDid}
         eventTrigger={selectedEventTrigger}
         savedStatus={savedStatus}
         saving={saving}
@@ -89,6 +90,7 @@ export function EventTriggerConfigPanel({
 }
 
 export type EventTriggerConfigEditorProps = {
+  agentDid: string;
   eventTrigger: EventTriggerView | null;
   selectedTask: TaskView | null;
   tasks: TaskView[];
@@ -101,6 +103,7 @@ export type EventTriggerConfigEditorProps = {
 };
 
 export function EventTriggerConfigEditor({
+  agentDid,
   eventTrigger,
   selectedTask,
   tasks,
@@ -119,7 +122,10 @@ export function EventTriggerConfigEditor({
       return;
     }
     try {
-      await onDeleteEventTriggerConfig({ triggerId: eventTrigger.triggerId });
+      await onDeleteEventTriggerConfig({
+        triggerId: eventTrigger.triggerId,
+        agentDid,
+      });
       onDeleted();
     } catch {
       // Surfaced by the shell error banner; the editor stays put.

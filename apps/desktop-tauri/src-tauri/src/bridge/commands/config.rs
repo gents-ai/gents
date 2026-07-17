@@ -162,7 +162,7 @@ pub(crate) async fn delete_skill_config(
 ) -> Result<()> {
     let skill_id = require_trimmed("skill_id", request.skill_id)?;
     let agent_did = require_trimmed("agent_did", request.agent_did)?;
-    core.delete_skill(&agent_did, &skill_id).await
+    core.delete_skill(&skill_id, &agent_did).await
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -171,7 +171,8 @@ pub(crate) async fn delete_task_config(
     request: TaskDeleteRequest,
 ) -> Result<()> {
     let task_id = require_trimmed("task_id", request.task_id)?;
-    core.delete_task(&task_id).await
+    let agent_did = require_trimmed("agent_did", request.agent_did)?;
+    core.delete_task(&task_id, &agent_did).await
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -180,7 +181,8 @@ pub(crate) async fn delete_schedule_config(
     request: ScheduleDeleteRequest,
 ) -> Result<()> {
     let schedule_id = require_trimmed("schedule_id", request.schedule_id)?;
-    core.delete_schedule(&schedule_id).await
+    let agent_did = require_trimmed("agent_did", request.agent_did)?;
+    core.delete_schedule(&schedule_id, &agent_did).await
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -189,7 +191,8 @@ pub(crate) async fn delete_event_trigger_config(
     request: EventTriggerDeleteRequest,
 ) -> Result<()> {
     let trigger_id = require_trimmed("trigger_id", request.trigger_id)?;
-    core.delete_event_trigger(&trigger_id).await
+    let agent_did = require_trimmed("agent_did", request.agent_did)?;
+    core.delete_event_trigger(&trigger_id, &agent_did).await
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -198,7 +201,8 @@ pub(crate) async fn delete_backend_config(
     request: BackendDeleteRequest,
 ) -> Result<()> {
     let backend_id = require_trimmed("backend_id", request.backend_id)?;
-    core.delete_inference_backend(&backend_id).await
+    let agent_did = require_trimmed("agent_did", request.agent_did)?;
+    core.delete_inference_backend(&backend_id, &agent_did).await
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -207,7 +211,8 @@ pub(crate) async fn delete_inference_profile_config(
     request: InferenceProfileDeleteRequest,
 ) -> Result<()> {
     let profile_id = require_trimmed("profile_id", request.profile_id)?;
-    core.delete_inference_profile(&profile_id).await
+    let agent_did = require_trimmed("agent_did", request.agent_did)?;
+    core.delete_inference_profile(&profile_id, &agent_did).await
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -216,7 +221,8 @@ pub(crate) async fn delete_tool_selection_config(
     request: ToolSelectionDeleteRequest,
 ) -> Result<()> {
     let selection_id = require_trimmed("selection_id", request.selection_id)?;
-    core.delete_tool_selection(&selection_id).await
+    let agent_did = require_trimmed("agent_did", request.agent_did)?;
+    core.delete_tool_selection(&selection_id, &agent_did).await
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -225,7 +231,8 @@ pub(crate) async fn delete_tool_service_config(
     request: ToolServiceDeleteRequest,
 ) -> Result<()> {
     let service_id = require_trimmed("service_id", request.service_id)?;
-    core.delete_tool_service(&service_id).await
+    let agent_did = require_trimmed("agent_did", request.agent_did)?;
+    core.delete_tool_service(&service_id, &agent_did).await
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -234,7 +241,8 @@ pub(crate) async fn delete_behavior_config(
     request: BehaviorDeleteRequest,
 ) -> Result<()> {
     let behavior_id = require_trimmed("behavior_id", request.behavior_id)?;
-    core.delete_behavior(&behavior_id).await
+    let agent_did = require_trimmed("agent_did", request.agent_did)?;
+    core.delete_behavior(&behavior_id, &agent_did).await
 }
 
 pub(crate) async fn save_backend_config(

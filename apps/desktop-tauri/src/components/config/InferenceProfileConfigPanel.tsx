@@ -74,6 +74,7 @@ export function InferenceProfileConfigPanel({
       />
 
       <InferenceProfileConfigEditor
+        agentDid={deployment.agentDid}
         profile={selectedProfile}
         savedStatus={savedStatus}
         saving={saving}
@@ -92,6 +93,7 @@ export function InferenceProfileConfigPanel({
 }
 
 export type InferenceProfileConfigEditorProps = {
+  agentDid: string;
   profile: InferenceProfileView | null;
   savedStatus: string | null;
   saving: boolean;
@@ -106,6 +108,7 @@ export type InferenceProfileConfigEditorProps = {
 };
 
 export function InferenceProfileConfigEditor({
+  agentDid,
   profile,
   savedStatus,
   saving,
@@ -122,7 +125,10 @@ export function InferenceProfileConfigEditor({
       return;
     }
     try {
-      await onDeleteInferenceProfileConfig({ profileId: profile.profileId });
+      await onDeleteInferenceProfileConfig({
+        profileId: profile.profileId,
+        agentDid,
+      });
       onDeleted();
     } catch {
       // Surfaced by the shell error banner; the editor stays put.

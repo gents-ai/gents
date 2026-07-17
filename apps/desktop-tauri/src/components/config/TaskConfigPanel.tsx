@@ -70,6 +70,7 @@ export function TaskConfigPanel({
       />
 
       <TaskConfigEditor
+        agentDid={deployment.agentDid}
         behaviors={deployment.behaviors}
         runningTask={runningTask}
         savedStatus={savedStatus}
@@ -92,6 +93,7 @@ export function TaskConfigPanel({
 }
 
 export type TaskConfigEditorProps = {
+  agentDid: string;
   behaviors: BehaviorView[];
   selectedBehavior: BehaviorView | null;
   task: TaskView | null;
@@ -106,6 +108,7 @@ export type TaskConfigEditorProps = {
 };
 
 export function TaskConfigEditor({
+  agentDid,
   behaviors,
   selectedBehavior,
   task,
@@ -126,7 +129,7 @@ export function TaskConfigEditor({
       return;
     }
     try {
-      await onDeleteTaskConfig({ taskId: task.taskId });
+      await onDeleteTaskConfig({ taskId: task.taskId, agentDid });
       onDeleted();
     } catch {
       // Surfaced by the shell error banner; the editor stays put.

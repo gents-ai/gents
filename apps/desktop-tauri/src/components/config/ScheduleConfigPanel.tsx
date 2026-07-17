@@ -74,6 +74,7 @@ export function ScheduleConfigPanel({
       />
 
       <ScheduleConfigEditor
+        agentDid={deployment.agentDid}
         runningTask={runningTask}
         savedStatus={savedStatus}
         saving={saving}
@@ -96,6 +97,7 @@ export function ScheduleConfigPanel({
 }
 
 export type ScheduleConfigEditorProps = {
+  agentDid: string;
   schedule: ScheduleView | null;
   selectedTask: TaskView | null;
   tasks: TaskView[];
@@ -110,6 +112,7 @@ export type ScheduleConfigEditorProps = {
 };
 
 export function ScheduleConfigEditor({
+  agentDid,
   schedule,
   selectedTask,
   tasks,
@@ -130,7 +133,7 @@ export function ScheduleConfigEditor({
       return;
     }
     try {
-      await onDeleteScheduleConfig({ scheduleId: schedule.scheduleId });
+      await onDeleteScheduleConfig({ scheduleId: schedule.scheduleId, agentDid });
       onDeleted();
     } catch {
       // Surfaced by the shell error banner; the editor stays put.

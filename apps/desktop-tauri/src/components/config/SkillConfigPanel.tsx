@@ -171,7 +171,10 @@ export function SkillConfigEditor({
       return;
     }
     try {
-      await onDeleteSkillConfig({ skillId: nextId, agentDid });
+      await onDeleteSkillConfig({
+        skillId: nextId,
+        agentDid: skill.agentDid ?? agentDid,
+      });
       onDeleted();
     } catch (error) {
       ignoreHandledActionError(error);

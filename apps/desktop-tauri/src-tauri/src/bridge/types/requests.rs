@@ -83,48 +83,56 @@ pub(crate) struct SkillDeleteRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TaskDeleteRequest {
     pub task_id: String,
+    pub agent_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ScheduleDeleteRequest {
     pub schedule_id: String,
+    pub agent_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EventTriggerDeleteRequest {
     pub trigger_id: String,
+    pub agent_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BackendDeleteRequest {
     pub backend_id: String,
+    pub agent_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct InferenceProfileDeleteRequest {
     pub profile_id: String,
+    pub agent_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ToolSelectionDeleteRequest {
     pub selection_id: String,
+    pub agent_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ToolServiceDeleteRequest {
     pub service_id: String,
+    pub agent_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BehaviorDeleteRequest {
     pub behavior_id: String,
+    pub agent_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -359,4 +367,74 @@ pub(crate) struct DesktopInterruptRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopProbeMcpServiceRequest {
     pub service_id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    macro_rules! assert_source_routed_delete_request {
+        ($request_type:ty, $id_key:literal, $id_field:ident, $id:literal) => {{
+            let mut value = json!({ "agentDid": "did:test:source" });
+            value[$id_key] = json!($id);
+            let request: $request_type = serde_json::from_value(value).unwrap();
+
+            assert_eq!(request.$id_field, $id);
+            assert_eq!(request.agent_did, "did:test:source");
+
+            let mut missing_source = json!({});
+            missing_source[$id_key] = json!($id);
+            assert!(serde_json::from_value::<$request_type>(missing_source).is_err());
+        }};
+    }
+
+    #[test]
+    fn config_delete_requests_require_camel_case_source_agent_did() {
+        assert_source_routed_delete_request!(SkillDeleteRequest, "skillId", skill_id, "skill-a");
+        assert_source_routed_delete_request!(TaskDeleteRequest, "taskId", task_id, "task-a");
+        assert_source_routed_delete_request!(
+            ScheduleDeleteRequest,
+            "scheduleId",
+            schedule_id,
+            "schedule-a"
+        );
+        assert_source_routed_delete_request!(
+            EventTriggerDeleteRequest,
+            "triggerId",
+            trigger_id,
+            "trigger-a"
+        );
+        assert_source_routed_delete_request!(
+            BackendDeleteRequest,
+            "backendId",
+            backend_id,
+            "backend-a"
+        );
+        assert_source_routed_delete_request!(
+            InferenceProfileDeleteRequest,
+            "profileId",
+            profile_id,
+            "profile-a"
+        );
+        assert_source_routed_delete_request!(
+            ToolSelectionDeleteRequest,
+            "selectionId",
+            selection_id,
+            "selection-a"
+        );
+        assert_source_routed_delete_request!(
+            ToolServiceDeleteRequest,
+            "serviceId",
+            service_id,
+            "service-a"
+        );
+        assert_source_routed_delete_request!(
+            BehaviorDeleteRequest,
+            "behaviorId",
+            behavior_id,
+            "behavior-a"
+        );
+    }
 }

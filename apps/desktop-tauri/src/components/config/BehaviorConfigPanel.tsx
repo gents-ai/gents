@@ -182,7 +182,7 @@ export function BehaviorConfigEditor({
       return;
     }
     try {
-      await onDeleteBehaviorConfig({ behaviorId: behavior.behaviorId });
+      await onDeleteBehaviorConfig({ behaviorId: behavior.behaviorId, agentDid });
       onDeleted();
     } catch {
       // Surfaced by the shell error banner; the editor stays put.
