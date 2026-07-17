@@ -160,7 +160,7 @@ test.describe("desktop UI harness", () => {
     await gotoHarness(page, "active-turn");
     await openChat(page);
     await page.getByTestId("cancel-button").click();
-    await expect(page.getByRole("status")).toContainText("Interrupt accepted");
+    await expect(page.getByTestId("chat-toast")).toContainText("Interrupted");
 
     await gotoHarness(page, "cascade-turn");
     await openChat(page);
@@ -168,9 +168,9 @@ test.describe("desktop UI harness", () => {
     await expect(
       page.getByRole("dialog", { name: /interrupt parent request/i }),
     ).toBeVisible();
-    await expect(page.getByText("Will request interrupt by cascade")).toBeVisible();
-    await page.getByRole("button", { name: /interrupt parent and cascade/i }).click();
-    await expect(page.getByRole("status")).toContainText("Interrupt accepted");
+    await expect(page.getByText("Will be interrupted")).toBeVisible();
+    await page.getByRole("button", { name: /interrupt all/i }).click();
+    await expect(page.getByTestId("chat-toast")).toContainText("Interrupted");
   });
 
   test("sad path scenarios surface empty, bridge, save, and backend-health errors", async ({
@@ -195,6 +195,9 @@ test.describe("desktop UI harness", () => {
     await expect(page.getByTestId("error-banner")).toContainText(
       "Harness rejected behavior save",
     );
+
+    await page.getByTestId("error-banner-dismiss").click();
+    await expect(page.getByTestId("error-banner")).toHaveCount(0);
 
     await gotoHarness(page, "backend-health-error");
     await openChat(page);

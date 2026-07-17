@@ -8,8 +8,7 @@ import type {
   BootstrapSummary,
   DeploymentView,
 } from "../../lib/types";
-import { PencilIcon } from "./ConfigChrome";
-import { ignoreHandledActionError } from "./formUtils";
+import { EditorStatusChip, FieldHint, PencilIcon } from "./ConfigChrome";
 
 export type AgentConfigPanelProps = {
   bootstrap: BootstrapSummary | null;
@@ -64,12 +63,16 @@ export function AgentConfigEditor({
 }: AgentConfigEditorProps) {
   const [displayName, setDisplayName] = useState("");
   const [editingDisplayName, setEditingDisplayName] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     setDisplayName(agent.displayName ?? "");
     setEditingDisplayName(false);
+    setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [agent.agentDid]);
+
+  const dirty = editingDisplayName && displayName !== (agent.displayName ?? "");
 
   const defaultBehaviorId =
     agent.defaultBehaviorId ??
@@ -90,8 +93,9 @@ export function AgentConfigEditor({
       });
       setEditingDisplayName(false);
       onSaved(agent.agentDid);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -130,10 +134,12 @@ export function AgentConfigEditor({
             ) : null}
           </div>
         </div>
-        {savedStatus === `agent:${agent.agentDid}` ? (
-          <span className="chip chip-green">Saved</span>
-        ) : null}
+        <EditorStatusChip
+          dirty={dirty}
+          saved={savedStatus === `agent:${agent.agentDid}`}
+        />
       </div>
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
 
       <div className="facts agent-install-facts">
         <div>
@@ -165,6 +171,8 @@ export function AgentConfigEditor({
             onClick={() => {
               setDisplayName(agent.displayName ?? "");
               setEditingDisplayName(false);
+              // An abandoned rename must not leave its failure on screen.
+              setSaveError(null);
             }}
             type="button"
           >

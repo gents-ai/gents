@@ -7,6 +7,7 @@ export type ConnectedPeerSectionProps = {
   onOpenFleet: () => void;
   onConfigureDeployment: (agentDid: string) => void;
   onOpenCode?: (agentDid: string) => void;
+  onSelectAgent?: (agentDid: string) => void;
 };
 
 export function ConnectedPeerSection({
@@ -15,6 +16,7 @@ export function ConnectedPeerSection({
   onOpenFleet,
   onConfigureDeployment,
   onOpenCode,
+  onSelectAgent,
 }: ConnectedPeerSectionProps) {
   const selectedDeployment =
     deployments.find((deployment) => deployment.agentDid === selectedAgentDid) ?? null;
@@ -27,7 +29,24 @@ export function ConnectedPeerSection({
         <div className="connected-peer-header">
           <div>
             <p className="eyebrow">Connected Peer</p>
-            <h2>{selectedDeployment?.label ?? "No peer selected"}</h2>
+            {deployments.length > 1 && onSelectAgent ? (
+              <select
+                aria-label="Switch agent"
+                className="connected-peer-switcher"
+                data-testid="sidebar-agent-switcher"
+                onChange={(event) => onSelectAgent(event.currentTarget.value)}
+                value={selectedAgentDid ?? ""}
+              >
+                {!selectedAgentDid ? <option value="">Select an agent</option> : null}
+                {deployments.map((deployment) => (
+                  <option key={deployment.agentDid} value={deployment.agentDid}>
+                    {deployment.agentPrincipal.displayName ?? deployment.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <h2>{selectedDeployment?.label ?? "No peer selected"}</h2>
+            )}
           </div>
           {selectedDeployment ? (
             <span className="connected-peer-status">

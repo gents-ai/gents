@@ -17,6 +17,7 @@ const deployment: DeploymentView = {
   skills: [
     {
       skillId: "review-skill",
+      agentDid: "did:test:skill-source",
       name: "Review",
       instructions: "review things",
       toolRefs: [],
@@ -62,7 +63,7 @@ describe("SkillConfigPanel delete confirmation", () => {
     await waitFor(() =>
       expect(onDeleteSkillConfig).toHaveBeenCalledWith({
         skillId: "review-skill",
-        agentDid: "did:test:operator",
+        agentDid: "did:test:skill-source",
       }),
     );
     await waitFor(() => expect(onDeletedSkill).toHaveBeenCalled());

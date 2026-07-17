@@ -28,7 +28,7 @@ const REMOTE_SNAPSHOT_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::f
 const AGENT_PRINCIPAL_FIELDS: &str =
     "agent_did display_name default_behavior_id enabled created_at created_by";
 const AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled skill_refs skill_excludes created_at";
-const AGENT_RUNTIME_FIELDS: &str = "agent_did process_state reconcile_phase active_generation router_generation default_behavior_id runnable_behavior_count unavailable_behavior_count last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
+const AGENT_RUNTIME_FIELDS: &str = "agent_did process_state reconcile_phase active_generation router_generation default_behavior_id runnable_behavior_count unavailable_behavior_count behavior_executor_capacity behavior_executor_queue_depth last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
 const AGENT_CONVERSATION_FIELDS: &str = "session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id";
 const AGENT_REQUEST_FIELDS: &str = "request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content temperature top_p top_k max_tokens metadata status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_parent_request_id failure_reason terminalized_at terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until";
 const AGENT_RESPONSE_FIELDS: &str = "response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at";
@@ -157,8 +157,8 @@ pub async fn load_agent_behaviors(node: &EmbeddedNode) -> Result<Vec<AgentBehavi
 pub async fn load_agent_runtimes(node: &EmbeddedNode) -> Result<Vec<AgentRuntimeRow>> {
     load_rows(
         node,
-        "AgentRuntime",
-        "query { AgentRuntime { agent_did process_state reconcile_phase active_generation router_generation default_behavior_id runnable_behavior_count unavailable_behavior_count last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at } }",
+        AGENT_RUNTIME_NAME,
+        &format!("query {{ {AGENT_RUNTIME_NAME} {{ {AGENT_RUNTIME_FIELDS} }} }}"),
     )
     .await
 }
@@ -648,7 +648,7 @@ const REMOTE_SNAPSHOT_QUERY: &str = r#"
 query DesktopRemoteSnapshot {
   AgentPrincipal { agent_did display_name default_behavior_id enabled created_at created_by }
   AgentBehavior { behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled skill_refs skill_excludes created_at }
-  AgentRuntime { agent_did process_state reconcile_phase active_generation router_generation default_behavior_id runnable_behavior_count unavailable_behavior_count last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at }
+  AgentRuntime { agent_did process_state reconcile_phase active_generation router_generation default_behavior_id runnable_behavior_count unavailable_behavior_count behavior_executor_capacity behavior_executor_queue_depth last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at }
   AgentConversation { session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id }
   AgentRequest { request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_parent_request_id failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until }
   AgentResponse { response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }
@@ -1120,6 +1120,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_agent_runtimes_hydrates_executor_capacity_and_queue_depth() {
+        let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
+
+        let response = node
+            .execute(
+                r#"mutation {
+                    create_AgentRuntime(input: {
+                        agent_did: "did:key:runtime-capacity",
+                        behavior_executor_capacity: 7,
+                        behavior_executor_queue_depth: 3
+                    }) { agent_did }
+                }"#,
+            )
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+
+        let runtimes = load_agent_runtimes(node.as_ref())
+            .await
+            .expect("load agent runtimes");
+        let runtime = runtimes
+            .iter()
+            .find(|row| row.agent_did == "did:key:runtime-capacity")
+            .expect("created runtime");
+        assert_eq!(runtime.behavior_executor_capacity, Some(7));
+        assert_eq!(runtime.behavior_executor_queue_depth, Some(3));
+    }
+
+    #[tokio::test]
     async fn load_agent_scoped_snapshot_excludes_other_agents() {
         let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
         ensure_runtime_schemas(node.as_ref())
@@ -1219,6 +1250,16 @@ mod tests {
             assert!(
                 REMOTE_SNAPSHOT_QUERY.contains(field),
                 "remote snapshot missing Goal field {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_runtime_query_includes_local_field_set() {
+        for field in AGENT_RUNTIME_FIELDS.split_whitespace() {
+            assert!(
+                REMOTE_SNAPSHOT_QUERY.contains(field),
+                "remote snapshot missing AgentRuntime field {field}"
             );
         }
     }

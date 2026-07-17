@@ -127,12 +127,14 @@ pub(crate) enum RenderedTimelineItem {
         item_key: String,
         sequence: Option<i64>,
         content: String,
+        timestamp: Option<String>,
     },
     AssistantMessage {
         item_key: String,
         sequence: Option<i64>,
         content: Option<String>,
         reasoning: Option<String>,
+        timestamp: Option<String>,
     },
     ToolGroup {
         item_key: String,

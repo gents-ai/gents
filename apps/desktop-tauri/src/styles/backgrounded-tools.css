@@ -11,10 +11,43 @@
 
   .background-tools-panel {
     /* --border-warning is not present in tokens.css; declare it here only. */
-    --border-warning: rgb(255 160 17 / 0.55);
+    --border-warning: rgb(var(--source-orange-rgb) / 0.55);
   }
 
   /* ── Chip row / filter row ─────────────────────────────────────────────── */
+
+  .background-tools-panel .stuck-diagnostics {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--color-warning);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-deep);
+  }
+
+  .background-tools-panel .stuck-diagnostic {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    color: var(--color-text-soft);
+    font-size: var(--text-sm);
+  }
+
+  .background-tools-panel .stuck-diagnostic-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-pill);
+    background: var(--color-warning);
+    animation: thinking-pulse var(--motion-pulse) ease-in-out infinite;
+  }
+
+  .background-tools-panel .stuck-diagnostic.is-critical .stuck-diagnostic-dot {
+    background: var(--color-error-strong);
+  }
+
+  .background-tools-panel .stuck-diagnostic.is-critical {
+    color: var(--color-error);
+  }
 
   .background-tools-panel .chip-row {
     display: flex;
@@ -66,7 +99,7 @@
 
   .background-tools-panel .chip[aria-pressed="true"],
   .background-tools-panel .chip.is-active {
-    background: rgb(6 178 80 / 0.22);
+    background: rgb(var(--source-green-rgb) / 0.22);
     border-color: var(--border-selected);
     color: var(--color-text-warm);
   }
@@ -177,23 +210,23 @@
   }
 
   .background-tools-panel table.tools tbody tr:hover {
-    background: rgb(6 178 80 / 0.06);
+    background: rgb(var(--source-green-rgb) / 0.06);
   }
 
   .background-tools-panel table.tools tbody tr:focus-within,
   .background-tools-panel table.tools tbody tr.is-selected {
-    background: rgb(6 178 80 / 0.1);
+    background: rgb(var(--source-green-rgb) / 0.1);
     box-shadow: inset 3px 0 0 0 var(--color-accent-strong);
   }
 
   .background-tools-panel table.tools tbody tr.row-stuck,
   .background-tools-panel table.tools tbody tr.row-warn {
     box-shadow: inset 3px 0 0 0 var(--color-warning);
-    background: rgb(255 160 17 / 0.06);
+    background: rgb(var(--source-orange-rgb) / 0.06);
   }
 
   .background-tools-panel table.tools tbody tr.row-stuck:focus-within {
-    background: rgb(255 160 17 / 0.1);
+    background: rgb(var(--source-orange-rgb) / 0.1);
   }
 
   .background-tools-panel table.tools td {
@@ -245,17 +278,17 @@
 
   .background-tools-panel .pill.pill-await {
     color: var(--color-info);
-    border-color: rgb(16 203 255 / 0.45);
+    border-color: rgb(var(--source-blue-rgb) / 0.45);
   }
 
   .background-tools-panel .pill.pill-await[data-mode="bridge"] {
     color: var(--color-accent-strong);
-    border-color: rgb(57 226 122 / 0.45);
+    border-color: rgb(var(--color-accent-strong-rgb) / 0.45);
   }
 
   .background-tools-panel .pill.pill-await[data-mode="detach"] {
     color: var(--color-text-muted);
-    border-color: rgb(149 164 157 / 0.45);
+    border-color: rgb(var(--color-text-muted-rgb) / 0.45);
   }
 
   .background-tools-panel .pill.pill-status {
@@ -264,25 +297,25 @@
 
   .background-tools-panel .pill.pill-status[data-state="running"] {
     color: var(--color-success);
-    border-color: rgb(141 242 180 / 0.45);
+    border-color: rgb(var(--color-success-rgb) / 0.45);
   }
 
   .background-tools-panel .pill.pill-status[data-state="background"] {
     color: var(--color-info);
-    border-color: rgb(16 203 255 / 0.45);
+    border-color: rgb(var(--source-blue-rgb) / 0.45);
   }
 
   .background-tools-panel .pill.pill-status[data-state="stuck"],
   .background-tools-panel .pill.pill-status[data-state="cancelPending"] {
     color: var(--color-warning);
     border-color: var(--border-warning);
-    background: rgb(255 160 17 / 0.08);
+    background: rgb(var(--source-orange-rgb) / 0.08);
   }
 
   .background-tools-panel .pill.pill-status[data-state="deadline+"] {
     color: var(--color-error);
-    border-color: rgb(255 111 95 / 0.5);
-    background: rgb(255 111 95 / 0.08);
+    border-color: rgb(var(--color-error-strong-rgb) / 0.5);
+    background: rgb(var(--color-error-strong-rgb) / 0.08);
   }
 
   /* ── Row actions ─────────────────────────────────────────────────────────── */

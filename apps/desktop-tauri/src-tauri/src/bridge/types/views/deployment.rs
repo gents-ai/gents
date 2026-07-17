@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use defra_agent_desktop_core::client::PeerMutationResult;
+
 use super::bootstrap::DesktopBootstrapSummary;
 
 #[derive(Debug, Clone, Serialize)]
@@ -22,6 +24,10 @@ pub(crate) struct RuntimeView {
     pub last_reconcile_result: Option<String>,
     pub last_reconcile_error: Option<String>,
     pub updated_at: Option<String>,
+    pub behavior_executor_capacity: Option<i64>,
+    pub behavior_executor_queue_depth: Option<i64>,
+    pub runnable_behavior_count: Option<i64>,
+    pub unavailable_behavior_count: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -294,4 +300,86 @@ pub(crate) struct DesktopRuntimeSnapshot {
 pub(crate) struct DesktopClientSnapshot {
     pub bootstrap: DesktopBootstrapSummary,
     pub client: Option<DesktopRuntimeSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PeerMutationView {
+    pub peer_id: String,
+    pub label: String,
+    pub addr: String,
+    pub connected: bool,
+    pub warning: Option<String>,
+}
+
+impl From<PeerMutationResult> for PeerMutationView {
+    fn from(result: PeerMutationResult) -> Self {
+        Self {
+            peer_id: result.peer_id,
+            label: result.label,
+            addr: result.addr,
+            connected: result.connected,
+            warning: result.warning,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PeerRemoveResponse {
+    #[serde(flatten)]
+    pub snapshot: DesktopClientSnapshot,
+    pub mutation: PeerMutationView,
+}
+
+impl PeerRemoveResponse {
+    pub(crate) fn new(snapshot: DesktopClientSnapshot, mutation: PeerMutationResult) -> Self {
+        Self {
+            snapshot,
+            mutation: mutation.into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod peer_remove_response_tests {
+    use super::*;
+
+    #[test]
+    fn response_preserves_snapshot_shape_and_surfaces_mutation_result() {
+        let snapshot = DesktopClientSnapshot {
+            bootstrap: DesktopBootstrapSummary {
+                default_agent_home: "/agent".to_string(),
+                init_agent_name: None,
+                init_agent_did: None,
+                init_tool_ceiling: None,
+                init_tool_root: None,
+                desktop_home: "/desktop".to_string(),
+                peer_directory_path: "/desktop/peers.json".to_string(),
+                node_data_dir: "/desktop/node".to_string(),
+                log_file_path: "/desktop/desktop.log".to_string(),
+                agent_home_exists: true,
+                desktop_home_exists: true,
+                peer_directory_exists: true,
+                saved_peers: Vec::new(),
+            },
+            client: None,
+        };
+        let response = PeerRemoveResponse::new(
+            snapshot,
+            PeerMutationResult {
+                peer_id: "peer-1".to_string(),
+                label: "Workshop".to_string(),
+                addr: "iroh://peer-1".to_string(),
+                connected: false,
+                warning: Some("partial cleanup".to_string()),
+            },
+        );
+
+        let value = serde_json::to_value(response).expect("serialize peer remove response");
+        assert_eq!(value["bootstrap"]["desktopHome"], "/desktop");
+        assert!(value["client"].is_null());
+        assert_eq!(value["mutation"]["peerId"], "peer-1");
+        assert_eq!(value["mutation"]["warning"], "partial cleanup");
+    }
 }

@@ -20,6 +20,11 @@ export type FileEditView = {
   kind: "fileEdit";
   path: string;
   created: boolean;
+  /**
+   * write_file onto an existing file: the previous contents were replaced
+   * and are unknowable client-side, so an all-additions diff would lie.
+   */
+  overwrite: boolean;
   /** >1 when edit_file replace_all touched multiple sites. */
   replacementsApplied: number;
   diff: DiffLine[];
@@ -31,16 +36,55 @@ export type CommandRunView = {
   exitCode: number | null;
   executionMode: string | null;
   networkMode: string | null;
+  durationMs: number | null;
+  cwd: string | null;
   timedOut: boolean;
   failed: boolean;
   stdout: string;
   stderr: string;
 };
 
-export type CodeToolView = FileEditView | CommandRunView;
+/** Operator-facing duration: 480ms · 1.2s · 2m 14s. */
+export function formatDuration(ms: number): string {
+  if (ms < 1000) {
+    return `${Math.round(ms)}ms`;
+  }
+  if (ms < 60_000) {
+    return `${(ms / 1000).toFixed(1).replace(/\.0$/, "")}s`;
+  }
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = Math.round((ms % 60_000) / 1000);
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+// Terminal escapes the webview can't render: CSI (colors/cursor), OSC
+// (titles/hyperlink wrappers), and stray two-byte escape controls.
+const ANSI_PATTERN =
+  // eslint-disable-next-line no-control-regex
+  /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
+
+export function stripAnsi(value: string): string {
+  return value.replace(ANSI_PATTERN, "");
+}
+
+export type FileReadTool = "read_file" | "grep" | "glob" | "list_files";
+
+export type FileReadView = {
+  kind: "fileRead";
+  tool: FileReadTool;
+  /** The path or pattern the call targeted, when the args carry one. */
+  target: string | null;
+  returnedCount: number | null;
+  totalCount: number | null;
+  truncated: boolean;
+  body: string;
+};
+
+export type CodeToolView = FileEditView | CommandRunView | FileReadView;
 
 const FILE_EDIT_TOOLS = new Set(["write_file", "edit_file"]);
 const COMMAND_TOOLS = new Set(["bash", "bash_unrestricted"]);
+const FILE_READ_TOOLS = new Set<string>(["read_file", "grep", "glob", "list_files"]);
 
 function safeJsonObject(text?: string | null): Record<string, unknown> | null {
   if (!text) {
@@ -202,7 +246,7 @@ function splitAtMarker(
 }
 
 function normalizeStream(value: string): string {
-  const trimmed = value.replace(/\s+$/, "");
+  const trimmed = stripAnsi(value).replace(/\s+$/, "");
   return trimmed === "(empty)" ? "" : trimmed;
 }
 
@@ -226,7 +270,45 @@ export function toCodeToolView(tool: RenderedToolCallView): CodeToolView | null 
   if (COMMAND_TOOLS.has(name)) {
     return toCommandRunView(tool);
   }
+  if (FILE_READ_TOOLS.has(name)) {
+    return toFileReadView(tool, name as FileReadTool);
+  }
   return null;
+}
+
+function numberField(
+  record: Record<string, unknown> | null,
+  key: string,
+): number | null {
+  const value = record?.[key];
+  return typeof value === "number" ? value : null;
+}
+
+function toFileReadView(
+  tool: RenderedToolCallView,
+  name: FileReadTool,
+): FileReadView | null {
+  const { meta, body } = splitEnvelope(tool.result?.rawText ?? "", "defra_fs: ");
+  // Same honesty rule as edits/commands: no parseable metadata → keep the
+  // generic disclosure instead of projecting a fabricated read result.
+  if (!meta) {
+    return null;
+  }
+  const args = safeJsonObject(tool.args?.rawText);
+  const target =
+    stringField(meta, "path") ??
+    stringField(args, "path") ??
+    stringField(args, "pattern") ??
+    null;
+  return {
+    kind: "fileRead",
+    tool: name,
+    target,
+    returnedCount: numberField(meta, "returned_count"),
+    totalCount: numberField(meta, "total_count"),
+    truncated: meta["truncated"] === true,
+    body: body.replace(/\s+$/, ""),
+  };
 }
 
 function toFileEditView(tool: RenderedToolCallView, name: string): FileEditView | null {
@@ -244,6 +326,7 @@ function toFileEditView(tool: RenderedToolCallView, name: string): FileEditView 
   }
   // Only write_file's metadata carries `created`; edit_file edits by contract.
   const created = name === "write_file" && meta["created"] === true;
+  const overwrite = name === "write_file" && meta["created"] === false;
   const replacementsRaw = meta["replacements_applied"];
   const replacementsApplied =
     typeof replacementsRaw === "number" && replacementsRaw > 0 ? replacementsRaw : 1;
@@ -256,7 +339,7 @@ function toFileEditView(tool: RenderedToolCallView, name: string): FileEditView 
       ...toDiffLines(stringField(args, "new_text") ?? "", "add"),
     ];
   }
-  return { kind: "fileEdit", path, created, replacementsApplied, diff };
+  return { kind: "fileEdit", path, created, overwrite, replacementsApplied, diff };
 }
 
 function toCommandRunView(tool: RenderedToolCallView): CommandRunView | null {
@@ -299,12 +382,15 @@ function toCommandRunView(tool: RenderedToolCallView): CommandRunView | null {
     status === "exit_nonzero" ||
     (exitCode != null && exitCode !== 0);
   const { stdout, stderr } = streams;
+  const durationRaw = meta?.["duration_ms"];
   return {
     kind: "command",
     command,
     exitCode,
     executionMode: stringField(meta, "execution_mode"),
     networkMode: stringField(meta, "network_mode"),
+    durationMs: typeof durationRaw === "number" ? durationRaw : null,
+    cwd: stringField(meta, "cwd"),
     timedOut,
     failed,
     stdout,

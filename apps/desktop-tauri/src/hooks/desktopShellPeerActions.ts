@@ -4,6 +4,8 @@ import {
   addPeer,
   fetchPeerStatus,
   initLocalStandardRuntime,
+  removePeer,
+  renamePeer,
   repairP2P,
   startDesktopClient,
 } from "../lib/desktop-api";
@@ -95,6 +97,32 @@ export function createDesktopShellPeerActions({
     }
   }
 
+  async function onRemovePeer(peerId: string) {
+    setError(null);
+    try {
+      const next = await removePeer(peerId);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      const message = formatPeerConnectionError(err, "remove-peer");
+      setError(message);
+      throw new Error(message);
+    }
+  }
+
+  async function onRenamePeer(peerId: string, label: string) {
+    setError(null);
+    try {
+      const next = await renamePeer(peerId, label);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      const message = formatPeerConnectionError(err, "rename-peer");
+      setError(message);
+      throw new Error(message);
+    }
+  }
+
   async function onRepairP2P() {
     setRepairingP2P(true);
     setError(null);
@@ -115,6 +143,8 @@ export function createDesktopShellPeerActions({
     onAddPeer,
     onFetchPeerStatus,
     onInitLocalRuntime,
+    onRemovePeer,
+    onRenamePeer,
     onRepairP2P,
   };
 }

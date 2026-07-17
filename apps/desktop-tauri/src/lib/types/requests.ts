@@ -136,6 +136,46 @@ export type SkillDeleteRequest = {
   agentDid: string;
 };
 
+export type TaskDeleteRequest = {
+  taskId: string;
+  agentDid: string;
+};
+
+export type ScheduleDeleteRequest = {
+  scheduleId: string;
+  agentDid: string;
+};
+
+export type EventTriggerDeleteRequest = {
+  triggerId: string;
+  agentDid: string;
+};
+
+export type BackendDeleteRequest = {
+  backendId: string;
+  agentDid: string;
+};
+
+export type InferenceProfileDeleteRequest = {
+  profileId: string;
+  agentDid: string;
+};
+
+export type ToolSelectionDeleteRequest = {
+  selectionId: string;
+  agentDid: string;
+};
+
+export type ToolServiceDeleteRequest = {
+  serviceId: string;
+  agentDid: string;
+};
+
+export type BehaviorDeleteRequest = {
+  behaviorId: string;
+  agentDid: string;
+};
+
 export type TaskSaveRequest = {
   taskId: string;
   name: string;

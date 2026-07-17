@@ -2,17 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 
 import type {
+  BackendDeleteRequest,
   BackendSaveRequest,
   DeploymentView,
   InferenceBackendView,
 } from "../../lib/types";
-import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
-import {
-  ignoreHandledActionError,
-  isOptionalInt,
-  linesToArray,
-  parseOptionalInt,
-} from "./formUtils";
+import { ConfirmDialog } from "../ConfirmDialog";
+import { isDirty } from "./configDirty";
+import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
+import { isOptionalInt, linesToArray, parseOptionalInt } from "./formUtils";
 
 export type BackendConfigPanelProps = {
   deployment: DeploymentView;
@@ -23,6 +21,8 @@ export type BackendConfigPanelProps = {
   onCreateBackend: () => void;
   onSavedStatusChange: (value: string) => void;
   onSaveBackendConfig: (request: BackendSaveRequest) => Promise<unknown>;
+  onDeleteBackendConfig: (request: BackendDeleteRequest) => Promise<unknown>;
+  onDeletedBackend: () => void;
 };
 
 export function BackendConfigPanel({
@@ -34,6 +34,8 @@ export function BackendConfigPanel({
   onCreateBackend,
   onSavedStatusChange,
   onSaveBackendConfig,
+  onDeleteBackendConfig,
+  onDeletedBackend,
 }: BackendConfigPanelProps) {
   const selectedBackend = useMemo(
     () =>
@@ -60,6 +62,7 @@ export function BackendConfigPanel({
       />
 
       <BackendConfigEditor
+        agentDid={deployment.agentDid}
         backend={selectedBackend}
         savedStatus={savedStatus}
         saving={saving}
@@ -68,26 +71,50 @@ export function BackendConfigPanel({
           onSavedStatusChange(`backend:${backendId}`);
         }}
         onSaveBackendConfig={onSaveBackendConfig}
+        onDeleteBackendConfig={onDeleteBackendConfig}
+        onDeleted={() => {
+          onDeletedBackend();
+        }}
       />
     </section>
   );
 }
 
 export type BackendConfigEditorProps = {
+  agentDid: string;
   backend: InferenceBackendView | null;
   savedStatus: string | null;
   saving: boolean;
   onSaved: (backendId: string) => void;
   onSaveBackendConfig: (request: BackendSaveRequest) => Promise<unknown>;
+  onDeleteBackendConfig: (request: BackendDeleteRequest) => Promise<unknown>;
+  onDeleted: () => void;
 };
 
 export function BackendConfigEditor({
+  agentDid,
   backend,
   savedStatus,
   saving,
   onSaved,
   onSaveBackendConfig,
+  onDeleteBackendConfig,
+  onDeleted,
 }: BackendConfigEditorProps) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  async function deleteBackend() {
+    setConfirmingDelete(false);
+    if (!backend) {
+      return;
+    }
+    try {
+      await onDeleteBackendConfig({ backendId: backend.backendId, agentDid });
+      onDeleted();
+    } catch {
+      // Surfaced by the shell error banner; the editor stays put.
+    }
+  }
   const [backendId, setBackendId] = useState("");
   const [name, setName] = useState("");
   const [providerKind, setProviderKind] = useState("openai");
@@ -100,28 +127,42 @@ export function BackendConfigEditor({
   const [maxQueueDepth, setMaxQueueDepth] = useState("");
   const [enabled, setEnabled] = useState(true);
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   useEffect(() => {
-    setBackendId(backend?.backendId ?? "");
-    setName(backend?.name ?? backend?.backendId ?? "");
-    setProviderKind(
-      backend?.providerKind === "OpenRouter" || backend?.providerKind === "openrouter"
-        ? "openrouter"
-        : "openai",
-    );
-    setEndpoint(backend?.endpoint ?? "");
-    setApiKey("");
-    setApiKeyEnvVar(backend?.apiKeyEnvVar ?? "");
-    setClearApiKey(false);
-    setModels((backend?.models ?? []).join("\n"));
-    setMaxConcurrent(
-      backend?.maxConcurrent != null ? String(backend.maxConcurrent) : "",
-    );
-    setMaxQueueDepth(
-      backend?.maxQueueDepth != null ? String(backend.maxQueueDepth) : "",
-    );
-    setEnabled(backend?.enabled ?? true);
+    const base = backendFormValues(backend);
+    setBackendId(base.backendId);
+    setName(base.name);
+    setProviderKind(base.providerKind);
+    setEndpoint(base.endpoint);
+    setApiKey(base.apiKey);
+    setApiKeyEnvVar(base.apiKeyEnvVar);
+    setClearApiKey(base.clearApiKey);
+    setModels(base.models);
+    setMaxConcurrent(base.maxConcurrent);
+    setMaxQueueDepth(base.maxQueueDepth);
+    setEnabled(base.enabled);
+    setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backend?.backendId]);
+
+  const dirty = isDirty(
+    {
+      backendId,
+      name,
+      providerKind,
+      endpoint,
+      apiKey,
+      apiKeyEnvVar,
+      clearApiKey,
+      models,
+      maxConcurrent,
+      maxQueueDepth,
+      enabled,
+    },
+    backendFormValues(backend),
+  );
 
   const maxConcurrentValid = isOptionalInt(maxConcurrent, { min: 1 });
   const maxQueueDepthValid = isOptionalInt(maxQueueDepth, { min: 1 });
@@ -144,8 +185,9 @@ export function BackendConfigEditor({
         enabled,
       });
       onSaved(nextId);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -155,7 +197,9 @@ export function BackendConfigEditor({
         eyebrow="Backend"
         saved={savedStatus === `backend:${backendId.trim()}`}
         title={name || backendId || "New Backend"}
+        dirty={dirty}
       />
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
       <div className="grid-2">
         <label className="field">
           <span>Backend ID</span>
@@ -241,6 +285,7 @@ export function BackendConfigEditor({
             type="number"
             value={maxConcurrent}
           />
+          <FieldHint show={!maxConcurrentValid}>Whole number of 1 or more</FieldHint>
         </label>
         <label className="field">
           <span>Max queue depth</span>
@@ -250,6 +295,7 @@ export function BackendConfigEditor({
             type="number"
             value={maxQueueDepth}
           />
+          <FieldHint show={!maxQueueDepthValid}>Whole number of 1 or more</FieldHint>
         </label>
         <label className="checkbox">
           <input
@@ -273,6 +319,28 @@ export function BackendConfigEditor({
         </label>
       ) : null}
       <div className="config-actions">
+        {backend ? (
+          <button
+            className="ghost-button danger-button"
+            data-testid="backend-delete"
+            disabled={saving}
+            onClick={() => setConfirmingDelete(true)}
+            type="button"
+          >
+            Delete Backend
+          </button>
+        ) : null}
+        <ConfirmDialog
+          open={confirmingDelete}
+          title="Delete backend"
+          message={`Delete backend "${backend?.backendId ?? ""}"? Behaviors still pointing at it will block the delete.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            void deleteBackend();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
         <button
           className="primary-button"
           data-testid="backend-save"
@@ -292,4 +360,24 @@ export function BackendConfigEditor({
       </div>
     </form>
   );
+}
+
+/** View→form hydration, shared by the reset effect and dirty comparison. */
+function backendFormValues(backend: InferenceBackendView | null) {
+  return {
+    backendId: backend?.backendId ?? "",
+    name: backend?.name ?? backend?.backendId ?? "",
+    providerKind:
+      backend?.providerKind === "OpenRouter" || backend?.providerKind === "openrouter"
+        ? "openrouter"
+        : "openai",
+    endpoint: backend?.endpoint ?? "",
+    apiKey: "",
+    apiKeyEnvVar: backend?.apiKeyEnvVar ?? "",
+    clearApiKey: false,
+    models: (backend?.models ?? []).join("\n"),
+    maxConcurrent: backend?.maxConcurrent != null ? String(backend.maxConcurrent) : "",
+    maxQueueDepth: backend?.maxQueueDepth != null ? String(backend.maxQueueDepth) : "",
+    enabled: backend?.enabled ?? true,
+  };
 }

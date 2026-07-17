@@ -5,10 +5,13 @@ import type {
   BehaviorView,
   DeploymentView,
   TaskRunResult,
+  TaskDeleteRequest,
   TaskSaveRequest,
   TaskView,
 } from "../../lib/types";
-import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
+import { ConfirmDialog } from "../ConfirmDialog";
+import { isDirty } from "./configDirty";
+import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import { ignoreHandledActionError, optionalString } from "./formUtils";
 
 export type TaskConfigPanelProps = {
@@ -22,6 +25,8 @@ export type TaskConfigPanelProps = {
   onCreateTask: () => void;
   onSavedStatusChange: (value: string) => void;
   onSaveTaskConfig: (request: TaskSaveRequest) => Promise<unknown>;
+  onDeleteTaskConfig: (request: TaskDeleteRequest) => Promise<unknown>;
+  onDeletedTask: () => void;
   onRunTask: (request: { taskId: string; args?: unknown }) => Promise<TaskRunResult>;
 };
 
@@ -36,6 +41,8 @@ export function TaskConfigPanel({
   onCreateTask,
   onSavedStatusChange,
   onSaveTaskConfig,
+  onDeleteTaskConfig,
+  onDeletedTask,
   onRunTask,
 }: TaskConfigPanelProps) {
   const selectedTask = useMemo(
@@ -63,6 +70,7 @@ export function TaskConfigPanel({
       />
 
       <TaskConfigEditor
+        agentDid={deployment.agentDid}
         behaviors={deployment.behaviors}
         runningTask={runningTask}
         savedStatus={savedStatus}
@@ -70,6 +78,10 @@ export function TaskConfigPanel({
         selectedBehavior={selectedBehavior}
         task={selectedTask}
         onRunTask={onRunTask}
+        onDeleteTaskConfig={onDeleteTaskConfig}
+        onDeleted={() => {
+          onDeletedTask();
+        }}
         onSaved={(taskId) => {
           onSelectTask(taskId);
           onSavedStatusChange(`task:${taskId}`);
@@ -81,6 +93,7 @@ export function TaskConfigPanel({
 }
 
 export type TaskConfigEditorProps = {
+  agentDid: string;
   behaviors: BehaviorView[];
   selectedBehavior: BehaviorView | null;
   task: TaskView | null;
@@ -89,10 +102,13 @@ export type TaskConfigEditorProps = {
   runningTask: boolean;
   onSaved: (taskId: string) => void;
   onSaveTaskConfig: (request: TaskSaveRequest) => Promise<unknown>;
+  onDeleteTaskConfig: (request: TaskDeleteRequest) => Promise<unknown>;
+  onDeleted: () => void;
   onRunTask: (request: { taskId: string; args?: unknown }) => Promise<TaskRunResult>;
 };
 
 export function TaskConfigEditor({
+  agentDid,
   behaviors,
   selectedBehavior,
   task,
@@ -101,8 +117,24 @@ export function TaskConfigEditor({
   runningTask,
   onSaved,
   onSaveTaskConfig,
+  onDeleteTaskConfig,
+  onDeleted,
   onRunTask,
 }: TaskConfigEditorProps) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  async function deleteTask() {
+    setConfirmingDelete(false);
+    if (!task) {
+      return;
+    }
+    try {
+      await onDeleteTaskConfig({ taskId: task.taskId, agentDid });
+      onDeleted();
+    } catch {
+      // Surfaced by the shell error banner; the editor stays put.
+    }
+  }
   const [taskId, setTaskId] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -113,14 +145,18 @@ export function TaskConfigEditor({
   const [runArgs, setRunArgs] = useState("{}");
   const [runStatus, setRunStatus] = useState<TaskRunResult | null>(null);
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   useEffect(() => {
-    setTaskId(task?.taskId ?? "");
-    setName(task?.name ?? task?.taskId ?? "");
-    setDescription(task?.description ?? "");
-    setBehaviorId(task?.behaviorId ?? selectedBehavior?.behaviorId ?? "");
-    setPromptTemplate(task?.promptTemplate ?? "");
-    setOutputSchemaRef(task?.outputSchemaRef ?? "");
-    setEnabled(task?.enabled ?? true);
+    const b = taskFormValues(task, selectedBehavior?.behaviorId ?? null);
+    setTaskId(b.taskId);
+    setName(b.name);
+    setDescription(b.description);
+    setBehaviorId(b.behaviorId);
+    setPromptTemplate(b.promptTemplate);
+    setOutputSchemaRef(b.outputSchemaRef);
+    setEnabled(b.enabled);
+    setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [selectedBehavior?.behaviorId, task?.taskId]);
 
@@ -144,8 +180,9 @@ export function TaskConfigEditor({
         outputSchemaRef: optionalString(outputSchemaRef),
       });
       onSaved(nextId);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -164,10 +201,23 @@ export function TaskConfigEditor({
   return (
     <form className="panel config-editor" onSubmit={submitTask}>
       <ConfigEditorHeader
+        dirty={isDirty(
+          {
+            taskId,
+            name,
+            description,
+            behaviorId,
+            promptTemplate,
+            outputSchemaRef,
+            enabled,
+          },
+          taskFormValues(task, selectedBehavior?.behaviorId ?? null),
+        )}
         eyebrow="Task"
         saved={savedStatus === `task:${taskId.trim()}`}
         title={name || taskId || "New Task"}
       />
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
       <div className="grid-2">
         <label className="field">
           <span>Task ID</span>
@@ -245,6 +295,28 @@ export function TaskConfigEditor({
         />
       </label>
       <div className="config-actions">
+        {task ? (
+          <button
+            className="ghost-button danger-button"
+            data-testid="task-delete"
+            disabled={saving}
+            onClick={() => setConfirmingDelete(true)}
+            type="button"
+          >
+            Delete Task
+          </button>
+        ) : null}
+        <ConfirmDialog
+          open={confirmingDelete}
+          title="Delete task"
+          message={`Delete task "${task?.taskId ?? ""}"? Schedules or triggers still referencing it will block the delete.`}
+          confirmLabel="Delete Task"
+          danger
+          onConfirm={() => {
+            void deleteTask();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
         <button
           className="primary-button"
           data-testid="task-save"
@@ -330,6 +402,7 @@ export function TaskConfigEditor({
             onChange={(event) => setRunArgs(event.currentTarget.value)}
             value={runArgs}
           />
+          <FieldHint show={!runArgsValid}>Must be a JSON object</FieldHint>
         </label>
         <div className="config-actions">
           <button
@@ -363,4 +436,17 @@ function displayTaskListTitle(task: TaskView) {
   }
 
   return task.taskId;
+}
+
+/** View→form hydration, shared by the reset effect and dirty comparison. */
+function taskFormValues(task: TaskView | null, fallbackBehaviorId: string | null) {
+  return {
+    taskId: task?.taskId ?? "",
+    name: task?.name ?? task?.taskId ?? "",
+    description: task?.description ?? "",
+    behaviorId: task?.behaviorId ?? fallbackBehaviorId ?? "",
+    promptTemplate: task?.promptTemplate ?? "",
+    outputSchemaRef: task?.outputSchemaRef ?? "",
+    enabled: task?.enabled ?? true,
+  };
 }

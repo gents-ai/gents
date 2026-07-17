@@ -1,11 +1,23 @@
+import { useState } from "react";
+
 import { isTerminalTurnState } from "../../lib/chat-shell";
+import { formatPeerConnectionError } from "../../lib/peerConnectionErrors";
 import type { BootstrapSummary, DeploymentView } from "../../lib/types";
+import { CopyButton } from "../CopyButton";
 import {
   displayAgentIdentity,
   displayBehaviorLabel,
   displayGraphqlEndpoint,
 } from "../../lib/types";
-import { ChatIcon, ConfigIcon, ToolIconGlyph } from "./FleetIcons";
+import { ConfirmDialog } from "../ConfirmDialog";
+import {
+  ChatIcon,
+  CodeIcon,
+  ConfigIcon,
+  PencilIcon,
+  ToolIconGlyph,
+  TrashIcon,
+} from "./FleetIcons";
 import {
   deploymentStatus,
   formatRelativeTime,
@@ -19,16 +31,35 @@ export type FleetRowProps = {
   bootstrap: BootstrapSummary | null;
   deployment: DeploymentView;
   onOpenChat: (agentDid: string) => void;
+  onOpenCode?: (agentDid: string) => void;
   onOpenConfig: (agentDid: string) => void;
+  onRemovePeer?: (peerId: string) => Promise<unknown> | void;
+  onRenamePeer?: (peerId: string, label: string) => Promise<unknown> | void;
 };
 
 export function FleetRow({
   bootstrap,
   deployment,
   onOpenChat,
+  onOpenCode,
   onOpenConfig,
+  onRemovePeer,
+  onRenamePeer,
 }: FleetRowProps) {
+  const [editingLabel, setEditingLabel] = useState<string | null>(null);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const status = deploymentStatus(deployment);
+  const localRuntime = isLocalRuntimeSource(deployment.source);
+
+  function commitRename() {
+    const label = (editingLabel ?? "").trim();
+    setEditingLabel(null);
+    if (label && label !== deployment.label && onRenamePeer) {
+      // Shell handlers rethrow after setting the banner; fire-and-forget
+      // call sites must swallow or the rejection escapes unhandled.
+      void Promise.resolve(onRenamePeer(deployment.peerId, label)).catch(() => {});
+    }
+  }
   const enabledTaskCount = deployment.tasks.filter(
     (task) => task.enabled !== false,
   ).length;
@@ -62,25 +93,76 @@ export function FleetRow({
     <tr data-testid={`fleet-row-${deployment.peerId}`}>
       <td>
         <div className="fleet-agent-cell">
-          <span className={`fleet-status-dot ${status.tone}`} title={status.title} />
-          <div className="fleet-agent-copy">
-            <button
-              className="fleet-agent-name"
-              data-testid={`fleet-chat-name-${deployment.peerId}`}
-              onClick={() => onOpenChat(deployment.agentDid)}
-              title={`Open ${deployment.label} chat`}
-              type="button"
+          <span className={`fleet-status ${status.tone}`} title={status.title}>
+            <span aria-hidden="true" className={`fleet-status-dot ${status.tone}`} />
+            <span
+              className="fleet-status-label"
+              data-testid={`fleet-status-${deployment.peerId}`}
             >
-              {deployment.agentPrincipal.displayName ?? deployment.label}
-            </button>
-            <span className="muted mono">
+              {status.label}
+            </span>
+          </span>
+          <div className="fleet-agent-copy">
+            {editingLabel != null ? (
+              <input
+                autoFocus
+                className="fleet-rename-input"
+                data-testid={`fleet-rename-input-${deployment.peerId}`}
+                onBlur={commitRename}
+                onChange={(event) => setEditingLabel(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    commitRename();
+                  } else if (event.key === "Escape") {
+                    setEditingLabel(null);
+                  }
+                }}
+                value={editingLabel}
+              />
+            ) : (
+              <button
+                className="fleet-agent-name"
+                data-testid={`fleet-chat-name-${deployment.peerId}`}
+                onClick={() => onOpenChat(deployment.agentDid)}
+                title={`Open ${deployment.label} chat`}
+                type="button"
+              >
+                {deployment.agentPrincipal.displayName ?? deployment.label}
+              </button>
+            )}
+            {onRenamePeer && editingLabel == null ? (
+              <button
+                aria-label={`Rename ${deployment.label}`}
+                className="ghost-button fleet-row-icon fleet-rename"
+                data-testid={`fleet-rename-${deployment.peerId}`}
+                onClick={() => setEditingLabel(deployment.label)}
+                title="Rename deployment (saved label)"
+                type="button"
+              >
+                <PencilIcon />
+              </button>
+            ) : null}
+            <span className="muted mono fleet-agent-identity">
               {[
                 agentIdentity,
                 defaultBehaviorLabel ? `default: ${defaultBehaviorLabel}` : null,
               ]
                 .filter(Boolean)
                 .join(" | ")}
+              <CopyButton
+                className="fleet-did-copy"
+                label="Copy DID"
+                getText={() => deployment.agentDid}
+              />
             </span>
+            {status.lastError ? (
+              <span
+                className="fleet-agent-error"
+                data-testid={`fleet-error-${deployment.peerId}`}
+              >
+                {formatPeerConnectionError(status.lastError, "repair-p2p")}
+              </span>
+            ) : null}
             {graphqlEndpoint ? (
               <span
                 className="fleet-agent-endpoint mono"
@@ -126,6 +208,18 @@ export function FleetRow({
           >
             <ChatIcon />
           </button>
+          {onOpenCode ? (
+            <button
+              aria-label={`Open ${deployment.label} in Code mode`}
+              className="ghost-button fleet-table-action"
+              data-testid={`fleet-code-${deployment.peerId}`}
+              onClick={() => onOpenCode(deployment.agentDid)}
+              title="Open Code mode"
+              type="button"
+            >
+              <CodeIcon />
+            </button>
+          ) : null}
           <button
             aria-label={`Configure ${deployment.label}`}
             className="ghost-button fleet-table-action"
@@ -136,6 +230,30 @@ export function FleetRow({
           >
             <ConfigIcon />
           </button>
+          {onRemovePeer && !localRuntime ? (
+            <button
+              aria-label={`Remove ${deployment.label}`}
+              className="ghost-button fleet-table-action danger-button"
+              data-testid={`fleet-remove-${deployment.peerId}`}
+              onClick={() => setConfirmingRemove(true)}
+              title="Remove saved deployment"
+              type="button"
+            >
+              <TrashIcon />
+            </button>
+          ) : null}
+          <ConfirmDialog
+            open={confirmingRemove}
+            title="Remove deployment"
+            message={`Remove "${deployment.label}" from this desktop's saved deployments? The remote agent itself is not touched.`}
+            confirmLabel="Remove"
+            danger
+            onConfirm={() => {
+              setConfirmingRemove(false);
+              void Promise.resolve(onRemovePeer?.(deployment.peerId)).catch(() => {});
+            }}
+            onCancel={() => setConfirmingRemove(false)}
+          />
         </div>
       </td>
     </tr>

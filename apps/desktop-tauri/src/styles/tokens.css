@@ -25,6 +25,10 @@
     --source-white: #ffffff;
     --source-blue: #10cbff;
     --source-orange: #ffa011;
+    /* Highlight washes (hover tints) and shade washes (card/scrim fills);
+       the light theme inverts both. */
+    --overlay-rgb: 255 255 255;
+    --scrim-rgb: 0 0 0;
     --source-green-rgb: 6 178 80;
     --source-dark-green-rgb: 28 39 36;
     --source-blue-rgb: 16 203 255;
@@ -34,7 +38,12 @@
     --color-surface-strong: #07110e;
     --color-surface-deep: #020504;
     --color-surface-muted: rgb(var(--source-dark-green-rgb) / 0.58);
-    --color-surface-row: rgb(9 17 14 / 0.86);
+    /* Near-black green inks used by dense surfaces; alpha applied at use
+       sites so a future light theme only overrides the triplets. */
+    --source-ink-rgb: 1 8 6;
+    --source-ink-2-rgb: 2 8 6;
+    --source-ink-3-rgb: 9 17 14;
+    --color-surface-row: rgb(var(--source-ink-3-rgb) / 0.86);
     --color-text: var(--source-white);
     --color-text-muted: #95a49d;
     --color-text-soft: #d6ddda;
@@ -49,6 +58,13 @@
     --color-info: var(--source-blue);
     --color-error: #ffad9d;
     --color-error-strong: #ff6f5f;
+    --color-error-strong-rgb: 255 111 95;
+    --color-error-deep-rgb: 72 15 10;
+    --color-error-soft: #ffe2de;
+    --color-error-tint: #ffbfb8;
+    --color-text-muted-rgb: 149 164 157;
+    --color-accent-strong-rgb: 57 226 122;
+    --color-success-rgb: 141 242 180;
     --border-subtle: rgb(var(--source-green-rgb) / 0.12);
     --border-default: rgb(var(--source-green-rgb) / 0.18);
     --border-strong: rgb(var(--source-green-rgb) / 0.28);
@@ -84,5 +100,43 @@
     --motion-fast: 120ms;
     --motion-medium: 150ms;
     --motion-pulse: 1.4s;
+    /* macOS overlay titlebar geometry (traffic-light clearance). */
+    --titlebar-height: 34px;
+    --titlebar-clearance: 44px;
+  }
+
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --color-bg: #f4f7f5;
+    --color-surface: #ffffff;
+    --color-surface-strong: #eef3f0;
+    --color-surface-deep: #e7ede9;
+    --color-surface-muted: #f0f4f2;
+    --source-ink-rgb: 248 250 249;
+    --source-ink-2-rgb: 244 247 245;
+    --source-ink-3-rgb: 238 243 240;
+    --overlay-rgb: 2 8 6;
+    --scrim-rgb: 255 255 255;
+    --color-text: #0d1612;
+    --color-text-muted: #52615a;
+    --color-text-muted-rgb: 82 97 90;
+    --color-text-soft: #2c3a33;
+    --color-text-warm: #14261c;
+    --color-accent-strong: #0c8f43;
+    --color-accent-strong-rgb: 12 143 67;
+    --color-accent-muted: #1d7a44;
+    --color-success: #0c7a3c;
+    --color-success-rgb: 12 122 60;
+    --color-warning-soft: #8a5b00;
+    --color-error: #a8321f;
+    --color-error-strong: #c73a26;
+    --color-error-strong-rgb: 199 58 38;
+    --color-error-deep-rgb: 255 214 208;
+    --color-error-soft: #7c2015;
+    --color-error-tint: #93301f;
+    --border-subtle: rgb(var(--source-green-rgb) / 0.16);
+    --border-default: rgb(var(--source-green-rgb) / 0.26);
+    --border-strong: rgb(var(--source-green-rgb) / 0.38);
+    --border-selected: rgb(var(--source-green-rgb) / 0.55);
   }
 }

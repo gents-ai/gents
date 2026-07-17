@@ -22,6 +22,14 @@ import type {
   ScheduleRunRequest,
   ScheduleSaveRequest,
   SkillDeleteRequest,
+  TaskDeleteRequest,
+  ScheduleDeleteRequest,
+  EventTriggerDeleteRequest,
+  BackendDeleteRequest,
+  InferenceProfileDeleteRequest,
+  ToolSelectionDeleteRequest,
+  ToolServiceDeleteRequest,
+  BehaviorDeleteRequest,
   SkillSaveRequest,
   SubagentTreeView,
   TaskRunRequest,
@@ -107,6 +115,8 @@ export type DesktopApiAdapter = {
   shutdownDesktopClient: () => Promise<DesktopClientSnapshot>;
   setSelectedAgent: (agentDid: string | null) => Promise<void>;
   addPeer: (request: PeerAddRequest) => Promise<DesktopClientSnapshot>;
+  removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
+  renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
   fetchPeerStatus: (serverAddress: string) => Promise<unknown>;
   repairP2P: () => Promise<DesktopClientSnapshot>;
   fetchSessionSnapshot: (
@@ -125,6 +135,28 @@ export type DesktopApiAdapter = {
   saveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<DesktopClientSnapshot>;
   saveSkillConfig: (request: SkillSaveRequest) => Promise<DesktopClientSnapshot>;
   deleteSkillConfig: (request: SkillDeleteRequest) => Promise<DesktopClientSnapshot>;
+  deleteTaskConfig: (request: TaskDeleteRequest) => Promise<DesktopClientSnapshot>;
+  deleteScheduleConfig: (
+    request: ScheduleDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  deleteEventTriggerConfig: (
+    request: EventTriggerDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  deleteBackendConfig: (
+    request: BackendDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  deleteInferenceProfileConfig: (
+    request: InferenceProfileDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  deleteToolSelectionConfig: (
+    request: ToolSelectionDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  deleteToolServiceConfig: (
+    request: ToolServiceDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  deleteBehaviorConfig: (
+    request: BehaviorDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
   saveBackendConfig: (request: BackendSaveRequest) => Promise<DesktopClientSnapshot>;
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
@@ -179,6 +211,15 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   addPeer(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_peer_add", { request });
   },
+  removePeer(peerId) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_peer_remove", { peerId });
+  },
+  renamePeer(peerId, label) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_peer_rename", {
+      peerId,
+      label,
+    });
+  },
   fetchPeerStatus(serverAddress) {
     return invokeDesktop<unknown>("desktop_peer_status_fetch", {
       request: { serverAddress },
@@ -213,6 +254,38 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   deleteSkillConfig(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_skill_delete", { request });
+  },
+  deleteTaskConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_task_delete", { request });
+  },
+  deleteScheduleConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_schedule_delete", { request });
+  },
+  deleteEventTriggerConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_event_trigger_delete", {
+      request,
+    });
+  },
+  deleteBackendConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_backend_delete", { request });
+  },
+  deleteInferenceProfileConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_delete", {
+      request,
+    });
+  },
+  deleteToolSelectionConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_tool_selection_delete", {
+      request,
+    });
+  },
+  deleteToolServiceConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_tool_service_delete", {
+      request,
+    });
+  },
+  deleteBehaviorConfig(request) {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_behavior_delete", { request });
   },
   saveBackendConfig(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_backend_save", { request });
@@ -331,6 +404,14 @@ export async function addPeer(request: PeerAddRequest) {
   return desktopApiAdapter().addPeer(request);
 }
 
+export async function removePeer(peerId: string) {
+  return desktopApiAdapter().removePeer(peerId);
+}
+
+export async function renamePeer(peerId: string, label: string) {
+  return desktopApiAdapter().renamePeer(peerId, label);
+}
+
 export async function fetchPeerStatus(serverAddress: string) {
   return desktopApiAdapter().fetchPeerStatus(serverAddress);
 }
@@ -377,6 +458,40 @@ export async function saveSkillConfig(request: SkillSaveRequest) {
 
 export async function deleteSkillConfig(request: SkillDeleteRequest) {
   return desktopApiAdapter().deleteSkillConfig(request);
+}
+
+export async function deleteTaskConfig(request: TaskDeleteRequest) {
+  return desktopApiAdapter().deleteTaskConfig(request);
+}
+
+export async function deleteScheduleConfig(request: ScheduleDeleteRequest) {
+  return desktopApiAdapter().deleteScheduleConfig(request);
+}
+
+export async function deleteEventTriggerConfig(request: EventTriggerDeleteRequest) {
+  return desktopApiAdapter().deleteEventTriggerConfig(request);
+}
+
+export async function deleteBackendConfig(request: BackendDeleteRequest) {
+  return desktopApiAdapter().deleteBackendConfig(request);
+}
+
+export async function deleteInferenceProfileConfig(
+  request: InferenceProfileDeleteRequest,
+) {
+  return desktopApiAdapter().deleteInferenceProfileConfig(request);
+}
+
+export async function deleteToolSelectionConfig(request: ToolSelectionDeleteRequest) {
+  return desktopApiAdapter().deleteToolSelectionConfig(request);
+}
+
+export async function deleteToolServiceConfig(request: ToolServiceDeleteRequest) {
+  return desktopApiAdapter().deleteToolServiceConfig(request);
+}
+
+export async function deleteBehaviorConfig(request: BehaviorDeleteRequest) {
+  return desktopApiAdapter().deleteBehaviorConfig(request);
 }
 
 export async function saveBackendConfig(request: BackendSaveRequest) {

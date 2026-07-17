@@ -4,17 +4,15 @@ import type { FormEvent } from "react";
 import type {
   DeploymentView,
   ToolServiceRegistryView,
+  ToolServiceDeleteRequest,
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
 } from "../../lib/types";
-import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
-import {
-  ignoreHandledActionError,
-  isOptionalInt,
-  optionalString,
-  parseOptionalInt,
-} from "./formUtils";
+import { ConfirmDialog } from "../ConfirmDialog";
+import { isDirty } from "./configDirty";
+import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
+import { isOptionalInt, optionalString, parseOptionalInt } from "./formUtils";
 
 export type ToolServiceConfigPanelProps = {
   deployment: DeploymentView;
@@ -25,6 +23,8 @@ export type ToolServiceConfigPanelProps = {
   onCreateToolService: () => void;
   onSavedStatusChange: (value: string) => void;
   onSaveToolServiceConfig: (request: ToolServiceSaveRequest) => Promise<unknown>;
+  onDeleteToolServiceConfig: (request: ToolServiceDeleteRequest) => Promise<unknown>;
+  onDeletedToolService: () => void;
   onTestToolService: (
     request: ToolServiceTestRequest,
   ) => Promise<ToolServiceTestResult>;
@@ -39,6 +39,8 @@ export function ToolServiceConfigPanel({
   onCreateToolService,
   onSavedStatusChange,
   onSaveToolServiceConfig,
+  onDeleteToolServiceConfig,
+  onDeletedToolService,
   onTestToolService,
 }: ToolServiceConfigPanelProps) {
   const selectedToolService = useMemo(
@@ -71,6 +73,7 @@ export function ToolServiceConfigPanel({
       />
 
       <ToolServiceConfigEditor
+        agentDid={deployment.agentDid}
         savedStatus={savedStatus}
         saving={saving}
         toolService={selectedToolService}
@@ -79,6 +82,10 @@ export function ToolServiceConfigPanel({
           onSavedStatusChange(`tool-service:${serviceId}`);
         }}
         onSaveToolServiceConfig={onSaveToolServiceConfig}
+        onDeleteToolServiceConfig={onDeleteToolServiceConfig}
+        onDeleted={() => {
+          onDeletedToolService();
+        }}
         onTestToolService={onTestToolService}
       />
     </section>
@@ -86,24 +93,44 @@ export function ToolServiceConfigPanel({
 }
 
 export type ToolServiceConfigEditorProps = {
+  agentDid: string;
   toolService: ToolServiceRegistryView | null;
   savedStatus: string | null;
   saving: boolean;
   onSaved: (serviceId: string) => void;
   onSaveToolServiceConfig: (request: ToolServiceSaveRequest) => Promise<unknown>;
+  onDeleteToolServiceConfig: (request: ToolServiceDeleteRequest) => Promise<unknown>;
+  onDeleted: () => void;
   onTestToolService: (
     request: ToolServiceTestRequest,
   ) => Promise<ToolServiceTestResult>;
 };
 
 export function ToolServiceConfigEditor({
+  agentDid,
   toolService,
   savedStatus,
   saving,
   onSaved,
   onSaveToolServiceConfig,
+  onDeleteToolServiceConfig,
+  onDeleted,
   onTestToolService,
 }: ToolServiceConfigEditorProps) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  async function deleteToolService() {
+    setConfirmingDelete(false);
+    if (!toolService) {
+      return;
+    }
+    try {
+      await onDeleteToolServiceConfig({ serviceId: toolService.serviceId, agentDid });
+      onDeleted();
+    } catch {
+      // Surfaced by the shell error banner; the editor stays put.
+    }
+  }
   const [serviceId, setServiceId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
@@ -117,18 +144,22 @@ export function ToolServiceConfigEditor({
   const [testResult, setTestResult] = useState<ToolServiceTestResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   useEffect(() => {
-    setServiceId(toolService?.serviceId ?? "");
-    setDisplayName(toolService?.displayName ?? toolService?.serviceId ?? "");
-    setDescription(toolService?.description ?? "");
-    setHostname(toolService?.hostname ?? "");
-    setTailscaleIp(toolService?.tailscaleIp ?? "");
-    setLanIp(toolService?.lanIp ?? "");
-    setMcpPort(toolService?.mcpPort != null ? String(toolService.mcpPort) : "");
-    setMcpPath(toolService?.mcpPath ?? "/mcp");
-    setStatus(toolService?.status ?? "online");
+    const b = toolServiceFormValues(toolService);
+    setServiceId(b.serviceId);
+    setDisplayName(b.displayName);
+    setDescription(b.description);
+    setHostname(b.hostname);
+    setTailscaleIp(b.tailscaleIp);
+    setLanIp(b.lanIp);
+    setMcpPort(b.mcpPort);
+    setMcpPath(b.mcpPath);
+    setStatus(b.status);
     setTestResult(null);
     setTestError(null);
+    setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [toolService?.serviceId]);
 
@@ -164,8 +195,9 @@ export function ToolServiceConfigEditor({
         status: optionalString(status) || "online",
       });
       onSaved(nextId);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -186,10 +218,25 @@ export function ToolServiceConfigEditor({
   return (
     <form className="panel config-editor" onSubmit={submitToolService}>
       <ConfigEditorHeader
+        dirty={isDirty(
+          {
+            serviceId,
+            displayName,
+            description,
+            hostname,
+            tailscaleIp,
+            lanIp,
+            mcpPort,
+            mcpPath,
+            status,
+          },
+          toolServiceFormValues(toolService),
+        )}
         eyebrow="HTTP MCP Service"
         saved={savedStatus === `tool-service:${serviceId.trim()}`}
         title={displayName || serviceId || "New Service"}
       />
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
       <div className="grid-2">
         <label className="field">
           <span>Service ID</span>
@@ -262,6 +309,7 @@ export function ToolServiceConfigEditor({
             type="number"
             value={mcpPort}
           />
+          <FieldHint show={!mcpPortValid}>Port between 1 and 65535</FieldHint>
         </label>
         <label className="field">
           <span>MCP path</span>
@@ -301,6 +349,28 @@ export function ToolServiceConfigEditor({
         >
           {testing ? "Testing..." : "Test Service"}
         </button>
+        {toolService ? (
+          <button
+            className="ghost-button danger-button"
+            data-testid="tool-service-delete"
+            disabled={saving}
+            onClick={() => setConfirmingDelete(true)}
+            type="button"
+          >
+            Delete Service
+          </button>
+        ) : null}
+        <ConfirmDialog
+          open={confirmingDelete}
+          title="Delete tool service"
+          message={`Delete tool service "${toolService?.serviceId ?? ""}"? Selections still allowing it will block the delete.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            void deleteToolService();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
         <button
           className="primary-button"
           data-testid="tool-service-save"
@@ -350,4 +420,19 @@ export function ToolServiceConfigEditor({
       ) : null}
     </form>
   );
+}
+
+/** View→form hydration, shared by the reset effect and dirty comparison. */
+function toolServiceFormValues(toolService: ToolServiceRegistryView | null) {
+  return {
+    serviceId: toolService?.serviceId ?? "",
+    displayName: toolService?.displayName ?? toolService?.serviceId ?? "",
+    description: toolService?.description ?? "",
+    hostname: toolService?.hostname ?? "",
+    tailscaleIp: toolService?.tailscaleIp ?? "",
+    lanIp: toolService?.lanIp ?? "",
+    mcpPort: toolService?.mcpPort != null ? String(toolService.mcpPort) : "",
+    mcpPath: toolService?.mcpPath ?? "/mcp",
+    status: toolService?.status ?? "online",
+  };
 }

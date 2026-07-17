@@ -9,6 +9,7 @@ import type {
 import { formatPeerConnectionError } from "../../lib/peerConnectionErrors";
 import { AddPeerForm } from "./AddPeerForm";
 import { BrandLockup } from "./BrandLockup";
+import { ThemeToggle } from "../ThemeToggle";
 import { FleetRow } from "./FleetRow";
 import { validateAgentDid } from "./peerConnectionImport";
 
@@ -24,7 +25,10 @@ type FleetDashboardProps = {
   onFetchPeerStatus: (serverAddress: string) => Promise<unknown>;
   onInitLocalRuntime: (label?: string | null) => Promise<unknown>;
   onOpenChat: (agentDid: string) => void;
+  onOpenCode?: (agentDid: string) => void;
   onOpenConfig: (agentDid: string) => void;
+  onRemovePeer?: (peerId: string) => Promise<unknown> | void;
+  onRenamePeer?: (peerId: string, label: string) => Promise<unknown> | void;
   onRepairP2P: () => Promise<unknown>;
 };
 
@@ -47,7 +51,10 @@ export function FleetDashboard({
   onFetchPeerStatus,
   onInitLocalRuntime,
   onOpenChat,
+  onOpenCode,
   onOpenConfig,
+  onRemovePeer,
+  onRenamePeer,
   onRepairP2P,
 }: FleetDashboardProps) {
   const [showAddPeer, setShowAddPeer] = useState(false);
@@ -135,6 +142,7 @@ export function FleetDashboard({
       <header className="fleet-header">
         <BrandLockup />
         <div className="fleet-header-actions">
+          <ThemeToggle />
           {needsP2PRepair ? (
             <button
               className="ghost-button"
@@ -198,7 +206,10 @@ export function FleetDashboard({
                 deployment={deployment}
                 key={deployment.peerId}
                 onOpenChat={onOpenChat}
+                onOpenCode={onOpenCode}
                 onOpenConfig={onOpenConfig}
+                onRemovePeer={onRemovePeer}
+                onRenamePeer={onRenamePeer}
               />
             ))}
           </tbody>

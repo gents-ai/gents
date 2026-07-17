@@ -19,6 +19,8 @@ export type OperationsRailProviderProps = {
 export type OperationsRailProps = {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Count of stuck/at-risk operations; badges the collapsed handle. */
+  attentionCount?: number;
 };
 
 export function OperationsRailProvider({
@@ -56,6 +58,7 @@ export function OperationsRailProvider({
 export function OperationsRail({
   open = true,
   onOpenChange,
+  attentionCount = 0,
 }: OperationsRailProps = {}) {
   const value = useContext(OperationsRailContext);
   if (!value || value.tabs.length === 0) {
@@ -74,9 +77,20 @@ export function OperationsRail({
           type="button"
           className="operations-rail-collapsed-button"
           aria-expanded="false"
-          aria-label={`Open operations drawer, ${activeLabel} selected`}
+          aria-label={
+            attentionCount > 0
+              ? `Open operations drawer, ${attentionCount} ${
+                  attentionCount === 1 ? "item needs" : "items need"
+                } attention`
+              : `Open operations drawer, ${activeLabel} selected`
+          }
           onClick={() => onOpenChange?.(true)}
         >
+          {attentionCount > 0 ? (
+            <span className="operations-rail-attention" data-testid="ops-attention">
+              {attentionCount}
+            </span>
+          ) : null}
           <span aria-hidden="true">‹</span>
           <span>Operations</span>
         </button>

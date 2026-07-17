@@ -5,11 +5,14 @@ import {
   BackendConfigPanel,
   BehaviorConfigEditor,
   SkillConfigPanel,
+  ToolSelectionConfigEditor,
 } from "../src/components/config";
 import type {
   BehaviorView,
   DeploymentView,
   InferenceProfileView,
+  ToolSelectionView,
+  ToolServiceRegistryView,
 } from "../src/lib/types";
 
 // Fence for the background-refresh edit wipe: the Tauri bridge emits
@@ -180,5 +183,51 @@ describe("config editors preserve in-progress edits across snapshot refreshes", 
       />,
     );
     expect(screen.getByTestId("behavior-system-prompt")).toHaveValue("edited prompt");
+  });
+
+  it("tool-selection editor keeps typed values when service registrations change", () => {
+    const selection: ToolSelectionView = {
+      selectionId: "tools-a",
+      displayName: "Tools A",
+      commandAllowedArgvPrefixes: [],
+      commandForbiddenArgvPrefixes: [],
+      cliToolNames: [],
+      allowedMcpServiceIds: [],
+      delegateTo: ["mcp-late"],
+      backgroundableToolNames: [],
+      subagentTargets: [],
+      defraQueryCollections: [],
+      writeTools: [],
+    };
+    const lateService: ToolServiceRegistryView = { serviceId: "mcp-late" };
+    const props = {
+      agentDid: "did:test:operator",
+      toolSelection: selection,
+      toolCeiling: "Readwrite",
+      toolRoot: "/tmp/work",
+      saving: false,
+      savedStatus: null,
+      onSaved: vi.fn(),
+      onSaveToolSelectionConfig: vi.fn(),
+      onDeleteToolSelectionConfig: vi.fn(),
+      onDeleted: vi.fn(),
+    };
+    const { rerender } = render(
+      <ToolSelectionConfigEditor {...props} toolServiceRegistries={[]} />,
+    );
+
+    fireEvent.change(screen.getByTestId("tool-selection-display-name"), {
+      target: { value: "Edited Tools" },
+    });
+
+    // A replicated service registration changes the legacy-delegate
+    // projection, but must not rehydrate the selected document's whole form.
+    rerender(
+      <ToolSelectionConfigEditor {...props} toolServiceRegistries={[lateService]} />,
+    );
+    expect(screen.getByTestId("tool-selection-display-name")).toHaveValue(
+      "Edited Tools",
+    );
+    expect(screen.getByTestId("tool-delegate-to")).toHaveValue("mcp-late");
   });
 });

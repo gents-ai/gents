@@ -9,10 +9,12 @@ import {
 import { BackendHealthPanel } from "./backendHealth";
 import { CascadeCancelDialog } from "./cancelUx";
 import { ChatComposer, ChatHeader, ChatTranscriptPanel } from "./chat";
+import { effectiveBehaviorSkills } from "./chat/slashSkills";
 import { McpHealthPanel } from "./mcpHealth";
 import { OperationsRail, OperationsRailProvider } from "./operations";
 import type { OperationsRailTabDescriptor } from "./operations";
 import { BackgroundedToolsPanel } from "./backgroundedTools";
+import { useOperationsSnapshot } from "./backgroundedTools/useOperationsSnapshot";
 import { SubagentLineageView } from "./subagentLineage";
 
 export type ChatWorkspaceProps = {
@@ -81,15 +83,22 @@ export function ActiveChatWorkspace({
 }: ActiveChatWorkspaceProps) {
   const activeBehaviorId =
     selectedBehaviorId ?? selectedDeployment.defaultBehaviorId ?? null;
-  const behaviorLabel =
+  const activeBehavior =
     selectedDeployment.behaviors.find(
       (behavior) => behavior.behaviorId === activeBehaviorId,
-    )?.displayName ?? displayBehaviorLabel(activeBehaviorId);
+    ) ?? null;
+  const behaviorLabel =
+    activeBehavior?.displayName ?? displayBehaviorLabel(activeBehaviorId);
+  const activeBehaviorSkills = useMemo(
+    () => effectiveBehaviorSkills(selectedDeployment.skills ?? [], activeBehavior),
+    [activeBehavior, selectedDeployment.skills],
+  );
 
   const [cascade, setCascade] = useState<null | { rootRequestId: string }>(null);
-  const [interruptResultBanner, setInterruptResultBanner] = useState<string | null>(
-    null,
-  );
+  const [interruptResultBanner, setInterruptResultBanner] = useState<{
+    text: string;
+    tone: "info" | "error";
+  } | null>(null);
   const [operationsOpen, setOperationsOpen] = useState(false);
   // Set when a background-tools row asks to focus the lineage view on its
   // parent request; falls back to the session's latest request.
@@ -125,18 +134,36 @@ export function ActiveChatWorkspace({
             cause: "userCancelled",
             cascade: false,
           });
-          if (result.accepted) setInterruptResultBanner("Interrupt accepted");
+          if (result.accepted)
+            setInterruptResultBanner({ text: "Interrupted", tone: "info" });
           else if (result.alreadyInterrupted)
-            setInterruptResultBanner("Already interrupted by another caller");
+            setInterruptResultBanner({ text: "Already interrupted", tone: "info" });
           return;
         }
         setCascade({ rootRequestId: requestId });
       } catch (e) {
-        setInterruptResultBanner(`Interrupt preview failed: ${String(e)}`);
+        setInterruptResultBanner({
+          text: `Couldn't interrupt: ${String(e)}`,
+          tone: "error",
+        });
       }
     },
     [selectedDeployment.agentDid],
   );
+
+  // Workspace-level poll so the closed drawer can still raise attention —
+  // the panels only poll while mounted inside the open drawer.
+  const opsSnapshotRequest = useMemo(
+    () => ({ agentDid: selectedDeployment.agentDid, rootRequestId: null }),
+    [selectedDeployment.agentDid],
+  );
+  const { snapshot: opsSnapshot } = useOperationsSnapshot(opsSnapshotRequest, {
+    enabled: !operationsOpen,
+  });
+  const stuckCount =
+    opsSnapshot?.agentDid === selectedDeployment.agentDid
+      ? opsSnapshot.stuckDiagnostics.length
+      : 0;
 
   const operationsRailTabs = useMemo<OperationsRailTabDescriptor[]>(() => {
     const rootRequestId = lineageRootOverride ?? session?.latestRequestId ?? null;
@@ -145,8 +172,12 @@ export function ActiveChatWorkspace({
       {
         id: "background-tools",
         label: "Background",
+        badge: stuckCount > 0 ? String(stuckCount) : null,
         render: () => (
           <BackgroundedToolsPanel
+            agentDid={selectedDeployment.agentDid}
+            rootRequestId={rootRequestId}
+            runtime={selectedDeployment?.runtime ?? null}
             onOpenLineage={setLineageRootOverride}
             onInterruptParent={(requestId) => {
               void beginInterrupt(requestId);
@@ -180,6 +211,7 @@ export function ActiveChatWorkspace({
     selectedDeployment.agentDid,
     lineageRootOverride,
     beginInterrupt,
+    stuckCount,
   ]);
 
   function onInterruptClick() {
@@ -206,17 +238,6 @@ export function ActiveChatWorkspace({
             onRetryMessage={onRetryMessage}
           />
 
-          {interruptResultBanner ? (
-            <div
-              className="muted small"
-              role="status"
-              aria-live="polite"
-              style={{ padding: "4px 12px" }}
-            >
-              {interruptResultBanner}
-            </div>
-          ) : null}
-
           <ChatComposer
             activeRequestId={session?.latestRequestId ?? null}
             approxSerializedBytes={approxSerializedBytes}
@@ -232,9 +253,26 @@ export function ActiveChatWorkspace({
             onDraftChange={onDraftChange}
             onInterruptClick={onInterruptClick}
             onSend={onSend}
+            skills={activeBehaviorSkills}
           />
         </div>
-        <OperationsRail open={operationsOpen} onOpenChange={setOperationsOpen} />
+        <OperationsRail
+          open={operationsOpen}
+          onOpenChange={setOperationsOpen}
+          attentionCount={stuckCount}
+        />
+        {interruptResultBanner ? (
+          <div
+            className={`chat-toast${
+              interruptResultBanner.tone === "error" ? " is-error" : ""
+            }`}
+            data-testid="chat-toast"
+            role="status"
+            aria-live="polite"
+          >
+            {interruptResultBanner.text}
+          </div>
+        ) : null}
       </section>
 
       {cascade ? (
@@ -245,15 +283,19 @@ export function ActiveChatWorkspace({
           onClose={() => setCascade(null)}
           onAccepted={(at) => {
             setCascade(null);
-            setInterruptResultBanner(`Interrupt accepted at ${at ?? "(unknown)"}`);
+            void at;
+            setInterruptResultBanner({ text: "Interrupted", tone: "info" });
           }}
           onAlreadyInterrupted={() => {
             setCascade(null);
-            setInterruptResultBanner("Already interrupted by another caller");
+            setInterruptResultBanner({ text: "Already interrupted", tone: "info" });
           }}
           onError={(msg) => {
             setCascade(null);
-            setInterruptResultBanner(`Interrupt failed: ${msg}`);
+            setInterruptResultBanner({
+              text: `Couldn't interrupt: ${msg}`,
+              tone: "error",
+            });
           }}
         />
       ) : null}

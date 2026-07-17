@@ -146,15 +146,35 @@ describe("token ratchets", () => {
     expect(count).toBeLessThanOrEqual(40);
   });
 
-  it("raw rgb() literals do not grow (ceiling 90)", () => {
-    expect(countMatches(/rgb\(\d+ \d+ \d+/g)).toBeLessThanOrEqual(90);
+  it("light-theme overrides only redefine tokens the dark root declares", () => {
+    const tokens = stripComments(readFileSync(join(STYLES_ROOT, "tokens.css"), "utf8"));
+    const blockTokens = (open: string) => {
+      const start = tokens.indexOf(open);
+      expect(start).toBeGreaterThan(-1);
+      const body = tokens.slice(start, tokens.indexOf("}", start));
+      return new Set([...body.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
+    };
+    const root = blockTokens(":root {");
+    const light = blockTokens(':root[data-theme="light"] {');
+    expect(light.size).toBeGreaterThan(0);
+    for (const token of light) {
+      expect(root, `${token} overridden in light but undefined in dark root`).toContain(
+        token,
+      );
+    }
+  });
+
+  it("raw rgb() literals stay eliminated: colors live in tokens.css", () => {
+    expect(countMatches(/rgb\(\d+ \d+ \d+/g)).toBe(0);
   });
 
   it("bespoke box-shadows do not grow (ceiling 38)", () => {
     // 'none' and pure --shadow-* token values are conformant, not bespoke:
     // tokenizing shadows must lower this pressure, not preserve it.
+    // The lookahead sits before \s* — a backtrackable \s* ahead of the
+    // lookahead let "box-shadow: none" slip back into the count.
     expect(
-      countMatches(/box-shadow:\s*(?!none[;}\s]|var\(--shadow-)[^;{}]+/gi),
+      countMatches(/box-shadow:(?!\s*none\s*[;}]|\s*var\(--shadow-)[^;{}]+/gi),
     ).toBeLessThanOrEqual(38);
   });
 });

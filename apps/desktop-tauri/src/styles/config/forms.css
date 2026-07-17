@@ -1,4 +1,9 @@
 @layer config {
+  .field-hint-error {
+    color: var(--color-error);
+    font-size: var(--text-xs);
+  }
+
   .config-icon-button {
     width: 28px;
     height: 28px;
@@ -71,7 +76,7 @@
   }
 
   .config-result-error {
-    border-color: rgb(255 111 95 / 0.34);
+    border-color: rgb(var(--color-error-strong-rgb) / 0.34);
     color: var(--color-error);
   }
 
@@ -118,7 +123,7 @@
 
   .config-workspace .field > input[readonly] {
     border-color: var(--border-subtle);
-    background: rgb(0 0 0 / 0.48);
+    background: rgb(var(--scrim-rgb) / 0.48);
     color: var(--color-text-muted);
     cursor: default;
   }

@@ -63,6 +63,10 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     last_reconcile_result: normalize_optional(row.last_reconcile_result.as_deref()),
                     last_reconcile_error: normalize_optional(row.last_reconcile_error.as_deref()),
                     updated_at: normalize_optional(row.updated_at.as_deref()),
+                    behavior_executor_capacity: row.behavior_executor_capacity,
+                    behavior_executor_queue_depth: row.behavior_executor_queue_depth,
+                    runnable_behavior_count: row.runnable_behavior_count,
+                    unavailable_behavior_count: row.unavailable_behavior_count,
                 });
 
             let mut behaviors = store

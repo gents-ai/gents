@@ -15,6 +15,14 @@ import type {
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
+  TaskDeleteRequest,
+  ScheduleDeleteRequest,
+  EventTriggerDeleteRequest,
+  BackendDeleteRequest,
+  InferenceProfileDeleteRequest,
+  ToolSelectionDeleteRequest,
+  ToolServiceDeleteRequest,
+  BehaviorDeleteRequest,
 } from "../lib/types";
 import { NEW_DOCUMENT_ID, TABS } from "./config-workspace/model";
 import { useConfigWorkspaceSelection } from "./config-workspace/useConfigWorkspaceSelection";
@@ -51,6 +59,18 @@ type ConfigWorkspaceProps = {
   ) => Promise<ToolServiceTestResult>;
   onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
   onDeleteSkillConfig: (request: SkillDeleteRequest) => Promise<unknown>;
+  onDeleteTaskConfig: (request: TaskDeleteRequest) => Promise<unknown>;
+  onDeleteScheduleConfig: (request: ScheduleDeleteRequest) => Promise<unknown>;
+  onDeleteEventTriggerConfig: (request: EventTriggerDeleteRequest) => Promise<unknown>;
+  onDeleteBackendConfig: (request: BackendDeleteRequest) => Promise<unknown>;
+  onDeleteInferenceProfileConfig: (
+    request: InferenceProfileDeleteRequest,
+  ) => Promise<unknown>;
+  onDeleteToolSelectionConfig: (
+    request: ToolSelectionDeleteRequest,
+  ) => Promise<unknown>;
+  onDeleteToolServiceConfig: (request: ToolServiceDeleteRequest) => Promise<unknown>;
+  onDeleteBehaviorConfig: (request: BehaviorDeleteRequest) => Promise<unknown>;
   onSaveSkillConfig: (request: SkillSaveRequest) => Promise<unknown>;
   onSaveTaskConfig: (request: TaskSaveRequest) => Promise<unknown>;
   onSaveScheduleConfig: (request: ScheduleSaveRequest) => Promise<unknown>;
@@ -74,6 +94,14 @@ export function ConfigWorkspace({
   onTestToolService,
   onSaveBehaviorConfig,
   onDeleteSkillConfig,
+  onDeleteTaskConfig,
+  onDeleteScheduleConfig,
+  onDeleteEventTriggerConfig,
+  onDeleteBackendConfig,
+  onDeleteInferenceProfileConfig,
+  onDeleteToolSelectionConfig,
+  onDeleteToolServiceConfig,
+  onDeleteBehaviorConfig,
   onSaveSkillConfig,
   onSaveTaskConfig,
   onSaveScheduleConfig,
@@ -165,7 +193,32 @@ export function ConfigWorkspace({
         </div>
       </header>
 
-      <nav className="config-screen-nav" role="tablist" aria-label="Configuration">
+      <nav
+        className="config-screen-nav"
+        role="tablist"
+        aria-label="Configuration"
+        // Roving tabindex needs the arrow keys to actually rove (WAI-ARIA
+        // tabs pattern): Left/Right cycle, Home/End jump, focus follows.
+        onKeyDown={(event) => {
+          const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
+          if (!keys.includes(event.key)) {
+            return;
+          }
+          event.preventDefault();
+          const currentIndex = TABS.findIndex((tab) => tab.id === activeTab);
+          const nextIndex =
+            event.key === "Home"
+              ? 0
+              : event.key === "End"
+                ? TABS.length - 1
+                : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + TABS.length) %
+                  TABS.length;
+          const next = TABS[nextIndex];
+          setActiveTab(next.id);
+          setSavedStatus(null);
+          document.getElementById(`config-tab-control-${next.id}`)?.focus();
+        }}
+      >
         {TABS.map((tab) => (
           <button
             aria-controls={`config-tab-panel-${tab.id}`}
@@ -206,6 +259,8 @@ export function ConfigWorkspace({
 
         {activeTab === "behavior" ? (
           <BehaviorConfigPanel
+            onDeleteBehaviorConfig={onDeleteBehaviorConfig}
+            onDeletedBehavior={() => selectConfigBehavior(null)}
             deployment={selectedDeployment}
             savedStatus={savedStatus}
             saving={saving}
@@ -252,6 +307,8 @@ export function ConfigWorkspace({
 
         {activeTab === "backends" ? (
           <BackendConfigPanel
+            onDeleteBackendConfig={onDeleteBackendConfig}
+            onDeletedBackend={() => setSelectedBackendId(null)}
             deployment={selectedDeployment}
             savedStatus={savedStatus}
             saving={saving}
@@ -265,6 +322,8 @@ export function ConfigWorkspace({
 
         {activeTab === "profiles" ? (
           <InferenceProfileConfigPanel
+            onDeleteInferenceProfileConfig={onDeleteInferenceProfileConfig}
+            onDeletedProfile={() => setSelectedProfileId(null)}
             deployment={selectedDeployment}
             savedStatus={savedStatus}
             saving={saving}
@@ -278,6 +337,8 @@ export function ConfigWorkspace({
 
         {activeTab === "toolSelections" ? (
           <ToolSelectionConfigPanel
+            onDeleteToolSelectionConfig={onDeleteToolSelectionConfig}
+            onDeletedToolSelection={() => setSelectedToolSelectionId(null)}
             deployment={selectedDeployment}
             savedStatus={savedStatus}
             saving={saving}
@@ -293,6 +354,8 @@ export function ConfigWorkspace({
 
         {activeTab === "metaTools" ? (
           <ToolServiceConfigPanel
+            onDeleteToolServiceConfig={onDeleteToolServiceConfig}
+            onDeletedToolService={() => setSelectedToolServiceId(null)}
             deployment={selectedDeployment}
             savedStatus={savedStatus}
             saving={saving}
@@ -314,6 +377,8 @@ export function ConfigWorkspace({
             selectedBehavior={selectedBehavior}
             selectedTaskId={selectedTaskId}
             onCreateTask={() => setSelectedTaskId(NEW_DOCUMENT_ID)}
+            onDeleteTaskConfig={onDeleteTaskConfig}
+            onDeletedTask={() => setSelectedTaskId(null)}
             onRunTask={onRunTask}
             onSaveTaskConfig={onSaveTaskConfig}
             onSavedStatusChange={setSavedStatus}
@@ -323,6 +388,8 @@ export function ConfigWorkspace({
 
         {activeTab === "timerTriggers" ? (
           <ScheduleConfigPanel
+            onDeleteScheduleConfig={onDeleteScheduleConfig}
+            onDeletedSchedule={() => setSelectedScheduleId(null)}
             deployment={selectedDeployment}
             runningTask={runningTask}
             savedStatus={savedStatus}
@@ -339,6 +406,8 @@ export function ConfigWorkspace({
 
         {activeTab === "eventTriggers" ? (
           <EventTriggerConfigPanel
+            onDeleteEventTriggerConfig={onDeleteEventTriggerConfig}
+            onDeletedEventTrigger={() => setSelectedEventTriggerId(null)}
             deployment={selectedDeployment}
             savedStatus={savedStatus}
             saving={saving}

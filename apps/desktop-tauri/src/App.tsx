@@ -5,6 +5,11 @@ import { CodeContextHeader } from "./components/code/CodeContextHeader";
 import { ConfigWorkspace } from "./components/ConfigWorkspace";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FleetDashboard } from "./components/fleet/FleetDashboard";
+import { ErrorBanner } from "./components/ErrorBanner";
+import { applyTheme, loadTheme } from "./lib/theme";
+import { applyShellPlatform } from "./lib/shellPlatform";
+import { ShortcutsHelp } from "./components/ShortcutsHelp";
+import { useAppShortcuts } from "./hooks/useAppShortcuts";
 import { Sidebar } from "./components/Sidebar";
 import { useDesktopShell } from "./hooks/useDesktopShell";
 import { installExternalLinkGuard } from "./lib/externalLinks";
@@ -21,12 +26,41 @@ function App() {
 function AppShell() {
   const shell = useDesktopShell();
 
+  // Boot lives here, not in App: the boundary test inspects App() as a
+  // plain hook-free function, and the e2e harness mounts App directly.
+  useEffect(() => {
+    applyTheme(loadTheme());
+    applyShellPlatform();
+  }, []);
+
   // External links (e.g. markdown links in the transcript) must open in the
   // OS browser — an unguarded anchor click navigates the whole webview away.
   useEffect(() => installExternalLinkGuard(document), []);
   const [workspaceView, setWorkspaceView] = useState<
     "fleet" | "chat" | "config" | "code"
   >("fleet");
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  useAppShortcuts({
+    setView: setWorkspaceView,
+    newConversation: () => {
+      const behaviorId =
+        shell.selectedBehaviorId ?? shell.behaviorOptions[0]?.behaviorId ?? null;
+      if (behaviorId) {
+        setWorkspaceView("chat");
+        shell.onStartNewConversation(behaviorId);
+      }
+    },
+    focusComposer: () => {
+      setWorkspaceView("chat");
+      requestAnimationFrame(() => {
+        document
+          .querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]')
+          ?.focus();
+      });
+    },
+    toggleHelp: () => setShortcutsOpen((open) => !open),
+  });
 
   function openChat(agentDid?: string) {
     if (agentDid) {
@@ -51,11 +85,11 @@ function AppShell() {
 
   return (
     <main className="app-shell">
+      <div aria-hidden="true" className="titlebar-drag-region" data-tauri-drag-region />
       {shell.error ? (
-        <div className="callout error-banner" data-testid="error-banner">
-          {shell.error}
-        </div>
+        <ErrorBanner message={shell.error} onDismiss={shell.onDismissError} />
       ) : null}
+      <ShortcutsHelp open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
       {workspaceView === "fleet" ? (
         <FleetDashboard
@@ -70,7 +104,10 @@ function AppShell() {
           onFetchPeerStatus={shell.onFetchPeerStatus}
           onInitLocalRuntime={shell.onInitLocalRuntime}
           onOpenChat={openChat}
+          onOpenCode={openCode}
           onOpenConfig={openConfig}
+          onRemovePeer={shell.onRemovePeer}
+          onRenamePeer={shell.onRenamePeer}
           onRepairP2P={shell.onRepairP2P}
         />
       ) : workspaceView === "chat" || workspaceView === "code" ? (
@@ -83,7 +120,12 @@ function AppShell() {
             onOpenCode={(agentDid) => openCode(agentDid)}
             onOpenFleet={() => setWorkspaceView("fleet")}
             onSelectBehavior={shell.setSelectedBehaviorId}
+            onSelectAgent={(agentDid) => {
+              shell.setSelectedAgentDid(agentDid);
+              shell.setSelectedSessionId(null);
+            }}
             onSelectSession={shell.onSelectSession}
+            onRenameConversationTitle={shell.onRenameConversationTitle}
             onStartNewConversation={shell.onStartNewConversation}
             selectedAgentDid={shell.selectedAgentDid}
             selectedBehaviorId={shell.selectedBehaviorId}
@@ -134,6 +176,14 @@ function AppShell() {
             bootstrap={shell.snapshot?.bootstrap ?? null}
             onBack={() => setWorkspaceView("chat")}
             onDeleteSkillConfig={shell.onDeleteSkillConfig}
+            onDeleteTaskConfig={shell.onDeleteTaskConfig}
+            onDeleteScheduleConfig={shell.onDeleteScheduleConfig}
+            onDeleteEventTriggerConfig={shell.onDeleteEventTriggerConfig}
+            onDeleteBackendConfig={shell.onDeleteBackendConfig}
+            onDeleteInferenceProfileConfig={shell.onDeleteInferenceProfileConfig}
+            onDeleteToolSelectionConfig={shell.onDeleteToolSelectionConfig}
+            onDeleteToolServiceConfig={shell.onDeleteToolServiceConfig}
+            onDeleteBehaviorConfig={shell.onDeleteBehaviorConfig}
             onSaveAgentConfig={shell.onSaveAgentConfig}
             onRunTask={shell.onRunTask}
             onSaveBackendConfig={shell.onSaveBackendConfig}

@@ -1,18 +1,61 @@
+import type React from "react";
+
 export type ConfigEditorHeaderProps = {
   eyebrow: string;
   saved: boolean;
   title: string;
+  dirty?: boolean;
 };
 
-export function ConfigEditorHeader({ eyebrow, saved, title }: ConfigEditorHeaderProps) {
+export function ConfigEditorHeader({
+  eyebrow,
+  saved,
+  title,
+  dirty = false,
+}: ConfigEditorHeaderProps) {
   return (
     <div className="panel-header">
       <div>
         <p className="eyebrow">{eyebrow}</p>
         <h3>{title}</h3>
       </div>
-      {saved ? <span className="chip chip-green">Saved</span> : null}
+      <EditorStatusChip dirty={dirty} saved={saved} />
     </div>
+  );
+}
+
+/** One save-state vocabulary for every editor, including the custom-header
+ * Agent/Behavior panels: dirty outranks saved. */
+export function EditorStatusChip({ dirty, saved }: { dirty: boolean; saved: boolean }) {
+  if (dirty) {
+    return (
+      <span className="chip chip-amber" data-testid="unsaved-chip">
+        Unsaved changes
+      </span>
+    );
+  }
+  if (saved) {
+    return <span className="chip chip-green">Saved</span>;
+  }
+  return null;
+}
+
+/** Inline validation reason — invalid input must explain itself, not just
+ * disable Save. */
+export function FieldHint({
+  show,
+  children,
+}: {
+  show: boolean;
+  children: React.ReactNode;
+}) {
+  if (!show) {
+    return null;
+  }
+  return (
+    <span className="field-hint-error" role="alert">
+      {children}
+    </span>
   );
 }
 

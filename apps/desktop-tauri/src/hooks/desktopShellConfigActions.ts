@@ -10,6 +10,14 @@ import {
   saveToolSelectionConfig,
   saveToolServiceConfig,
   testToolService,
+  deleteTaskConfig,
+  deleteScheduleConfig,
+  deleteEventTriggerConfig,
+  deleteBackendConfig,
+  deleteInferenceProfileConfig,
+  deleteToolSelectionConfig,
+  deleteToolServiceConfig,
+  deleteBehaviorConfig,
 } from "../lib/desktop-api";
 import type {
   AgentConfigSaveRequest,
@@ -23,6 +31,14 @@ import type {
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
+  TaskDeleteRequest,
+  ScheduleDeleteRequest,
+  EventTriggerDeleteRequest,
+  BackendDeleteRequest,
+  InferenceProfileDeleteRequest,
+  ToolSelectionDeleteRequest,
+  ToolServiceDeleteRequest,
+  BehaviorDeleteRequest,
 } from "../lib/types";
 
 type ConfigActionParams = {
@@ -99,6 +115,136 @@ export function createDesktopShellConfigActions({
     setError(null);
     try {
       const next = await deleteSkillConfig(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteTaskConfig(request: TaskDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteTaskConfig(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteScheduleConfig(request: ScheduleDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteScheduleConfig(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteEventTriggerConfig(request: EventTriggerDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteEventTriggerConfig(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteBackendConfig(request: BackendDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteBackendConfig(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteInferenceProfileConfig(
+    request: InferenceProfileDeleteRequest,
+  ) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteInferenceProfileConfig(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteToolSelectionConfig(request: ToolSelectionDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteToolSelectionConfig(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteToolServiceConfig(request: ToolServiceDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteToolServiceConfig(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteBehaviorConfig(request: BehaviorDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await deleteBehaviorConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       return next;
@@ -188,6 +334,14 @@ export function createDesktopShellConfigActions({
     onSaveBackendConfig,
     onSaveBehaviorConfig,
     onDeleteSkillConfig,
+    onDeleteTaskConfig,
+    onDeleteScheduleConfig,
+    onDeleteEventTriggerConfig,
+    onDeleteBackendConfig,
+    onDeleteInferenceProfileConfig,
+    onDeleteToolSelectionConfig,
+    onDeleteToolServiceConfig,
+    onDeleteBehaviorConfig,
     onSaveInferenceProfileConfig,
     onSaveSkillConfig,
     onSaveToolSelectionConfig,

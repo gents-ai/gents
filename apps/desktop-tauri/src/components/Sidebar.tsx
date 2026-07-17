@@ -17,6 +17,11 @@ export type SidebarProps = {
   onOpenCode?: (agentDid: string) => void;
   onSelectBehavior: (behaviorId: string) => void;
   onSelectSession: (sessionId: string) => void;
+  onSelectAgent?: (agentDid: string) => void;
+  onRenameConversationTitle?: (
+    sessionId: string,
+    title: string,
+  ) => void | Promise<void>;
   onStartNewConversation: (behaviorId: string) => void;
 };
 
@@ -32,12 +37,15 @@ export function Sidebar({
   onOpenCode,
   onSelectBehavior,
   onSelectSession,
+  onSelectAgent,
+  onRenameConversationTitle,
   onStartNewConversation,
 }: SidebarProps) {
   return (
     <aside className="sidebar">
       <ConnectedPeerSection
         deployments={deployments}
+        onSelectAgent={onSelectAgent}
         selectedAgentDid={selectedAgentDid}
         onConfigureDeployment={onConfigureDeployment}
         onOpenCode={onOpenCode}
@@ -58,6 +66,7 @@ export function Sidebar({
         selectedAgentDid={selectedAgentDid}
         selectedSessionId={selectedSessionId}
         onSelectSession={onSelectSession}
+        onRenameConversationTitle={onRenameConversationTitle}
       />
     </aside>
   );

@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 
 import type {
   AgentConfigSaveRequest,
+  BehaviorDeleteRequest,
   BehaviorSaveRequest,
   BehaviorView,
   DeploymentView,
@@ -11,10 +12,16 @@ import type {
   SkillView,
   ToolSelectionView,
 } from "../../lib/types";
-import { ConfigDocumentList, PlusIcon } from "./ConfigChrome";
+import { ConfirmDialog } from "../ConfirmDialog";
+import { isDirty } from "./configDirty";
+import {
+  ConfigDocumentList,
+  EditorStatusChip,
+  FieldHint,
+  PlusIcon,
+} from "./ConfigChrome";
 import {
   boolText,
-  ignoreHandledActionError,
   isOptionalFloat,
   optionalString,
   parseOptionalFloat,
@@ -36,6 +43,8 @@ export type BehaviorConfigPanelProps = {
   onSelectBehavior: (behaviorId: string) => void;
   onSaveAgentConfig: (request: AgentConfigSaveRequest) => Promise<unknown>;
   onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
+  onDeleteBehaviorConfig: (request: BehaviorDeleteRequest) => Promise<unknown>;
+  onDeletedBehavior: () => void;
 };
 
 export function BehaviorConfigPanel({
@@ -51,6 +60,8 @@ export function BehaviorConfigPanel({
   onSelectBehavior,
   onSaveAgentConfig,
   onSaveBehaviorConfig,
+  onDeleteBehaviorConfig,
+  onDeletedBehavior,
 }: BehaviorConfigPanelProps) {
   return (
     <section className="config-layout">
@@ -95,6 +106,10 @@ export function BehaviorConfigPanel({
         }}
         onSaveAgentConfig={onSaveAgentConfig}
         onSaveBehaviorConfig={onSaveBehaviorConfig}
+        onDeleteBehaviorConfig={onDeleteBehaviorConfig}
+        onDeleted={() => {
+          onDeletedBehavior();
+        }}
       />
     </section>
   );
@@ -118,6 +133,8 @@ export type BehaviorConfigEditorProps = {
   onSaved: (behaviorId: string) => void;
   onSaveAgentConfig: (request: AgentConfigSaveRequest) => Promise<unknown>;
   onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
+  onDeleteBehaviorConfig: (request: BehaviorDeleteRequest) => Promise<unknown>;
+  onDeleted: () => void;
 };
 
 export function BehaviorConfigEditor({
@@ -138,6 +155,8 @@ export function BehaviorConfigEditor({
   onSaved,
   onSaveAgentConfig,
   onSaveBehaviorConfig,
+  onDeleteBehaviorConfig,
+  onDeleted,
 }: BehaviorConfigEditorProps) {
   const [behaviorId, setBehaviorId] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
@@ -154,48 +173,54 @@ export function BehaviorConfigEditor({
   const [defaultForAgent, setDefaultForAgent] = useState(false);
   const [skillRefs, setSkillRefs] = useState<string[]>([]);
   const [skillExcludes, setSkillExcludes] = useState<string[]>([]);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
-  // Sorted like toolServiceIdKey: the joined key must not depend on row order.
-  const profileIdKey = inferenceProfiles
-    .map((p) => p.profileId)
-    .sort()
-    .join("|");
+  async function deleteBehavior() {
+    setConfirmingDelete(false);
+    if (!behavior) {
+      return;
+    }
+    try {
+      await onDeleteBehaviorConfig({ behaviorId: behavior.behaviorId, agentDid });
+      onDeleted();
+    } catch {
+      // Surfaced by the shell error banner; the editor stays put.
+    }
+  }
 
   useEffect(() => {
-    setBehaviorId(behavior?.behaviorId ?? "");
-    setSystemPrompt(behavior?.systemPrompt ?? "");
-    setBackendId(behavior?.backendId ?? "");
-    setProfileId(behavior?.inferenceProfileId ?? "");
-    setToolSelectionId(behavior?.toolSelectionId ?? "");
-    setCompactionStrategy(behavior?.compactionStrategy ?? DEFAULT_COMPACTION_STRATEGY);
-    setCompactionThreshold(
-      behavior?.compactionThreshold != null
-        ? String(behavior.compactionThreshold)
-        : DEFAULT_COMPACTION_THRESHOLD,
-    );
-    setEnabled(behavior?.enabled ?? true);
-    setDefaultForAgent(behavior?.isDefault ?? false);
-    setSkillRefs(behavior?.skillRefs ?? []);
-    setSkillExcludes(behavior?.skillExcludes ?? []);
+    const base = behaviorFormValues(behavior);
+    setBehaviorId(base.behaviorId);
+    setSystemPrompt(base.systemPrompt);
+    setBackendId(base.backendId);
+    setProfileId(base.profileId);
+    setToolSelectionId(base.toolSelectionId);
+    setCompactionStrategy(base.compactionStrategy);
+    setCompactionThreshold(base.compactionThreshold);
+    setEnabled(base.enabled);
+    setDefaultForAgent(base.defaultForAgent);
+    setSkillRefs(base.skillRefs);
+    setSkillExcludes(base.skillExcludes);
+    setSaveError(null);
     // Id-keyed only: background snapshot refreshes (including profile-list
     // churn) must not wipe in-progress edits.
   }, [behavior?.behaviorId]);
 
-  // Default-profile fallback in its own effect so profile-set churn never
-  // resets the rest of the form: keep the current pick while it exists,
-  // otherwise fall back to the document's selection, then the first profile.
-  useEffect(() => {
-    setProfileId((current) => {
-      if (current && inferenceProfiles.some((p) => p.profileId === current)) {
-        return current;
-      }
-      const selected = behavior?.inferenceProfileId;
-      if (selected && inferenceProfiles.some((p) => p.profileId === selected)) {
-        return selected;
-      }
-      return inferenceProfiles[0]?.profileId ?? "";
-    });
-  }, [behavior?.behaviorId, profileIdKey]);
+  // The profile fallback is derived, not stored: profileId holds only what
+  // hydration or the user put there, so profile-list churn can never bake a
+  // fallback into state (a stored fallback both defeats dirty tracking and
+  // gets silently persisted over the document's own selection on Save).
+  const effectiveProfileId = pickValidProfile(
+    [profileId, behavior?.inferenceProfileId ?? ""],
+    inferenceProfiles,
+  );
+  // The select needs an available value to render, but a temporary profile
+  // registry dropout must not rewrite the document's actual reference when an
+  // operator saves an unrelated field. A deliberate selection updates
+  // profileId and therefore still wins here.
+  const submittedProfileId =
+    profileId || behavior?.inferenceProfileId || effectiveProfileId;
 
   const behaviorScopedSkills = skills.filter((skill) => skill.scope === "behavior");
   const principalScopedSkills = skills.filter((skill) => skill.scope === "principal");
@@ -234,6 +259,31 @@ export function BehaviorConfigEditor({
     max: 1,
   });
 
+  // Baseline applies the same derived-profile fallback; skill arrays compare
+  // as sets — toggling off and back on must not read as an edit.
+  const base = behaviorFormValues(behavior);
+  const dirty = isDirty(
+    {
+      behaviorId,
+      systemPrompt,
+      backendId,
+      profileId: effectiveProfileId,
+      toolSelectionId,
+      compactionStrategy,
+      compactionThreshold,
+      enabled,
+      defaultForAgent,
+      skillRefs: [...skillRefs].sort(),
+      skillExcludes: [...skillExcludes].sort(),
+    },
+    {
+      ...base,
+      profileId: pickValidProfile([base.profileId], inferenceProfiles),
+      skillRefs: [...base.skillRefs].sort(),
+      skillExcludes: [...base.skillExcludes].sort(),
+    },
+  );
+
   async function submitBehavior(event: FormEvent) {
     event.preventDefault();
     const nextId = behaviorId.trim();
@@ -244,7 +294,7 @@ export function BehaviorConfigEditor({
         displayName: nextId,
         systemPrompt,
         backendId: optionalString(backendId),
-        inferenceProfileId: profileId.trim(),
+        inferenceProfileId: submittedProfileId,
         toolSelectionId: optionalString(toolSelectionId),
         compactionStrategy: optionalString(compactionStrategy),
         compactionThreshold: parseOptionalFloat(compactionThreshold),
@@ -261,8 +311,9 @@ export function BehaviorConfigEditor({
         });
       }
       onSaved(nextId);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -287,10 +338,12 @@ export function BehaviorConfigEditor({
             )}
           </div>
         </div>
-        {savedStatus === `behavior:${behaviorId.trim()}` ? (
-          <span className="chip chip-green">Saved</span>
-        ) : null}
+        <EditorStatusChip
+          dirty={dirty}
+          saved={savedStatus === `behavior:${behaviorId.trim()}`}
+        />
       </div>
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
 
       <div className="behavior-link-grid">
         <label className="field behavior-link-field">
@@ -326,7 +379,7 @@ export function BehaviorConfigEditor({
             <select
               data-testid="behavior-profile-id"
               onChange={(event) => setProfileId(event.currentTarget.value)}
-              value={profileId}
+              value={effectiveProfileId}
             >
               {!inferenceProfiles.length ? (
                 <option value="">No profiles available</option>
@@ -425,6 +478,9 @@ export function BehaviorConfigEditor({
               type="number"
               value={compactionThreshold}
             />
+            <FieldHint show={!compactionThresholdValid}>
+              Number between 0 and 1
+            </FieldHint>
           </label>
         </div>
       </section>
@@ -493,6 +549,28 @@ export function BehaviorConfigEditor({
       </label>
 
       <div className="config-actions">
+        {behavior && !behavior.isDefault ? (
+          <button
+            className="ghost-button danger-button"
+            data-testid="behavior-delete"
+            disabled={saving}
+            onClick={() => setConfirmingDelete(true)}
+            type="button"
+          >
+            Delete Behavior
+          </button>
+        ) : null}
+        <ConfirmDialog
+          open={confirmingDelete}
+          title="Delete behavior"
+          message={`Delete behavior "${behavior?.behaviorId ?? ""}"? Tasks still pointing at it will block the delete.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            void deleteBehavior();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
         <button
           className="primary-button"
           data-testid="behavior-save"
@@ -500,7 +578,7 @@ export function BehaviorConfigEditor({
             saving ||
             !behaviorId.trim() ||
             !systemPrompt.trim() ||
-            !profileId.trim() ||
+            !effectiveProfileId ||
             !compactionThresholdValid
           }
           type="submit"
@@ -510,4 +588,34 @@ export function BehaviorConfigEditor({
       </div>
     </form>
   );
+}
+
+/** View→form hydration, shared by the reset effect and dirty comparison. */
+function behaviorFormValues(behavior: BehaviorView | null) {
+  return {
+    behaviorId: behavior?.behaviorId ?? "",
+    systemPrompt: behavior?.systemPrompt ?? "",
+    backendId: behavior?.backendId ?? "",
+    profileId: behavior?.inferenceProfileId ?? "",
+    toolSelectionId: behavior?.toolSelectionId ?? "",
+    compactionStrategy: behavior?.compactionStrategy ?? DEFAULT_COMPACTION_STRATEGY,
+    compactionThreshold:
+      behavior?.compactionThreshold != null
+        ? String(behavior.compactionThreshold)
+        : DEFAULT_COMPACTION_THRESHOLD,
+    enabled: behavior?.enabled ?? true,
+    defaultForAgent: behavior?.isDefault ?? false,
+    skillRefs: behavior?.skillRefs ?? [],
+    skillExcludes: behavior?.skillExcludes ?? [],
+  };
+}
+
+/** First candidate that names an available profile, else the first profile. */
+function pickValidProfile(candidates: string[], profiles: InferenceProfileView[]) {
+  for (const candidate of candidates) {
+    if (candidate && profiles.some((profile) => profile.profileId === candidate)) {
+      return candidate;
+    }
+  }
+  return profiles[0]?.profileId ?? "";
 }

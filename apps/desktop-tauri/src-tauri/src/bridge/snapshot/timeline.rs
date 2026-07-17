@@ -163,6 +163,7 @@ pub(super) fn build_rendered_timeline(
                         item_key: message.message_key.clone(),
                         sequence: message.sequence,
                         content,
+                        timestamp: normalize_optional(message.timestamp.as_deref()),
                     }),
                 ),
                 None => (false, None),
@@ -175,6 +176,7 @@ pub(super) fn build_rendered_timeline(
                     sequence: message.sequence,
                     content: normalized_content.clone(),
                     reasoning: normalized_reasoning.clone(),
+                    timestamp: normalize_optional(message.timestamp.as_deref()),
                 }),
             )
         } else {

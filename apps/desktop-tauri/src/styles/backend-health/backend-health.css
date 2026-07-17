@@ -60,7 +60,7 @@
     border-color: rgb(var(--source-orange-rgb) / 0.36);
   }
   .backend-health__summary-chip[data-tone="error"] {
-    border-color: rgb(255 111 95 / 0.36);
+    border-color: rgb(var(--color-error-strong-rgb) / 0.36);
   }
 
   .backend-health__summary-count {
@@ -81,7 +81,7 @@
 
   .backend-health__error {
     color: var(--color-error);
-    border-color: rgb(255 111 95 / 0.36);
+    border-color: rgb(var(--color-error-strong-rgb) / 0.36);
   }
 
   /* ── list ──────────────────────────────────────────────── */
@@ -169,7 +169,7 @@
   }
   .backend-health__status-glyph[data-state="unhealthy"] {
     color: var(--color-error);
-    border-color: rgb(255 111 95 / 0.4);
+    border-color: rgb(var(--color-error-strong-rgb) / 0.4);
   }
   .backend-health__status-glyph[data-state="stale"],
   .backend-health__status-glyph[data-state="rate-limited"],
@@ -280,7 +280,7 @@
     gap: var(--space-9);
     padding: var(--space-7) var(--space-7) var(--space-9);
     border-top: 1px solid var(--border-subtle);
-    background: rgb(0 0 0 / 0.2);
+    background: rgb(var(--scrim-rgb) / 0.2);
   }
 
   .backend-health__detail-section {
@@ -415,7 +415,7 @@
   }
   .backend-health__call-state[data-state="failed"] {
     color: var(--color-error);
-    background: rgb(255 111 95 / 0.1);
+    background: rgb(var(--color-error-strong-rgb) / 0.1);
   }
   .backend-health__call-state[data-state="cancelled"] {
     color: var(--color-warning);

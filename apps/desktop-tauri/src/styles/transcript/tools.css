@@ -8,17 +8,6 @@
     background: var(--color-surface-deep);
   }
 
-  .tool-group-meta {
-    display: flex;
-    justify-content: flex-start;
-    align-items: center;
-    gap: var(--space-3);
-    min-width: 0;
-    padding: var(--space-4) var(--space-5);
-    border-bottom: 1px solid rgb(var(--source-green-rgb) / 0.1);
-  }
-
-  .tool-group-label,
   .tool-item-label,
   .tool-detail-key,
   .tool-detail-label {
@@ -99,6 +88,21 @@
     font-size: var(--text-sm);
     white-space: nowrap;
     opacity: 0.7;
+    transition: transform var(--motion-fast) ease;
+  }
+
+  .tool-item[open] .tool-item-action {
+    transform: rotate(90deg);
+  }
+
+  .tool-item-preview {
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
 
   .tool-item-body {
@@ -338,10 +342,34 @@
     padding: 0 var(--space-5) var(--space-2);
   }
 
+  .code-read-counts {
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+    white-space: nowrap;
+  }
+
+  .code-output {
+    position: relative;
+  }
+
+  .code-output-copy {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+    opacity: 0;
+    background: var(--color-surface-deep);
+  }
+
+  .code-output:hover .code-output-copy,
+  .code-output-copy:focus-visible {
+    opacity: 1;
+  }
+
   .code-terminal {
     margin: 0;
     padding: var(--space-3) var(--space-5);
-    overflow-x: auto;
+    max-height: 320px;
+    overflow: auto;
     background: var(--color-surface-deep);
     border-radius: var(--radius-md, 8px);
     font-size: var(--text-md);

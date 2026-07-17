@@ -3,12 +3,15 @@ import type { FormEvent } from "react";
 
 import type {
   DeploymentView,
+  ScheduleDeleteRequest,
   ScheduleSaveRequest,
   ScheduleView,
   TaskRunResult,
   TaskView,
 } from "../../lib/types";
-import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
+import { ConfirmDialog } from "../ConfirmDialog";
+import { isDirty } from "./configDirty";
+import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import { ignoreHandledActionError, isOptionalInt, parseOptionalInt } from "./formUtils";
 
 export type ScheduleConfigPanelProps = {
@@ -22,6 +25,8 @@ export type ScheduleConfigPanelProps = {
   onCreateSchedule: () => void;
   onSavedStatusChange: (value: string) => void;
   onSaveScheduleConfig: (request: ScheduleSaveRequest) => Promise<unknown>;
+  onDeleteScheduleConfig: (request: ScheduleDeleteRequest) => Promise<unknown>;
+  onDeletedSchedule: () => void;
   onRunSchedule: (request: { scheduleId: string }) => Promise<TaskRunResult>;
 };
 
@@ -36,6 +41,8 @@ export function ScheduleConfigPanel({
   onCreateSchedule,
   onSavedStatusChange,
   onSaveScheduleConfig,
+  onDeleteScheduleConfig,
+  onDeletedSchedule,
   onRunSchedule,
 }: ScheduleConfigPanelProps) {
   const selectedSchedule = useMemo(
@@ -67,6 +74,7 @@ export function ScheduleConfigPanel({
       />
 
       <ScheduleConfigEditor
+        agentDid={deployment.agentDid}
         runningTask={runningTask}
         savedStatus={savedStatus}
         saving={saving}
@@ -79,12 +87,17 @@ export function ScheduleConfigPanel({
           onSavedStatusChange(`schedule:${scheduleId}`);
         }}
         onSaveScheduleConfig={onSaveScheduleConfig}
+        onDeleteScheduleConfig={onDeleteScheduleConfig}
+        onDeleted={() => {
+          onDeletedSchedule();
+        }}
       />
     </section>
   );
 }
 
 export type ScheduleConfigEditorProps = {
+  agentDid: string;
   schedule: ScheduleView | null;
   selectedTask: TaskView | null;
   tasks: TaskView[];
@@ -93,10 +106,13 @@ export type ScheduleConfigEditorProps = {
   runningTask: boolean;
   onSaved: (scheduleId: string) => void;
   onSaveScheduleConfig: (request: ScheduleSaveRequest) => Promise<unknown>;
+  onDeleteScheduleConfig: (request: ScheduleDeleteRequest) => Promise<unknown>;
+  onDeleted: () => void;
   onRunSchedule: (request: { scheduleId: string }) => Promise<TaskRunResult>;
 };
 
 export function ScheduleConfigEditor({
+  agentDid,
   schedule,
   selectedTask,
   tasks,
@@ -105,8 +121,24 @@ export function ScheduleConfigEditor({
   runningTask,
   onSaved,
   onSaveScheduleConfig,
+  onDeleteScheduleConfig,
+  onDeleted,
   onRunSchedule,
 }: ScheduleConfigEditorProps) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  async function deleteSchedule() {
+    setConfirmingDelete(false);
+    if (!schedule) {
+      return;
+    }
+    try {
+      await onDeleteScheduleConfig({ scheduleId: schedule.scheduleId, agentDid });
+      onDeleted();
+    } catch {
+      // Surfaced by the shell error banner; the editor stays put.
+    }
+  }
   const [scheduleId, setScheduleId] = useState("");
   const [taskId, setTaskId] = useState("");
   const [intervalSecs, setIntervalSecs] = useState("");
@@ -114,14 +146,16 @@ export function ScheduleConfigEditor({
   const [concurrency, setConcurrency] = useState("serial");
   const [runStatus, setRunStatus] = useState<TaskRunResult | null>(null);
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   useEffect(() => {
-    setScheduleId(schedule?.scheduleId ?? "");
-    setTaskId(schedule?.taskId ?? selectedTask?.taskId ?? "");
-    setIntervalSecs(
-      schedule?.intervalSecs != null ? String(schedule.intervalSecs) : "",
-    );
-    setEnabled(schedule?.enabled ?? true);
-    setConcurrency(schedule?.concurrency ?? "serial");
+    const b = scheduleFormValues(schedule, selectedTask?.taskId ?? null);
+    setScheduleId(b.scheduleId);
+    setTaskId(b.taskId);
+    setIntervalSecs(b.intervalSecs);
+    setEnabled(b.enabled);
+    setConcurrency(b.concurrency);
+    setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [schedule?.scheduleId, selectedTask?.taskId]);
 
@@ -143,8 +177,9 @@ export function ScheduleConfigEditor({
         concurrency,
       });
       onSaved(nextId);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -160,10 +195,15 @@ export function ScheduleConfigEditor({
   return (
     <form className="panel config-editor" onSubmit={submitSchedule}>
       <ConfigEditorHeader
+        dirty={isDirty(
+          { scheduleId, taskId, intervalSecs, enabled, concurrency },
+          scheduleFormValues(schedule, selectedTask?.taskId ?? null),
+        )}
         eyebrow="Timer Trigger"
         saved={savedStatus === `schedule:${scheduleId.trim()}`}
         title={scheduleId || "New Timer Trigger"}
       />
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
       <div className="grid-2">
         <label className="field">
           <span>Schedule ID</span>
@@ -206,6 +246,7 @@ export function ScheduleConfigEditor({
             type="number"
             value={intervalSecs}
           />
+          <FieldHint show={!intervalValid}>Whole number of 1 or more</FieldHint>
         </label>
         <label className="field">
           <span>Concurrency</span>
@@ -252,6 +293,28 @@ export function ScheduleConfigEditor({
         </div>
       </div>
       <div className="config-actions">
+        {schedule ? (
+          <button
+            className="ghost-button danger-button"
+            data-testid="schedule-delete"
+            disabled={saving}
+            onClick={() => setConfirmingDelete(true)}
+            type="button"
+          >
+            Delete Schedule
+          </button>
+        ) : null}
+        <ConfirmDialog
+          open={confirmingDelete}
+          title="Delete schedule"
+          message={`Delete schedule "${schedule?.scheduleId ?? ""}"? This automation stops firing immediately.`}
+          confirmLabel="Delete Schedule"
+          danger
+          onConfirm={() => {
+            void deleteSchedule();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
         <button
           className="primary-button"
           data-testid="schedule-save"
@@ -294,4 +357,18 @@ export function ScheduleConfigEditor({
       </section>
     </form>
   );
+}
+
+/** View→form hydration, shared by the reset effect and dirty comparison. */
+function scheduleFormValues(
+  schedule: ScheduleView | null,
+  fallbackTaskId: string | null,
+) {
+  return {
+    scheduleId: schedule?.scheduleId ?? "",
+    taskId: schedule?.taskId ?? fallbackTaskId ?? "",
+    intervalSecs: schedule?.intervalSecs != null ? String(schedule.intervalSecs) : "",
+    enabled: schedule?.enabled ?? true,
+    concurrency: schedule?.concurrency ?? "serial",
+  };
 }

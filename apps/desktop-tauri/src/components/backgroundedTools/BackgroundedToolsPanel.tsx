@@ -1,6 +1,10 @@
 import { useCallback, useContext, useMemo, useState } from "react";
 
-import type { DesktopOperationsSnapshotRequest } from "../../lib/types/operations";
+import type {
+  DesktopOperationsSnapshotRequest,
+  StuckWorkDiagnosticView,
+} from "../../lib/types/operations";
+import { shortId } from "../../lib/shortId";
 import { OperationsRailContext } from "../operations/operationsRailContext";
 import {
   correlateProcess,
@@ -19,12 +23,36 @@ type SortKey =
   | "processLabel";
 type SortDir = "ascending" | "descending";
 
-// 8-slot ceiling per the operator-surfaces spec §"Panel 1". Hardcoded
-// until the bridge exposes a per-agent backgrounded-tool capacity.
-const MAX_BACKGROUND_SLOTS = 8;
+const STATE_LABELS: Record<string, string> = {
+  running: "Running",
+  background: "Background",
+  stuck: "Stuck",
+  cancelPending: "CancelPending",
+  "deadline+": "Past deadline",
+};
+
+/** The bridge's diagnosis, in operator language. */
+function diagnosticSentence(diag: StuckWorkDiagnosticView): string {
+  const tool = diag.toolName ?? "a tool";
+  switch (diag.reason) {
+    case "expiredProcessing":
+      return `Request ${shortId(diag.requestId)} ran past its deadline`;
+    case "expiredTool":
+      return `${tool} on ${shortId(diag.requestId)} ran past its deadline`;
+    case "stuckTool":
+      return `${tool} on ${shortId(diag.requestId)} has stopped making progress`;
+    case "pendingRemoteCancelAck":
+      return `Waiting on a remote node to acknowledge cancelling ${shortId(diag.requestId)}`;
+    default:
+      return `${shortId(diag.requestId)} needs attention`;
+  }
+}
 
 export type BackgroundedToolsPanelProps = {
+  agentDid?: string | null;
   rootRequestId?: string | null;
+  /** Selected deployment's runtime doc — carries real executor slot data. */
+  runtime?: import("../../lib/types").RuntimeView | null;
   /** Focus the lineage view on this row's parent request. */
   onOpenLineage?: (requestId: string) => void;
   /** Begin the interrupt (preview + cascade dialog) flow for this row's parent request. */
@@ -32,7 +60,9 @@ export type BackgroundedToolsPanelProps = {
 };
 
 export function BackgroundedToolsPanel({
+  agentDid,
   rootRequestId,
+  runtime,
   onOpenLineage,
   onInterruptParent,
 }: BackgroundedToolsPanelProps = {}) {
@@ -40,8 +70,8 @@ export function BackgroundedToolsPanel({
   // (tests, future standalone surfaces), where tab switching is a no-op.
   const rail = useContext(OperationsRailContext);
   const request: DesktopOperationsSnapshotRequest = useMemo(
-    () => ({ rootRequestId: rootRequestId ?? null }),
-    [rootRequestId],
+    () => ({ agentDid: agentDid ?? null, rootRequestId: rootRequestId ?? null }),
+    [agentDid, rootRequestId],
   );
   const { snapshot, error, isLoading } = useOperationsSnapshot(request);
 
@@ -109,6 +139,28 @@ export function BackgroundedToolsPanel({
     [projected],
   );
 
+  // Chips are derived from the rows actually present (plus any engaged
+  // filter, so clearing stays possible) — an offered filter always matches.
+  const stateOptions = useMemo(
+    () =>
+      Array.from(
+        new Set([...projected.map((r) => r.derivedState), ...stateFilters]),
+      ).sort(),
+    [projected, stateFilters],
+  );
+  const awaitOptions = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...projected
+            .map((r) => r.awaitMode)
+            .filter((mode): mode is string => mode != null),
+          ...awaitFilters,
+        ]),
+      ).sort(),
+    [projected, awaitFilters],
+  );
+
   const onSort = useCallback(
     (key: SortKey) => {
       if (sortKey === key) {
@@ -135,8 +187,9 @@ export function BackgroundedToolsPanel({
       return next;
     });
 
-  // Error state
-  if (error) {
+  // Full error state only when there is nothing to show — a single failed
+  // poll must not replace a live table with an error screen.
+  if (error && !snapshot) {
     return (
       <section className="background-tools-panel" aria-label="Background tools">
         <div className="empty-state">
@@ -149,8 +202,28 @@ export function BackgroundedToolsPanel({
     );
   }
 
+  const diagnostics = snapshot?.stuckDiagnostics ?? [];
+
   return (
     <section className="background-tools-panel" aria-label="Background tools">
+      {error ? (
+        <div className="muted small" data-testid="ops-stale-note" role="status">
+          Live updates interrupted — showing the last snapshot. ({error})
+        </div>
+      ) : null}
+      {diagnostics.length > 0 ? (
+        <div className="stuck-diagnostics" data-testid="stuck-diagnostics" role="alert">
+          {diagnostics.map((diag, index) => (
+            <div
+              className={`stuck-diagnostic is-${diag.severity}`}
+              key={`${diag.requestId}-${diag.toolCallId ?? index}`}
+            >
+              <span aria-hidden="true" className="stuck-diagnostic-dot" />
+              {diagnosticSentence(diag)}
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="chip-row" role="group" aria-label="Filter by parent">
         <span className="chip-label">Parent</span>
         <button
@@ -168,49 +241,44 @@ export function BackgroundedToolsPanel({
             className={`chip ${parentFilter === p ? "is-active" : ""}`}
             aria-pressed={parentFilter === p}
             onClick={() => setParentFilter(p)}
+            title={p}
           >
-            {p}
+            {shortId(p)}
           </button>
         ))}
       </div>
-      <div className="chip-row" role="group" aria-label="Filter by state">
-        <span className="chip-label">State</span>
-        {(
-          [
-            "running",
-            "background",
-            "stuck",
-            "cancelPending",
-            "deadline+",
-          ] as DerivedState[]
-        ).map((s) => (
-          <button
-            key={s}
-            type="button"
-            className={`chip ${stateFilters.has(s) ? "is-active" : ""}`}
-            aria-pressed={stateFilters.has(s)}
-            onClick={() => toggleStateFilter(s)}
-          >
-            {s === "deadline+"
-              ? "Past deadline"
-              : s.charAt(0).toUpperCase() + s.slice(1)}
-          </button>
-        ))}
-      </div>
-      <div className="chip-row" role="group" aria-label="Filter by await mode">
-        <span className="chip-label">Await</span>
-        {["background", "bridge", "detach"].map((a) => (
-          <button
-            key={a}
-            type="button"
-            className={`chip ${awaitFilters.has(a) ? "is-active" : ""}`}
-            aria-pressed={awaitFilters.has(a)}
-            onClick={() => toggleAwaitFilter(a)}
-          >
-            {a}
-          </button>
-        ))}
-      </div>
+      {stateOptions.length > 0 ? (
+        <div className="chip-row" role="group" aria-label="Filter by state">
+          <span className="chip-label">State</span>
+          {stateOptions.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={`chip ${stateFilters.has(s) ? "is-active" : ""}`}
+              aria-pressed={stateFilters.has(s)}
+              onClick={() => toggleStateFilter(s)}
+            >
+              {STATE_LABELS[s] ?? s}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {awaitOptions.length > 0 ? (
+        <div className="chip-row" role="group" aria-label="Filter by await mode">
+          <span className="chip-label">Await</span>
+          {awaitOptions.map((a) => (
+            <button
+              key={a}
+              type="button"
+              className={`chip ${awaitFilters.has(a) ? "is-active" : ""}`}
+              aria-pressed={awaitFilters.has(a)}
+              onClick={() => toggleAwaitFilter(a)}
+            >
+              {a}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="chip-row">
         <span className="chip-label">Threshold</span>
         <label className="toggle">
@@ -224,10 +292,28 @@ export function BackgroundedToolsPanel({
       </div>
 
       <div className="panel-summary">
-        <div className="live-count">
-          <em>{filtered.length}</em> live{" "}
-          <span className="root">/ {MAX_BACKGROUND_SLOTS} max</span>
+        <div className="live-count" data-testid="ops-live-count">
+          <em>{projected.length}</em> backgrounded
+          {filtered.length !== projected.length ? (
+            <span className="root"> · {filtered.length} shown</span>
+          ) : null}
         </div>
+        {runtime?.behaviorExecutorCapacity != null ? (
+          <div
+            className="live-count"
+            data-testid="ops-slot-capacity"
+            title="Behavior executor slots reported by the agent's runtime document"
+          >
+            capacity <em>{runtime.behaviorExecutorCapacity}</em>
+            {runtime.behaviorExecutorQueueDepth != null &&
+            runtime.behaviorExecutorQueueDepth > 0 ? (
+              <span className="root">
+                {" "}
+                · {runtime.behaviorExecutorQueueDepth} queued
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="tools-table-wrap">
@@ -298,7 +384,9 @@ export function BackgroundedToolsPanel({
                 >
                   <td className="cell-tool">{row.toolName}</td>
                   <td className="cell-age">{formatAge(row.ageMs ?? 0)}</td>
-                  <td className="cell-parent">{row.requestId}</td>
+                  <td className="cell-parent" title={row.requestId}>
+                    {shortId(row.requestId)}
+                  </td>
                   <td>
                     <span className="pill pill-await" data-mode={row.awaitMode ?? ""}>
                       {row.awaitMode ?? "—"}

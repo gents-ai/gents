@@ -31,6 +31,7 @@ use super::super::types::{
 };
 
 const SUBAGENT_TREE_TIMEOUT: Duration = Duration::from_secs(10);
+const BACKGROUND_TOOL_CALL_LIMIT: usize = 256;
 
 /// Number of most-recent `InferenceCall` rows surfaced per backend in the
 /// health panel. Picked to give the operator enough history to see a
@@ -44,7 +45,14 @@ pub(crate) async fn desktop_operations_snapshot(
     request: DesktopOperationsSnapshotRequest,
 ) -> Result<DesktopOperationsSnapshot, String> {
     let core = current_core(&state).ok_or_else(|| "desktop bridge not initialized".to_string())?;
-    let agent_did = request.agent_did.clone();
+    let agent_did = request
+        .agent_did
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| core.selected_agent_did())
+        .ok_or_else(|| "no agent selected; pass agentDid explicitly".to_string())?;
 
     // 1) In-process native executor snapshot. The runtime exposes this via
     //    `defra_agent::active_native_executors()` (re-exported from
@@ -64,11 +72,11 @@ pub(crate) async fn desktop_operations_snapshot(
             })
             .collect();
 
-    // 2) GraphQL query for AgentToolCall rows with await_mode = "background".
-    //    AgentToolCall has no agent_did field — scope is implicit via local
-    //    DefraDB replication. The agent_did from the request is preserved
-    //    in the response envelope only.
-    let tool_call_rows = fetch_background_tool_calls(&core)
+    // 2) Query only live background calls owned by the selected deployment.
+    //    Replicated stores can contain rows for many agents, so treating the
+    //    local node as an ownership boundary leaks another deployment's work
+    //    into this panel.
+    let tool_call_rows = fetch_background_tool_calls(&core, &agent_did)
         .await
         .map_err(|e| format!("failed to query AgentToolCall: {e}"))?;
 
@@ -89,7 +97,7 @@ pub(crate) async fn desktop_operations_snapshot(
 
     Ok(DesktopOperationsSnapshot {
         fetched_at: Utc::now().to_rfc3339(),
-        agent_did,
+        agent_did: Some(agent_did),
         liveness: Some(liveness),
         liveness_unavailable_reason: None,
         backgrounded_tools,
@@ -104,30 +112,15 @@ pub(crate) async fn desktop_operations_snapshot(
 /// here rather than `graphql_for_agent`: `graphql_for_agent` returns a
 /// remote-peer endpoint URL (`Option<String>`) for cross-deployment HTTP
 /// queries, but operator-surfaces panels read the operator's own local
-/// DefraDB. Local replication handles per-deployment scoping.
-async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolCallRow>, String> {
-    let query = r#"
-        query {
-            AgentToolCall(
-                filter: { await_mode: { _eq: "background" } }
-            ) {
-                request_id
-                tool_call_id
-                tool_name
-                lifecycle_state
-                status
-                started_at
-                deadline_at
-                await_mode
-                cancel_policy
-                child_request_id
-                stuck_since
-                cancel_pending_remote_ack
-            }
-        }
-    "#;
+/// replicated store. The explicit `agent_did` filter is the deployment
+/// boundary inside that shared store.
+async fn fetch_background_tool_calls(
+    core: &Arc<ClientCore>,
+    agent_did: &str,
+) -> Result<Vec<ToolCallRow>, String> {
+    let query = background_tool_calls_query(agent_did);
 
-    let response = core.node().execute(query).await;
+    let response = core.node().execute(&query).await;
     if response.has_errors() {
         return Err(response
             .errors
@@ -202,6 +195,53 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
                 .unwrap_or(false),
         })
         .collect())
+}
+
+fn background_tool_calls_query(agent_did: &str) -> String {
+    let escaped_agent_did = escape_graphql_string(agent_did);
+
+    format!(
+        r#"
+        query {{
+            AgentToolCall(
+                filter: {{
+                    await_mode: {{ _eq: "background" }},
+                    lifecycle_state: {{ _in: ["pending", "running"] }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }}
+                }},
+                limit: {BACKGROUND_TOOL_CALL_LIMIT}
+            ) {{
+                request_id
+                tool_call_id
+                tool_name
+                lifecycle_state
+                status
+                started_at
+                deadline_at
+                await_mode
+                cancel_policy
+                child_request_id
+                stuck_since
+                cancel_pending_remote_ack
+            }}
+        }}
+    "#
+    )
+}
+
+#[cfg(test)]
+mod background_tool_query_tests {
+    use super::*;
+
+    #[test]
+    fn scopes_live_rows_to_the_selected_agent_and_caps_the_scan() {
+        let query = background_tool_calls_query("did:key:z6Mk\"selected");
+
+        assert!(query.contains(r#"await_mode: { _eq: "background" }"#));
+        assert!(query.contains(r#"lifecycle_state: { _in: ["pending", "running"] }"#));
+        assert!(query.contains(r#"agent_did: { _eq: "did:key:z6Mk\"selected" }"#));
+        assert!(query.contains(&format!("limit: {BACKGROUND_TOOL_CALL_LIMIT}")));
+    }
 }
 
 #[tauri::command]

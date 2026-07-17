@@ -1,8 +1,10 @@
-import { useRef, type ReactNode } from "react";
+import { isValidElement, useRef, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
+import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 
 import { CopyButton } from "./CopyButton";
+import { formatMessageTime } from "../lib/formatTime";
 
 import { parseCommandDenial } from "../lib/commandDenial";
 import type {
@@ -16,14 +18,26 @@ import { CodeToolItem } from "./codeTools/CodeToolItem";
 import { toCodeToolView } from "./codeTools/codeTools";
 import { CommandDenialToolItem } from "./commandDenial";
 
+function codeBlockLanguage(children: ReactNode): string | null {
+  if (!isValidElement<{ className?: string }>(children)) {
+    return null;
+  }
+  const match = /language-([\w+-]+)/.exec(children.props.className ?? "");
+  return match ? match[1] : null;
+}
+
 function CodeBlock(props: { children?: ReactNode }) {
   const preRef = useRef<HTMLPreElement | null>(null);
+  const language = codeBlockLanguage(props.children);
   return (
     <div className="code-block">
-      <CopyButton
-        className="code-block-copy"
-        getText={() => preRef.current?.textContent ?? ""}
-      />
+      <div className="code-block-header">
+        {language ? <span className="code-block-language">{language}</span> : null}
+        <CopyButton
+          className="code-block-copy"
+          getText={() => preRef.current?.textContent ?? ""}
+        />
+      </div>
       <pre ref={preRef}>{props.children}</pre>
     </div>
   );
@@ -32,7 +46,11 @@ function CodeBlock(props: { children?: ReactNode }) {
 function MarkdownContent({ value }: { value: string }) {
   return (
     <div className="markdown-content">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: CodeBlock }}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeHighlight]}
+        components={{ pre: CodeBlock }}
+      >
         {value}
       </ReactMarkdown>
     </div>
@@ -88,15 +106,38 @@ function ToolDetailSection({
   );
 }
 
+const SAFE_TOOL_ARG_PREVIEW_FIELDS = new Set([
+  "path",
+  "file_path",
+  "directory",
+  "cwd",
+  "pattern",
+  "query",
+  "command",
+]);
+
+const SENSITIVE_TOOL_ARG_PREVIEW =
+  /(?:^|[^a-z0-9])(?:api[-_]?key|access[-_]?token|refresh[-_]?token|token|password|passwd|secret|authorization|cookie)(?:[^a-z0-9]|$)|\bbearer\s+\S+|\b(?:sk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}/i;
+
+/** One-line digest of a non-sensitive call argument for the collapsed summary. */
+function toolArgsPreview(args?: ToolDetailValueView | null): string | null {
+  if (!args) {
+    return null;
+  }
+  const source = args.fields.find((field) => {
+    const key = field.key.trim().toLowerCase().replace(/-/g, "_");
+    return SAFE_TOOL_ARG_PREVIEW_FIELDS.has(key) && field.value.trim();
+  })?.value;
+  const flat = source?.replace(/\s+/g, " ").trim();
+  if (!flat || SENSITIVE_TOOL_ARG_PREVIEW.test(flat)) {
+    return null;
+  }
+  return flat.length > 64 ? `${flat.slice(0, 64)}…` : flat;
+}
+
 function ToolGroups({ tools }: { tools: RenderedToolCallView[] }) {
   return (
     <section className="tool-group">
-      <div className="tool-group-meta">
-        <span className="tool-group-label">Tool Calls</span>
-        <span className="muted small">
-          {tools.length} tool {tools.length === 1 ? "call" : "calls"}
-        </span>
-      </div>
       {tools.map((tool) => {
         // Prefer structured DenialReason fields persisted on AgentToolCall.
         // The parser remains as a compatibility fallback for older rows.
@@ -122,12 +163,16 @@ function ToolGroups({ tools }: { tools: RenderedToolCallView[] }) {
         if (codeView) {
           return <CodeToolItem key={tool.itemKey} view={codeView} />;
         }
+        const argsPreview = toolArgsPreview(tool.args);
         return (
           <details className="tool-item" key={tool.itemKey}>
             <summary className="tool-item-summary">
               <span className="tool-item-summary-left">
                 <span aria-hidden="true" className={toolStatusClass(tool.statusKind)} />
                 <span className="tool-item-name">{tool.toolName}</span>
+                {argsPreview ? (
+                  <span className="tool-item-preview">{argsPreview}</span>
+                ) : null}
                 {tool.cancelCause ? (
                   <CancelCauseBadge
                     cause={tool.cancelCause}
@@ -135,7 +180,9 @@ function ToolGroups({ tools }: { tools: RenderedToolCallView[] }) {
                   />
                 ) : null}
               </span>
-              <span className="tool-item-action">View</span>
+              <span aria-hidden="true" className="tool-item-action">
+                ▸
+              </span>
             </summary>
             <div className="tool-item-body">
               {tool.cancelCause ? (
@@ -211,6 +258,22 @@ function AssistantCancelCauseTurn({ cause }: { cause: DerivedCancelCauseView }) 
   );
 }
 
+function MessageTime({ value }: { value?: string | null }) {
+  const label = formatMessageTime(value);
+  if (!label) {
+    return null;
+  }
+  return (
+    <time
+      className="message-time"
+      dateTime={value ?? undefined}
+      title={value ?? undefined}
+    >
+      {label}
+    </time>
+  );
+}
+
 export function MessageList({
   timelineItems,
   responseCancelCause,
@@ -234,9 +297,10 @@ export function MessageList({
           case "userMessage":
             return (
               <div className="turn-block" key={timelineKey}>
-                <article className="message-card">
+                <article className="message-card user-card">
                   <div className="message-role">
                     user
+                    <MessageTime value={item.timestamp} />
                     <CopyButton
                       className="message-copy"
                       getText={() => normalizeTranscriptText(item.content)}
@@ -269,6 +333,7 @@ export function MessageList({
                         className="assistant-turn-cause-badge"
                       />
                     ) : null}
+                    <MessageTime value={item.timestamp} />
                     {normalizedContent ? (
                       <CopyButton
                         className="message-copy"

@@ -242,22 +242,36 @@ export function useDesktopShell() {
     stopping,
   });
 
-  const { onAddPeer, onFetchPeerStatus, onInitLocalRuntime, onRepairP2P } =
-    createDesktopShellPeerActions({
-      snapshot,
-      setAddingPeer,
-      setError,
-      setRepairingP2P,
-      setSelectedAgentDid,
-      setSnapshot,
-      setStarting,
-    });
+  const {
+    onAddPeer,
+    onFetchPeerStatus,
+    onInitLocalRuntime,
+    onRemovePeer,
+    onRenamePeer,
+    onRepairP2P,
+  } = createDesktopShellPeerActions({
+    snapshot,
+    setAddingPeer,
+    setError,
+    setRepairingP2P,
+    setSelectedAgentDid,
+    setSnapshot,
+    setStarting,
+  });
 
   const {
     onSaveAgentConfig,
     onSaveBackendConfig,
     onSaveBehaviorConfig,
     onDeleteSkillConfig,
+    onDeleteTaskConfig,
+    onDeleteScheduleConfig,
+    onDeleteEventTriggerConfig,
+    onDeleteBackendConfig,
+    onDeleteInferenceProfileConfig,
+    onDeleteToolSelectionConfig,
+    onDeleteToolServiceConfig,
+    onDeleteBehaviorConfig,
     onSaveInferenceProfileConfig,
     onSaveSkillConfig,
     onSaveToolSelectionConfig,
@@ -313,6 +327,10 @@ export function useDesktopShell() {
     setSnapshot,
   });
 
+  function onDismissError() {
+    setError(null);
+  }
+
   return {
     snapshot,
     session,
@@ -326,6 +344,7 @@ export function useDesktopShell() {
     repairingP2P,
     runningTask,
     error,
+    onDismissError,
     selectedAgentDid,
     selectedSessionId,
     selectedBehaviorId,
@@ -346,6 +365,8 @@ export function useDesktopShell() {
     onStartNewConversation,
     refreshSnapshot,
     onAddPeer,
+    onRemovePeer,
+    onRenamePeer,
     onFetchPeerStatus,
     onInitLocalRuntime,
     onRepairP2P,
@@ -355,6 +376,14 @@ export function useDesktopShell() {
     onSaveAgentConfig,
     onSaveBehaviorConfig,
     onDeleteSkillConfig,
+    onDeleteTaskConfig,
+    onDeleteScheduleConfig,
+    onDeleteEventTriggerConfig,
+    onDeleteBackendConfig,
+    onDeleteInferenceProfileConfig,
+    onDeleteToolSelectionConfig,
+    onDeleteToolServiceConfig,
+    onDeleteBehaviorConfig,
     onSaveSkillConfig,
     onSaveBackendConfig,
     onSaveInferenceProfileConfig,

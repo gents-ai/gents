@@ -1,19 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import type {
   DeploymentView,
+  ToolSelectionDeleteRequest,
   ToolSelectionSaveRequest,
   ToolSelectionView,
   ToolServiceRegistryView,
 } from "../../lib/types";
-import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
-import {
-  ignoreHandledActionError,
-  isOptionalInt,
-  linesToArray,
-  parseOptionalInt,
-} from "./formUtils";
+import { ConfirmDialog } from "../ConfirmDialog";
+import { isDirty } from "./configDirty";
+import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
+import { isOptionalInt, linesToArray, parseOptionalInt } from "./formUtils";
 
 const COMMAND_POLICY_OPTIONS = [
   { value: "", label: "Default for bash mode" },
@@ -37,6 +35,10 @@ export type ToolSelectionConfigPanelProps = {
   onCreateToolSelection: () => void;
   onSavedStatusChange: (value: string) => void;
   onSaveToolSelectionConfig: (request: ToolSelectionSaveRequest) => Promise<unknown>;
+  onDeleteToolSelectionConfig: (
+    request: ToolSelectionDeleteRequest,
+  ) => Promise<unknown>;
+  onDeletedToolSelection: () => void;
   toolCeiling?: string | null;
   toolRoot?: string | null;
 };
@@ -50,6 +52,8 @@ export function ToolSelectionConfigPanel({
   onCreateToolSelection,
   onSavedStatusChange,
   onSaveToolSelectionConfig,
+  onDeleteToolSelectionConfig,
+  onDeletedToolSelection,
   toolCeiling,
   toolRoot,
 }: ToolSelectionConfigPanelProps) {
@@ -98,6 +102,10 @@ export function ToolSelectionConfigPanel({
           onSavedStatusChange(`tool:${selectionId}`);
         }}
         onSaveToolSelectionConfig={onSaveToolSelectionConfig}
+        onDeleteToolSelectionConfig={onDeleteToolSelectionConfig}
+        onDeleted={() => {
+          onDeletedToolSelection();
+        }}
       />
     </section>
   );
@@ -113,6 +121,10 @@ export type ToolSelectionConfigEditorProps = {
   saving: boolean;
   onSaved: (selectionId: string) => void;
   onSaveToolSelectionConfig: (request: ToolSelectionSaveRequest) => Promise<unknown>;
+  onDeleteToolSelectionConfig: (
+    request: ToolSelectionDeleteRequest,
+  ) => Promise<unknown>;
+  onDeleted: () => void;
 };
 
 export function ToolSelectionConfigEditor({
@@ -125,7 +137,26 @@ export function ToolSelectionConfigEditor({
   saving,
   onSaved,
   onSaveToolSelectionConfig,
+  onDeleteToolSelectionConfig,
+  onDeleted,
 }: ToolSelectionConfigEditorProps) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  async function deleteToolSelection() {
+    setConfirmingDelete(false);
+    if (!toolSelection) {
+      return;
+    }
+    try {
+      await onDeleteToolSelectionConfig({
+        selectionId: toolSelection.selectionId,
+        agentDid: toolSelection.agentDid ?? agentDid,
+      });
+      onDeleted();
+    } catch {
+      // Surfaced by the shell error banner; the editor stays put.
+    }
+  }
   const [selectionId, setSelectionId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [enableFileTools, setEnableFileTools] = useState(false);
@@ -164,64 +195,43 @@ export function ToolSelectionConfigEditor({
         .join("\n"),
     [toolServiceRegistries],
   );
+  // Service registrations are a derived input used only when a document is
+  // hydrated. Keep that input stable for the selected document: replicated
+  // service-list churn must not reset the rest of an in-progress form or move
+  // legacy delegates behind the operator's back.
+  const hydrationToolServiceIdKey = useRef(toolServiceIdKey);
+
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
-    setSelectionId(toolSelection?.selectionId ?? "");
-    setDisplayName(toolSelection?.displayName ?? toolSelection?.selectionId ?? "");
-    setEnableFileTools(toolSelection?.enableFileTools ?? false);
-    setFileToolsMode(toolSelection?.fileToolsMode ?? "ReadOnly");
-    setFileToolRoot(toolSelection?.fileToolRoot ?? "");
-    setEnableBash(toolSelection?.enableBash ?? false);
-    setBashMode(
-      toolSelection?.bashMode === "ReadWrite"
-        ? "Unrestricted"
-        : (toolSelection?.bashMode ?? "ReadOnly"),
-    );
-    setCommandExecutionPolicy(
-      normalizeCommandExecutionPolicy(toolSelection?.commandExecutionPolicy),
-    );
-    setCommandAllowedArgvPrefixes(
-      (toolSelection?.commandAllowedArgvPrefixes ?? []).join("\n"),
-    );
-    setCommandForbiddenArgvPrefixes(
-      (toolSelection?.commandForbiddenArgvPrefixes ?? []).join("\n"),
-    );
-    setCommandNetworkMode(
-      normalizeCommandNetworkMode(toolSelection?.commandNetworkMode),
-    );
-    setCliToolNames((toolSelection?.cliToolNames ?? []).join("\n"));
-    setEnableMetaTools(toolSelection?.enableMetaTools ?? false);
-    const knownServiceIds = new Set(toolServiceIdKey.split("\n").filter(Boolean));
-    const existingAllowedServiceIds = toolSelection?.allowedMcpServiceIds ?? [];
-    const existingDelegateTo = toolSelection?.delegateTo ?? [];
-    const legacyServiceDelegates =
-      existingAllowedServiceIds.length === 0
-        ? existingDelegateTo.filter((value) => knownServiceIds.has(value))
-        : [];
-    setAllowedMcpServiceIds(
-      (existingAllowedServiceIds.length > 0
-        ? existingAllowedServiceIds
-        : legacyServiceDelegates
-      ).join("\n"),
-    );
-    setDelegateTo(
-      existingDelegateTo.filter((value) => !knownServiceIds.has(value)).join("\n"),
-    );
-    setBackgroundableToolNames(
-      (toolSelection?.backgroundableToolNames ?? []).join("\n"),
-    );
-    setSubagentTargets((toolSelection?.subagentTargets ?? []).join("\n"));
-    setSubagentSpawnEnabled(toolSelection?.subagentSpawnEnabled ?? false);
-    setSubagentSteeringEnabled(toolSelection?.subagentSteeringEnabled ?? false);
-    setSubagentBackgroundEnabled(toolSelection?.subagentBackgroundEnabled ?? false);
-    setCrossDeploymentSpawnTimeoutSeconds(
-      toolSelection?.crossDeploymentSpawnTimeoutSeconds != null
-        ? String(toolSelection.crossDeploymentSpawnTimeoutSeconds)
-        : "",
-    );
-    setDefraQueryCollections((toolSelection?.defraQueryCollections ?? []).join("\n"));
+    hydrationToolServiceIdKey.current = toolServiceIdKey;
+    const b = toolSelectionFormValues(toolSelection, toolServiceIdKey);
+    setSelectionId(b.selectionId);
+    setDisplayName(b.displayName);
+    setEnableFileTools(b.enableFileTools);
+    setFileToolsMode(b.fileToolsMode);
+    setFileToolRoot(b.fileToolRoot);
+    setEnableBash(b.enableBash);
+    setBashMode(b.bashMode);
+    setCommandExecutionPolicy(b.commandExecutionPolicy);
+    setCommandAllowedArgvPrefixes(b.commandAllowedArgvPrefixes);
+    setCommandForbiddenArgvPrefixes(b.commandForbiddenArgvPrefixes);
+    setCommandNetworkMode(b.commandNetworkMode);
+    setCliToolNames(b.cliToolNames);
+    setEnableMetaTools(b.enableMetaTools);
+    setAllowedMcpServiceIds(b.allowedMcpServiceIds);
+    setDelegateTo(b.delegateTo);
+    setBackgroundableToolNames(b.backgroundableToolNames);
+    setSubagentTargets(b.subagentTargets);
+    setSubagentSpawnEnabled(b.subagentSpawnEnabled);
+    setSubagentSteeringEnabled(b.subagentSteeringEnabled);
+    setSubagentBackgroundEnabled(b.subagentBackgroundEnabled);
+    setCrossDeploymentSpawnTimeoutSeconds(b.crossDeploymentSpawnTimeoutSeconds);
+    setDefraQueryCollections(b.defraQueryCollections);
+    setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
-  }, [toolSelection?.selectionId, toolServiceIdKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toolSelection?.selectionId]);
 
   function toggleAllowedMcpService(serviceId: string, checked: boolean) {
     const values = new Set(linesToArray(allowedMcpServiceIds));
@@ -278,18 +288,47 @@ export function ToolSelectionConfigEditor({
         ),
       });
       onSaved(nextId);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
   return (
     <form className="panel config-editor" onSubmit={submitToolSelection}>
       <ConfigEditorHeader
+        dirty={isDirty(
+          {
+            selectionId,
+            displayName,
+            enableFileTools,
+            fileToolsMode,
+            fileToolRoot,
+            enableBash,
+            bashMode,
+            commandExecutionPolicy,
+            commandAllowedArgvPrefixes,
+            commandForbiddenArgvPrefixes,
+            commandNetworkMode,
+            cliToolNames,
+            enableMetaTools,
+            allowedMcpServiceIds,
+            delegateTo,
+            backgroundableToolNames,
+            subagentTargets,
+            subagentSpawnEnabled,
+            subagentSteeringEnabled,
+            subagentBackgroundEnabled,
+            crossDeploymentSpawnTimeoutSeconds,
+            defraQueryCollections,
+          },
+          toolSelectionFormValues(toolSelection, hydrationToolServiceIdKey.current),
+        )}
         eyebrow="Tool Selection"
         saved={savedStatus === `tool:${selectionId.trim()}`}
         title={displayName || selectionId || "New Tool Selection"}
       />
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
       <div className="facts">
         <div>
           <dt>Server ceiling</dt>
@@ -556,6 +595,9 @@ export function ToolSelectionConfigEditor({
             }
             value={crossDeploymentSpawnTimeoutSeconds}
           />
+          <FieldHint show={!crossDeploymentSpawnTimeoutValid}>
+            Whole number of 1 or more
+          </FieldHint>
         </label>
       </div>
       <div className="grid-2">
@@ -592,6 +634,28 @@ export function ToolSelectionConfigEditor({
         </label>
       </div>
       <div className="config-actions">
+        {toolSelection ? (
+          <button
+            className="ghost-button danger-button"
+            data-testid="tool-selection-delete"
+            disabled={saving}
+            onClick={() => setConfirmingDelete(true)}
+            type="button"
+          >
+            Delete Selection
+          </button>
+        ) : null}
+        <ConfirmDialog
+          open={confirmingDelete}
+          title="Delete tool selection"
+          message={`Delete tool selection "${toolSelection?.selectionId ?? ""}"? Behaviors still pointing at it will block the delete.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            void deleteToolSelection();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
         <button
           className="primary-button"
           data-testid="tool-selection-save"
@@ -693,4 +757,59 @@ function displayToolCeiling(value: ReturnType<typeof normalizeToolCeiling>) {
     default:
       return "unknown";
   }
+}
+
+/** View→form hydration, shared by the reset effect and dirty comparison. */
+function toolSelectionFormValues(
+  toolSelection: ToolSelectionView | null,
+  toolServiceIdKey: string,
+) {
+  const knownServiceIds = new Set(toolServiceIdKey.split("\n").filter(Boolean));
+  const existingAllowedServiceIds = toolSelection?.allowedMcpServiceIds ?? [];
+  const existingDelegateTo = toolSelection?.delegateTo ?? [];
+  const legacyServiceDelegates =
+    existingAllowedServiceIds.length === 0
+      ? existingDelegateTo.filter((value) => knownServiceIds.has(value))
+      : [];
+  return {
+    selectionId: toolSelection?.selectionId ?? "",
+    displayName: toolSelection?.displayName ?? toolSelection?.selectionId ?? "",
+    enableFileTools: toolSelection?.enableFileTools ?? false,
+    fileToolsMode: toolSelection?.fileToolsMode ?? "ReadOnly",
+    fileToolRoot: toolSelection?.fileToolRoot ?? "",
+    enableBash: toolSelection?.enableBash ?? false,
+    bashMode:
+      toolSelection?.bashMode === "ReadWrite"
+        ? "Unrestricted"
+        : (toolSelection?.bashMode ?? "ReadOnly"),
+    commandExecutionPolicy: normalizeCommandExecutionPolicy(
+      toolSelection?.commandExecutionPolicy,
+    ),
+    commandAllowedArgvPrefixes: (toolSelection?.commandAllowedArgvPrefixes ?? []).join(
+      "\n",
+    ),
+    commandForbiddenArgvPrefixes: (
+      toolSelection?.commandForbiddenArgvPrefixes ?? []
+    ).join("\n"),
+    commandNetworkMode: normalizeCommandNetworkMode(toolSelection?.commandNetworkMode),
+    cliToolNames: (toolSelection?.cliToolNames ?? []).join("\n"),
+    enableMetaTools: toolSelection?.enableMetaTools ?? false,
+    allowedMcpServiceIds: (existingAllowedServiceIds.length > 0
+      ? existingAllowedServiceIds
+      : legacyServiceDelegates
+    ).join("\n"),
+    delegateTo: existingDelegateTo
+      .filter((value) => !knownServiceIds.has(value))
+      .join("\n"),
+    backgroundableToolNames: (toolSelection?.backgroundableToolNames ?? []).join("\n"),
+    subagentTargets: (toolSelection?.subagentTargets ?? []).join("\n"),
+    subagentSpawnEnabled: toolSelection?.subagentSpawnEnabled ?? false,
+    subagentSteeringEnabled: toolSelection?.subagentSteeringEnabled ?? false,
+    subagentBackgroundEnabled: toolSelection?.subagentBackgroundEnabled ?? false,
+    crossDeploymentSpawnTimeoutSeconds:
+      toolSelection?.crossDeploymentSpawnTimeoutSeconds != null
+        ? String(toolSelection.crossDeploymentSpawnTimeoutSeconds)
+        : "",
+    defraQueryCollections: (toolSelection?.defraQueryCollections ?? []).join("\n"),
+  };
 }

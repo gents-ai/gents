@@ -25,6 +25,10 @@ import type {
 const AGENT_DID = "did:key:z6MkBombadilAgent";
 const DEFAULT_BEHAVIOR_ID = "default";
 const STARTED_AT = "2026-06-17T00:00:00.000Z";
+// Relative-time fixtures must be offsets from *now*: a fixed date drifts one
+// label per day and breaks the near-exact visual baselines.
+const THIRTY_DAYS_AGO = new Date(Date.now() - 30 * 86_400_000).toISOString();
+const TWO_HOURS_AGO = new Date(Date.now() - 2 * 3_600_000).toISOString();
 
 export type DesktopUiHarnessScenario =
   | "default"
@@ -68,6 +72,7 @@ export function createDesktopUiHarness(
   let sessionSeq = 1;
   let rowCount = 42;
   let deployment = createDeployment();
+  let removed = false;
 
   const greeting =
     scenario === "long-content"
@@ -82,6 +87,8 @@ export function createDesktopUiHarness(
     agentDid: AGENT_DID,
     behaviorId: DEFAULT_BEHAVIOR_ID,
     title: "introduction-and-greetings",
+    createdAt: THIRTY_DAYS_AGO,
+    updatedAt: TWO_HOURS_AGO,
     previewText: greeting,
     status: activeTurn ? "processing" : "completed",
     turnState: activeTurn ? "processing" : "completed",
@@ -103,6 +110,7 @@ export function createDesktopUiHarness(
         itemKey: "intro-assistant",
         sequence: 1,
         content: greeting,
+        timestamp: "2026-06-03T14:05:00Z",
       },
       ...(scenario === "coding"
         ? [
@@ -164,7 +172,7 @@ export function createDesktopUiHarness(
   }
 
   function snapshot() {
-    const deployments = scenario === "empty-fleet" ? [] : [deployment];
+    const deployments = scenario === "empty-fleet" || removed ? [] : [deployment];
     const health = {
       status: "healthy",
       connectedPeerCount: 1,
@@ -234,8 +242,8 @@ export function createDesktopUiHarness(
         taskName: sessionLineage.get(session.sessionId)?.taskName ?? null,
         triggerId: sessionLineage.get(session.sessionId)?.triggerId ?? null,
         triggerKind: sessionLineage.get(session.sessionId)?.triggerKind ?? null,
-        createdAt: STARTED_AT,
-        updatedAt: STARTED_AT,
+        createdAt: session.createdAt ?? THIRTY_DAYS_AGO,
+        updatedAt: session.updatedAt ?? TWO_HOURS_AGO,
         turnState: session.turnState,
         messageCount: session.timelineItems.filter(
           (item) => item.kind === "userMessage" || item.kind === "assistantMessage",
@@ -302,12 +310,14 @@ export function createDesktopUiHarness(
           itemKey: `${requestId}-user`,
           sequence: 1,
           content: prompt,
+          timestamp: new Date().toISOString(),
         },
         {
           kind: "assistantMessage",
           itemKey: `${requestId}-assistant`,
           sequence: 2,
           content: response,
+          timestamp: new Date().toISOString(),
         },
       ],
     };
@@ -370,6 +380,22 @@ export function createDesktopUiHarness(
       notify("peers");
       return snapshot();
     },
+    async removePeer(peerId) {
+      if (peerId !== deployment.peerId) {
+        throw new Error(`peer ${peerId} not found`);
+      }
+      removed = true;
+      notify("peers");
+      return snapshot();
+    },
+    async renamePeer(peerId, label) {
+      if (peerId !== deployment.peerId) {
+        throw new Error(`peer ${peerId} not found`);
+      }
+      deployment = { ...deployment, label };
+      notify("peers");
+      return snapshot();
+    },
     async fetchPeerStatus() {
       return {
         label: "Bombadil UI Agent",
@@ -422,12 +448,14 @@ export function createDesktopUiHarness(
               itemKey: `${requestId}-user`,
               sequence: nextSequence,
               content,
+              timestamp: new Date().toISOString(),
             },
             {
               kind: "assistantMessage",
               itemKey: `${requestId}-assistant`,
               sequence: nextSequence + 1,
               content: response,
+              timestamp: new Date().toISOString(),
             },
           ],
         };
@@ -530,6 +558,139 @@ export function createDesktopUiHarness(
           createdAt: STARTED_AT,
         }),
       };
+      return snapshot();
+    },
+    async deleteTaskConfig(request) {
+      const schedules = deployment.schedules.filter(
+        (schedule) => schedule.taskId === request.taskId,
+      ).length;
+      const triggers = deployment.eventTriggers.filter(
+        (trigger) => trigger.taskId === request.taskId,
+      ).length;
+      if (schedules + triggers > 0) {
+        throw new Error(
+          `task "${request.taskId}" is referenced by ${schedules} schedule(s) and ${triggers} event trigger(s); delete or detach those first`,
+        );
+      }
+      deployment = {
+        ...deployment,
+        tasks: deployment.tasks.filter((task) => task.taskId !== request.taskId),
+      };
+      notify("config");
+      return snapshot();
+    },
+    async deleteScheduleConfig(request) {
+      deployment = {
+        ...deployment,
+        schedules: deployment.schedules.filter(
+          (schedule) => schedule.scheduleId !== request.scheduleId,
+        ),
+      };
+      notify("config");
+      return snapshot();
+    },
+    async deleteEventTriggerConfig(request) {
+      deployment = {
+        ...deployment,
+        eventTriggers: deployment.eventTriggers.filter(
+          (trigger) => trigger.triggerId !== request.triggerId,
+        ),
+      };
+      notify("config");
+      return snapshot();
+    },
+    async deleteBackendConfig(request) {
+      const referencing = deployment.behaviors
+        .filter((behavior) => behavior.backendId === request.backendId)
+        .map((behavior) => behavior.behaviorId);
+      if (referencing.length) {
+        throw new Error(
+          `backend "${request.backendId}" is referenced by behavior(s) ${referencing.join(", ")}; point them elsewhere first`,
+        );
+      }
+      deployment = {
+        ...deployment,
+        inferenceBackends: deployment.inferenceBackends.filter(
+          (backend) => backend.backendId !== request.backendId,
+        ),
+      };
+      notify("config");
+      return snapshot();
+    },
+    async deleteInferenceProfileConfig(request) {
+      const referencing = deployment.behaviors
+        .filter((behavior) => behavior.inferenceProfileId === request.profileId)
+        .map((behavior) => behavior.behaviorId);
+      if (referencing.length) {
+        throw new Error(
+          `profile "${request.profileId}" is referenced by behavior(s) ${referencing.join(", ")}; point them elsewhere first`,
+        );
+      }
+      deployment = {
+        ...deployment,
+        inferenceProfiles: deployment.inferenceProfiles.filter(
+          (profile) => profile.profileId !== request.profileId,
+        ),
+      };
+      notify("config");
+      return snapshot();
+    },
+    async deleteToolSelectionConfig(request) {
+      const referencing = deployment.behaviors
+        .filter((behavior) => behavior.toolSelectionId === request.selectionId)
+        .map((behavior) => behavior.behaviorId);
+      if (referencing.length) {
+        throw new Error(
+          `tool selection "${request.selectionId}" is referenced by behavior(s) ${referencing.join(", ")}; point them elsewhere first`,
+        );
+      }
+      deployment = {
+        ...deployment,
+        toolSelections: deployment.toolSelections.filter(
+          (selection) => selection.selectionId !== request.selectionId,
+        ),
+      };
+      notify("config");
+      return snapshot();
+    },
+    async deleteToolServiceConfig(request) {
+      const referencing = deployment.toolSelections
+        .filter((selection) =>
+          (selection.allowedMcpServiceIds ?? []).includes(request.serviceId),
+        )
+        .map((selection) => selection.selectionId);
+      if (referencing.length) {
+        throw new Error(
+          `tool service "${request.serviceId}" is allowed by tool selection(s) ${referencing.join(", ")}; remove it there first`,
+        );
+      }
+      deployment = {
+        ...deployment,
+        toolServices: deployment.toolServices.filter(
+          (service) => service.serviceId !== request.serviceId,
+        ),
+      };
+      notify("config");
+      return snapshot();
+    },
+    async deleteBehaviorConfig(request) {
+      const isDefault =
+        deployment.behaviors.find(
+          (behavior) => behavior.behaviorId === request.behaviorId,
+        )?.isDefault ??
+        deployment.agentPrincipal.defaultBehaviorId === request.behaviorId;
+      if (isDefault) {
+        throw new Error(
+          `behavior "${request.behaviorId}" is the agent's default behavior; make another behavior the default first`,
+        );
+      }
+      deployment = {
+        ...deployment,
+        behaviors: deployment.behaviors.filter(
+          (behavior) => behavior.behaviorId !== request.behaviorId,
+        ),
+      };
+      notify("config");
       return snapshot();
     },
     async deleteSkillConfig(request) {
@@ -1104,7 +1265,11 @@ function createDeployment(): DeploymentView {
       reconcilePhase: "idle",
       lastReconcileResult: "ok",
       lastReconcileError: null,
-      updatedAt: STARTED_AT,
+      updatedAt: THIRTY_DAYS_AGO,
+      behaviorExecutorCapacity: 4,
+      behaviorExecutorQueueDepth: 0,
+      runnableBehaviorCount: 2,
+      unavailableBehaviorCount: 0,
     },
     behaviors: [
       {

@@ -8,7 +8,8 @@ import type {
   SkillView,
 } from "../../lib/types";
 import { ConfirmDialog } from "../ConfirmDialog";
-import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
+import { isDirty } from "./configDirty";
+import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import { ignoreHandledActionError, linesToArray, optionalString } from "./formUtils";
 
 export type SkillConfigPanelProps = {
@@ -111,17 +112,27 @@ export function SkillConfigEditor({
   const [enabled, setEnabled] = useState(true);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   useEffect(() => {
-    setSkillId(skill?.skillId ?? "");
-    setName(skill?.name ?? skill?.skillId ?? "");
-    setScope(skill?.scope ?? "behavior");
-    setDescription(skill?.description ?? "");
-    setInstructions(skill?.instructions ?? "");
-    setToolRefs((skill?.toolRefs ?? []).join("\n"));
-    setDisplayName(skill?.displayName ?? "");
-    setEnabled(skill?.enabled ?? true);
+    const base = skillFormValues(skill);
+    setSkillId(base.skillId);
+    setName(base.name);
+    setScope(base.scope);
+    setDescription(base.description);
+    setInstructions(base.instructions);
+    setToolRefs(base.toolRefs);
+    setDisplayName(base.displayName);
+    setEnabled(base.enabled);
+    setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [skill?.skillId]);
+
+  const dirty = isDirty(
+    { skillId, name, scope, description, instructions, toolRefs, displayName, enabled },
+    skillFormValues(skill),
+  );
 
   async function submitSkill(event: FormEvent) {
     event.preventDefault();
@@ -139,8 +150,9 @@ export function SkillConfigEditor({
         enabled,
       });
       onSaved(nextId);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -159,7 +171,10 @@ export function SkillConfigEditor({
       return;
     }
     try {
-      await onDeleteSkillConfig({ skillId: nextId, agentDid });
+      await onDeleteSkillConfig({
+        skillId: nextId,
+        agentDid: skill.agentDid ?? agentDid,
+      });
       onDeleted();
     } catch (error) {
       ignoreHandledActionError(error);
@@ -172,7 +187,9 @@ export function SkillConfigEditor({
         eyebrow="Skill"
         saved={savedStatus === `skill:${skillId.trim()}`}
         title={name || skillId || "New Skill"}
+        dirty={dirty}
       />
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
       <div className="grid-2">
         <label className="field">
           <span>Skill ID</span>
@@ -290,6 +307,20 @@ export function SkillConfigEditor({
       </div>
     </form>
   );
+}
+
+/** View→form hydration, shared by the reset effect and dirty comparison. */
+function skillFormValues(skill: SkillView | null) {
+  return {
+    skillId: skill?.skillId ?? "",
+    name: skill?.name ?? skill?.skillId ?? "",
+    scope: skill?.scope ?? "behavior",
+    description: skill?.description ?? "",
+    instructions: skill?.instructions ?? "",
+    toolRefs: (skill?.toolRefs ?? []).join("\n"),
+    displayName: skill?.displayName ?? "",
+    enabled: skill?.enabled ?? true,
+  };
 }
 
 function displaySkillListTitle(skill: SkillView) {

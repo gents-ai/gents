@@ -41,8 +41,8 @@
 
   .cause-unknown {
     color: var(--color-text-muted);
-    background: rgb(255 255 255 / 0.04);
-    border-color: rgb(255 255 255 / 0.1);
+    background: rgb(var(--overlay-rgb) / 0.04);
+    border-color: rgb(var(--overlay-rgb) / 0.1);
   }
 
   /* Wrapper for cause evidence details list (CancelCauseDetails component) */
@@ -67,6 +67,20 @@
     color: var(--color-text-muted);
   }
 
+  .cause-headline {
+    margin: 0 0 var(--space-2);
+    color: var(--color-text-soft);
+    font-size: var(--text-md);
+  }
+
+  .cause-evidence summary {
+    cursor: pointer;
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
   .cause-details code {
     font-family: var(--font-mono);
     color: var(--color-text-warm);
@@ -76,7 +90,7 @@
   .dialog-backdrop {
     position: fixed;
     inset: 0;
-    background: rgb(0 0 0 / 0.62);
+    background: rgb(var(--scrim-rgb) / 0.62);
     display: none;
     align-items: flex-start;
     justify-content: center;
@@ -105,7 +119,7 @@
     width: min(560px, 100%);
     max-height: calc(100vh - 128px);
     overflow: auto;
-    box-shadow: 0 24px 60px rgb(0 0 0 / 0.5);
+    box-shadow: 0 24px 60px rgb(var(--scrim-rgb) / 0.5);
   }
 
   .dialog header {

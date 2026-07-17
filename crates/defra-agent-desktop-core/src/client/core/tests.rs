@@ -13,6 +13,7 @@ use defra_p2p_adapter::{
 use super::supervisor::{
     p2p_health_materially_changed, probe_p2p_health, repair_saved_peer, saved_peer_needs_repair,
 };
+use super::writes::cleanup_saved_peer_p2p;
 use super::*;
 use crate::client::PeerRecord;
 
@@ -26,6 +27,7 @@ struct RecordingP2P {
     connected_peers_error: StdRwLock<Option<String>>,
     connect_calls: StdRwLock<Vec<String>>,
     add_replicator_calls: StdRwLock<Vec<String>>,
+    cleanup_calls: StdRwLock<Vec<String>>,
     replicators: StdRwLock<Vec<ReplicatorInfo>>,
     replicators_error: StdRwLock<Option<String>>,
 }
@@ -89,6 +91,13 @@ impl RecordingP2P {
         self.add_replicator_calls
             .read()
             .expect("add replicator calls lock poisoned")
+            .clone()
+    }
+
+    fn cleanup_calls(&self) -> Vec<String> {
+        self.cleanup_calls
+            .read()
+            .expect("cleanup calls lock poisoned")
             .clone()
     }
 
@@ -159,6 +168,10 @@ impl P2POps for RecordingP2P {
     }
 
     async fn disconnect_peer(&self, addr: &str) -> P2PResult<()> {
+        self.cleanup_calls
+            .write()
+            .expect("cleanup calls lock poisoned")
+            .push(format!("disconnect:{addr}"));
         self.connected_peers
             .write()
             .expect("connected peers lock poisoned")
@@ -206,9 +219,17 @@ impl P2POps for RecordingP2P {
 
     async fn remove_replicator(
         &self,
-        _collections: Vec<String>,
-        _addr: Option<&str>,
+        collections: Vec<String>,
+        addr: Option<&str>,
     ) -> P2PResult<()> {
+        self.cleanup_calls
+            .write()
+            .expect("cleanup calls lock poisoned")
+            .push(format!(
+                "remove-replicator:{}:{}",
+                addr.unwrap_or_default(),
+                collections.join(",")
+            ));
         Ok(())
     }
 
@@ -247,6 +268,95 @@ impl P2POps for RecordingP2P {
     async fn sync_collection_versions(&self, _version_ids: Vec<String>) -> P2PResult<()> {
         Ok(())
     }
+}
+
+#[tokio::test]
+async fn saved_peer_cleanup_removes_replicator_before_idempotent_disconnect() {
+    let recording = Arc::new(RecordingP2P::default());
+    let p2p: Arc<dyn P2POps> = recording.clone();
+    let record = PeerRecord::new(
+        "Never Connected",
+        "127.0.0.1:56000/p2p/peer-absent",
+        "did:defra:absent",
+    );
+
+    cleanup_saved_peer_p2p(&p2p, &record)
+        .await
+        .expect("absent P2P state should clean up idempotently");
+
+    let calls = recording.cleanup_calls();
+    assert_eq!(calls.len(), 2);
+    assert!(calls[0].starts_with(&format!("remove-replicator:{}:", record.addr)));
+    assert_eq!(calls[1], format!("disconnect:{}", record.addr));
+    for collection in crate::client::schema::subscribed_collection_names() {
+        assert!(calls[0].contains(collection));
+    }
+}
+
+#[tokio::test]
+async fn remove_peer_retains_saved_deployment_when_p2p_cleanup_fails() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tmp.path().to_path_buf()),
+        ClientCoreOptions::local_only(),
+    )
+    .await
+    .expect("client core");
+    let record = PeerRecord::new(
+        "Invalid Address",
+        "not-a-valid-p2p-address",
+        "did:defra:invalid",
+    );
+    core.peer_directory
+        .write()
+        .await
+        .upsert(record.clone())
+        .await
+        .expect("save invalid peer fixture");
+    super::bootstrap::write_peer_pairing_desired(core.node(), &record)
+        .await
+        .expect("save pairing desired fixture");
+
+    let error = core
+        .remove_peer(&record.peer_id)
+        .await
+        .expect_err("invalid P2P cleanup must fail removal");
+    let message = error.to_string();
+    assert!(
+        message.contains("replicator removed but transport disconnect failed"),
+        "{message}"
+    );
+    assert!(message.contains("saved deployment retained"), "{message}");
+    assert!(core
+        .peer_records()
+        .await
+        .iter()
+        .any(|saved| saved.peer_id == record.peer_id));
+    assert!(core
+        .last_mutation_error()
+        .as_deref()
+        .is_some_and(|error| error.contains("saved deployment retained")));
+    let peer_id = defra_agent_protocol::graphql::escape_graphql_string(&record.peer_id);
+    let response = core
+        .node()
+        .execute(&format!(
+            r#"query {{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID }} }}"#
+        ))
+        .await;
+    assert!(!response.has_errors());
+    assert_eq!(
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("PeerPairingDesired"))
+            .and_then(|rows| rows.as_array())
+            .map(Vec::len),
+        Some(1)
+    );
+
+    core.shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]

@@ -29,7 +29,7 @@
   }
 
   .transcript-panel .response-error-card {
-    border-color: rgb(255 111 95 / 0.34);
+    border-color: rgb(var(--color-error-strong-rgb) / 0.34);
     box-shadow: inset 2px 0 0 var(--color-error-strong);
   }
 
@@ -277,9 +277,21 @@
     border-color: var(--border-default);
   }
 
+  .message-time {
+    margin-left: auto;
+    font-size: var(--text-2xs);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+
   .message-copy {
     margin-left: auto;
     opacity: 0;
+  }
+
+  /* When a timestamp occupies the auto slot, the copy button docks beside it. */
+  .message-time + .message-copy {
+    margin-left: 0;
   }
 
   .message-card:hover .message-copy,
@@ -294,20 +306,92 @@
   }
 
   .code-block {
-    position: relative;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-deep);
+    overflow: hidden;
+  }
+
+  .code-block-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-1) var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--color-surface-strong);
+  }
+
+  .code-block-language {
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    text-transform: lowercase;
+    letter-spacing: 0.04em;
   }
 
   .code-block-copy {
-    position: absolute;
-    top: var(--space-2);
-    right: var(--space-2);
+    margin-left: auto;
     opacity: 0;
-    background: var(--color-surface-deep);
   }
 
   .code-block:hover .code-block-copy,
   .code-block-copy:focus-visible {
     opacity: 1;
+  }
+
+  .code-block pre {
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+  }
+
+  /* highlight.js scopes mapped onto the app palette — no imported theme. */
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-built_in,
+  .hljs-type {
+    color: var(--color-info);
+  }
+
+  .hljs-string,
+  .hljs-regexp,
+  .hljs-addition {
+    color: var(--color-success);
+  }
+
+  .hljs-number,
+  .hljs-literal,
+  .hljs-attr,
+  .hljs-attribute,
+  .hljs-symbol {
+    color: var(--color-warning-soft);
+  }
+
+  .hljs-comment,
+  .hljs-quote,
+  .hljs-meta {
+    color: var(--color-text-muted);
+    font-style: italic;
+  }
+
+  .hljs-title,
+  .hljs-function,
+  .hljs-section,
+  .hljs-name {
+    color: var(--color-accent-strong);
+  }
+
+  .hljs-deletion {
+    color: var(--color-error);
+  }
+
+  .hljs-emphasis {
+    font-style: italic;
+  }
+
+  .hljs-strong {
+    font-weight: 700;
   }
 
   .response-error-details {
@@ -319,5 +403,29 @@
     margin: var(--space-3) 0 0;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+}
+
+@layer transcript {
+  /* Reading measure: prose lines cap near 76ch; assistant text reads as an
+     open page while the user's asks sit in visually distinct cards. */
+  .transcript-panel .message-card {
+    max-width: 76ch;
+  }
+
+  .transcript-panel .user-card,
+  .transcript-panel .pending-card {
+    background: var(--color-surface-muted);
+    border-color: var(--border-default);
+    box-shadow: none;
+  }
+
+  .transcript-panel
+    .message-card:not(.user-card):not(.pending-card):not(.response-error-card):not(
+      .thinking-card
+    ) {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
   }
 }

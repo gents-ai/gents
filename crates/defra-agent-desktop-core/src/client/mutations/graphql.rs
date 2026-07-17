@@ -30,6 +30,32 @@ pub(super) async fn execute_remote_mutation(
     mutation: &str,
     operation: &str,
 ) -> Result<()> {
+    execute_remote_mutation_response(graphql, mutation, operation)
+        .await
+        .map(|_| ())
+}
+
+pub(super) async fn execute_remote_delete_mutation(
+    graphql: &str,
+    mutation: &str,
+    operation: &str,
+    response_field: &str,
+) -> Result<usize> {
+    let response = execute_remote_mutation_response(graphql, mutation, operation).await?;
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get(response_field))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0))
+}
+
+async fn execute_remote_mutation_response(
+    graphql: &str,
+    mutation: &str,
+    operation: &str,
+) -> Result<RemoteGraphqlMutationResponse> {
     let client = reqwest::Client::builder()
         .timeout(REMOTE_MUTATION_HTTP_TIMEOUT)
         .build()
@@ -53,12 +79,12 @@ pub(super) async fn execute_remote_mutation(
     }
     let response: RemoteGraphqlMutationResponse = serde_json::from_slice(&body)
         .with_context(|| format!("decoding {operation} mutation response from {graphql}"))?;
-    if let Some(errors) = response.errors {
+    if let Some(errors) = response.errors.as_ref() {
         if !errors.is_empty() {
             bail!("{operation} mutation to {graphql} returned errors: {errors:?}");
         }
     }
-    Ok(())
+    Ok(response)
 }
 
 #[derive(Debug, Deserialize)]

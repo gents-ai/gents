@@ -3,12 +3,14 @@ import type { FormEvent } from "react";
 
 import type {
   DeploymentView,
+  InferenceProfileDeleteRequest,
   InferenceProfileSaveRequest,
   InferenceProfileView,
 } from "../../lib/types";
-import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
+import { ConfirmDialog } from "../ConfirmDialog";
+import { isDirty } from "./configDirty";
+import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import {
-  ignoreHandledActionError,
   isOptionalFloat,
   isOptionalInt,
   parseOptionalFloat,
@@ -26,6 +28,10 @@ export type InferenceProfileConfigPanelProps = {
   onSaveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<unknown>;
+  onDeleteInferenceProfileConfig: (
+    request: InferenceProfileDeleteRequest,
+  ) => Promise<unknown>;
+  onDeletedProfile: () => void;
 };
 
 export function InferenceProfileConfigPanel({
@@ -37,6 +43,8 @@ export function InferenceProfileConfigPanel({
   onCreateProfile,
   onSavedStatusChange,
   onSaveInferenceProfileConfig,
+  onDeleteInferenceProfileConfig,
+  onDeletedProfile,
 }: InferenceProfileConfigPanelProps) {
   const selectedProfile = useMemo(
     () =>
@@ -66,6 +74,7 @@ export function InferenceProfileConfigPanel({
       />
 
       <InferenceProfileConfigEditor
+        agentDid={deployment.agentDid}
         profile={selectedProfile}
         savedStatus={savedStatus}
         saving={saving}
@@ -74,12 +83,17 @@ export function InferenceProfileConfigPanel({
           onSavedStatusChange(`profile:${profileId}`);
         }}
         onSaveInferenceProfileConfig={onSaveInferenceProfileConfig}
+        onDeleteInferenceProfileConfig={onDeleteInferenceProfileConfig}
+        onDeleted={() => {
+          onDeletedProfile();
+        }}
       />
     </section>
   );
 }
 
 export type InferenceProfileConfigEditorProps = {
+  agentDid: string;
   profile: InferenceProfileView | null;
   savedStatus: string | null;
   saving: boolean;
@@ -87,15 +101,39 @@ export type InferenceProfileConfigEditorProps = {
   onSaveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<unknown>;
+  onDeleteInferenceProfileConfig: (
+    request: InferenceProfileDeleteRequest,
+  ) => Promise<unknown>;
+  onDeleted: () => void;
 };
 
 export function InferenceProfileConfigEditor({
+  agentDid,
   profile,
   savedStatus,
   saving,
   onSaved,
   onSaveInferenceProfileConfig,
+  onDeleteInferenceProfileConfig,
+  onDeleted,
 }: InferenceProfileConfigEditorProps) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  async function deleteInferenceProfile() {
+    setConfirmingDelete(false);
+    if (!profile) {
+      return;
+    }
+    try {
+      await onDeleteInferenceProfileConfig({
+        profileId: profile.profileId,
+        agentDid,
+      });
+      onDeleted();
+    } catch {
+      // Surfaced by the shell error banner; the editor stays put.
+    }
+  }
   const [profileId, setProfileId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [contextWindow, setContextWindow] = useState("");
@@ -106,28 +144,20 @@ export function InferenceProfileConfigEditor({
   const [streamLivenessSecs, setStreamLivenessSecs] = useState("");
   const [deadlineSecs, setDeadlineSecs] = useState("");
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   useEffect(() => {
-    setProfileId(profile?.profileId ?? "");
-    setDisplayName(profile?.displayName ?? profile?.profileId ?? "");
-    setContextWindow(
-      profile?.contextWindow != null ? String(profile.contextWindow) : "",
-    );
-    setMaxOutputTokens(
-      profile?.maxOutputTokens != null ? String(profile.maxOutputTokens) : "",
-    );
-    setMaxTurns(profile?.maxTurns != null ? String(profile.maxTurns) : "");
-    setTemperature(profile?.temperature != null ? String(profile.temperature) : "");
-    setStreamBatchMs(
-      profile?.streamBatchMs != null ? String(profile.streamBatchMs) : "",
-    );
-    setStreamLivenessSecs(
-      profile?.streamLivenessTimeoutSecs != null
-        ? String(profile.streamLivenessTimeoutSecs)
-        : "",
-    );
-    setDeadlineSecs(
-      profile?.deadlineDurationSecs != null ? String(profile.deadlineDurationSecs) : "",
-    );
+    const b = profileFormValues(profile);
+    setProfileId(b.profileId);
+    setDisplayName(b.displayName);
+    setContextWindow(b.contextWindow);
+    setMaxOutputTokens(b.maxOutputTokens);
+    setMaxTurns(b.maxTurns);
+    setTemperature(b.temperature);
+    setStreamBatchMs(b.streamBatchMs);
+    setStreamLivenessSecs(b.streamLivenessSecs);
+    setDeadlineSecs(b.deadlineSecs);
+    setSaveError(null);
     // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [profile?.profileId]);
 
@@ -155,18 +185,34 @@ export function InferenceProfileConfigEditor({
         deadlineDurationSecs: parseOptionalInt(deadlineSecs),
       });
       onSaved(nextId);
+      setSaveError(null);
     } catch (error) {
-      ignoreHandledActionError(error);
+      setSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
   return (
     <form className="panel config-editor" onSubmit={submitProfile}>
       <ConfigEditorHeader
+        dirty={isDirty(
+          {
+            profileId,
+            displayName,
+            contextWindow,
+            maxOutputTokens,
+            maxTurns,
+            temperature,
+            streamBatchMs,
+            streamLivenessSecs,
+            deadlineSecs,
+          },
+          profileFormValues(profile),
+        )}
         eyebrow="Profile"
         saved={savedStatus === `profile:${profileId.trim()}`}
         title={displayName || profileId || "New Profile"}
       />
+      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
       <div className="grid-2">
         <label className="field">
           <span>Profile document ID</span>
@@ -202,6 +248,7 @@ export function InferenceProfileConfigEditor({
             type="number"
             value={contextWindow}
           />
+          <FieldHint show={!contextWindowValid}>Whole number of 1 or more</FieldHint>
         </label>
         <label className="field">
           <span>Max output tokens</span>
@@ -211,6 +258,7 @@ export function InferenceProfileConfigEditor({
             type="number"
             value={maxOutputTokens}
           />
+          <FieldHint show={!maxOutputTokensValid}>Whole number of 1 or more</FieldHint>
         </label>
         <label className="field">
           <span>Max turns</span>
@@ -220,6 +268,7 @@ export function InferenceProfileConfigEditor({
             type="number"
             value={maxTurns}
           />
+          <FieldHint show={!maxTurnsValid}>Whole number of 1 or more</FieldHint>
         </label>
       </div>
       <div className="grid-3">
@@ -232,6 +281,7 @@ export function InferenceProfileConfigEditor({
             type="number"
             value={temperature}
           />
+          <FieldHint show={!temperatureValid}>Number of 0 or more</FieldHint>
         </label>
         <label className="field">
           <span>Stream batch ms</span>
@@ -241,6 +291,7 @@ export function InferenceProfileConfigEditor({
             type="number"
             value={streamBatchMs}
           />
+          <FieldHint show={!streamBatchValid}>Whole number of 0 or more</FieldHint>
         </label>
         <label className="field">
           <span>Stream liveness seconds</span>
@@ -250,6 +301,7 @@ export function InferenceProfileConfigEditor({
             type="number"
             value={streamLivenessSecs}
           />
+          <FieldHint show={!streamLivenessValid}>Whole number of 1 or more</FieldHint>
         </label>
       </div>
       <div className="grid-3">
@@ -261,9 +313,32 @@ export function InferenceProfileConfigEditor({
             type="number"
             value={deadlineSecs}
           />
+          <FieldHint show={!deadlineValid}>Whole number of 1 or more</FieldHint>
         </label>
       </div>
       <div className="config-actions">
+        {profile ? (
+          <button
+            className="ghost-button danger-button"
+            data-testid="profile-delete"
+            disabled={saving}
+            onClick={() => setConfirmingDelete(true)}
+            type="button"
+          >
+            Delete Profile
+          </button>
+        ) : null}
+        <ConfirmDialog
+          open={confirmingDelete}
+          title="Delete profile"
+          message={`Delete profile "${profile?.profileId ?? ""}"? Behaviors still pointing at it will block the delete.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            void deleteInferenceProfile();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
         <button
           className="primary-button"
           data-testid="profile-save"
@@ -286,4 +361,24 @@ export function InferenceProfileConfigEditor({
       </div>
     </form>
   );
+}
+
+/** View→form hydration, shared by the reset effect and dirty comparison. */
+function profileFormValues(profile: InferenceProfileView | null) {
+  return {
+    profileId: profile?.profileId ?? "",
+    displayName: profile?.displayName ?? profile?.profileId ?? "",
+    contextWindow: profile?.contextWindow != null ? String(profile.contextWindow) : "",
+    maxOutputTokens:
+      profile?.maxOutputTokens != null ? String(profile.maxOutputTokens) : "",
+    maxTurns: profile?.maxTurns != null ? String(profile.maxTurns) : "",
+    temperature: profile?.temperature != null ? String(profile.temperature) : "",
+    streamBatchMs: profile?.streamBatchMs != null ? String(profile.streamBatchMs) : "",
+    streamLivenessSecs:
+      profile?.streamLivenessTimeoutSecs != null
+        ? String(profile.streamLivenessTimeoutSecs)
+        : "",
+    deadlineSecs:
+      profile?.deadlineDurationSecs != null ? String(profile.deadlineDurationSecs) : "",
+  };
 }
