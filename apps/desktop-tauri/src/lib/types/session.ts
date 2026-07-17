@@ -63,6 +63,7 @@ export type RenderedTimelineItem =
       itemKey: string;
       sequence?: number | null;
       content: string;
+      timestamp?: string | null;
     }
   | {
       kind: "assistantMessage";
@@ -70,6 +71,7 @@ export type RenderedTimelineItem =
       sequence?: number | null;
       content?: string | null;
       reasoning?: string | null;
+      timestamp?: string | null;
     }
   | {
       kind: "toolGroup";

@@ -4,6 +4,7 @@ import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 
 import { CopyButton } from "./CopyButton";
+import { formatMessageTime } from "../lib/formatTime";
 
 import { parseCommandDenial } from "../lib/commandDenial";
 import type {
@@ -242,6 +243,22 @@ function AssistantCancelCauseTurn({ cause }: { cause: DerivedCancelCauseView }) 
   );
 }
 
+function MessageTime({ value }: { value?: string | null }) {
+  const label = formatMessageTime(value);
+  if (!label) {
+    return null;
+  }
+  return (
+    <time
+      className="message-time"
+      dateTime={value ?? undefined}
+      title={value ?? undefined}
+    >
+      {label}
+    </time>
+  );
+}
+
 export function MessageList({
   timelineItems,
   responseCancelCause,
@@ -268,6 +285,7 @@ export function MessageList({
                 <article className="message-card user-card">
                   <div className="message-role">
                     user
+                    <MessageTime value={item.timestamp} />
                     <CopyButton
                       className="message-copy"
                       getText={() => normalizeTranscriptText(item.content)}
@@ -300,6 +318,7 @@ export function MessageList({
                         className="assistant-turn-cause-badge"
                       />
                     ) : null}
+                    <MessageTime value={item.timestamp} />
                     {normalizedContent ? (
                       <CopyButton
                         className="message-copy"
