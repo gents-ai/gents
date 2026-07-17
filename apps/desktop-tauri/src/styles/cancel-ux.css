@@ -67,6 +67,20 @@
     color: var(--color-text-muted);
   }
 
+  .cause-headline {
+    margin: 0 0 var(--space-2);
+    color: var(--color-text-soft);
+    font-size: var(--text-md);
+  }
+
+  .cause-evidence summary {
+    cursor: pointer;
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
   .cause-details code {
     font-family: var(--font-mono);
     color: var(--color-text-warm);

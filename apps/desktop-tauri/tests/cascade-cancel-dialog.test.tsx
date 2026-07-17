@@ -92,10 +92,8 @@ describe("CascadeCancelDialog", () => {
       agentDid: "did:test:operator",
       includeTerminal: true,
     });
-    expect(
-      await screen.findByText(/will request interrupt by cascade/i),
-    ).toBeInTheDocument();
-    expect(await screen.findByText(/policy unknown/i)).toBeInTheDocument();
+    expect(await screen.findByText(/will be interrupted/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no cancellation policy/i)).toBeInTheDocument();
     expect(screen.getByText(/req_b91/)).toBeInTheDocument();
     expect(screen.getByText(/req_c02/)).toBeInTheDocument();
   });
@@ -113,7 +111,7 @@ describe("CascadeCancelDialog", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: /interrupt parent and cascade/i,
+        name: /interrupt all/i,
       }),
     );
 
@@ -142,7 +140,7 @@ describe("CascadeCancelDialog", () => {
       });
     render(<CascadeCancelDialog {...baseProps} />);
     const confirm = await screen.findByRole("button", {
-      name: /interrupt parent and cascade/i,
+      name: /interrupt all/i,
     });
 
     fireEvent.click(confirm);
