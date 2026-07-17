@@ -1,4 +1,24 @@
 @layer shell {
+  /* macOS overlay titlebar: reserved strip is drag surface + traffic-light
+     clearance. Inert outside the packaged app (no data-shell stamp). */
+  .titlebar-drag-region {
+    display: none;
+  }
+
+  :root[data-shell="mac"] .titlebar-drag-region {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--titlebar-height);
+    z-index: 40;
+  }
+
+  :root[data-shell="mac"] .app-shell {
+    padding-top: var(--titlebar-clearance);
+  }
+
   .shortcuts-help {
     min-width: 320px;
   }
