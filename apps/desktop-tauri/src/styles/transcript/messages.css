@@ -393,3 +393,27 @@
     word-break: break-word;
   }
 }
+
+@layer transcript {
+  /* Reading measure: prose lines cap near 76ch; assistant text reads as an
+     open page while the user's asks sit in visually distinct cards. */
+  .transcript-panel .message-card {
+    max-width: 76ch;
+  }
+
+  .transcript-panel .user-card,
+  .transcript-panel .pending-card {
+    background: var(--color-surface-muted);
+    border-color: var(--border-default);
+    box-shadow: none;
+  }
+
+  .transcript-panel
+    .message-card:not(.user-card):not(.pending-card):not(.response-error-card):not(
+      .thinking-card
+    ) {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
+}

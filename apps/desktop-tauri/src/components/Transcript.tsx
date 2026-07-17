@@ -251,7 +251,7 @@ export function MessageList({
           case "userMessage":
             return (
               <div className="turn-block" key={timelineKey}>
-                <article className="message-card">
+                <article className="message-card user-card">
                   <div className="message-role">
                     user
                     <CopyButton
