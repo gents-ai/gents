@@ -223,6 +223,27 @@
     border-color: var(--border-selected);
   }
 
+  .chat-toast {
+    position: absolute;
+    z-index: 4;
+    left: 50%;
+    bottom: var(--space-10);
+    transform: translateX(-50%);
+    max-width: min(60ch, 90%);
+    padding: var(--space-3) var(--space-7);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-pill);
+    background: var(--color-surface-deep);
+    color: var(--color-text-soft);
+    font-size: var(--text-sm);
+    animation: fade-in var(--motion-fast) ease-out;
+  }
+
+  .chat-toast.is-error {
+    border-color: var(--color-error-strong);
+    color: var(--color-error);
+  }
+
   .chat-title-row {
     display: flex;
     align-items: center;

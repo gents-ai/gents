@@ -160,7 +160,7 @@ test.describe("desktop UI harness", () => {
     await gotoHarness(page, "active-turn");
     await openChat(page);
     await page.getByTestId("cancel-button").click();
-    await expect(page.getByRole("status")).toContainText("Interrupt accepted");
+    await expect(page.getByTestId("chat-toast")).toContainText("Interrupted");
 
     await gotoHarness(page, "cascade-turn");
     await openChat(page);
@@ -170,7 +170,7 @@ test.describe("desktop UI harness", () => {
     ).toBeVisible();
     await expect(page.getByText("Will request interrupt by cascade")).toBeVisible();
     await page.getByRole("button", { name: /interrupt parent and cascade/i }).click();
-    await expect(page.getByRole("status")).toContainText("Interrupt accepted");
+    await expect(page.getByTestId("chat-toast")).toContainText("Interrupted");
   });
 
   test("sad path scenarios surface empty, bridge, save, and backend-health errors", async ({

@@ -105,15 +105,22 @@ function ToolDetailSection({
   );
 }
 
+/** One-line digest of a call's arguments for the collapsed summary. */
+function toolArgsPreview(args?: ToolDetailValueView | null): string | null {
+  if (!args) {
+    return null;
+  }
+  const source = args.fields.find((field) => field.value.trim())?.value ?? args.rawText;
+  const flat = source.replace(/\s+/g, " ").trim();
+  if (!flat) {
+    return null;
+  }
+  return flat.length > 64 ? `${flat.slice(0, 64)}…` : flat;
+}
+
 function ToolGroups({ tools }: { tools: RenderedToolCallView[] }) {
   return (
     <section className="tool-group">
-      <div className="tool-group-meta">
-        <span className="tool-group-label">Tool Calls</span>
-        <span className="muted small">
-          {tools.length} tool {tools.length === 1 ? "call" : "calls"}
-        </span>
-      </div>
       {tools.map((tool) => {
         // Prefer structured DenialReason fields persisted on AgentToolCall.
         // The parser remains as a compatibility fallback for older rows.
@@ -145,6 +152,11 @@ function ToolGroups({ tools }: { tools: RenderedToolCallView[] }) {
               <span className="tool-item-summary-left">
                 <span aria-hidden="true" className={toolStatusClass(tool.statusKind)} />
                 <span className="tool-item-name">{tool.toolName}</span>
+                {toolArgsPreview(tool.args) ? (
+                  <span className="tool-item-preview">
+                    {toolArgsPreview(tool.args)}
+                  </span>
+                ) : null}
                 {tool.cancelCause ? (
                   <CancelCauseBadge
                     cause={tool.cancelCause}
@@ -152,7 +164,9 @@ function ToolGroups({ tools }: { tools: RenderedToolCallView[] }) {
                   />
                 ) : null}
               </span>
-              <span className="tool-item-action">View</span>
+              <span aria-hidden="true" className="tool-item-action">
+                ▸
+              </span>
             </summary>
             <div className="tool-item-body">
               {tool.cancelCause ? (

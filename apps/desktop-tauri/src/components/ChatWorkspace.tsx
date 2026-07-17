@@ -87,9 +87,10 @@ export function ActiveChatWorkspace({
     )?.displayName ?? displayBehaviorLabel(activeBehaviorId);
 
   const [cascade, setCascade] = useState<null | { rootRequestId: string }>(null);
-  const [interruptResultBanner, setInterruptResultBanner] = useState<string | null>(
-    null,
-  );
+  const [interruptResultBanner, setInterruptResultBanner] = useState<{
+    text: string;
+    tone: "info" | "error";
+  } | null>(null);
   const [operationsOpen, setOperationsOpen] = useState(false);
   // Set when a background-tools row asks to focus the lineage view on its
   // parent request; falls back to the session's latest request.
@@ -125,14 +126,18 @@ export function ActiveChatWorkspace({
             cause: "userCancelled",
             cascade: false,
           });
-          if (result.accepted) setInterruptResultBanner("Interrupt accepted");
+          if (result.accepted)
+            setInterruptResultBanner({ text: "Interrupted", tone: "info" });
           else if (result.alreadyInterrupted)
-            setInterruptResultBanner("Already interrupted by another caller");
+            setInterruptResultBanner({ text: "Already interrupted", tone: "info" });
           return;
         }
         setCascade({ rootRequestId: requestId });
       } catch (e) {
-        setInterruptResultBanner(`Interrupt preview failed: ${String(e)}`);
+        setInterruptResultBanner({
+          text: `Couldn't interrupt: ${String(e)}`,
+          tone: "error",
+        });
       }
     },
     [selectedDeployment.agentDid],
@@ -206,17 +211,6 @@ export function ActiveChatWorkspace({
             onRetryMessage={onRetryMessage}
           />
 
-          {interruptResultBanner ? (
-            <div
-              className="muted small"
-              role="status"
-              aria-live="polite"
-              style={{ padding: "4px 12px" }}
-            >
-              {interruptResultBanner}
-            </div>
-          ) : null}
-
           <ChatComposer
             activeRequestId={session?.latestRequestId ?? null}
             approxSerializedBytes={approxSerializedBytes}
@@ -235,6 +229,18 @@ export function ActiveChatWorkspace({
           />
         </div>
         <OperationsRail open={operationsOpen} onOpenChange={setOperationsOpen} />
+        {interruptResultBanner ? (
+          <div
+            className={`chat-toast${
+              interruptResultBanner.tone === "error" ? " is-error" : ""
+            }`}
+            data-testid="chat-toast"
+            role="status"
+            aria-live="polite"
+          >
+            {interruptResultBanner.text}
+          </div>
+        ) : null}
       </section>
 
       {cascade ? (
@@ -245,15 +251,19 @@ export function ActiveChatWorkspace({
           onClose={() => setCascade(null)}
           onAccepted={(at) => {
             setCascade(null);
-            setInterruptResultBanner(`Interrupt accepted at ${at ?? "(unknown)"}`);
+            void at;
+            setInterruptResultBanner({ text: "Interrupted", tone: "info" });
           }}
           onAlreadyInterrupted={() => {
             setCascade(null);
-            setInterruptResultBanner("Already interrupted by another caller");
+            setInterruptResultBanner({ text: "Already interrupted", tone: "info" });
           }}
           onError={(msg) => {
             setCascade(null);
-            setInterruptResultBanner(`Interrupt failed: ${msg}`);
+            setInterruptResultBanner({
+              text: `Couldn't interrupt: ${msg}`,
+              tone: "error",
+            });
           }}
         />
       ) : null}
