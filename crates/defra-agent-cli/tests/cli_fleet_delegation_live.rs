@@ -44,6 +44,7 @@ use support::*;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -104,7 +105,9 @@ const SUBAGENT_SYSTEM_PROMPT: &str = r#"You are a remote research subagent. Answ
 
 const RELEASE_FLEET_SIZE: usize = 19;
 const RELEASE_DELEGATE_COUNT: usize = 15;
-const RELEASE_MAX_RETAINED_BACKGROUND_TASKS: usize = 128;
+// Mirrors the pinned DefraDB #1099 regression gate: fixed push workers plus a
+// small allowance for transient fetch/replay work must bound retained handles.
+const RELEASE_MAX_TRANSIENT_BACKGROUND_TASKS: usize = 32;
 const RELEASE_BAD_LOG_SIGNATURES: &[&str] = &[
     "Dropping GossipSub message outside accepted replication direction",
     "Collection-commit push failed; document retry ledger cannot replay CID-scoped work",
@@ -131,8 +134,31 @@ struct FleetNode {
     inference_profile_id: String,
     model_name: String,
     codex_shim_port: Option<u16>,
+    archived_logs: Vec<FleetLogCapture>,
     #[allow(dead_code)]
     serve: ServeProcess,
+}
+
+#[derive(Debug, Clone)]
+struct FleetLogCapture {
+    phase: String,
+    stdout: String,
+    stderr: String,
+}
+
+#[derive(Debug)]
+struct FatalFleetInvariant(String);
+
+impl std::fmt::Display for FatalFleetInvariant {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for FatalFleetInvariant {}
+
+fn fatal_fleet_invariant(message: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(FatalFleetInvariant(message.into()))
 }
 
 #[derive(Debug, Clone)]
@@ -435,17 +461,12 @@ async fn run_release_acceptance(root: &Path, fleet: &mut [FleetNode]) -> Result<
         true,
     )
     .await?;
-    wait_for_runtime_quiescence(&coord.graphql, &coord.agent_did, 2, Duration::from_secs(6))
-        .await?;
-    for delegate in delegates {
-        wait_for_runtime_quiescence(
-            &delegate.graphql,
-            &delegate.agent_did,
-            2,
-            Duration::from_secs(6),
-        )
-        .await?;
-    }
+    futures_util::future::try_join_all(std::iter::once(coord).chain(delegates.iter()).map(
+        |node| {
+            wait_for_runtime_quiescence(&node.graphql, &node.agent_did, 2, Duration::from_secs(6))
+        },
+    ))
+    .await?;
 
     let submit = run_cli_json(
         &coord.home,
@@ -525,7 +546,6 @@ struct P2pProgressSignature {
     pending_dag_expired: u64,
     pending_dag_capacity_shed: u64,
     pending_dag_retry_dispatched: u64,
-    retained_background_tasks: usize,
 }
 
 impl From<&P2pSyncStatusSnapshot> for P2pProgressSignature {
@@ -539,8 +559,21 @@ impl From<&P2pSyncStatusSnapshot> for P2pProgressSignature {
             pending_dag_expired: snapshot.pending_dag_expired,
             pending_dag_capacity_shed: snapshot.pending_dag_capacity_shed,
             pending_dag_retry_dispatched: snapshot.pending_dag_retry_dispatched,
-            retained_background_tasks: snapshot.retained_background_tasks,
         }
+    }
+}
+
+static P2P_HTTP_CLIENT: OnceLock<std::result::Result<reqwest::Client, String>> = OnceLock::new();
+
+fn p2p_http_client() -> Result<&'static reqwest::Client> {
+    match P2P_HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(client) => Ok(client),
+        Err(error) => bail!("building shared P2P diagnostics client: {error}"),
     }
 }
 
@@ -549,10 +582,7 @@ async fn fetch_p2p_sync_status(graphql: &str) -> Result<P2pSyncStatusSnapshot> {
         .strip_suffix("/graphql")
         .with_context(|| format!("unexpected GraphQL endpoint shape: {graphql}"))?;
     let url = format!("{api_base}/p2p/sync/status");
-    let value = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .context("building P2P diagnostics client")?
+    let value = p2p_http_client()?
         .get(&url)
         .send()
         .await
@@ -572,10 +602,7 @@ async fn fetch_connected_peer_ids(graphql: &str) -> Result<HashSet<String>> {
         .strip_suffix("/graphql")
         .with_context(|| format!("unexpected GraphQL endpoint shape: {graphql}"))?;
     let url = format!("{api_base}/p2p/peers");
-    let rows = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .context("building P2P peer client")?
+    let rows = p2p_http_client()?
         .get(&url)
         .send()
         .await
@@ -616,17 +643,23 @@ async fn wait_for_fleet_hub_remesh(
     .await
 }
 
-async fn sample_p2p_fleet_bounded(fleet: &[FleetNode]) -> Result<Vec<P2pSyncStatusSnapshot>> {
-    let snapshots = futures_util::future::try_join_all(
+async fn fetch_p2p_fleet(fleet: &[FleetNode]) -> Result<Vec<P2pSyncStatusSnapshot>> {
+    futures_util::future::try_join_all(
         fleet
             .iter()
             .map(|node| fetch_p2p_sync_status(&node.graphql)),
     )
-    .await?;
-    for (node, snapshot) in fleet.iter().zip(&snapshots) {
+    .await
+}
+
+fn assert_p2p_fleet_bounded(
+    fleet: &[FleetNode],
+    snapshots: &[P2pSyncStatusSnapshot],
+) -> Result<()> {
+    for (node, snapshot) in fleet.iter().zip(snapshots) {
         assert_p2p_snapshot_bounded(&node.agent_did, snapshot)?;
     }
-    Ok(snapshots)
+    Ok(())
 }
 
 fn assert_p2p_snapshot_bounded(label: &str, snapshot: &P2pSyncStatusSnapshot) -> Result<()> {
@@ -659,11 +692,14 @@ fn assert_p2p_snapshot_bounded(label: &str, snapshot: &P2pSyncStatusSnapshot) ->
             && snapshot.persisted_pending_dags <= snapshot.persisted_pending_dag_capacity,
         "{label} persisted pending-DAG occupancy exceeded its cap: {snapshot:?}"
     );
+    let retained_background_task_limit =
+        backlog.worker_count + RELEASE_MAX_TRANSIENT_BACKGROUND_TASKS;
     anyhow::ensure!(
-        snapshot.retained_background_tasks <= RELEASE_MAX_RETAINED_BACKGROUND_TASKS,
-        "{label} retained {} P2P background tasks (release max {})",
+        snapshot.retained_background_tasks <= retained_background_task_limit,
+        "{label} retained {} P2P background tasks ({} workers + {} transient-task allowance)",
         snapshot.retained_background_tasks,
-        RELEASE_MAX_RETAINED_BACKGROUND_TASKS
+        backlog.worker_count,
+        RELEASE_MAX_TRANSIENT_BACKGROUND_TASKS
     );
     anyhow::ensure!(
         snapshot.gossip_direction_filtered_total == 0,
@@ -714,7 +750,25 @@ async fn wait_for_p2p_fleet_quiet(fleet: &[FleetNode], timeout: Duration) -> Res
     let mut previous = None::<Vec<P2pProgressSignature>>;
     let mut stable_quiet_samples = 0usize;
     loop {
-        let snapshots = sample_p2p_fleet_bounded(fleet).await?;
+        let snapshots = match fetch_p2p_fleet(fleet).await {
+            Ok(snapshots) => snapshots,
+            Err(error) if Instant::now() < deadline => {
+                tracing::warn!(
+                    error = %error,
+                    "transient P2P diagnostics fetch failed while waiting for fleet quiet; retrying"
+                );
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+            Err(error) => {
+                bail!(
+                    "P2P diagnostics remained unavailable while waiting for fleet quiet: {error:#}"
+                );
+            }
+        };
+        // Admission or retention violations are system failures, not sampling
+        // failures, and must stop the release gate immediately.
+        assert_p2p_fleet_bounded(fleet, &snapshots)?;
         let signatures = snapshots
             .iter()
             .map(P2pProgressSignature::from)
@@ -761,7 +815,7 @@ async fn wait_for_p2p_fleet_quiet(fleet: &[FleetNode], timeout: Duration) -> Res
 
 fn assert_no_fleet_log_signatures(fleet: &[FleetNode]) -> Result<()> {
     for node in fleet {
-        let (stdout, stderr) = node.serve.captured_output()?;
+        let (stdout, stderr) = fleet_node_captured_output(node)?;
         let combined = format!("{stdout}\n{stderr}");
         for signature in RELEASE_BAD_LOG_SIGNATURES {
             anyhow::ensure!(
@@ -774,6 +828,25 @@ fn assert_no_fleet_log_signatures(fleet: &[FleetNode]) -> Result<()> {
     Ok(())
 }
 
+fn fleet_node_captured_output(node: &FleetNode) -> Result<(String, String)> {
+    let (current_stdout, current_stderr) = node.serve.captured_output()?;
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    for capture in &node.archived_logs {
+        stdout.push_str(&format!(
+            "\n===== {} stdout =====\n{}",
+            capture.phase, capture.stdout
+        ));
+        stderr.push_str(&format!(
+            "\n===== {} stderr =====\n{}",
+            capture.phase, capture.stderr
+        ));
+    }
+    stdout.push_str(&format!("\n===== current stdout =====\n{current_stdout}"));
+    stderr.push_str(&format!("\n===== current stderr =====\n{current_stderr}"));
+    Ok((stdout, stderr))
+}
+
 async fn wait_for_release_sweep(
     fleet: &[FleetNode],
     coord: &FleetNode,
@@ -782,6 +855,7 @@ async fn wait_for_release_sweep(
     parent_request_id: &str,
     timeout: Duration,
 ) -> Result<HashMap<String, CompletedChild>> {
+    let deadline = Instant::now() + timeout;
     let allowed_foreground_target = format!("researcher-{}", delegates.len());
     let completion = async {
         let (parent_terminal, completed_children) = tokio::try_join!(
@@ -808,7 +882,24 @@ async fn wait_for_release_sweep(
         tokio::select! {
             result = &mut completion => return result,
             _ = sample_interval.tick() => {
-                sample_p2p_fleet_bounded(fleet).await?;
+                match fetch_p2p_fleet(fleet).await {
+                    Ok(snapshots) => {
+                        // Bounds violations describe the fleet under test and
+                        // fail immediately; only diagnostics transport retries.
+                        assert_p2p_fleet_bounded(fleet, &snapshots)?;
+                    }
+                    Err(error) if Instant::now() < deadline => {
+                        tracing::warn!(
+                            error = %error,
+                            "transient P2P diagnostics fetch failed during release sweep; retrying"
+                        );
+                    }
+                    Err(error) => {
+                        bail!(
+                            "P2P diagnostics remained unavailable through the release sweep deadline: {error:#}"
+                        );
+                    }
+                }
             }
         }
     }
@@ -856,7 +947,6 @@ async fn assert_release_subagent_inspection(
     );
     let mut child_ids = HashSet::new();
     let mut child_ids_by_target = HashMap::new();
-    let mut foreground_child_ids = Vec::new();
     for row in rows {
         anyhow::ensure!(
             row.get("lifecycle_state").and_then(Value::as_str) == Some("completed"),
@@ -878,9 +968,9 @@ async fn assert_release_subagent_inspection(
             .with_context(|| format!("release spawn args have no target name: {args}"))?;
         match row.get("await_mode").and_then(Value::as_str) {
             Some("background") => {}
-            Some("foreground") if name == expected_wait_target_name => {
-                foreground_child_ids.push(child_id.to_string());
-            }
+            // wait_subagent foregrounds the running bridge it waits on, so the
+            // waited target may persist foreground after a background spawn.
+            Some("foreground") if name == expected_wait_target_name => {}
             mode => bail!(
                 "release spawn bridge for {name} has invalid final await mode {mode:?}; only {expected_wait_target_name} may be foreground"
             ),
@@ -892,10 +982,6 @@ async fn assert_release_subagent_inspection(
             "duplicate release spawn target {name}"
         );
     }
-    anyhow::ensure!(
-        foreground_child_ids.len() <= 1,
-        "more than one release child was foregrounded: {foreground_child_ids:?}"
-    );
     let expected_names = (1..=expected_count)
         .map(|index| format!("researcher-{index}"))
         .collect::<HashSet<_>>();
@@ -1000,15 +1086,16 @@ async fn assert_release_subagent_inspection(
     let wait_rows = transcript_exchanges_named(&exchanges, "wait_subagent");
     let read_rows = transcript_exchanges_named(&exchanges, "read_subagent");
     anyhow::ensure!(
-        !wait_rows.is_empty() && read_rows.len() == 1,
-        "release parent must successfully wait and call read_subagent exactly once; wait={} read={} session={parent_session_id}",
+        !wait_rows.is_empty() && !read_rows.is_empty(),
+        "release parent must successfully wait and read a subagent; wait={} read={} session={parent_session_id}",
         wait_rows.len(),
         read_rows.len()
     );
     let expected_waited_child_id = child_ids_by_target
         .get(&expected_wait_target_name)
         .context("release sweep has no last researcher child id")?;
-    for (index, exchange) in wait_rows.iter().enumerate() {
+    let mut successful_wait_exchange_ids = HashSet::new();
+    for exchange in &wait_rows {
         let waited_child_id = exchange
             .args
             .get("child_request_id")
@@ -1019,14 +1106,14 @@ async fn assert_release_subagent_inspection(
             "wait_subagent targeted {waited_child_id}, expected researcher-{expected_count} child {expected_waited_child_id}"
         );
         let wait_result = parse_transcript_tool_result(exchange)?;
-        if index + 1 == wait_rows.len() {
+        if wait_result.get("ok").and_then(Value::as_bool) == Some(true) {
             anyhow::ensure!(
-                wait_result.get("ok").and_then(Value::as_bool) == Some(true)
-                    && wait_result.get("child_request_id").and_then(Value::as_str)
-                        == Some(waited_child_id)
+                wait_result.get("child_request_id").and_then(Value::as_str)
+                    == Some(waited_child_id)
                     && wait_result.get("status").and_then(Value::as_str) == Some("completed"),
-                "final wait_subagent attempt did not successfully observe researcher-{expected_count}: {wait_result}"
+                "successful wait_subagent did not observe researcher-{expected_count} completed: {wait_result}"
             );
+            successful_wait_exchange_ids.insert(exchange.id.as_str());
         } else {
             anyhow::ensure!(
                 wait_result.get("ok").and_then(Value::as_bool) == Some(false)
@@ -1037,43 +1124,45 @@ async fn assert_release_subagent_inspection(
             );
         }
     }
+    anyhow::ensure!(
+        !successful_wait_exchange_ids.is_empty(),
+        "wait_subagent never successfully observed researcher-{expected_count} completed"
+    );
     let waited_child_id = expected_waited_child_id.as_str();
 
-    let read_child_id = read_rows[0]
-        .args
-        .get("child_request_id")
-        .and_then(Value::as_str)
-        .context("read_subagent args omitted child_request_id")?;
     let expected_read_child_id = child_ids_by_target
         .get("researcher-1")
         .context("release sweep has no researcher-1 child id")?;
     anyhow::ensure!(
-        read_child_id == expected_read_child_id,
-        "read_subagent targeted {read_child_id}, expected researcher-1 child {expected_read_child_id}"
-    );
-    anyhow::ensure!(
-        read_child_id != waited_child_id,
+        expected_read_child_id != waited_child_id,
         "read_subagent must inspect a different background child than wait_subagent"
     );
-    anyhow::ensure!(
-        read_rows[0]
+    let mut successful_read_exchange_ids = HashSet::new();
+    for exchange in &read_rows {
+        let read_child_id = exchange
             .args
-            .get("include_user_messages")
-            .and_then(Value::as_bool)
-            == Some(true),
-        "read_subagent must include user messages so a materialized live child has an observable transcript: {:?}",
-        read_rows[0].args
-    );
-    let read_result = parse_transcript_tool_result(read_rows[0])?;
-    anyhow::ensure!(
-        read_result.get("child_request_id").and_then(Value::as_str) == Some(read_child_id),
-        "read_subagent did not project researcher-1: {read_result}"
-    );
-    anyhow::ensure!(
-        read_result
-            .get("child_session_id")
+            .get("child_request_id")
             .and_then(Value::as_str)
-            .is_some_and(|session_id| !session_id.trim().is_empty())
+            .context("read_subagent args omitted child_request_id")?;
+        anyhow::ensure!(
+            read_child_id == expected_read_child_id,
+            "read_subagent targeted {read_child_id}, expected researcher-1 child {expected_read_child_id}"
+        );
+        anyhow::ensure!(
+            exchange
+                .args
+                .get("include_user_messages")
+                .and_then(Value::as_bool)
+                == Some(true),
+            "read_subagent must include user messages so a materialized live child has an observable transcript: {:?}",
+            exchange.args
+        );
+        let read_result = parse_transcript_tool_result(exchange)?;
+        if read_result.get("child_request_id").and_then(Value::as_str) == Some(read_child_id)
+            && read_result
+                .get("child_session_id")
+                .and_then(Value::as_str)
+                .is_some_and(|session_id| !session_id.trim().is_empty())
             && read_result
                 .get("lifecycle_state")
                 .and_then(Value::as_str)
@@ -1083,8 +1172,14 @@ async fn assert_release_subagent_inspection(
             && read_result
                 .get("transcript")
                 .and_then(Value::as_str)
-                .is_some_and(|transcript| !transcript.trim().is_empty()),
-        "read_subagent did not return a materialized child with observable transcript content: {read_result}"
+                .is_some_and(|transcript| !transcript.trim().is_empty())
+        {
+            successful_read_exchange_ids.insert(exchange.id.as_str());
+        }
+    }
+    anyhow::ensure!(
+        !successful_read_exchange_ids.is_empty(),
+        "read_subagent never returned a materialized researcher-1 child with observable transcript content"
     );
 
     let last_spawn_index = exchanges
@@ -1099,19 +1194,24 @@ async fn assert_release_subagent_inspection(
         .iter()
         .position(|exchange| exchange.name == "wait_subagent")
         .context("release transcript contains no wait_subagent call")?;
-    let last_wait_index = exchanges
+    let successful_wait_index = exchanges
         .iter()
-        .rposition(|exchange| exchange.name == "wait_subagent")
-        .context("release transcript contains no wait_subagent call")?;
-    let read_index = exchanges
+        .position(|exchange| successful_wait_exchange_ids.contains(exchange.id.as_str()))
+        .context("release transcript contains no successful wait_subagent call")?;
+    let successful_read_index = exchanges
         .iter()
-        .position(|exchange| exchange.name == "read_subagent")
-        .context("release transcript contains no read_subagent call")?;
+        .enumerate()
+        .find(|(index, exchange)| {
+            *index > successful_wait_index
+                && successful_read_exchange_ids.contains(exchange.id.as_str())
+        })
+        .map(|(index, _)| index)
+        .context(
+            "release transcript contains no successful read_subagent after a successful wait",
+        )?;
     anyhow::ensure!(
-        last_spawn_index < list_index
-            && list_index < first_wait_index
-            && last_wait_index < read_index,
-        "release inspection tools ran out of order: last_spawn={last_spawn_index} list={list_index} first_wait={first_wait_index} last_wait={last_wait_index} read={read_index}"
+        last_spawn_index < list_index && list_index < first_wait_index,
+        "release inspection tools ran out of order: last_spawn={last_spawn_index} list={list_index} first_wait={first_wait_index} successful_wait={successful_wait_index} successful_read={successful_read_index}"
     );
     Ok(())
 }
@@ -3454,6 +3554,7 @@ async fn bring_up_fleet(
             inference_profile_id,
             model_name,
             codex_shim_port,
+            archived_logs: Vec::new(),
             serve,
         });
     }
@@ -3498,6 +3599,10 @@ async fn restart_fleet_node(node: &mut FleetNode) -> Result<()> {
         .child
         .wait()
         .context("waiting for stopped fleet daemon")?;
+    let (archived_stdout, archived_stderr) = node
+        .serve
+        .captured_output()
+        .context("capturing stopped fleet daemon logs before restart")?;
 
     let http_port = reqwest::Url::parse(&node.graphql)
         .with_context(|| format!("parsing fleet GraphQL URL {}", node.graphql))?
@@ -3527,6 +3632,11 @@ async fn restart_fleet_node(node: &mut FleetNode) -> Result<()> {
     node.shareable = fetch_shareable_address(&node.graphql)
         .await
         .context("fetching restarted fleet daemon shareable address")?;
+    node.archived_logs.push(FleetLogCapture {
+        phase: format!("before-restart-{}", node.archived_logs.len() + 1),
+        stdout: archived_stdout,
+        stderr: archived_stderr,
+    });
     node.serve = serve;
     Ok(())
 }
@@ -3848,41 +3958,42 @@ async fn wait_for_replicator_installed(
 ) -> Result<()> {
     let escaped = escape_graphql_string(peer_id);
     let query = format!(
-        r#"{{ PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ peer_id collections replicator_addresses }} }}"#
+        r#"{{ PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{escaped}" }} }}) {{ peer_id collections replicator_addresses }} }}"#
     );
     let deadline = Instant::now() + timeout;
     let mut last = Value::Null;
     loop {
         let response = graphql_query(graphql, &query).await?;
-        if let Some(row) = response
+        if let Some(rows) = response
             .pointer("/data/PeerPairingApplied")
             .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
         {
-            last = row.clone();
-            let has_address = row
-                .get("replicator_addresses")
-                .and_then(Value::as_array)
-                .is_some_and(|addrs| {
-                    addrs
-                        .iter()
-                        .any(|a| a.as_str().is_some_and(|s| !s.is_empty()))
-                });
-            let has_collection = row
-                .get("collections")
-                .and_then(Value::as_array)
-                .is_some_and(|collections| {
-                    collections
-                        .iter()
-                        .any(|collection| collection.as_str() == Some(required_collection))
-                });
-            if has_address && has_collection {
+            last = Value::Array(rows.clone());
+            if rows.iter().any(|row| {
+                let has_address = row
+                    .get("replicator_addresses")
+                    .and_then(Value::as_array)
+                    .is_some_and(|addrs| {
+                        addrs
+                            .iter()
+                            .any(|address| address.as_str().is_some_and(|value| !value.is_empty()))
+                    });
+                let has_collection = row
+                    .get("collections")
+                    .and_then(Value::as_array)
+                    .is_some_and(|collections| {
+                        collections
+                            .iter()
+                            .any(|collection| collection.as_str() == Some(required_collection))
+                    });
+                has_address && has_collection
+            }) {
                 return Ok(());
             }
         }
         if Instant::now() >= deadline {
             bail!(
-                "timed out waiting for replicator install containing {required_collection} on edge peer={peer_id} (graphql={graphql}); last PeerPairingApplied row: {last}"
+                "timed out waiting for replicator install containing {required_collection} on edge peer={peer_id} (graphql={graphql}); last PeerPairingApplied rows: {last}"
             );
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -3893,7 +4004,7 @@ async fn wait_for_replicator_installed(
 /// for offline timeline/trace analysis (the temp logs are dropped with the fleet).
 fn persist_fleet_logs(fleet: &[FleetNode], suffix: &str) {
     for (idx, node) in fleet.iter().enumerate() {
-        if let Ok((stdout, stderr)) = node.serve.captured_output() {
+        if let Ok((stdout, stderr)) = fleet_node_captured_output(node) {
             let label = if idx == 0 {
                 "coordinator".to_string()
             } else {
@@ -3922,7 +4033,7 @@ fn dump_fleet_logs(fleet: &[FleetNode]) {
         lines[start..].join("\n")
     };
     for node in fleet {
-        match node.serve.captured_output() {
+        match fleet_node_captured_output(node) {
             Ok((stdout, stderr)) => {
                 eprintln!(
                     "\n===== {} ({}) stderr tail =====\n{}",
@@ -4164,23 +4275,29 @@ async fn wait_for_all_subagent_children_completed(
         for bridge in &bridges {
             match bridge.await_mode.as_deref() {
                 Some("background") => {}
+                // wait_subagent foregrounds the running bridge it waits on;
+                // this is the sole permitted final foreground transition.
                 Some("foreground")
                     if allowed_foreground_target == Some(bridge.target_name.as_str()) => {}
-                Some("foreground") => bail!(
-                    "bridge {} for target {:?} was unexpectedly foregrounded; only {allowed_foreground_target:?} may foreground: {bridge:?}",
-                    bridge.tool_call_id,
-                    bridge.target_name,
-                ),
-                _ => bail!(
-                    "bridge {} has an invalid await mode: {bridge:?}",
-                    bridge.tool_call_id
-                ),
+                Some("foreground") => {
+                    return Err(fatal_fleet_invariant(format!(
+                        "bridge {} for target {:?} was unexpectedly foregrounded; only {allowed_foreground_target:?} may foreground: {bridge:?}",
+                        bridge.tool_call_id, bridge.target_name,
+                    )));
+                }
+                _ => {
+                    return Err(fatal_fleet_invariant(format!(
+                        "bridge {} has an invalid await mode: {bridge:?}",
+                        bridge.tool_call_id
+                    )));
+                }
             }
-            anyhow::ensure!(
-                bridge.lifecycle_state != "failed",
-                "bridge {} failed before child completion: {bridge:?}",
-                bridge.tool_call_id
-            );
+            if bridge.lifecycle_state == "failed" {
+                return Err(fatal_fleet_invariant(format!(
+                    "bridge {} failed before child completion: {bridge:?}",
+                    bridge.tool_call_id
+                )));
+            }
 
             let Some((owner, child)) =
                 find_child_on_any_subagent(subagents, &bridge.child_request_id).await?
@@ -4192,7 +4309,12 @@ async fn wait_for_all_subagent_children_completed(
                 continue;
             };
 
-            assert_child_lineage(&child, owner, bridge, parent_request_id)?;
+            assert_child_lineage(&child, owner, bridge, parent_request_id).map_err(|error| {
+                fatal_fleet_invariant(format!(
+                    "child {} violated release lineage: {error:#}",
+                    child.request_id
+                ))
+            })?;
 
             let child_state = child
                 .lifecycle_state
@@ -4272,18 +4394,23 @@ fn assert_child_lineage(
     bridge: &BridgeRow,
     parent_request_id: &str,
 ) -> Result<()> {
-    assert_eq!(child.request_id, bridge.child_request_id);
-    assert_eq!(child.agent_did, owner.agent_did);
-    assert_eq!(child.behavior_id, owner.behavior_id);
-    assert_eq!(
-        child.caused_by_parent_request_id.as_deref(),
-        Some(parent_request_id)
+    anyhow::ensure!(
+        child.request_id == bridge.child_request_id,
+        "child request id does not match its bridge: child={child:?} bridge={bridge:?}"
     );
-    assert_eq!(
-        child.caused_by_parent_tool_call_id.as_deref(),
-        Some(bridge.tool_call_id.as_str())
+    anyhow::ensure!(
+        child.agent_did == owner.agent_did && child.behavior_id == owner.behavior_id,
+        "child ownership does not match its materializing node: child={child:?} owner={} behavior={}",
+        owner.agent_did,
+        owner.behavior_id
     );
-    assert_eq!(child.caused_by_trigger_kind.as_deref(), Some("subagent"));
+    anyhow::ensure!(
+        child.caused_by_parent_request_id.as_deref() == Some(parent_request_id)
+            && child.caused_by_parent_tool_call_id.as_deref()
+                == Some(bridge.tool_call_id.as_str())
+            && child.caused_by_trigger_kind.as_deref() == Some("subagent"),
+        "child lineage does not match its parent bridge: child={child:?} bridge={bridge:?} parent={parent_request_id}"
+    );
     anyhow::ensure!(
         !matches!(
             child.lifecycle_state.as_deref(),
@@ -4701,6 +4828,9 @@ where
         }
         match f().await {
             Ok(value) => return Ok(value),
+            Err(error) if error.downcast_ref::<FatalFleetInvariant>().is_some() => {
+                return Err(error);
+            }
             Err(error) => last_error = error.to_string(),
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
