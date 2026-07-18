@@ -325,6 +325,30 @@ impl ClientCore {
         });
     }
 
+    /// Reconstruct a request's persisted event timeline, routed like every
+    /// per-agent operation: remote GraphQL when the peer registers an
+    /// endpoint, the local node otherwise. Bounded so a dead peer fails the
+    /// panel instead of hanging it.
+    pub async fn request_timeline(
+        &self,
+        agent_did: &str,
+        request_id: &str,
+    ) -> Result<defra_agent::run_timeline::RunTimeline> {
+        let agent_did = normalize_required("agent_did", agent_did)?;
+        let request_id = normalize_required("request_id", request_id)?;
+        let access = match self.graphql_for_agent(agent_did).await {
+            Some(graphql) => defra_agent::config_client::ConfigAccess::Graphql(graphql),
+            None => defra_agent::config_client::ConfigAccess::Local(self.node_arc()),
+        };
+        let timeline = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            defra_agent::run_timeline_fetch::load_run_timeline(&access, request_id),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))??;
+        Ok(timeline)
+    }
+
     pub async fn graphql_for_agent(&self, agent_did: &str) -> Option<String> {
         self.peer_record_for_agent(agent_did)
             .await

@@ -131,3 +131,16 @@ export type ChatSendResult = {
   agentDid: string;
   behaviorId?: string | null;
 };
+
+/// Raw runtime `RunTimeline` JSON (snake_case — serialized straight from
+/// defra_agent::run_timeline, not a bridge camelCase view).
+export type RunTimelineEventView = { kind: string } & Record<string, unknown>;
+
+export type RequestTimelineView = {
+  request_id: string;
+  session_id?: string | null;
+  agent_did?: string | null;
+  behavior_id?: string | null;
+  child_request_ids?: string[];
+  events: RunTimelineEventView[];
+};

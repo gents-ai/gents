@@ -68,6 +68,8 @@ export type {
   ResponseView,
   ToolDetailFieldView,
   ToolDetailValueView,
+  RequestTimelineView,
+  RunTimelineEventView,
 } from "./types/session";
 export type {
   ActiveRequestView,

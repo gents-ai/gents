@@ -47,6 +47,7 @@ pub fn run() {
             tauri_commands::lifecycle::desktop_set_selected_agent,
             tauri_commands::lifecycle::desktop_observer_metrics,
             tauri_commands::chat::desktop_session_snapshot,
+            tauri_commands::chat::desktop_request_timeline,
             tauri_commands::chat::desktop_chat_send,
             tauri_commands::chat::desktop_conversation_rename,
             tauri_commands::config::desktop_agent_config_save,

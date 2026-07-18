@@ -396,6 +396,44 @@ export function createDesktopUiHarness(
       notify("peers");
       return snapshot();
     },
+    async fetchRequestTimeline(agentDid, requestId) {
+      if (agentDid !== AGENT_DID) {
+        throw new Error(`no deployment for ${agentDid}`);
+      }
+      return {
+        request_id: requestId,
+        session_id: "session-intro",
+        agent_did: agentDid,
+        behavior_id: DEFAULT_BEHAVIOR_ID,
+        child_request_ids: [],
+        events: [
+          {
+            kind: "request",
+            request_id: requestId,
+            lifecycle_state: "Completed",
+            timestamp: STARTED_AT,
+          },
+          {
+            kind: "message",
+            role: "user",
+            content: "hello there",
+            sequence: 1,
+            timestamp: STARTED_AT,
+          },
+          {
+            kind: "tool_call",
+            tool_name: "defra_exec",
+            lifecycle_state: "Completed",
+            started_at: STARTED_AT,
+          },
+          {
+            kind: "response",
+            status: "materialized",
+            created_at: STARTED_AT,
+          },
+        ],
+      };
+    },
     async fetchPeerStatus() {
       return {
         label: "Bombadil UI Agent",
