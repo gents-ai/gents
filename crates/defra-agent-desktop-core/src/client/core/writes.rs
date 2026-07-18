@@ -23,6 +23,7 @@ use super::bootstrap::{
     normalize_required, p2p_pairing_enabled_for_graphql, sync_branchable_collections_with_retry,
     BRANCHABLE_PAIR_SYNC_ENV, REMOTE_P2P_PAIRING_ENV,
 };
+use super::p2p_ops;
 use super::p2p_ops::{p2p_disconnect_peer, p2p_remove_replicator};
 use super::{ClientCore, ClientPeerStatus, PEER_ADD_OPERATION_TIMEOUT};
 
@@ -323,6 +324,37 @@ impl ClientCore {
                 }
             }
         });
+    }
+
+    /// Live P2P/network state for the visibility panel. Each probe fails
+    /// independently — a dead subsystem reports its error instead of hiding
+    /// the healthy ones.
+    pub async fn network_status(&self) -> NetworkStatus {
+        let local_peer_id = p2p_ops::p2p_local_peer_id(&self.p2p).await;
+        let listen_addresses = p2p_ops::p2p_listen_addresses(&self.p2p).await;
+        let connected_peers = p2p_ops::p2p_connected_peers(&self.p2p).await;
+        let replicators = p2p_ops::p2p_get_replicators(&self.p2p).await;
+        let saved_peers = self.peer_directory.read().await.records().to_vec();
+
+        NetworkStatus {
+            local_peer_id: local_peer_id.map_err(|error| error.to_string()),
+            listen_addresses: listen_addresses.map_err(|error| error.to_string()),
+            connected_peers: connected_peers.map_err(|error| error.to_string()),
+            replicators: replicators
+                .map(|rows| {
+                    rows.into_iter()
+                        .map(|info| NetworkReplicator {
+                            peer_id: info.id,
+                            address: info.address,
+                            collections: info.collections,
+                            status: info.status,
+                            last_status_change: info.last_status_change,
+                        })
+                        .collect()
+                })
+                .map_err(|error| error.to_string()),
+            saved_peers,
+        }
     }
 
     pub async fn graphql_for_agent(&self, agent_did: &str) -> Option<String> {
@@ -2073,4 +2105,23 @@ mod delete_source_tests {
             tool_selections_referencing_behavior(&selections, "did:key:alpha", "writer").is_empty()
         );
     }
+}
+
+/// Independent probe results; `Err` carries the probe's failure message.
+#[derive(Debug, Clone)]
+pub struct NetworkStatus {
+    pub local_peer_id: std::result::Result<String, String>,
+    pub listen_addresses: std::result::Result<Vec<String>, String>,
+    pub connected_peers: std::result::Result<Vec<String>, String>,
+    pub replicators: std::result::Result<Vec<NetworkReplicator>, String>,
+    pub saved_peers: Vec<super::super::peer_directory::PeerRecord>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NetworkReplicator {
+    pub peer_id: Option<String>,
+    pub address: Option<String>,
+    pub collections: Vec<String>,
+    pub status: Option<u8>,
+    pub last_status_change: Option<String>,
 }
