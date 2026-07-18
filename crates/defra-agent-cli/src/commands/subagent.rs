@@ -63,7 +63,6 @@ async fn subagent_cancel(args: SubagentCancelArgs) -> Result<()> {
             }
         }
         ConfigAccess::Local(node) => {
-            let node = Arc::new(node);
             // Migrations already ran via the single sanctioned entry point inside
             // `resolve_config_access` (it calls
             // `migration::ensure_all_runtime_migrations` for every Local node,

@@ -102,7 +102,7 @@ mod tests {
             ..Default::default()
         };
 
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
         write_tool_selection_document(&access, &selection).await?;
 
         let node = match &access {
@@ -173,7 +173,7 @@ mod tests {
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
 
         // A valid `subagent_targets` entry is the JSON serialization of a named
         // SubagentTarget, not a bare behavior id.
@@ -278,7 +278,7 @@ mod tests {
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
 
         let applied = ToolSelectionDocument {
             selection_id: "test-clear-fields".to_string(),

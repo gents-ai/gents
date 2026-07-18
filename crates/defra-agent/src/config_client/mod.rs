@@ -43,17 +43,20 @@ pub use txn::ConfigApplyTxn;
 
 mod tool_selection;
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use defra_agent_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use defra_node::EmbeddedNode;
 use serde_json::{json, Value};
 
-#[allow(clippy::large_enum_variant)]
 pub enum ConfigAccess {
     /// HTTP GraphQL endpoint. **Must end with `/graphql`** — transaction
     /// begin/commit/discard derive the REST API base by stripping that suffix.
     Graphql(String),
-    Local(EmbeddedNode),
+    /// Shared so callers that already hold the node (desktop client) can
+    /// construct access without moving it; `EmbeddedNode` is not `Clone`.
+    Local(Arc<EmbeddedNode>),
 }
 
 impl ConfigAccess {
