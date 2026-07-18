@@ -51,6 +51,10 @@ use codex_app_server_protocol as codex;
 use defra_agent::{
     subagent_target_entry, JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter, P2pSyncStatusSnapshot,
 };
+use defra_agent_protocol::message::{
+    AssistantContent, Message as ProtocolMessage, ToolResultContent, UserContent,
+};
+use defra_agent_protocol::transcript::decode_persisted_message;
 use futures_util::{SinkExt, StreamExt};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -160,6 +164,15 @@ struct CompletedChild {
     owner_behavior_id: String,
     owner_answer: String,
     coordinator_answer: String,
+}
+
+#[derive(Debug, Clone)]
+struct TranscriptToolExchange {
+    id: String,
+    call_id: Option<String>,
+    name: String,
+    args: Value,
+    result: Option<String>,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -283,7 +296,7 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
         subagents,
         &parent_session_id,
         &parent_request_id,
-        0,
+        false,
         Duration::from_secs(300),
     )
     .await?;
@@ -394,8 +407,10 @@ async fn run_release_acceptance(root: &Path, fleet: &mut [FleetNode]) -> Result<
             .split_first()
             .context("release fleet requires a coordinator")?;
         wait_for_fleet_control_plane(coord, spokes).await?;
+        wait_for_fleet_hub_remesh(coord, spokes, Duration::from_secs(120)).await?;
     }
     wait_for_p2p_fleet_quiet(fleet, Duration::from_secs(240)).await?;
+    assert_no_fleet_log_signatures(fleet)?;
 
     let (coord, spokes) = fleet
         .split_first()
@@ -489,7 +504,7 @@ fn release_coordinator_system_prompt(delegate_count: usize) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "You are the release acceptance fleet coordinator. Your allowed remote targets are: {names}. When the user asks for the release sweep, follow this exact sequence: (1) call spawn_subagent exactly once for every allowed target, with await_mode=background; (2) after all {delegate_count} spawn calls return, call list_subagents exactly once with status=all and limit=50; (3) call wait_subagent for researcher-1's returned child_request_id; (4) after that wait returns, call read_subagent exactly once for the same child_request_id; (5) reply briefly that the sweep completed. Do not omit a target, do not create duplicate spawns, and do not call any other tools."
+        "You are the release acceptance fleet coordinator. Your allowed remote targets are: {names}. When the user asks for the release sweep, follow this exact sequence: (1) call spawn_subagent exactly once for every allowed target, with await_mode=background; (2) after all {delegate_count} spawn calls return, call list_subagents exactly once with status=all and limit=50; (3) call wait_subagent exactly once for researcher-{delegate_count}'s returned child_request_id; (4) after that wait returns, call read_subagent exactly once for researcher-1's returned child_request_id; (5) reply briefly that the sweep completed. The wait and read calls must target those two different children. Do not omit a target, do not create duplicate spawns, do not call steer_subagent, and do not call any other tools."
     )
 }
 
@@ -549,6 +564,55 @@ async fn fetch_p2p_sync_status(graphql: &str) -> Result<P2pSyncStatusSnapshot> {
     JsonP2pSyncStatusAdapter
         .adapt(&value)
         .with_context(|| format!("adapting typed P2P diagnostics from {url}"))
+}
+
+async fn fetch_connected_peer_ids(graphql: &str) -> Result<HashSet<String>> {
+    let api_base = graphql
+        .strip_suffix("/graphql")
+        .with_context(|| format!("unexpected GraphQL endpoint shape: {graphql}"))?;
+    let url = format!("{api_base}/p2p/peers");
+    let rows = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("building P2P peer client")?
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("fetching connected P2P peers from {url}"))?
+        .error_for_status()
+        .with_context(|| format!("P2P peer endpoint returned an error from {url}"))?
+        .json::<Vec<Value>>()
+        .await
+        .with_context(|| format!("decoding connected P2P peers from {url}"))?;
+    rows.into_iter()
+        .map(|row| {
+            row.get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.trim().is_empty())
+                .map(ToOwned::to_owned)
+                .with_context(|| format!("connected P2P peer row has no id: {row}"))
+        })
+        .collect()
+}
+
+async fn wait_for_fleet_hub_remesh(
+    coord: &FleetNode,
+    spokes: &[FleetNode],
+    timeout: Duration,
+) -> Result<()> {
+    let expected = spokes
+        .iter()
+        .map(|node| node.peer_id.clone())
+        .collect::<HashSet<_>>();
+    wait_until_value(timeout, || async {
+        let connected = fetch_connected_peer_ids(&coord.graphql).await?;
+        anyhow::ensure!(
+            connected == expected,
+            "restarted hub has not live-remeshed with every spoke: connected={connected:?} expected={expected:?}"
+        );
+        Ok(())
+    })
+    .await
 }
 
 async fn sample_p2p_fleet_bounded(fleet: &[FleetNode]) -> Result<Vec<P2pSyncStatusSnapshot>> {
@@ -725,7 +789,7 @@ async fn wait_for_release_sweep(
                 delegates,
                 parent_session_id,
                 parent_request_id,
-                1,
+                true,
                 timeout,
             ),
         )?;
@@ -760,7 +824,10 @@ async fn assert_release_subagent_inspection(
         &format!(
             r#"{{
                 AgentToolCall(
-                    filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                    filter: {{
+                        request_id: {{ _eq: "{escaped_request_id}" }},
+                        tool_name: {{ _eq: "spawn_subagent" }}
+                    }},
                     order: {{ started_at: ASC }}
                 ) {{
                     tool_name
@@ -776,20 +843,16 @@ async fn assert_release_subagent_inspection(
     let rows = response
         .pointer("/data/AgentToolCall")
         .and_then(Value::as_array)
-        .context("release sweep has no persisted AgentToolCall rows")?;
+        .context("release sweep has no persisted spawn bridge rows")?;
 
-    let spawn_rows = rows
-        .iter()
-        .filter(|row| row.get("tool_name").and_then(Value::as_str) == Some("spawn_subagent"))
-        .collect::<Vec<_>>();
     anyhow::ensure!(
-        spawn_rows.len() == expected_count,
+        rows.len() == expected_count,
         "release sweep persisted {} spawn calls, expected exactly {expected_count}",
-        spawn_rows.len()
+        rows.len()
     );
     let mut child_ids = HashSet::new();
-    let mut target_names = HashSet::new();
-    for row in spawn_rows {
+    let mut child_ids_by_target = HashMap::new();
+    for row in rows {
         anyhow::ensure!(
             row.get("lifecycle_state").and_then(Value::as_str) == Some("completed"),
             "release spawn bridge was not completed: {row}"
@@ -813,7 +876,9 @@ async fn assert_release_subagent_inspection(
             .and_then(Value::as_str)
             .with_context(|| format!("release spawn args have no target name: {args}"))?;
         anyhow::ensure!(
-            target_names.insert(name.to_string()),
+            child_ids_by_target
+                .insert(name.to_string(), child_id.to_string())
+                .is_none(),
             "duplicate release spawn target {name}"
         );
     }
@@ -821,17 +886,58 @@ async fn assert_release_subagent_inspection(
         .map(|index| format!("researcher-{index}"))
         .collect::<HashSet<_>>();
     anyhow::ensure!(
-        target_names == expected_names,
-        "release spawn target set mismatch: actual={target_names:?} expected={expected_names:?}"
+        child_ids_by_target.keys().cloned().collect::<HashSet<_>>() == expected_names,
+        "release spawn target set mismatch: actual={:?} expected={expected_names:?}",
+        child_ids_by_target.keys().collect::<Vec<_>>()
     );
 
-    let list_rows = tool_rows_named(rows, "list_subagents");
+    // list/wait/read are hook-managed Skip tools. They intentionally do not
+    // create AgentToolCall lifecycle rows; their durable proof is the paired
+    // tool call/result in the parent transcript.
+    let exchanges = fetch_transcript_tool_exchanges(coord_graphql, parent_session_id).await?;
+    let spawn_exchanges = transcript_exchanges_named(&exchanges, "spawn_subagent");
+    anyhow::ensure!(
+        spawn_exchanges.len() == expected_count,
+        "release transcript contains {} spawn calls, expected exactly {expected_count}",
+        spawn_exchanges.len()
+    );
+    let transcript_targets = spawn_exchanges
+        .iter()
+        .filter_map(|exchange| exchange.args.get("name").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect::<HashSet<_>>();
+    anyhow::ensure!(
+        transcript_targets == expected_names,
+        "release transcript spawn target mismatch: actual={transcript_targets:?} expected={expected_names:?}"
+    );
+
+    anyhow::ensure!(
+        transcript_exchanges_named(&exchanges, "steer_subagent").is_empty(),
+        "release parent called steer_subagent even though the sweep forbids steering"
+    );
+    let allowed_tool_names = [
+        "spawn_subagent",
+        "list_subagents",
+        "wait_subagent",
+        "read_subagent",
+    ];
+    let unexpected = exchanges
+        .iter()
+        .filter(|exchange| !allowed_tool_names.contains(&exchange.name.as_str()))
+        .map(|exchange| exchange.name.as_str())
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        unexpected.is_empty(),
+        "release parent called tools outside the sweep contract: {unexpected:?}"
+    );
+
+    let list_rows = transcript_exchanges_named(&exchanges, "list_subagents");
     anyhow::ensure!(
         list_rows.len() == 1,
         "release parent must call list_subagents exactly once; saw {}",
         list_rows.len()
     );
-    let list_result = parse_completed_tool_result(list_rows[0])?;
+    let list_result = parse_transcript_tool_result(list_rows[0])?;
     let list_entries = list_result
         .get("entries")
         .and_then(Value::as_array)
@@ -856,79 +962,205 @@ async fn assert_release_subagent_inspection(
             .all(|entry| { entry.get("await_mode").and_then(Value::as_str) == Some("background") }),
         "list_subagents did not preserve the background spawn mode: {list_result}"
     );
-    let terminal_states = [
-        "completed",
-        "failed",
-        "cancelled",
-        "timedOut",
-        "dead",
-        "interrupted",
-        "superseded",
-    ];
-    anyhow::ensure!(
-        list_entries.iter().any(|entry| {
-            entry
-                .get("status")
-                .and_then(Value::as_str)
-                .is_some_and(|status| !terminal_states.contains(&status))
-        }),
-        "list_subagents was not exercised while any release child was live: {list_result}"
-    );
 
-    let wait_rows = tool_rows_named(rows, "wait_subagent");
-    let read_rows = tool_rows_named(rows, "read_subagent");
+    let wait_rows = transcript_exchanges_named(&exchanges, "wait_subagent");
+    let read_rows = transcript_exchanges_named(&exchanges, "read_subagent");
     anyhow::ensure!(
         wait_rows.len() == 1 && read_rows.len() == 1,
         "release parent must call wait_subagent and read_subagent exactly once; wait={} read={} session={parent_session_id}",
         wait_rows.len(),
         read_rows.len()
     );
-    let wait_args = parse_tool_result_json(wait_rows[0], "args")?;
-    let waited_child_id = wait_args
+    let waited_child_id = wait_rows[0]
+        .args
         .get("child_request_id")
         .and_then(Value::as_str)
         .context("wait_subagent args omitted child_request_id")?;
+    let expected_waited_child_id = child_ids_by_target
+        .get(&format!("researcher-{expected_count}"))
+        .context("release sweep has no last researcher child id")?;
     anyhow::ensure!(
-        child_ids.contains(waited_child_id),
-        "wait_subagent targeted a child outside the release sweep: {waited_child_id}"
+        waited_child_id == expected_waited_child_id,
+        "wait_subagent targeted {waited_child_id}, expected researcher-{expected_count} child {expected_waited_child_id}"
     );
-    let wait_result = parse_completed_tool_result(wait_rows[0])?;
+    let wait_result = parse_transcript_tool_result(wait_rows[0])?;
     anyhow::ensure!(
-        !wait_result.is_null(),
-        "wait_subagent returned a null result for {waited_child_id}"
+        wait_result.get("ok").and_then(Value::as_bool) == Some(true)
+            && wait_result.get("child_request_id").and_then(Value::as_str) == Some(waited_child_id)
+            && wait_result.get("status").and_then(Value::as_str) == Some("completed"),
+        "wait_subagent did not successfully observe researcher-{expected_count}: {wait_result}"
     );
 
-    let read_result = parse_completed_tool_result(read_rows[0])?;
+    let read_child_id = read_rows[0]
+        .args
+        .get("child_request_id")
+        .and_then(Value::as_str)
+        .context("read_subagent args omitted child_request_id")?;
+    let expected_read_child_id = child_ids_by_target
+        .get("researcher-1")
+        .context("release sweep has no researcher-1 child id")?;
     anyhow::ensure!(
-        read_result.get("child_request_id").and_then(Value::as_str) == Some(waited_child_id),
-        "read_subagent did not target the waited child: {read_result}"
+        read_child_id == expected_read_child_id,
+        "read_subagent targeted {read_child_id}, expected researcher-1 child {expected_read_child_id}"
     );
     anyhow::ensure!(
-        read_result.get("terminal").and_then(Value::as_bool) == Some(true),
-        "read_subagent did not project the completed child as terminal: {read_result}"
+        read_child_id != waited_child_id,
+        "read_subagent must inspect a different background child than wait_subagent"
     );
+    let read_result = parse_transcript_tool_result(read_rows[0])?;
     anyhow::ensure!(
-        read_result
-            .get("transcript")
-            .and_then(Value::as_str)
-            .is_some_and(|transcript| !transcript.trim().is_empty()),
-        "read_subagent returned no transcript after wait_subagent completed: {read_result}"
+        read_result.get("child_request_id").and_then(Value::as_str) == Some(read_child_id),
+        "read_subagent did not project researcher-1: {read_result}"
+    );
+    if read_result.get("terminal").and_then(Value::as_bool) == Some(true) {
+        anyhow::ensure!(
+            read_result
+                .get("transcript")
+                .and_then(Value::as_str)
+                .is_some_and(|transcript| !transcript.trim().is_empty()),
+            "read_subagent projected a terminal child without its transcript: {read_result}"
+        );
+    } else {
+        anyhow::ensure!(
+            read_result
+                .get("lifecycle_state")
+                .and_then(Value::as_str)
+                .is_some_and(|state| !state.trim().is_empty()),
+            "read_subagent did not return a valid live-child projection: {read_result}"
+        );
+    }
+
+    let last_spawn_index = exchanges
+        .iter()
+        .rposition(|exchange| exchange.name == "spawn_subagent")
+        .context("release transcript contains no spawn_subagent call")?;
+    let list_index = exchanges
+        .iter()
+        .position(|exchange| exchange.name == "list_subagents")
+        .context("release transcript contains no list_subagents call")?;
+    let wait_index = exchanges
+        .iter()
+        .position(|exchange| exchange.name == "wait_subagent")
+        .context("release transcript contains no wait_subagent call")?;
+    let read_index = exchanges
+        .iter()
+        .position(|exchange| exchange.name == "read_subagent")
+        .context("release transcript contains no read_subagent call")?;
+    anyhow::ensure!(
+        last_spawn_index < list_index && list_index < wait_index && wait_index < read_index,
+        "release inspection tools ran out of order: last_spawn={last_spawn_index} list={list_index} wait={wait_index} read={read_index}"
     );
     Ok(())
 }
 
-fn tool_rows_named<'a>(rows: &'a [Value], name: &str) -> Vec<&'a Value> {
-    rows.iter()
-        .filter(|row| row.get("tool_name").and_then(Value::as_str) == Some(name))
+async fn fetch_transcript_tool_exchanges(
+    coord_graphql: &str,
+    parent_session_id: &str,
+) -> Result<Vec<TranscriptToolExchange>> {
+    let escaped_session_id = escape_graphql_string(parent_session_id);
+    let response = graphql_query(
+        coord_graphql,
+        &format!(
+            r#"{{
+                AgentMessage(
+                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                    order: {{ sequence: ASC }}
+                ) {{ role content sequence }}
+            }}"#
+        ),
+    )
+    .await?;
+    let rows = response
+        .pointer("/data/AgentMessage")
+        .and_then(Value::as_array)
+        .context("release parent transcript has no AgentMessage rows")?;
+    let mut exchanges = Vec::<TranscriptToolExchange>::new();
+    for row in rows {
+        let role = row
+            .get("role")
+            .and_then(Value::as_str)
+            .context("release transcript row has no role")?;
+        let content = row
+            .get("content")
+            .and_then(Value::as_str)
+            .context("release transcript row has no content")?;
+        match decode_persisted_message(role, content) {
+            ProtocolMessage::Assistant { content, .. } => {
+                for item in content {
+                    if let AssistantContent::ToolCall(tool_call) = item {
+                        exchanges.push(TranscriptToolExchange {
+                            id: tool_call.id,
+                            call_id: tool_call.call_id,
+                            name: tool_call.function.name,
+                            args: tool_call.function.arguments,
+                            result: None,
+                        });
+                    }
+                }
+            }
+            ProtocolMessage::User { content } => {
+                for item in content {
+                    let UserContent::ToolResult(tool_result) = item else {
+                        continue;
+                    };
+                    let result = tool_result
+                        .content
+                        .iter()
+                        .filter_map(|content| match content {
+                            ToolResultContent::Text(text) => Some(text.text.as_str()),
+                            ToolResultContent::Image(_) => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let exchange = exchanges
+                        .iter_mut()
+                        .rev()
+                        .find(|exchange| {
+                            exchange.result.is_none()
+                                && transcript_tool_result_matches(exchange, &tool_result)
+                        })
+                        .with_context(|| {
+                            format!(
+                                "release transcript tool result has no matching call: id={} call_id={:?}",
+                                tool_result.id, tool_result.call_id
+                            )
+                        })?;
+                    exchange.result = Some(result);
+                }
+            }
+            ProtocolMessage::System { .. } => {}
+        }
+    }
+    Ok(exchanges)
+}
+
+fn transcript_tool_result_matches(
+    exchange: &TranscriptToolExchange,
+    result: &defra_agent_protocol::message::ToolResult,
+) -> bool {
+    exchange.id == result.id
+        || exchange.call_id.as_deref() == Some(result.id.as_str())
+        || result.call_id.as_deref() == Some(exchange.id.as_str())
+        || (exchange.call_id.is_some() && exchange.call_id == result.call_id)
+}
+
+fn transcript_exchanges_named<'a>(
+    exchanges: &'a [TranscriptToolExchange],
+    name: &str,
+) -> Vec<&'a TranscriptToolExchange> {
+    exchanges
+        .iter()
+        .filter(|exchange| exchange.name == name)
         .collect()
 }
 
-fn parse_completed_tool_result(row: &Value) -> Result<Value> {
-    anyhow::ensure!(
-        row.get("lifecycle_state").and_then(Value::as_str) == Some("completed"),
-        "release inspection tool call was not completed: {row}"
-    );
-    parse_tool_result_json(row, "result")
+fn parse_transcript_tool_result(exchange: &TranscriptToolExchange) -> Result<Value> {
+    let result = exchange
+        .result
+        .as_deref()
+        .with_context(|| format!("{} has no paired transcript result", exchange.name))?;
+    serde_json::from_str(result)
+        .with_context(|| format!("decoding {} transcript result: {result}", exchange.name))
 }
 
 fn parse_tool_result_json(row: &Value, field: &str) -> Result<Value> {
@@ -3802,6 +4034,10 @@ fn configure_coordinator_targets_with_steering(
     subagents: &[FleetNode],
     steering_enabled: bool,
 ) -> Result<()> {
+    // The runtime's steering feature flag exposes both read_subagent and
+    // steer_subagent. Release acceptance enables it for the read path; the
+    // coordinator prompt forbids steering and the transcript assertion proves
+    // that the wider surface was not used.
     let mut args = vec![
         "config".to_string(),
         "tools".to_string(),
@@ -3848,7 +4084,7 @@ async fn wait_for_all_subagent_children_completed(
     subagents: &[FleetNode],
     parent_session_id: &str,
     parent_request_id: &str,
-    expected_foreground_bridges: usize,
+    allow_foreground_bridges: bool,
     timeout: Duration,
 ) -> Result<HashMap<String, CompletedChild>> {
     wait_until_value(timeout, || async {
@@ -3861,12 +4097,15 @@ async fn wait_for_all_subagent_children_completed(
         );
 
         let mut completed_by_owner = HashMap::new();
-        let mut foreground_bridges = 0usize;
         let mut pending = Vec::new();
         for bridge in &bridges {
             match bridge.await_mode.as_deref() {
                 Some("background") => {}
-                Some("foreground") => foreground_bridges += 1,
+                Some("foreground") if allow_foreground_bridges => {}
+                Some("foreground") => bail!(
+                    "bridge {} was unexpectedly foregrounded: {bridge:?}",
+                    bridge.tool_call_id
+                ),
                 _ => bail!(
                     "bridge {} has an invalid await mode: {bridge:?}",
                     bridge.tool_call_id
@@ -3955,10 +4194,6 @@ async fn wait_for_all_subagent_children_completed(
             missing.is_empty(),
             "completed children missing subagent owners {missing:?}; pending: {pending:?}; completed owners: {:?}",
             completed_by_owner.keys().collect::<Vec<_>>()
-        );
-        anyhow::ensure!(
-            foreground_bridges == expected_foreground_bridges,
-            "saw {foreground_bridges} foregrounded bridges, expected {expected_foreground_bridges}"
         );
 
         Ok(completed_by_owner)
