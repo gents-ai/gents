@@ -551,7 +551,10 @@ mod tests {
     fn probe_options() -> BackendProberOptions {
         BackendProberOptions {
             probe_interval: Duration::from_millis(50),
-            probe_timeout: Duration::from_secs(2),
+            // Match the production request budget. The local responder is
+            // immediate, but a two-second test-only timeout can expire before
+            // its thread is scheduled under the full parallel suite (#743).
+            probe_timeout: Duration::from_secs(10),
             failure_threshold_k: 3,
         }
     }
