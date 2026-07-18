@@ -12,9 +12,13 @@ use defra_agent::adapter_projection::{
 };
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::run_timeline::{
-    build_run_timeline, RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineConversationRow,
-    TimelineInferenceCallRow, TimelineMessageRow, TimelineRequestEvent, TimelineRequestRow,
-    TimelineResponseRow, TimelineSessionRow, TimelineToolCallEvent, TimelineToolCallRow,
+    build_run_timeline, RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineRequestEvent,
+    TimelineRequestRow, TimelineToolCallEvent,
+};
+#[cfg(test)]
+use defra_agent::run_timeline::{
+    TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow, TimelineResponseRow,
+    TimelineSessionRow, TimelineToolCallRow,
 };
 use defra_agent::run_timeline_fetch::{load_run_timeline, load_run_timeline_rows};
 use defra_agent::trace_export::{

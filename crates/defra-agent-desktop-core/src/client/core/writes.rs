@@ -345,7 +345,11 @@ impl ClientCore {
             defra_agent::run_timeline_fetch::load_run_timeline(&access, request_id),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))??;
+        .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))?
+        // The GraphQL transport appends CLI-flavored operator hints
+        // ("run `defra-agent init`", "Retry with `--graphql ...`") that are
+        // meaningless inside the desktop app.
+        .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))?;
         Ok(timeline)
     }
 
@@ -2097,4 +2101,19 @@ mod delete_source_tests {
             tool_selections_referencing_behavior(&selections, "did:key:alpha", "writer").is_empty()
         );
     }
+}
+
+/// Drop advice lines that only make sense at a CLI prompt.
+fn strip_cli_operator_hints(message: &str) -> String {
+    message
+        .lines()
+        .filter(|line| {
+            !line.contains("defra-agent init")
+                && !line.contains("defra-agent server")
+                && !line.contains("--graphql")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }

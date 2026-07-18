@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { fetchRequestTimeline } from "../../lib/desktop-api";
 import { formatMessageTime } from "../../lib/formatTime";
@@ -18,19 +18,30 @@ export function RequestTracePanel({ agentDid, rootRequestId }: RequestTracePanel
   const [timeline, setTimeline] = useState<RequestTimelineView | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A slow fetch (remote peer, up to 15s) must not clobber state after the
+  // panel has moved on to another request/agent.
+  const generationRef = useRef(0);
 
   const load = useCallback(async () => {
     if (!rootRequestId) {
       return;
     }
+    const generation = ++generationRef.current;
     setLoading(true);
     setError(null);
     try {
-      setTimeline(await fetchRequestTimeline(agentDid, rootRequestId));
+      const next = await fetchRequestTimeline(agentDid, rootRequestId);
+      if (generationRef.current === generation) {
+        setTimeline(next);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (generationRef.current === generation) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setLoading(false);
+      if (generationRef.current === generation) {
+        setLoading(false);
+      }
     }
   }, [agentDid, rootRequestId]);
 
