@@ -169,11 +169,7 @@ test.describe("desktop UI harness", () => {
       page.getByRole("dialog", { name: /interrupt parent request/i }),
     ).toBeVisible();
     await expect(page.getByText("Will be interrupted")).toBeVisible();
-    await page
-      .getByRole("button", {
-        name: /interrupt parent \+ eligible descendants/i,
-      })
-      .click();
+    await page.getByTestId("cascade-interrupt-confirm").click();
     await expect(page.getByTestId("chat-toast")).toContainText("Interrupted");
   });
 

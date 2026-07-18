@@ -4,7 +4,10 @@
 //! edge is an independent two-node reconcile with two documents: (1) a v5
 //! network-control join (P2P mesh + control-plane document gossip) and (2) an
 //! operator conversation `DataPlanePairingDesired` row (the doc sync delegation
-//! needs). See `establish_reconciler_pairing`.
+//! needs). Convergence is layer-specific: control proves `AgentNetwork` in the
+//! Replicate subscription collections, while conversation proves the local DID
+//! in the Push replicator's `AgentRequest` filter. See `establish_control_plane`
+//! and `establish_conversation_data_plane`.
 //!
 //! Requires the defradb iroh fixes in sourcenetwork/defradb.rs#1045 (addr
 //! hygiene + observed-addr reverse-dial fallback + spawning the dial off the
@@ -28,7 +31,10 @@
 //!
 //! The release acceptance composes the same primitives into a 19-fresh-store
 //! genesis mesh, a coordinator restart, and a 15-target delegation/readback
-//! sweep. It is separately gated because it is intentionally expensive:
+//! sweep. It is intentionally a product E2E across both model instruction
+//! following and the mesh; the hermetic two-process demo test isolates the pure
+//! transport/materialization contract. It is separately gated because it is
+//! intentionally expensive:
 //!
 //! ```bash
 //! DEFRA_AGENT_RELEASE_ACCEPTANCE=1 \
@@ -729,6 +735,9 @@ fn p2p_snapshot_is_quiet(snapshot: &P2pSyncStatusSnapshot) -> bool {
     backlog.queued_items == 0
         && backlog.queued_bytes == 0
         && backlog.active_jobs == 0
+        && backlog.failed_total == 0
+        && backlog.rejected_items_total == 0
+        && backlog.rejected_bytes_total == 0
         && backlog.per_cid_retry_counts.is_empty()
         && backlog.per_peer.iter().all(|peer| {
             peer.queued_items == 0
@@ -790,7 +799,7 @@ async fn wait_for_p2p_fleet_quiet(fleet: &[FleetNode], timeout: Duration) -> Res
                 .zip(&snapshots)
                 .map(|(node, snapshot)| {
                     format!(
-                        "{}: queued={}/{} active={} pending={}/{} persisted={}/{} retained={} missing_retries={} failed_pushes={}",
+                        "{}: queued={}/{} active={} pending={}/{} persisted={}/{} retained={} missing_retries={} failed_pushes={} rejected_items={} rejected_bytes={}",
                         node.agent_did,
                         snapshot.push_backlog.queued_items,
                         snapshot.push_backlog.queued_bytes,
@@ -802,6 +811,8 @@ async fn wait_for_p2p_fleet_quiet(fleet: &[FleetNode], timeout: Duration) -> Res
                         snapshot.retained_background_tasks,
                         snapshot.missing_link_retries,
                         snapshot.push_backlog.failed_total,
+                        snapshot.push_backlog.rejected_items_total,
+                        snapshot.push_backlog.rejected_bytes_total,
                     )
                 })
                 .collect::<Vec<_>>()
@@ -3869,23 +3880,53 @@ async fn upsert_conversation_data_plane(
 /// Wait for the daemon reconciler to install the conversation layer on every
 /// bidirectional coordinator<->subagent edge.
 async fn wait_for_fleet_pairing(coord: &FleetNode, subagents: &[FleetNode]) -> Result<()> {
-    wait_for_fleet_pairing_collection(coord, subagents, "AgentRequest").await
+    for subagent in subagents {
+        // Conversation is a Push template: its identity is carried by the
+        // replicator filter, not by subscription collections.
+        wait_for_conversation_replicator_installed(
+            &subagent.graphql,
+            &coord.peer_id,
+            &subagent.agent_did,
+            Duration::from_secs(120),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "{} -> coordinator conversation replicator filtered to {}",
+                subagent.agent_did, subagent.agent_did
+            )
+        })?;
+        wait_for_conversation_replicator_installed(
+            &coord.graphql,
+            &subagent.peer_id,
+            &coord.agent_did,
+            Duration::from_secs(120),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "coordinator -> {} conversation replicator filtered to {}",
+                subagent.agent_did, coord.agent_did
+            )
+        })?;
+    }
+    Ok(())
 }
 
 /// Wait for the network-control layer without allowing a later conversation
 /// layer to mask genesis convergence.
 async fn wait_for_fleet_control_plane(coord: &FleetNode, subagents: &[FleetNode]) -> Result<()> {
-    wait_for_fleet_pairing_collection(coord, subagents, "AgentNetwork").await
+    wait_for_fleet_control_plane_collection(coord, subagents, "AgentNetwork").await
 }
 
-async fn wait_for_fleet_pairing_collection(
+async fn wait_for_fleet_control_plane_collection(
     coord: &FleetNode,
     subagents: &[FleetNode],
     required_collection: &str,
 ) -> Result<()> {
     for subagent in subagents {
         // Join direction first (joiner -> inviter) — the proven 2-node primitive.
-        wait_for_replicator_installed(
+        wait_for_subscription_replicator_installed(
             &subagent.graphql,
             &coord.peer_id,
             required_collection,
@@ -3900,7 +3941,7 @@ async fn wait_for_fleet_pairing_collection(
         })?;
         // Reverse edge (inviter -> joiner) — depends on the joiner's endpoint
         // having replicated to the coordinator (network derivation).
-        wait_for_replicator_installed(
+        wait_for_subscription_replicator_installed(
             &coord.graphql,
             &subagent.peer_id,
             required_collection,
@@ -3928,7 +3969,7 @@ async fn dump_fleet_doc_state(fleet: &[FleetNode]) {
         PeerEndpoint { did }
         PeerPairingDesired { peer_id source template replicator_addresses }
         DataPlanePairingDesired { peer_id template replicator_addresses }
-        PeerPairingApplied { peer_id collections replicator_addresses }
+        PeerPairingApplied { peer_id collections replicator_addresses replicator_filter }
     }"#;
     for node in fleet {
         match graphql_query(&node.graphql, query).await {
@@ -3946,10 +3987,9 @@ async fn dump_fleet_doc_state(fleet: &[FleetNode]) {
     }
 }
 
-/// Poll `PeerPairingApplied` for `peer_id` until its `replicator_addresses` is
-/// non-empty — i.e. the reconciler actually installed the replicator (the
-/// PairingTransport `ReplicatorLiveness` property, concretely).
-async fn wait_for_replicator_installed(
+/// Poll a Replicate-layer `PeerPairingApplied` row until it has a live address
+/// and subscribes to the required control-plane collection.
+async fn wait_for_subscription_replicator_installed(
     graphql: &str,
     peer_id: &str,
     required_collection: &str,
@@ -3997,6 +4037,76 @@ async fn wait_for_replicator_installed(
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
+}
+
+/// Poll a Push-layer `PeerPairingApplied` row until it has a live address and
+/// its durable filter carries the local DID's `AgentRequest` conversation scope.
+async fn wait_for_conversation_replicator_installed(
+    graphql: &str,
+    peer_id: &str,
+    local_did: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let escaped = escape_graphql_string(peer_id);
+    let query = format!(
+        r#"{{ PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{escaped}" }} }}) {{ peer_id replicator_addresses replicator_filter }} }}"#
+    );
+    let deadline = Instant::now() + timeout;
+    let mut last = Value::Null;
+    loop {
+        let response = graphql_query(graphql, &query).await?;
+        if let Some(rows) = response
+            .pointer("/data/PeerPairingApplied")
+            .and_then(Value::as_array)
+        {
+            last = Value::Array(rows.clone());
+            if rows.iter().any(|row| {
+                let has_address = row
+                    .get("replicator_addresses")
+                    .and_then(Value::as_array)
+                    .is_some_and(|addresses| {
+                        addresses
+                            .iter()
+                            .any(|address| address.as_str().is_some_and(|value| !value.is_empty()))
+                    });
+                let has_conversation_filter = row
+                    .get("replicator_filter")
+                    .and_then(Value::as_str)
+                    .is_some_and(|filter| conversation_filter_matches(filter, local_did));
+                has_address && has_conversation_filter
+            }) {
+                return Ok(());
+            }
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "timed out waiting for conversation replicator filtered to AgentRequest={local_did} on edge peer={peer_id} (graphql={graphql}); last PeerPairingApplied rows: {last}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+fn conversation_filter_matches(filter: &str, local_did: &str) -> bool {
+    serde_json::from_str::<Value>(filter)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("AgentRequest")
+                .and_then(|entry| entry.get("value"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .as_deref()
+        == Some(local_did)
+}
+
+#[test]
+fn conversation_pairing_fence_requires_the_local_agent_request_scope() {
+    let filter = r#"{"AgentRequest":{"operator":"_eq","value":"did:key:local"}}"#;
+    assert!(conversation_filter_matches(filter, "did:key:local"));
+    assert!(!conversation_filter_matches(filter, "did:key:other"));
+    assert!(!conversation_filter_matches("not-json", "did:key:local"));
 }
 
 /// Persist each daemon's FULL captured stdout+stderr to `/tmp/fleet_<label>_<suffix>.log`

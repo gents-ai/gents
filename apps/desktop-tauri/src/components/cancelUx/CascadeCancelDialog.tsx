@@ -254,6 +254,7 @@ export function CascadeCancelDialog(
           <button
             ref={confirmRef}
             type="button"
+            data-testid="cascade-interrupt-confirm"
             className="btn btn-danger"
             disabled={phase === "submitting" || !preview}
             onClick={onConfirm}

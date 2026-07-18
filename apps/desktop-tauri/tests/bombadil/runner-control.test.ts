@@ -97,10 +97,16 @@ describe("Bombadil watchdog recovery", () => {
     await stopProcess(child, {
       killProcessGroup: true,
       graceMs: 1,
-      killByPid: (pid: number, signal: string) => {
-        signals.push([pid, signal]);
-        if (signal === "SIGTERM") {
-          child.finish(null, signal);
+      killByPid: (pid: number, signal: string | number) => {
+        if (signal === 0) {
+          const error = new Error("process group drained") as NodeJS.ErrnoException;
+          error.code = "ESRCH";
+          throw error;
+        }
+        const namedSignal = String(signal);
+        signals.push([pid, namedSignal]);
+        if (namedSignal === "SIGTERM") {
+          child.finish(null, namedSignal);
         }
         return true;
       },
@@ -111,5 +117,55 @@ describe("Bombadil watchdog recovery", () => {
       [-321, "SIGKILL"],
     ]);
     expect(child.killSignals).toEqual([]);
+  });
+
+  it("drains the killed Bombadil leader before allowing a retry", async () => {
+    const child = new FakeChild(654);
+    const signals: Array<[number, string]> = [];
+    let exitedAfterKill = false;
+    let groupAlive = true;
+
+    await stopProcess(child, {
+      killProcessGroup: true,
+      graceMs: 1,
+      killDrainMs: 100,
+      killByPid: (pid: number, signal: string | number) => {
+        if (signal === 0) {
+          if (groupAlive) return true;
+          const error = new Error("process group drained") as NodeJS.ErrnoException;
+          error.code = "ESRCH";
+          throw error;
+        }
+        const namedSignal = String(signal);
+        signals.push([pid, namedSignal]);
+        if (namedSignal === "SIGKILL") {
+          setTimeout(() => {
+            exitedAfterKill = true;
+            groupAlive = false;
+            child.finish(null, namedSignal);
+          }, 10);
+        }
+        return true;
+      },
+    });
+
+    expect(exitedAfterKill).toBe(true);
+    expect(signals).toEqual([
+      [-654, "SIGTERM"],
+      [-654, "SIGKILL"],
+    ]);
+  });
+
+  it("does not start over while a SIGKILLed process remains undrained", async () => {
+    const child = new FakeChild(777);
+
+    await expect(
+      stopProcess(child, {
+        killProcessGroup: true,
+        graceMs: 1,
+        killDrainMs: 2,
+        killByPid: () => true,
+      }),
+    ).rejects.toThrow("did not drain");
   });
 });

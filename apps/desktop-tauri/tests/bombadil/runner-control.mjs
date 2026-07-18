@@ -54,6 +54,7 @@ export async function stopProcess(
   {
     killProcessGroup = false,
     graceMs = 2_000,
+    killDrainMs = 2_000,
     killByPid = process.kill.bind(process),
   } = {},
 ) {
@@ -70,13 +71,54 @@ export async function stopProcess(
   sendSignal(child, "SIGTERM", killProcessGroup, killByPid);
   await Promise.race([exitPromise, delay(graceMs)]);
 
+  let sentFinalKill = false;
   if (killProcessGroup) {
     // Bombadil launches Chrome descendants. The CLI may exit on SIGTERM while
     // a wedged browser remains in its process group, so always fence the group
     // with SIGKILL after the grace period (ESRCH simply means it is clean).
     sendSignal(child, "SIGKILL", true, killByPid);
+    sentFinalKill = true;
   } else if (child.exitCode === null && child.signalCode === null) {
     child.kill("SIGKILL");
+    sentFinalKill = true;
+  }
+
+  if (sentFinalKill) {
+    const [leaderDrain, groupDrained] = await Promise.all([
+      waitForExitWithTimeout(child, killDrainMs),
+      killProcessGroup
+        ? waitForProcessGroupDrain(child.pid, killDrainMs, killByPid)
+        : Promise.resolve(true),
+    ]);
+    if (leaderDrain.kind === "timeout" || !groupDrained) {
+      throw new Error(
+        `process group ${child.pid ?? "unknown"} did not drain within ${killDrainMs}ms after SIGKILL`,
+      );
+    }
+  }
+}
+
+async function waitForProcessGroupDrain(pid, timeoutMs, killByPid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return true;
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    try {
+      killByPid(-pid, 0);
+    } catch (error) {
+      if (error?.code === "ESRCH") {
+        return true;
+      }
+      if (error?.code !== "EPERM") {
+        throw error;
+      }
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      return false;
+    }
+    await delay(Math.min(25, remaining));
   }
 }
 

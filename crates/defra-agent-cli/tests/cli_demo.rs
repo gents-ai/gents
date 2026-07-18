@@ -165,7 +165,7 @@ fn request_tool_result_values(request: &Value) -> Vec<Value> {
         .collect()
 }
 
-fn list_entries_are_materialized_and_running(value: &Value, expected: usize) -> bool {
+fn list_entries_are_materialized(value: &Value, expected: usize) -> bool {
     value
         .get("entries")
         .and_then(Value::as_array)
@@ -176,8 +176,11 @@ fn list_entries_are_materialized_and_running(value: &Value, expected: usize) -> 
                         .get("child_session_id")
                         .and_then(Value::as_str)
                         .is_some_and(|id| !id.is_empty())
-                        && entry.get("status").and_then(Value::as_str) == Some("running")
-                        && entry.get("diagnostic").is_none()
+                        && matches!(
+                            entry.get("status").and_then(Value::as_str),
+                            Some("running" | "completed")
+                        )
+                        && entry.get("diagnostic").is_none_or(Value::is_null)
                 })
         })
 }
@@ -186,7 +189,9 @@ fn list_entries_are_materialized_and_running(value: &Value, expected: usize) -> 
 /// background spawn bridges to node B, expose both materialized live children
 /// through list/read on the parent, and let the worker claim and complete them.
 /// This uses the real two-process demo and document-driven pairing/config;
-/// only inference is hermetic.
+/// only inference is hermetic. It intentionally stays in the default CLI suite
+/// as the process-level regression fence; event-driven child waits keep its
+/// expected runtime to roughly one worker hold plus fleet startup/teardown.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
     use support::mocks::fake_llm::{ChatAction, FakeLlm};
@@ -200,11 +205,13 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
     let parent_reply = format!("demo-parent-finished-{}", Uuid::new_v4().simple());
     let worker_reply_a = format!("demo-worker-a-finished-{}", Uuid::new_v4().simple());
     let worker_reply_b = format!("demo-worker-b-finished-{}", Uuid::new_v4().simple());
+    let list_poll_started_at = Arc::new(std::sync::Mutex::new(None::<Instant>));
 
     let mock = FakeLlm::start(&model, None, {
         let parent_reply = parent_reply.clone();
         let worker_reply_a = worker_reply_a.clone();
         let worker_reply_b = worker_reply_b.clone();
+        let list_poll_started_at = Arc::clone(&list_poll_started_at);
         Arc::new(move |request: &Value| {
             if request_contains_role_text(request, "user", worker_prompt_a) {
                 return ChatAction::DelayThenSse(
@@ -266,9 +273,16 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
                 let latest_materialized_list = list_results
                     .iter()
                     .rev()
-                    .find(|result| list_entries_are_materialized_and_running(result, 2));
+                    .find(|result| list_entries_are_materialized(result, 2));
                 if latest_materialized_list.is_none() {
-                    if list_results.len() >= 12 {
+                    let elapsed = {
+                        let mut started_at = list_poll_started_at
+                            .lock()
+                            .expect("demo list poll clock poisoned");
+                        let started_at = started_at.get_or_insert_with(Instant::now);
+                        started_at.elapsed()
+                    };
+                    if elapsed >= Duration::from_secs(30) {
                         return ChatAction::Sse(completion_text_sse(
                             "demo-live-child-visibility-failed",
                         ));
@@ -283,7 +297,7 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
                         tool_call_sse_with_id(
                             &format!("demo-list-live-{}", list_results.len()),
                             "list_subagents",
-                            r#"{"status":"running","limit":10}"#,
+                            r#"{"status":"all","limit":10}"#,
                         ),
                     );
                 }
@@ -309,12 +323,47 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
                     ));
                 }
 
-                // Keep both daemons alive after the live inspection so node B
-                // can persist both delayed worker completions before teardown.
-                return ChatAction::DelayThenSse(
-                    Duration::from_secs(27),
-                    completion_text_sse(&parent_reply),
-                );
+                let wait_results = results
+                    .iter()
+                    .filter(|result| {
+                        result.get("await_mode").and_then(Value::as_str) != Some("background")
+                            && result.get("entries").is_none()
+                            && result.get("transcript").is_none()
+                            && result.get("ok").is_some()
+                            && result.get("child_request_id").is_some()
+                    })
+                    .collect::<Vec<_>>();
+                if wait_results.iter().any(|result| {
+                    result.get("ok").and_then(Value::as_bool) == Some(false)
+                        && result.get("retryable").and_then(Value::as_bool) != Some(true)
+                }) {
+                    return ChatAction::Sse(completion_text_sse("demo-child-wait-failed"));
+                }
+                let completed_wait_ids = wait_results
+                    .iter()
+                    .filter(|result| {
+                        result.get("ok").and_then(Value::as_bool) == Some(true)
+                            && result.get("status").and_then(Value::as_str) == Some("completed")
+                    })
+                    .filter_map(|result| result.get("child_request_id").and_then(Value::as_str))
+                    .collect::<std::collections::HashSet<_>>();
+                if let Some(child_request_id) = spawn_results
+                    .iter()
+                    .filter_map(|result| result.get("child_request_id").and_then(Value::as_str))
+                    .find(|child_request_id| !completed_wait_ids.contains(child_request_id))
+                {
+                    if wait_results.len() >= 12 {
+                        return ChatAction::Sse(completion_text_sse("demo-child-wait-exhausted"));
+                    }
+                    let args = json!({ "child_request_id": child_request_id }).to_string();
+                    return ChatAction::Sse(tool_call_sse_with_id(
+                        &format!("demo-wait-worker-{}", wait_results.len()),
+                        "wait_subagent",
+                        &args,
+                    ));
+                }
+
+                return ChatAction::Sse(completion_text_sse(&parent_reply));
             }
             ChatAction::Sse(completion_text_sse("demo fallback"))
         })
@@ -385,9 +434,9 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
     );
     let materialized_list = inspection_results
         .iter()
-        .filter(|result| list_entries_are_materialized_and_running(result, 2))
+        .filter(|result| list_entries_are_materialized(result, 2))
         .last()
-        .context("list_subagents never exposed both materialized live children")?;
+        .context("list_subagents never exposed both materialized children")?;
     let listed_ids = materialized_list["entries"]
         .as_array()
         .expect("validated entries")
@@ -396,29 +445,107 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
         .collect::<std::collections::HashSet<_>>();
     anyhow::ensure!(
         listed_ids == spawn_ids,
-        "list_subagents returned the wrong live child set: listed={listed_ids:?} spawned={spawn_ids:?}"
+        "list_subagents returned the wrong child set: listed={listed_ids:?} spawned={spawn_ids:?}"
     );
     let read_result = inspection_results
         .iter()
         .find(|result| result.get("transcript").is_some())
         .context("missing read_subagent result")?;
     anyhow::ensure!(
-        read_result.get("terminal").and_then(Value::as_bool) == Some(false)
-            && read_result.get("diagnostic").is_none()
+        read_result
+            .get("terminal")
+            .and_then(Value::as_bool)
+            .is_some()
+            && read_result.get("diagnostic").is_none_or(Value::is_null)
             && read_result
                 .get("transcript")
                 .and_then(Value::as_str)
                 .is_some_and(|transcript| transcript.contains(worker_prompt_a)),
-        "read_subagent did not return the live child's materialized transcript: {read_result}"
+        "read_subagent did not return the child's materialized transcript: {read_result}"
     );
     let inspected_child_request_id = read_result
         .get("child_request_id")
         .and_then(Value::as_str)
         .context("read_subagent result omitted child_request_id")?;
+    anyhow::ensure!(
+        spawn_ids.contains(inspected_child_request_id),
+        "read_subagent inspected an unowned child: {read_result}"
+    );
 
     // The user-visible failure in #734 was `no_peer_claimed_spawn`. Prove the
-    // opposite from node B's durable store: the targeted child materialized
-    // there and reached the terminal completed state.
+    // opposite from both durable stores. First recover the exact parent request
+    // and spawn tool-call lineage recorded on node A for each bridge.
+    let coordinator_data_dir = home.join("data");
+    let node_a = EmbeddedNode::builder()
+        .data_path(&coordinator_data_dir)
+        .with_storage_backend(StorageBackend::RocksDb)
+        .build()
+        .await
+        .with_context(|| {
+            format!(
+                "opening coordinator store at {}",
+                coordinator_data_dir.display()
+            )
+        })?;
+    let response = node_a
+        .execute(
+            r#"{
+                AgentToolCall(filter: { tool_name: { _eq: "spawn_subagent" } }) {
+                    request_id
+                    tool_call_id
+                    child_request_id
+                }
+            }"#,
+        )
+        .await;
+    anyhow::ensure!(
+        !response.has_errors(),
+        "querying coordinator spawn bridges failed: {:?}",
+        response.errors
+    );
+    let bridge_rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(Value::as_array)
+        .context("coordinator spawn bridge query omitted AgentToolCall rows")?;
+    let mut expected_lineage = std::collections::HashMap::new();
+    for bridge in bridge_rows {
+        let Some(child_request_id) = bridge.get("child_request_id").and_then(Value::as_str) else {
+            continue;
+        };
+        if !spawn_ids.contains(child_request_id) {
+            continue;
+        }
+        let parent_request_id = bridge
+            .get("request_id")
+            .and_then(Value::as_str)
+            .context("spawn bridge omitted request_id")?;
+        let parent_tool_call_id = bridge
+            .get("tool_call_id")
+            .and_then(Value::as_str)
+            .context("spawn bridge omitted tool_call_id")?;
+        anyhow::ensure!(
+            expected_lineage
+                .insert(
+                    child_request_id.to_string(),
+                    (
+                        parent_request_id.to_string(),
+                        parent_tool_call_id.to_string()
+                    ),
+                )
+                .is_none(),
+            "coordinator persisted duplicate spawn bridges for child {child_request_id}"
+        );
+    }
+    anyhow::ensure!(
+        expected_lineage.len() == spawn_ids.len(),
+        "coordinator did not persist an exact bridge for every spawned child: expected={spawn_ids:?} lineage={expected_lineage:?}"
+    );
+    drop(node_a);
+
+    // Every spawned child must materialize and complete on node B with lineage
+    // exactly matching its node-A bridge—not merely non-empty parent fields.
     let data_dir = home.join("node-b").join("data");
     let node_b = EmbeddedNode::builder()
         .data_path(&data_dir)
@@ -426,52 +553,59 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
         .build()
         .await
         .with_context(|| format!("opening worker store at {}", data_dir.display()))?;
-    let escaped_child_request_id = escape_graphql_string(inspected_child_request_id);
-    let response = node_b
-        .execute(&format!(
-            r#"{{
-                AgentRequest(
-                    filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
-                    order: {{ created_at: DESC }},
-                    limit: 1
-                ) {{
-                    request_id
-                    agent_did
-                    status
-                    lifecycle_state
-                    caused_by_parent_request_id
-                    caused_by_parent_tool_call_id
-                }}
-            }}"#
-        ))
-        .await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "querying worker child failed: {:?}",
-        response.errors
-    );
-    let child = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .context("paired worker never materialized the remote child")?;
-    anyhow::ensure!(
-        child.get("lifecycle_state").and_then(Value::as_str) == Some("completed"),
-        "remote worker child did not complete: {child}"
-    );
-    anyhow::ensure!(
-        child
-            .get("caused_by_parent_request_id")
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.is_empty())
-            && child
-                .get("caused_by_parent_tool_call_id")
+    for child_request_id in &spawn_ids {
+        let escaped_child_request_id = escape_graphql_string(child_request_id);
+        let response = node_b
+            .execute(&format!(
+                r#"{{
+                    AgentRequest(
+                        filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
+                        order: {{ created_at: DESC }},
+                        limit: 1
+                    ) {{
+                        request_id
+                        agent_did
+                        status
+                        lifecycle_state
+                        caused_by_parent_request_id
+                        caused_by_parent_tool_call_id
+                    }}
+                }}"#
+            ))
+            .await;
+        anyhow::ensure!(
+            !response.has_errors(),
+            "querying worker child {child_request_id} failed: {:?}",
+            response.errors
+        );
+        let child = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .with_context(|| {
+                format!("paired worker never materialized remote child {child_request_id}")
+            })?;
+        let (expected_parent_request_id, expected_parent_tool_call_id) = expected_lineage
+            .get(*child_request_id)
+            .context("spawned child had no coordinator lineage witness")?;
+        anyhow::ensure!(
+            child.get("lifecycle_state").and_then(Value::as_str) == Some("completed"),
+            "remote worker child {child_request_id} did not complete: {child}"
+        );
+        anyhow::ensure!(
+            child
+                .get("caused_by_parent_request_id")
                 .and_then(Value::as_str)
-                .is_some_and(|value| !value.is_empty()),
-        "remote worker child lost its parent lineage: {child}"
-    );
+                == Some(expected_parent_request_id.as_str())
+                && child
+                    .get("caused_by_parent_tool_call_id")
+                    .and_then(Value::as_str)
+                    == Some(expected_parent_tool_call_id.as_str()),
+            "remote worker child {child_request_id} has the wrong parent lineage: expected request={expected_parent_request_id} tool={expected_parent_tool_call_id} child={child}"
+        );
+    }
 
     Ok(())
 }
