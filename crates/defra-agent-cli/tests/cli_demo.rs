@@ -143,10 +143,50 @@ async fn demo_single_node_chats_lists_skills_and_shuts_down_clean() -> Result<()
     Ok(())
 }
 
-/// #734 regression: the shipped `pair` -> `delegate` path must carry the
-/// coordinator's background spawn bridge to node B, where the worker claims
-/// and completes it. This uses the real two-process demo and its document-
-/// driven pairing/config commands; only inference is hermetic.
+fn request_tool_result_values(request: &Value) -> Vec<Value> {
+    request
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("tool"))
+        .filter_map(|message| match message.get("content") {
+            Some(Value::String(content)) => Some(content.clone()),
+            Some(Value::Array(parts)) => Some(
+                parts
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            _ => None,
+        })
+        .filter_map(|content| serde_json::from_str(&content).ok())
+        .collect()
+}
+
+fn list_entries_are_materialized_and_running(value: &Value, expected: usize) -> bool {
+    value
+        .get("entries")
+        .and_then(Value::as_array)
+        .is_some_and(|entries| {
+            entries.len() == expected
+                && entries.iter().all(|entry| {
+                    entry
+                        .get("child_session_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| !id.is_empty())
+                        && entry.get("status").and_then(Value::as_str) == Some("running")
+                        && entry.get("diagnostic").is_none()
+                })
+        })
+}
+
+/// #734/#735 regressions: the shipped `pair` -> `delegate` path must carry
+/// background spawn bridges to node B, expose both materialized live children
+/// through list/read on the parent, and let the worker claim and complete them.
+/// This uses the real two-process demo and document-driven pairing/config;
+/// only inference is hermetic.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
     use support::mocks::fake_llm::{ChatAction, FakeLlm};
@@ -155,34 +195,126 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
     let home = tempdir.path().join("demo-home");
     let model = format!("demo-delegate-model-{}", Uuid::new_v4().simple());
     let parent_prompt = "Run the hermetic demo delegation check.";
-    let worker_prompt = "Return the hermetic remote-worker proof token.";
+    let worker_prompt_a = "Hold and return the first hermetic remote-worker proof token.";
+    let worker_prompt_b = "Hold and return the second hermetic remote-worker proof token.";
     let parent_reply = format!("demo-parent-finished-{}", Uuid::new_v4().simple());
-    let worker_reply = format!("demo-worker-finished-{}", Uuid::new_v4().simple());
+    let worker_reply_a = format!("demo-worker-a-finished-{}", Uuid::new_v4().simple());
+    let worker_reply_b = format!("demo-worker-b-finished-{}", Uuid::new_v4().simple());
 
     let mock = FakeLlm::start(&model, None, {
         let parent_reply = parent_reply.clone();
-        let worker_reply = worker_reply.clone();
+        let worker_reply_a = worker_reply_a.clone();
+        let worker_reply_b = worker_reply_b.clone();
         Arc::new(move |request: &Value| {
-            if request_contains_role_text(request, "user", worker_prompt) {
-                return ChatAction::Sse(completion_text_sse(&worker_reply));
+            if request_contains_role_text(request, "user", worker_prompt_a) {
+                return ChatAction::DelayThenSse(
+                    Duration::from_secs(15),
+                    completion_text_sse(&worker_reply_a),
+                );
+            }
+            if request_contains_role_text(request, "user", worker_prompt_b) {
+                return ChatAction::DelayThenSse(
+                    Duration::from_secs(15),
+                    completion_text_sse(&worker_reply_b),
+                );
             }
             if request_contains_role_text(request, "user", parent_prompt) {
-                if request_has_tool_result_message(request) {
-                    // Keep both demo daemons alive while the background bridge
-                    // replicates, is claimed, and the immediate worker answer
-                    // persists on node B.
+                let results = request_tool_result_values(request);
+                let spawn_results = results
+                    .iter()
+                    .filter(|result| {
+                        result.get("await_mode").and_then(Value::as_str) == Some("background")
+                            && result.get("child_request_id").is_some()
+                    })
+                    .collect::<Vec<_>>();
+                let list_results = results
+                    .iter()
+                    .filter(|result| result.get("entries").is_some())
+                    .collect::<Vec<_>>();
+                let read_results = results
+                    .iter()
+                    .filter(|result| result.get("transcript").is_some())
+                    .collect::<Vec<_>>();
+
+                if spawn_results.is_empty() {
+                    let args = json!({
+                        "name": "worker",
+                        "prompt": worker_prompt_a,
+                        "await_mode": "background"
+                    })
+                    .to_string();
+                    return ChatAction::Sse(tool_call_sse_with_id(
+                        "demo-spawn-worker-a",
+                        "spawn_subagent",
+                        &args,
+                    ));
+                }
+                if spawn_results.len() == 1 {
+                    let args = json!({
+                        "name": "worker",
+                        "prompt": worker_prompt_b,
+                        "await_mode": "background"
+                    })
+                    .to_string();
+                    return ChatAction::Sse(tool_call_sse_with_id(
+                        "demo-spawn-worker-b",
+                        "spawn_subagent",
+                        &args,
+                    ));
+                }
+
+                let latest_materialized_list = list_results
+                    .iter()
+                    .rev()
+                    .find(|result| list_entries_are_materialized_and_running(result, 2));
+                if latest_materialized_list.is_none() {
+                    if list_results.len() >= 12 {
+                        return ChatAction::Sse(completion_text_sse(
+                            "demo-live-child-visibility-failed",
+                        ));
+                    }
+                    let delay = if list_results.is_empty() {
+                        Duration::from_secs(3)
+                    } else {
+                        Duration::from_millis(500)
+                    };
                     return ChatAction::DelayThenSse(
-                        Duration::from_secs(20),
-                        completion_text_sse(&parent_reply),
+                        delay,
+                        tool_call_sse_with_id(
+                            &format!("demo-list-live-{}", list_results.len()),
+                            "list_subagents",
+                            r#"{"status":"running","limit":10}"#,
+                        ),
                     );
                 }
-                let args = json!({
-                    "name": "worker",
-                    "prompt": worker_prompt,
-                    "await_mode": "background"
-                })
-                .to_string();
-                return ChatAction::Sse(tool_call_sse("spawn_subagent", &args));
+
+                if read_results.is_empty() {
+                    let non_read_results = spawn_results.len() + list_results.len();
+                    if results.len() > non_read_results {
+                        return ChatAction::Sse(completion_text_sse("demo-live-child-read-failed"));
+                    }
+                    let child_request_id = spawn_results[0]
+                        .get("child_request_id")
+                        .and_then(Value::as_str)
+                        .expect("background spawn receipt has child_request_id");
+                    let args = json!({
+                        "child_request_id": child_request_id,
+                        "include_user_messages": true
+                    })
+                    .to_string();
+                    return ChatAction::Sse(tool_call_sse_with_id(
+                        "demo-read-live-worker-a",
+                        "read_subagent",
+                        &args,
+                    ));
+                }
+
+                // Keep both daemons alive after the live inspection so node B
+                // can persist both delayed worker completions before teardown.
+                return ChatAction::DelayThenSse(
+                    Duration::from_secs(27),
+                    completion_text_sse(&parent_reply),
+                );
             }
             ChatAction::Sse(completion_text_sse("demo fallback"))
         })
@@ -216,13 +348,73 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
     );
     assert!(
         stdout.contains(&parent_reply),
-        "parent did not finish after the background spawn:\n{stdout}"
+        "parent did not finish after live background-child inspection:\n{stdout}"
     );
     assert!(
         wait_port_free(port, Duration::from_secs(15))
             && wait_port_free(worker_port, Duration::from_secs(15)),
         "demo left a paired server process listening"
     );
+
+    let parent_requests = mock
+        .captured_chat_requests()
+        .into_iter()
+        .filter(|request| request_contains_role_text(request, "user", parent_prompt))
+        .collect::<Vec<_>>();
+    let inspected_request = parent_requests
+        .iter()
+        .rev()
+        .find(|request| {
+            request_tool_result_values(request)
+                .iter()
+                .any(|result| result.get("transcript").is_some())
+        })
+        .context("parent never received a read_subagent result")?;
+    let inspection_results = request_tool_result_values(inspected_request);
+    let spawn_ids = inspection_results
+        .iter()
+        .filter(|result| {
+            result.get("await_mode").and_then(Value::as_str) == Some("background")
+                && result.get("child_request_id").is_some()
+        })
+        .filter_map(|result| result.get("child_request_id").and_then(Value::as_str))
+        .collect::<std::collections::HashSet<_>>();
+    anyhow::ensure!(
+        spawn_ids.len() == 2,
+        "parent did not receive two distinct background spawn receipts: {inspection_results:?}"
+    );
+    let materialized_list = inspection_results
+        .iter()
+        .filter(|result| list_entries_are_materialized_and_running(result, 2))
+        .last()
+        .context("list_subagents never exposed both materialized live children")?;
+    let listed_ids = materialized_list["entries"]
+        .as_array()
+        .expect("validated entries")
+        .iter()
+        .filter_map(|entry| entry.get("child_request_id").and_then(Value::as_str))
+        .collect::<std::collections::HashSet<_>>();
+    anyhow::ensure!(
+        listed_ids == spawn_ids,
+        "list_subagents returned the wrong live child set: listed={listed_ids:?} spawned={spawn_ids:?}"
+    );
+    let read_result = inspection_results
+        .iter()
+        .find(|result| result.get("transcript").is_some())
+        .context("missing read_subagent result")?;
+    anyhow::ensure!(
+        read_result.get("terminal").and_then(Value::as_bool) == Some(false)
+            && read_result.get("diagnostic").is_none()
+            && read_result
+                .get("transcript")
+                .and_then(Value::as_str)
+                .is_some_and(|transcript| transcript.contains(worker_prompt_a)),
+        "read_subagent did not return the live child's materialized transcript: {read_result}"
+    );
+    let inspected_child_request_id = read_result
+        .get("child_request_id")
+        .and_then(Value::as_str)
+        .context("read_subagent result omitted child_request_id")?;
 
     // The user-visible failure in #734 was `no_peer_claimed_spawn`. Prove the
     // opposite from node B's durable store: the targeted child materialized
@@ -234,12 +426,12 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
         .build()
         .await
         .with_context(|| format!("opening worker store at {}", data_dir.display()))?;
-    let escaped_prompt = escape_graphql_string(worker_prompt);
+    let escaped_child_request_id = escape_graphql_string(inspected_child_request_id);
     let response = node_b
         .execute(&format!(
             r#"{{
                 AgentRequest(
-                    filter: {{ content: {{ _eq: "{escaped_prompt}" }} }},
+                    filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
                     order: {{ created_at: DESC }},
                     limit: 1
                 ) {{
