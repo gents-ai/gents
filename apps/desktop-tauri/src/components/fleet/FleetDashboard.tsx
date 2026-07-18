@@ -11,6 +11,7 @@ import { AddPeerForm } from "./AddPeerForm";
 import { BrandLockup } from "./BrandLockup";
 import { ThemeToggle } from "../ThemeToggle";
 import { FleetRow } from "./FleetRow";
+import { NetworkPanel } from "./NetworkPanel";
 import { validateAgentDid } from "./peerConnectionImport";
 
 type FleetDashboardProps = {
@@ -215,6 +216,8 @@ export function FleetDashboard({
           </tbody>
         </table>
       </div>
+
+      <NetworkPanel />
     </section>
   );
 }

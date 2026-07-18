@@ -1,4 +1,67 @@
 @layer fleet {
+  .network-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    align-items: flex-start;
+  }
+
+  .network-body {
+    width: 100%;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    background: rgb(var(--source-ink-2-rgb) / 0.6);
+  }
+
+  .network-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .network-error {
+    color: var(--color-error);
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+  }
+
+  .network-facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: var(--space-5);
+  }
+
+  .network-facts dt {
+    font-size: var(--text-2xs);
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .network-facts dd {
+    margin: var(--space-1) 0 0;
+    font-size: var(--text-sm);
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+  }
+
+  .network-replicators {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+  }
+
+  .network-replicators th,
+  .network-replicators td {
+    text-align: left;
+    padding: var(--space-2) var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
   .theme-toggle {
     width: 32px;
     height: 32px;

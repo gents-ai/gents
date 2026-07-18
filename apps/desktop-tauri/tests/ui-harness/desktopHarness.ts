@@ -396,6 +396,31 @@ export function createDesktopUiHarness(
       notify("peers");
       return snapshot();
     },
+    async fetchNetworkStatus() {
+      return {
+        localPeerId: "12D3KooWBombadilLocalPeer",
+        listenAddresses: ["/ip4/127.0.0.1/tcp/9292/p2p/12D3KooWBombadilLocalPeer"],
+        connectedPeers: [deployment.peerId],
+        replicators: [
+          {
+            peerId: deployment.peerId,
+            address: deployment.addr,
+            collections: ["AgentRequest", "AgentResponse", "AgentMessage"],
+            status: 0,
+            lastStatusChange: TWO_HOURS_AGO,
+          },
+        ],
+        savedPeers: [
+          {
+            peerId: deployment.peerId,
+            label: deployment.label,
+            addr: deployment.addr,
+            agentDid: deployment.agentDid,
+            source: deployment.source,
+          },
+        ],
+      };
+    },
     async fetchPeerStatus() {
       return {
         label: "Bombadil UI Agent",
