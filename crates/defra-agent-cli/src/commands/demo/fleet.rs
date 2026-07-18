@@ -399,14 +399,16 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
         ],
     )
     .await?;
+    // The host's return leg is requester-scoped to the coordinator DID.
     wait_replicator_filter(
         &worker.graphql,
         &peer_a,
-        &["AgentRequest".to_string(), worker.did.clone()],
+        &["AgentRequest".to_string(), fleet.did_a.clone()],
     )
     .await?;
 
     // Worker (node B) must accept cross-deployment spawns from the orchestrator.
+    let worker_gen = runtime_generation(&worker.graphql).await;
     config_tools(
         &fleet.bin,
         &worker.graphql,
@@ -421,7 +423,6 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
         ],
     )
     .await?;
-    let worker_gen = runtime_generation(&worker.graphql).await;
     wait_runtime_reconcile(&worker.graphql, worker_gen).await;
 
     // Orchestrator (node A): background spawn of a remote `worker` target.

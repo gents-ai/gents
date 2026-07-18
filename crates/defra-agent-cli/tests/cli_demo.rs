@@ -8,12 +8,15 @@ use support::*;
 
 use std::fs;
 use std::io::Write;
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
+use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 /// Drive `defra-agent demo` to completion with `input` fed to its shell.
@@ -56,6 +59,19 @@ fn wait_port_free(port: u16, timeout: Duration) -> bool {
             return false;
         }
         std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+fn allocate_demo_base_port() -> Result<u16> {
+    loop {
+        let port = allocate_port()?;
+        let Some(worker_port) = port.checked_add(1) else {
+            continue;
+        };
+        if let Ok(listener) = TcpListener::bind(("127.0.0.1", worker_port)) {
+            drop(listener);
+            return Ok(port);
+        }
     }
 }
 
@@ -124,6 +140,147 @@ async fn demo_single_node_chats_lists_skills_and_shuts_down_clean() -> Result<()
         home.join("init.json").exists(),
         "expected the demo to persist init.json under its home"
     );
+    Ok(())
+}
+
+/// #734 regression: the shipped `pair` -> `delegate` path must carry the
+/// coordinator's background spawn bridge to node B, where the worker claims
+/// and completes it. This uses the real two-process demo and its document-
+/// driven pairing/config commands; only inference is hermetic.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
+    use support::mocks::fake_llm::{ChatAction, FakeLlm};
+
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home = tempdir.path().join("demo-home");
+    let model = format!("demo-delegate-model-{}", Uuid::new_v4().simple());
+    let parent_prompt = "Run the hermetic demo delegation check.";
+    let worker_prompt = "Return the hermetic remote-worker proof token.";
+    let parent_reply = format!("demo-parent-finished-{}", Uuid::new_v4().simple());
+    let worker_reply = format!("demo-worker-finished-{}", Uuid::new_v4().simple());
+
+    let mock = FakeLlm::start(&model, None, {
+        let parent_reply = parent_reply.clone();
+        let worker_reply = worker_reply.clone();
+        Arc::new(move |request: &Value| {
+            if request_contains_role_text(request, "user", worker_prompt) {
+                return ChatAction::Sse(completion_text_sse(&worker_reply));
+            }
+            if request_contains_role_text(request, "user", parent_prompt) {
+                if request_has_tool_result_message(request) {
+                    // Keep both demo daemons alive while the background bridge
+                    // replicates, is claimed, and the immediate worker answer
+                    // persists on node B.
+                    return ChatAction::DelayThenSse(
+                        Duration::from_secs(20),
+                        completion_text_sse(&parent_reply),
+                    );
+                }
+                let args = json!({
+                    "name": "worker",
+                    "prompt": worker_prompt,
+                    "await_mode": "background"
+                })
+                .to_string();
+                return ChatAction::Sse(tool_call_sse("spawn_subagent", &args));
+            }
+            ChatAction::Sse(completion_text_sse("demo fallback"))
+        })
+    })?;
+    let port = allocate_demo_base_port()?;
+    let worker_port = port + 1;
+
+    let input = format!("pair\ndelegate\nchat\n{parent_prompt}\n/back\ndown\n");
+    let output = run_demo(
+        tempdir.path(),
+        &[
+            "--home",
+            home.to_str().unwrap(),
+            "--inference-url",
+            mock.endpoint(),
+            "--model",
+            &model,
+            "--http-port",
+            &port.to_string(),
+        ],
+        &input,
+    )?;
+    let stdout = require_success(&output)?;
+    assert!(
+        stdout.contains("paired. Node B (worker) is live"),
+        "demo pair did not converge:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("cross-node delegation enabled"),
+        "demo delegate did not configure the fleet:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(&parent_reply),
+        "parent did not finish after the background spawn:\n{stdout}"
+    );
+    assert!(
+        wait_port_free(port, Duration::from_secs(15))
+            && wait_port_free(worker_port, Duration::from_secs(15)),
+        "demo left a paired server process listening"
+    );
+
+    // The user-visible failure in #734 was `no_peer_claimed_spawn`. Prove the
+    // opposite from node B's durable store: the targeted child materialized
+    // there and reached the terminal completed state.
+    let data_dir = home.join("node-b").join("data");
+    let node_b = EmbeddedNode::builder()
+        .data_path(&data_dir)
+        .with_storage_backend(StorageBackend::RocksDb)
+        .build()
+        .await
+        .with_context(|| format!("opening worker store at {}", data_dir.display()))?;
+    let escaped_prompt = escape_graphql_string(worker_prompt);
+    let response = node_b
+        .execute(&format!(
+            r#"{{
+                AgentRequest(
+                    filter: {{ content: {{ _eq: "{escaped_prompt}" }} }},
+                    order: {{ created_at: DESC }},
+                    limit: 1
+                ) {{
+                    request_id
+                    agent_did
+                    status
+                    lifecycle_state
+                    caused_by_parent_request_id
+                    caused_by_parent_tool_call_id
+                }}
+            }}"#
+        ))
+        .await;
+    anyhow::ensure!(
+        !response.has_errors(),
+        "querying worker child failed: {:?}",
+        response.errors
+    );
+    let child = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .context("paired worker never materialized the remote child")?;
+    anyhow::ensure!(
+        child.get("lifecycle_state").and_then(Value::as_str) == Some("completed"),
+        "remote worker child did not complete: {child}"
+    );
+    anyhow::ensure!(
+        child
+            .get("caused_by_parent_request_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+            && child
+                .get("caused_by_parent_tool_call_id")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty()),
+        "remote worker child lost its parent lineage: {child}"
+    );
+
     Ok(())
 }
 
