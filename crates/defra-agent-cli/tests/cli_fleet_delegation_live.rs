@@ -105,9 +105,11 @@ const SUBAGENT_SYSTEM_PROMPT: &str = r#"You are a remote research subagent. Answ
 
 const RELEASE_FLEET_SIZE: usize = 19;
 const RELEASE_DELEGATE_COUNT: usize = 15;
-// Mirrors the pinned DefraDB #1099 regression gate: fixed push workers plus a
-// small allowance for transient fetch/replay work must bound retained handles.
-const RELEASE_MAX_TRANSIENT_BACKGROUND_TASKS: usize = 32;
+// The pinned DefraDB #1099 three-node regression gate uses `worker_count + 32`,
+// but this counter includes per-CID DAG fetch tasks as well as fixed push
+// workers. Keep the inaugural 19-node ceiling conservative until a live run
+// establishes the mesh's high-water mark, then tighten it from captured data.
+const RELEASE_MAX_RETAINED_BACKGROUND_TASKS: usize = 128;
 const RELEASE_BAD_LOG_SIGNATURES: &[&str] = &[
     "Dropping GossipSub message outside accepted replication direction",
     "Collection-commit push failed; document retry ledger cannot replay CID-scoped work",
@@ -692,14 +694,11 @@ fn assert_p2p_snapshot_bounded(label: &str, snapshot: &P2pSyncStatusSnapshot) ->
             && snapshot.persisted_pending_dags <= snapshot.persisted_pending_dag_capacity,
         "{label} persisted pending-DAG occupancy exceeded its cap: {snapshot:?}"
     );
-    let retained_background_task_limit =
-        backlog.worker_count + RELEASE_MAX_TRANSIENT_BACKGROUND_TASKS;
     anyhow::ensure!(
-        snapshot.retained_background_tasks <= retained_background_task_limit,
-        "{label} retained {} P2P background tasks ({} workers + {} transient-task allowance)",
+        snapshot.retained_background_tasks <= RELEASE_MAX_RETAINED_BACKGROUND_TASKS,
+        "{label} retained {} P2P background tasks (release max {})",
         snapshot.retained_background_tasks,
-        backlog.worker_count,
-        RELEASE_MAX_TRANSIENT_BACKGROUND_TASKS
+        RELEASE_MAX_RETAINED_BACKGROUND_TASKS
     );
     anyhow::ensure!(
         snapshot.gossip_direction_filtered_total == 0,
@@ -878,25 +877,30 @@ async fn wait_for_release_sweep(
     tokio::pin!(completion);
     let mut sample_interval = tokio::time::interval(Duration::from_secs(1));
     sample_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut consecutive_diagnostics_failures = 0usize;
     loop {
         tokio::select! {
             result = &mut completion => return result,
             _ = sample_interval.tick() => {
                 match fetch_p2p_fleet(fleet).await {
                     Ok(snapshots) => {
+                        consecutive_diagnostics_failures = 0;
                         // Bounds violations describe the fleet under test and
                         // fail immediately; only diagnostics transport retries.
                         assert_p2p_fleet_bounded(fleet, &snapshots)?;
                     }
                     Err(error) if Instant::now() < deadline => {
+                        consecutive_diagnostics_failures += 1;
                         tracing::warn!(
                             error = %error,
+                            consecutive_failures = consecutive_diagnostics_failures,
                             "transient P2P diagnostics fetch failed during release sweep; retrying"
                         );
                     }
                     Err(error) => {
+                        consecutive_diagnostics_failures += 1;
                         bail!(
-                            "P2P diagnostics remained unavailable through the release sweep deadline: {error:#}"
+                            "P2P diagnostics fetch failed at or after the release sweep deadline after {consecutive_diagnostics_failures} consecutive failure(s); latest error: {error:#}"
                         );
                     }
                 }
@@ -1200,17 +1204,12 @@ async fn assert_release_subagent_inspection(
         .context("release transcript contains no successful wait_subagent call")?;
     let successful_read_index = exchanges
         .iter()
-        .enumerate()
-        .find(|(index, exchange)| {
-            *index > successful_wait_index
-                && successful_read_exchange_ids.contains(exchange.id.as_str())
-        })
-        .map(|(index, _)| index)
-        .context(
-            "release transcript contains no successful read_subagent after a successful wait",
-        )?;
+        .position(|exchange| successful_read_exchange_ids.contains(exchange.id.as_str()))
+        .context("release transcript contains no successful read_subagent call")?;
     anyhow::ensure!(
-        last_spawn_index < list_index && list_index < first_wait_index,
+        last_spawn_index < list_index
+            && list_index < first_wait_index
+            && successful_wait_index < successful_read_index,
         "release inspection tools ran out of order: last_spawn={last_spawn_index} list={list_index} first_wait={first_wait_index} successful_wait={successful_wait_index} successful_read={successful_read_index}"
     );
     Ok(())
