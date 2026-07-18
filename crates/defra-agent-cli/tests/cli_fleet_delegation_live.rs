@@ -141,6 +141,7 @@ struct BridgeRow {
     lifecycle_state: String,
     child_request_id: String,
     await_mode: Option<String>,
+    target_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -296,7 +297,7 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
         subagents,
         &parent_session_id,
         &parent_request_id,
-        false,
+        None,
         Duration::from_secs(300),
     )
     .await?;
@@ -504,7 +505,7 @@ fn release_coordinator_system_prompt(delegate_count: usize) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "You are the release acceptance fleet coordinator. Your allowed remote targets are: {names}. When the user asks for the release sweep, follow this exact sequence: (1) call spawn_subagent exactly once for every allowed target, with await_mode=background; (2) after all {delegate_count} spawn calls return, call list_subagents exactly once with status=all and limit=50; (3) call wait_subagent exactly once for researcher-{delegate_count}'s returned child_request_id; (4) after that wait returns, call read_subagent exactly once for researcher-1's returned child_request_id; (5) reply briefly that the sweep completed. The wait and read calls must target those two different children. Do not omit a target, do not create duplicate spawns, do not call steer_subagent, and do not call any other tools."
+        "You are the release acceptance fleet coordinator. Your allowed remote targets are: {names}. When the user asks for the release sweep, follow this exact sequence: (1) call spawn_subagent exactly once for every allowed target, with await_mode=background; (2) after all {delegate_count} spawn calls return, call list_subagents exactly once with status=all and limit=50; (3) call wait_subagent for researcher-{delegate_count}'s returned child_request_id; if and only if wait_subagent returns retryable=true, retry wait_subagent on that same child until one call succeeds with status=completed; (4) after the successful wait, call read_subagent exactly once for researcher-1's returned child_request_id with include_user_messages=true; (5) reply briefly that the sweep completed. The wait and read calls must target those two different children. Do not omit a target, do not create duplicate spawns, do not call steer_subagent, and do not call any other tools."
     )
 }
 
@@ -781,6 +782,7 @@ async fn wait_for_release_sweep(
     parent_request_id: &str,
     timeout: Duration,
 ) -> Result<HashMap<String, CompletedChild>> {
+    let allowed_foreground_target = format!("researcher-{}", delegates.len());
     let completion = async {
         let (parent_terminal, completed_children) = tokio::try_join!(
             wait_for_request_terminal(&coord.graphql, parent_request_id, timeout),
@@ -789,7 +791,7 @@ async fn wait_for_release_sweep(
                 delegates,
                 parent_session_id,
                 parent_request_id,
-                true,
+                Some(allowed_foreground_target.as_str()),
                 timeout,
             ),
         )?;
@@ -819,6 +821,7 @@ async fn assert_release_subagent_inspection(
     expected_count: usize,
 ) -> Result<()> {
     let escaped_request_id = escape_graphql_string(parent_request_id);
+    let expected_wait_target_name = format!("researcher-{expected_count}");
     let response = graphql_query(
         coord_graphql,
         &format!(
@@ -835,6 +838,7 @@ async fn assert_release_subagent_inspection(
                     result
                     lifecycle_state
                     child_request_id
+                    await_mode
                 }}
             }}"#
         ),
@@ -852,6 +856,7 @@ async fn assert_release_subagent_inspection(
     );
     let mut child_ids = HashSet::new();
     let mut child_ids_by_target = HashMap::new();
+    let mut foreground_child_ids = Vec::new();
     for row in rows {
         anyhow::ensure!(
             row.get("lifecycle_state").and_then(Value::as_str) == Some("completed"),
@@ -867,14 +872,19 @@ async fn assert_release_subagent_inspection(
             "duplicate release child request id {child_id}"
         );
         let args = parse_tool_result_json(row, "args")?;
-        anyhow::ensure!(
-            args.get("await_mode").and_then(Value::as_str) == Some("background"),
-            "release spawn did not request background mode: {args}"
-        );
         let name = args
             .get("name")
             .and_then(Value::as_str)
             .with_context(|| format!("release spawn args have no target name: {args}"))?;
+        match row.get("await_mode").and_then(Value::as_str) {
+            Some("background") => {}
+            Some("foreground") if name == expected_wait_target_name => {
+                foreground_child_ids.push(child_id.to_string());
+            }
+            mode => bail!(
+                "release spawn bridge for {name} has invalid final await mode {mode:?}; only {expected_wait_target_name} may be foreground"
+            ),
+        }
         anyhow::ensure!(
             child_ids_by_target
                 .insert(name.to_string(), child_id.to_string())
@@ -882,6 +892,10 @@ async fn assert_release_subagent_inspection(
             "duplicate release spawn target {name}"
         );
     }
+    anyhow::ensure!(
+        foreground_child_ids.len() <= 1,
+        "more than one release child was foregrounded: {foreground_child_ids:?}"
+    );
     let expected_names = (1..=expected_count)
         .map(|index| format!("researcher-{index}"))
         .collect::<HashSet<_>>();
@@ -910,6 +924,12 @@ async fn assert_release_subagent_inspection(
         transcript_targets == expected_names,
         "release transcript spawn target mismatch: actual={transcript_targets:?} expected={expected_names:?}"
     );
+    anyhow::ensure!(
+        spawn_exchanges.iter().all(|exchange| {
+            exchange.args.get("await_mode").and_then(Value::as_str) == Some("background")
+        }),
+        "release transcript contains a spawn that did not request background mode: {spawn_exchanges:?}"
+    );
 
     anyhow::ensure!(
         transcript_exchanges_named(&exchanges, "steer_subagent").is_empty(),
@@ -937,7 +957,21 @@ async fn assert_release_subagent_inspection(
         "release parent must call list_subagents exactly once; saw {}",
         list_rows.len()
     );
+    anyhow::ensure!(
+        list_rows[0].args.get("status").and_then(Value::as_str) == Some("all")
+            && list_rows[0]
+                .args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .is_some_and(|limit| limit >= expected_count as u64),
+        "list_subagents must explicitly request status=all with enough capacity: {:?}",
+        list_rows[0].args
+    );
     let list_result = parse_transcript_tool_result(list_rows[0])?;
+    anyhow::ensure!(
+        list_result.get("truncated").and_then(Value::as_bool) == Some(false),
+        "list_subagents truncated the release bridge set: {list_result}"
+    );
     let list_entries = list_result
         .get("entries")
         .and_then(Value::as_array)
@@ -966,30 +1000,44 @@ async fn assert_release_subagent_inspection(
     let wait_rows = transcript_exchanges_named(&exchanges, "wait_subagent");
     let read_rows = transcript_exchanges_named(&exchanges, "read_subagent");
     anyhow::ensure!(
-        wait_rows.len() == 1 && read_rows.len() == 1,
-        "release parent must call wait_subagent and read_subagent exactly once; wait={} read={} session={parent_session_id}",
+        !wait_rows.is_empty() && read_rows.len() == 1,
+        "release parent must successfully wait and call read_subagent exactly once; wait={} read={} session={parent_session_id}",
         wait_rows.len(),
         read_rows.len()
     );
-    let waited_child_id = wait_rows[0]
-        .args
-        .get("child_request_id")
-        .and_then(Value::as_str)
-        .context("wait_subagent args omitted child_request_id")?;
     let expected_waited_child_id = child_ids_by_target
-        .get(&format!("researcher-{expected_count}"))
+        .get(&expected_wait_target_name)
         .context("release sweep has no last researcher child id")?;
-    anyhow::ensure!(
-        waited_child_id == expected_waited_child_id,
-        "wait_subagent targeted {waited_child_id}, expected researcher-{expected_count} child {expected_waited_child_id}"
-    );
-    let wait_result = parse_transcript_tool_result(wait_rows[0])?;
-    anyhow::ensure!(
-        wait_result.get("ok").and_then(Value::as_bool) == Some(true)
-            && wait_result.get("child_request_id").and_then(Value::as_str) == Some(waited_child_id)
-            && wait_result.get("status").and_then(Value::as_str) == Some("completed"),
-        "wait_subagent did not successfully observe researcher-{expected_count}: {wait_result}"
-    );
+    for (index, exchange) in wait_rows.iter().enumerate() {
+        let waited_child_id = exchange
+            .args
+            .get("child_request_id")
+            .and_then(Value::as_str)
+            .context("wait_subagent args omitted child_request_id")?;
+        anyhow::ensure!(
+            waited_child_id == expected_waited_child_id,
+            "wait_subagent targeted {waited_child_id}, expected researcher-{expected_count} child {expected_waited_child_id}"
+        );
+        let wait_result = parse_transcript_tool_result(exchange)?;
+        if index + 1 == wait_rows.len() {
+            anyhow::ensure!(
+                wait_result.get("ok").and_then(Value::as_bool) == Some(true)
+                    && wait_result.get("child_request_id").and_then(Value::as_str)
+                        == Some(waited_child_id)
+                    && wait_result.get("status").and_then(Value::as_str) == Some("completed"),
+                "final wait_subagent attempt did not successfully observe researcher-{expected_count}: {wait_result}"
+            );
+        } else {
+            anyhow::ensure!(
+                wait_result.get("ok").and_then(Value::as_bool) == Some(false)
+                    && wait_result.get("retryable").and_then(Value::as_bool) == Some(true)
+                    && wait_result.get("failure_class").and_then(Value::as_str)
+                        == Some("service_unavailable"),
+                "wait_subagent may retry only after retryable materialization failures: {wait_result}"
+            );
+        }
+    }
+    let waited_child_id = expected_waited_child_id.as_str();
 
     let read_child_id = read_rows[0]
         .args
@@ -1007,28 +1055,37 @@ async fn assert_release_subagent_inspection(
         read_child_id != waited_child_id,
         "read_subagent must inspect a different background child than wait_subagent"
     );
+    anyhow::ensure!(
+        read_rows[0]
+            .args
+            .get("include_user_messages")
+            .and_then(Value::as_bool)
+            == Some(true),
+        "read_subagent must include user messages so a materialized live child has an observable transcript: {:?}",
+        read_rows[0].args
+    );
     let read_result = parse_transcript_tool_result(read_rows[0])?;
     anyhow::ensure!(
         read_result.get("child_request_id").and_then(Value::as_str) == Some(read_child_id),
         "read_subagent did not project researcher-1: {read_result}"
     );
-    if read_result.get("terminal").and_then(Value::as_bool) == Some(true) {
-        anyhow::ensure!(
-            read_result
+    anyhow::ensure!(
+        read_result
+            .get("child_session_id")
+            .and_then(Value::as_str)
+            .is_some_and(|session_id| !session_id.trim().is_empty())
+            && read_result
+                .get("lifecycle_state")
+                .and_then(Value::as_str)
+                .is_some_and(|state| {
+                    !state.trim().is_empty() && state != "awaiting_child_materialization"
+                })
+            && read_result
                 .get("transcript")
                 .and_then(Value::as_str)
                 .is_some_and(|transcript| !transcript.trim().is_empty()),
-            "read_subagent projected a terminal child without its transcript: {read_result}"
-        );
-    } else {
-        anyhow::ensure!(
-            read_result
-                .get("lifecycle_state")
-                .and_then(Value::as_str)
-                .is_some_and(|state| !state.trim().is_empty()),
-            "read_subagent did not return a valid live-child projection: {read_result}"
-        );
-    }
+        "read_subagent did not return a materialized child with observable transcript content: {read_result}"
+    );
 
     let last_spawn_index = exchanges
         .iter()
@@ -1038,17 +1095,23 @@ async fn assert_release_subagent_inspection(
         .iter()
         .position(|exchange| exchange.name == "list_subagents")
         .context("release transcript contains no list_subagents call")?;
-    let wait_index = exchanges
+    let first_wait_index = exchanges
         .iter()
         .position(|exchange| exchange.name == "wait_subagent")
+        .context("release transcript contains no wait_subagent call")?;
+    let last_wait_index = exchanges
+        .iter()
+        .rposition(|exchange| exchange.name == "wait_subagent")
         .context("release transcript contains no wait_subagent call")?;
     let read_index = exchanges
         .iter()
         .position(|exchange| exchange.name == "read_subagent")
         .context("release transcript contains no read_subagent call")?;
     anyhow::ensure!(
-        last_spawn_index < list_index && list_index < wait_index && wait_index < read_index,
-        "release inspection tools ran out of order: last_spawn={last_spawn_index} list={list_index} wait={wait_index} read={read_index}"
+        last_spawn_index < list_index
+            && list_index < first_wait_index
+            && last_wait_index < read_index,
+        "release inspection tools ran out of order: last_spawn={last_spawn_index} list={list_index} first_wait={first_wait_index} last_wait={last_wait_index} read={read_index}"
     );
     Ok(())
 }
@@ -4084,7 +4147,7 @@ async fn wait_for_all_subagent_children_completed(
     subagents: &[FleetNode],
     parent_session_id: &str,
     parent_request_id: &str,
-    allow_foreground_bridges: bool,
+    allowed_foreground_target: Option<&str>,
     timeout: Duration,
 ) -> Result<HashMap<String, CompletedChild>> {
     wait_until_value(timeout, || async {
@@ -4101,10 +4164,12 @@ async fn wait_for_all_subagent_children_completed(
         for bridge in &bridges {
             match bridge.await_mode.as_deref() {
                 Some("background") => {}
-                Some("foreground") if allow_foreground_bridges => {}
+                Some("foreground")
+                    if allowed_foreground_target == Some(bridge.target_name.as_str()) => {}
                 Some("foreground") => bail!(
-                    "bridge {} was unexpectedly foregrounded: {bridge:?}",
-                    bridge.tool_call_id
+                    "bridge {} for target {:?} was unexpectedly foregrounded; only {allowed_foreground_target:?} may foreground: {bridge:?}",
+                    bridge.tool_call_id,
+                    bridge.target_name,
                 ),
                 _ => bail!(
                     "bridge {} has an invalid await mode: {bridge:?}",
@@ -4247,6 +4312,7 @@ async fn fetch_spawn_bridges(graphql: &str, session_id: &str) -> Result<Vec<Brid
                     lifecycle_state
                     child_request_id
                     await_mode
+                    args
                 }}
             }}"#
         ),
@@ -4268,6 +4334,16 @@ async fn fetch_spawn_bridges(graphql: &str, session_id: &str) -> Result<Vec<Brid
             if child_request_id.is_empty() {
                 return None;
             }
+            let target_name = row
+                .get("args")
+                .and_then(Value::as_str)
+                .and_then(|args| serde_json::from_str::<Value>(args).ok())
+                .and_then(|args| {
+                    args.get("name")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                })
+                .unwrap_or_default();
             Some(BridgeRow {
                 tool_call_id: row
                     .get("tool_call_id")
@@ -4284,6 +4360,7 @@ async fn fetch_spawn_bridges(graphql: &str, session_id: &str) -> Result<Vec<Brid
                     .get("await_mode")
                     .and_then(Value::as_str)
                     .map(ToOwned::to_owned),
+                target_name,
             })
         })
         .collect())
