@@ -325,6 +325,47 @@ impl ClientCore {
         });
     }
 
+    /// Fork a conversation at a user turn, routed like every per-agent
+    /// operation. The caller principal must own the source session; the
+    /// runtime's fork machinery enforces that and the busy/turn-range rules.
+    pub async fn fork_session(
+        &self,
+        agent_did: &str,
+        source_session_id: &str,
+        at_user_turn: u32,
+        target_behavior_id: Option<&str>,
+    ) -> Result<defra_agent::ForkOutcome> {
+        let agent_did = normalize_required("agent_did", agent_did)?;
+        let source_session_id = normalize_required("source_session_id", source_session_id)?;
+        let params = defra_agent::ForkParams {
+            source_session_id,
+            fork_at_user_turn: at_user_turn,
+            caller_agent_did: agent_did,
+            target_behavior_id,
+        };
+        let result = match self.graphql_for_agent(agent_did).await {
+            Some(graphql) => defra_agent::fork_via_http(&graphql, params).await,
+            None => defra_agent::fork(self.node(), params).await,
+        };
+        match result {
+            Ok(outcome) => {
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop_core::writes",
+                    action = "session_fork",
+                    row_id = %outcome.session_id,
+                    source_session_id,
+                    "desktop write saved"
+                );
+                Ok(outcome)
+            }
+            Err(error) => {
+                Err(self.record_mutation_error("fork session", anyhow::Error::from(error)))
+            }
+        }
+    }
+
     pub async fn graphql_for_agent(&self, agent_did: &str) -> Option<String> {
         self.peer_record_for_agent(agent_did)
             .await

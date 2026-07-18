@@ -167,6 +167,7 @@ function AppShell() {
               selectedSessionId={shell.selectedSessionId}
               sending={shell.sending}
               session={shell.session}
+              onForkedConversation={shell.onSelectSession}
             />
           </section>
         </section>

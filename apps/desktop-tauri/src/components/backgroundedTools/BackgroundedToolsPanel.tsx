@@ -57,6 +57,8 @@ export type BackgroundedToolsPanelProps = {
   onOpenLineage?: (requestId: string) => void;
   /** Begin the interrupt (preview + cascade dialog) flow for this row's parent request. */
   onInterruptParent?: (requestId: string) => void;
+  /** Resubmit a stale/expired request as a fresh one. */
+  onResendRequest?: (requestId: string) => void;
 };
 
 export function BackgroundedToolsPanel({
@@ -65,6 +67,7 @@ export function BackgroundedToolsPanel({
   runtime,
   onOpenLineage,
   onInterruptParent,
+  onResendRequest,
 }: BackgroundedToolsPanelProps = {}) {
   // Nullable on purpose: the panel also renders outside the operations rail
   // (tests, future standalone surfaces), where tab switching is a no-op.
@@ -220,6 +223,17 @@ export function BackgroundedToolsPanel({
             >
               <span aria-hidden="true" className="stuck-diagnostic-dot" />
               {diagnosticSentence(diag)}
+              {onResendRequest && diag.requestId ? (
+                <button
+                  className="ghost-button stuck-resend"
+                  data-testid={`stuck-resend-${diag.requestId}`}
+                  onClick={() => onResendRequest(diag.requestId)}
+                  title="Resubmit this request as a fresh one"
+                  type="button"
+                >
+                  Resend
+                </button>
+              ) : null}
             </div>
           ))}
         </div>

@@ -39,6 +39,8 @@ import type {
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
+  SessionForkResult,
+  RequestResendResult,
 } from "./types";
 import type {
   DesktopOperationsSnapshot,
@@ -131,6 +133,13 @@ export type DesktopApiAdapter = {
     content: string;
   }) => Promise<ChatSendResult>;
   renameConversation: (request: { sessionId: string; title: string }) => Promise<void>;
+  forkSession: (request: {
+    agentDid: string;
+    sessionId: string;
+    atUserTurn: number;
+    behaviorId?: string | null;
+  }) => Promise<SessionForkResult>;
+  resendRequest: (requestId: string) => Promise<RequestResendResult>;
   saveAgentConfig: (request: AgentConfigSaveRequest) => Promise<DesktopClientSnapshot>;
   saveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<DesktopClientSnapshot>;
   saveSkillConfig: (request: SkillSaveRequest) => Promise<DesktopClientSnapshot>;
@@ -240,6 +249,17 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   renameConversation(request) {
     return invokeDesktop<void>("desktop_conversation_rename", { request });
+  },
+  forkSession(request) {
+    return invokeDesktop<SessionForkResult>("desktop_session_fork", {
+      agentDid: request.agentDid,
+      sessionId: request.sessionId,
+      atUserTurn: request.atUserTurn,
+      behaviorId: request.behaviorId ?? null,
+    });
+  },
+  resendRequest(requestId) {
+    return invokeDesktop<RequestResendResult>("desktop_request_resend", { requestId });
   },
   saveAgentConfig(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_agent_config_save", {
@@ -442,6 +462,19 @@ export async function renameConversation(request: {
   title: string;
 }) {
   return desktopApiAdapter().renameConversation(request);
+}
+
+export async function forkSession(request: {
+  agentDid: string;
+  sessionId: string;
+  atUserTurn: number;
+  behaviorId?: string | null;
+}) {
+  return desktopApiAdapter().forkSession(request);
+}
+
+export async function resendRequest(requestId: string) {
+  return desktopApiAdapter().resendRequest(requestId);
 }
 
 export async function saveAgentConfig(request: AgentConfigSaveRequest) {

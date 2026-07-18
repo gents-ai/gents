@@ -131,3 +131,14 @@ export type ChatSendResult = {
   agentDid: string;
   behaviorId?: string | null;
 };
+
+export type SessionForkResult = {
+  sessionId: string;
+  copiedMessages: number;
+  copiedToolCalls: number;
+};
+
+export type RequestResendResult = {
+  requestId: string;
+  sessionId: string;
+};

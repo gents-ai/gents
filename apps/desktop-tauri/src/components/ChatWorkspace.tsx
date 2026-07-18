@@ -9,6 +9,7 @@ import {
 import { BackendHealthPanel } from "./backendHealth";
 import { CascadeCancelDialog } from "./cancelUx";
 import { ChatComposer, ChatHeader, ChatTranscriptPanel } from "./chat";
+import { forkSession, resendRequest } from "../lib/desktop-api";
 import { effectiveBehaviorSkills } from "./chat/slashSkills";
 import { McpHealthPanel } from "./mcpHealth";
 import { OperationsRail, OperationsRailProvider } from "./operations";
@@ -36,6 +37,7 @@ export type ChatWorkspaceProps = {
   onDraftChange: (value: string) => void;
   onSend: (event: FormEvent) => void;
   onRetryMessage?: (content: string) => void;
+  onForkedConversation?: (sessionId: string) => void;
 };
 
 export type ActiveChatWorkspaceProps = Omit<
@@ -80,6 +82,7 @@ export function ActiveChatWorkspace({
   onDraftChange,
   onSend,
   onRetryMessage,
+  onForkedConversation,
 }: ActiveChatWorkspaceProps) {
   const activeBehaviorId =
     selectedBehaviorId ?? selectedDeployment.defaultBehaviorId ?? null;
@@ -100,6 +103,49 @@ export function ActiveChatWorkspace({
     tone: "info" | "error";
   } | null>(null);
   const [operationsOpen, setOperationsOpen] = useState(false);
+  const [forking, setForking] = useState(false);
+
+  async function forkConversation(sessionId: string) {
+    // Fork at the currently rendered user-turn count = "as of now".
+    const atUserTurn = (session?.timelineItems ?? []).filter(
+      (item) => item.kind === "userMessage",
+    ).length;
+    setForking(true);
+    try {
+      const outcome = await forkSession({
+        agentDid: selectedDeployment.agentDid,
+        sessionId,
+        atUserTurn,
+      });
+      setInterruptResultBanner({
+        text: `Forked into a new conversation (${outcome.copiedMessages} messages copied)`,
+        tone: "info",
+      });
+      onForkedConversation?.(outcome.sessionId);
+    } catch (error) {
+      setInterruptResultBanner({
+        text: `Fork failed: ${error instanceof Error ? error.message : String(error)}`,
+        tone: "error",
+      });
+    } finally {
+      setForking(false);
+    }
+  }
+
+  async function resendStaleRequest(requestId: string) {
+    try {
+      const submitted = await resendRequest(requestId);
+      setInterruptResultBanner({
+        text: `Request resent as ${submitted.requestId.slice(0, 14)}…`,
+        tone: "info",
+      });
+    } catch (error) {
+      setInterruptResultBanner({
+        text: `Resend failed: ${error instanceof Error ? error.message : String(error)}`,
+        tone: "error",
+      });
+    }
+  }
   // Set when a background-tools row asks to focus the lineage view on its
   // parent request; falls back to the session's latest request.
   const [lineageRootOverride, setLineageRootOverride] = useState<string | null>(null);
@@ -176,6 +222,9 @@ export function ActiveChatWorkspace({
         render: () => (
           <BackgroundedToolsPanel
             agentDid={selectedDeployment.agentDid}
+            onResendRequest={(requestId) => {
+              void resendStaleRequest(requestId);
+            }}
             rootRequestId={rootRequestId}
             runtime={selectedDeployment?.runtime ?? null}
             onOpenLineage={setLineageRootOverride}
@@ -228,6 +277,8 @@ export function ActiveChatWorkspace({
         selectedConversationTitle={selectedConversationTitle}
         selectedSessionId={selectedSessionId}
         onRenameConversationTitle={onRenameConversationTitle}
+        onForkConversation={(sessionId) => void forkConversation(sessionId)}
+        forking={forking}
       />
 
       <section className="chat-workspace">
