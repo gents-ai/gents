@@ -399,14 +399,16 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
         ],
     )
     .await?;
+    // The host's return leg is requester-scoped to the coordinator DID.
     wait_replicator_filter(
         &worker.graphql,
         &peer_a,
-        &["AgentRequest".to_string(), worker.did.clone()],
+        &["AgentRequest".to_string(), fleet.did_a.clone()],
     )
     .await?;
 
     // Worker (node B) must accept cross-deployment spawns from the orchestrator.
+    let worker_gen = runtime_generation(&worker.graphql).await;
     config_tools(
         &fleet.bin,
         &worker.graphql,
@@ -421,8 +423,9 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
         ],
     )
     .await?;
-    let worker_gen = runtime_generation(&worker.graphql).await;
-    wait_runtime_reconcile(&worker.graphql, worker_gen).await;
+    wait_runtime_reconcile(&worker.graphql, worker_gen)
+        .await
+        .context("worker runtime did not reconcile cross-node delegation tools")?;
 
     // Orchestrator (node A): background spawn of a remote `worker` target.
     let target = format!(
@@ -450,7 +453,9 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
         ],
     )
     .await?;
-    wait_runtime_reconcile(&fleet.graphql_a, orch_gen).await;
+    wait_runtime_reconcile(&fleet.graphql_a, orch_gen)
+        .await
+        .context("coordinator runtime did not reconcile cross-node delegation tools")?;
 
     println!("  ✓ cross-node delegation enabled.");
     println!("  In `chat`, ask the orchestrator to use its worker subagent, e.g.:");
@@ -489,28 +494,38 @@ async fn runtime_generation(graphql: &str) -> i64 {
         .unwrap_or(0)
 }
 
-async fn wait_runtime_reconcile(graphql: &str, prev_generation: i64) {
+async fn wait_runtime_reconcile(graphql: &str, prev_generation: i64) -> Result<()> {
+    let mut last = Value::Null;
+    let mut last_error = None;
     for _ in 0..80 {
-        if let Ok(resp) = post_graphql(
+        match post_graphql(
             graphql,
             "{ AgentRuntime { active_generation reconcile_phase } }",
         )
         .await
         {
-            let generation = resp
-                .pointer("/data/AgentRuntime/0/active_generation")
-                .and_then(Value::as_i64)
-                .unwrap_or(0);
-            let phase = resp
-                .pointer("/data/AgentRuntime/0/reconcile_phase")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if generation > prev_generation && phase == "idle" {
-                return;
+            Ok(resp) => {
+                last = resp;
+                last_error = None;
+                let generation = last
+                    .pointer("/data/AgentRuntime/0/active_generation")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let phase = last
+                    .pointer("/data/AgentRuntime/0/reconcile_phase")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if generation > prev_generation && phase == "idle" {
+                    return Ok(());
+                }
             }
+            Err(error) => last_error = Some(error.to_string()),
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
+    bail!(
+        "timed out waiting for AgentRuntime generation to advance beyond {prev_generation} and return idle at {graphql}; last response={last}; last error={last_error:?}"
+    )
 }
 
 // ---- desktop (paired desktop client) ----------------------------------------

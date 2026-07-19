@@ -242,12 +242,19 @@ async fn handle_fallback() -> Response {
 /// SSE body for a single assistant tool call (`tool_calls` delta then a
 /// `finish_reason: "tool_calls"` terminal chunk and `[DONE]`).
 pub fn tool_call_sse(tool_name: &str, arguments: &str) -> String {
+    tool_call_sse_with_id("call-read-file", tool_name, arguments)
+}
+
+/// SSE body for a single assistant tool call with a caller-selected id.
+/// Multi-turn orchestration tests use distinct ids so their provider history
+/// matches real model behavior and every tool result has an unambiguous owner.
+pub fn tool_call_sse_with_id(tool_call_id: &str, tool_name: &str, arguments: &str) -> String {
     let chunk_1 = serde_json::json!({
         "choices": [{
             "delta": {
                 "tool_calls": [{
                     "index": 0,
-                    "id": "call-read-file",
+                    "id": tool_call_id,
                     "function": { "name": tool_name, "arguments": "" }
                 }]
             },

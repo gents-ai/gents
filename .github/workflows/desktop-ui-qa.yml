@@ -16,7 +16,10 @@ env:
 jobs:
   desktop-ui-qa-sweep:
     runs-on: [self-hosted, macOS, ARM64, studio]
-    timeout-minutes: 45
+    # A 5m fuzz limit maps to a 15m runner watchdog. One watchdog-only retry
+    # needs 30m, leaving another 30m for build/unit/browser gates and artifact
+    # upload even when Bombadil exercises the full recovery budget.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,6 +30,12 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: apps/desktop-tauri/package-lock.json
+
+      - name: Install elan
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          "$HOME/.elan/bin/elan" --version
 
       - name: Install frontend dependencies
         working-directory: apps/desktop-tauri

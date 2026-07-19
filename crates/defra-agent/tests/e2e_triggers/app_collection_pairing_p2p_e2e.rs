@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use defra_agent::agent::p2p_reconcile::{GraphqlNetworkStore, NetworkStore};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::retry::execute_graphql_with_conflict_retry;
 use defra_agent::{AgentIdentity, DefraAgent, DocumentRuntimeOptions, ToolCeiling};
 use defra_agent_protocol::network_token::{
     derive_membership_key, EndpointRecord, MembershipRecord, NetworkRecord,
@@ -198,7 +199,12 @@ async fn seed_materializable_peer(
             ) {{ _docID }}
         }}"#
     );
-    let resp = node.execute(&ep_mutation).await;
+    // The live runtime publishes this same DID's endpoint heartbeat. Keep the
+    // real concurrent write in the e2e, but cross the same bounded conflict
+    // retry boundary production document writers use (#730, #750).
+    let resp =
+        execute_graphql_with_conflict_retry(node, &ep_mutation, "seed materializable PeerEndpoint")
+            .await;
     assert!(
         !resp.has_errors(),
         "upsert PeerEndpoint failed: {:?}",

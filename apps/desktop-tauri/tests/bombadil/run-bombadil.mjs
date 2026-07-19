@@ -6,6 +6,8 @@ import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { delimiter, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { runWithWatchdogRetry, stopProcess } from "./runner-control.mjs";
+
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const args = process.argv.slice(2);
 const headed = consumeFlag(args, "--headed");
@@ -43,9 +45,7 @@ installSignalHandlers();
 
 try {
   await waitForVite(vite, harnessUrl);
-  await mkdir(defaultOutputPath, { recursive: true });
 
-  const chromeEnv = await chromePathEnvironment(defaultOutputPath);
   const bombadilArgs = ["browser", "test", harnessUrl, "tests/bombadil/spec.ts"];
   if (!headed) {
     bombadilArgs.push("--headless");
@@ -62,26 +62,45 @@ try {
   bombadilArgs.push(...args);
 
   const outputPath = outputPathFromArgs(bombadilArgs);
-  await writeRunReadme(outputPath, harnessUrl, bombadilArgs);
-
-  console.log(`[bombadil] harness: ${harnessUrl}`);
-  console.log(`[bombadil] output: ${outputPath}`);
-
-  bombadilProcess = spawn(resolveBin("bombadil"), bombadilArgs, {
-    cwd: rootDir,
-    env: {
-      ...process.env,
-      ...chromeEnv,
-      RUST_LOG: process.env.BOMBADIL_RUST_LOG ?? "error",
-    },
-    stdio: "inherit",
-  });
+  const chromeEnv = await chromePathEnvironment(outputPath);
+  const useProcessGroup = process.platform !== "win32";
   const runnerTimeoutMs = runnerTimeoutMillis(bombadilArgs);
-  const result = await waitForExitWithTimeout(bombadilProcess, runnerTimeoutMs);
+  const result = await runWithWatchdogRetry({
+    timeoutMs: runnerTimeoutMs,
+    maxWatchdogRetries: 1,
+    startAttempt: async (attempt) => {
+      const attemptArgs = bombadilArgs.slice();
+      if (attempt > 1) {
+        setOutputPath(attemptArgs, `${outputPath}-watchdog-retry-${attempt - 1}`);
+      }
+      const attemptOutputPath = outputPathFromArgs(attemptArgs);
+      await writeRunReadme(attemptOutputPath, harnessUrl, attemptArgs);
+
+      console.log(`[bombadil] harness: ${harnessUrl}`);
+      console.log(`[bombadil] output: ${attemptOutputPath}`);
+      bombadilProcess = spawn(resolveBin("bombadil"), attemptArgs, {
+        cwd: rootDir,
+        detached: useProcessGroup,
+        env: {
+          ...process.env,
+          ...chromeEnv,
+          RUST_LOG: process.env.BOMBADIL_RUST_LOG ?? "error",
+        },
+        stdio: "inherit",
+      });
+      return bombadilProcess;
+    },
+    stopTimedOutChild: (child) =>
+      stopProcess(child, { killProcessGroup: useProcessGroup }),
+    onRetry: ({ nextAttempt }) => {
+      console.warn(
+        `[bombadil] runner watchdog expired; retrying once with a fresh browser process (attempt ${nextAttempt}/2)`,
+      );
+    },
+  });
   if (result.kind === "timeout") {
-    await stopProcess(bombadilProcess);
     throw new Error(
-      `Bombadil did not exit before the runner watchdog (${runnerTimeoutMs}ms)`,
+      `Bombadil did not exit before the runner watchdog (${runnerTimeoutMs}ms) after ${result.attempts} attempts`,
     );
   }
   process.exitCode = result.code ?? 1;
@@ -93,6 +112,9 @@ try {
     console.error(viteOutput.join(""));
   }
 } finally {
+  await stopProcess(bombadilProcess, {
+    killProcessGroup: process.platform !== "win32",
+  });
   await stopProcess(vite);
 }
 
@@ -181,6 +203,20 @@ function outputPathFromArgs(values) {
   return assigned ? assigned.slice("--output-path=".length) : "(bombadil default)";
 }
 
+function setOutputPath(values, outputPath) {
+  const index = values.indexOf("--output-path");
+  if (index >= 0) {
+    values[index + 1] = outputPath;
+    return;
+  }
+  const assigned = values.findIndex((value) => value.startsWith("--output-path="));
+  if (assigned >= 0) {
+    values[assigned] = `--output-path=${outputPath}`;
+    return;
+  }
+  values.push("--output-path", outputPath);
+}
+
 async function writeRunReadme(outputPath, harnessUrl, bombadilArgs) {
   if (outputPath === "(bombadil default)") {
     return;
@@ -219,6 +255,7 @@ async function writeRunReadme(outputPath, harnessUrl, bombadilArgs) {
       "Notes:",
       "",
       "- The npm wrapper starts Vite on a fresh local port before replaying.",
+      "- A watchdog retry writes to the adjacent `-watchdog-retry-1` directory so both attempts remain inspectable.",
       "- Use this directory path in GitHub bug issues as the artifact reference.",
       "",
     ].join("\n"),
@@ -320,53 +357,6 @@ async function waitForVite(process, url) {
   throw new Error(`timed out waiting for Vite at ${url}`);
 }
 
-function waitForExitWithTimeout(process, timeoutMs) {
-  if (timeoutMs === null) {
-    return waitForExit(process).then((code) => ({ kind: "exit", code }));
-  }
-  return new Promise((resolveExit) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolveExit({ kind: "timeout" });
-    }, timeoutMs);
-    process.once("exit", (code) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      resolveExit({ kind: "exit", code });
-    });
-  });
-}
-
-function waitForExit(process) {
-  return new Promise((resolveExit) => {
-    process.once("exit", (code) => resolveExit(code));
-  });
-}
-
-async function stopProcess(process) {
-  if (!process) {
-    return;
-  }
-  if (process.exitCode !== null || process.signalCode !== null) {
-    return;
-  }
-  process.kill("SIGTERM");
-  const code = await Promise.race([
-    waitForExit(process),
-    delay(2_000).then(() => null),
-  ]);
-  if (code === null && process.exitCode === null) {
-    process.kill("SIGKILL");
-  }
-}
-
 function delay(ms) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 }
@@ -375,7 +365,9 @@ function installSignalHandlers() {
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.once(signal, () => {
       void (async () => {
-        await stopProcess(bombadilProcess);
+        await stopProcess(bombadilProcess, {
+          killProcessGroup: process.platform !== "win32",
+        });
         await stopProcess(vite);
         process.exit(signal === "SIGINT" ? 130 : 143);
       })();
