@@ -43,6 +43,10 @@
 //!   cargo test -p defra-agent-cli --test cli_fleet_delegation_live \
 //!     nineteen_process_release_acceptance_live -- --ignored --nocapture
 //! ```
+//!
+//! Known failure: the fresh-store control mesh can saturate DefraDB's pending
+//! DAG admission and fail to materialize an `AgentNetwork` applied scope. The
+//! release exception and removal criteria are tracked in #798.
 
 mod support;
 use support::*;
@@ -386,7 +390,7 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
 /// 4. prove the parent saw all children through list/wait/read and every result
 ///    replicated back, while continuously checking the admission bounds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "release live: set DEFRA_AGENT_RELEASE_ACCEPTANCE=1 and pass --ignored"]
+#[ignore = "known failing: fresh-store 19-node mesh storm tracked in #798"]
 async fn nineteen_process_release_acceptance_live() -> Result<()> {
     if std::env::var("DEFRA_AGENT_RELEASE_ACCEPTANCE").as_deref() != Ok("1") {
         tracing::info!(
