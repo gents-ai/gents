@@ -334,6 +334,10 @@ pub struct DefraSessionHook {
     /// Last persisted partial_output_seq per in-flight tool call; skips
     /// no-change flushes and is pruned to in-flight ids on every pass.
     live_output_flushed_seq: Arc<Mutex<HashMap<String, i64>>>,
+    /// True while a demand-driven flusher task is alive. The task exists
+    /// only while live buffers exist, so paused-clock tests without
+    /// background tools never see its timer.
+    live_output_flusher_running: Arc<std::sync::atomic::AtomicBool>,
 }
 
 enum PolicyDecision {
@@ -375,6 +379,7 @@ impl DefraSessionHook {
             background_executions: BackgroundExecutionRegistry::default(),
             background_live_outputs: LiveToolOutputRegistry::default(),
             live_output_flushed_seq: Arc::new(Mutex::new(HashMap::new())),
+            live_output_flusher_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -415,6 +420,7 @@ impl DefraSessionHook {
             background_executions: BackgroundExecutionRegistry::default(),
             background_live_outputs: LiveToolOutputRegistry::default(),
             live_output_flushed_seq: Arc::new(Mutex::new(HashMap::new())),
+            live_output_flusher_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -517,6 +523,38 @@ impl DefraSessionHook {
         self.state.lock().await.request_deadline_at = deadline_at;
     }
 
+    /// Start the demand-driven flusher if it is not already running. Called
+    /// whenever a live-output writer is handed out; the task exits on the
+    /// first pass that finds no live buffers.
+    pub(crate) fn ensure_live_output_flusher(&self) {
+        use std::sync::atomic::Ordering;
+        if self
+            .live_output_flusher_running
+            .swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        let hook = self.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(2));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                match hook.flush_live_output_tails().await {
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::debug!(error = %error, "live output flush failed");
+                    }
+                }
+                if hook.background_live_outputs.live_ids().await.is_empty() {
+                    break;
+                }
+            }
+            hook.live_output_flusher_running
+                .store(false, std::sync::atomic::Ordering::Release);
+        });
+    }
+
     /// Persist a capped rolling tail of live output for every in-flight tool
     /// call whose byte counter moved since the last flush. Additive telemetry
     /// on the AgentToolCall document — no lifecycle transition is touched.
@@ -525,17 +563,17 @@ impl DefraSessionHook {
     pub(crate) async fn flush_live_output_tails(&self) -> anyhow::Result<usize> {
         const TAIL_PERSIST_BYTES: usize = 4096;
 
-        let in_flight: Vec<String> = {
-            let map = self.in_flight_lifecycles.lock().await;
-            map.keys().cloned().collect()
-        };
+        // The live registry is keyed by the ids its producers write under
+        // (background tool-call ids) — NOT the in-flight lifecycle map, whose
+        // internal call ids never appear in the registry.
+        let live_ids = self.background_live_outputs.live_ids().await;
         {
             let mut flushed = self.live_output_flushed_seq.lock().await;
-            flushed.retain(|id, _| in_flight.contains(id));
+            flushed.retain(|id, _| live_ids.contains(id));
         }
 
         let mut count = 0usize;
-        for tool_call_id in in_flight {
+        for tool_call_id in live_ids {
             let Some(snapshot) = self.background_live_outputs.snapshot(&tool_call_id).await else {
                 continue;
             };
@@ -553,15 +591,103 @@ impl DefraSessionHook {
             let bytes = &snapshot.combined.bytes;
             let start = bytes.len().saturating_sub(TAIL_PERSIST_BYTES);
             let tail = String::from_utf8_lossy(&bytes[start..]).to_string();
+
+            // DefraDB re-validates the whole document on update, so existing
+            // DateTime columns must be resupplied or the write errors. Fetch
+            // the row's current values (and skip rows that are not running —
+            // the CAS filter below would no-op anyway).
+            let row_query = format!(
+                r#"{{
+                    AgentToolCall(
+                        filter: {{ tool_call_id: {{ _eq: "{id}" }} }},
+                        limit: 1
+                    ) {{
+                        lifecycle_state
+                        started_at
+                        deadline_at
+                        completed_at
+                        unclaimed_deadline_at
+                        cancel_cascade_intent_at
+                        stuck_since
+                    }}
+                }}"#,
+                id = crate::graphql::escape_graphql_string(&tool_call_id),
+            );
+            let row_response = self.node.execute(&row_query).await;
+            let Some(row_value) = row_response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("AgentToolCall"))
+                .and_then(|value| value.as_array())
+                .and_then(|rows| rows.first())
+                .cloned()
+            else {
+                continue;
+            };
+            if row_value.get("lifecycle_state").and_then(|v| v.as_str()) != Some("running") {
+                continue;
+            }
+            let datetime_row: crate::background_completion::AgentToolCallDateTimeRow =
+                serde_json::from_value(row_value).unwrap_or_default();
+            let mut datetime_fields = Vec::new();
+            crate::background_completion::push_datetime_field(
+                &mut datetime_fields,
+                &[],
+                "started_at",
+                datetime_row.started_at.as_deref(),
+            );
+            crate::background_completion::push_datetime_field(
+                &mut datetime_fields,
+                &[],
+                "deadline_at",
+                datetime_row.deadline_at.as_deref(),
+            );
+            crate::background_completion::push_datetime_field(
+                &mut datetime_fields,
+                &[],
+                "completed_at",
+                datetime_row.completed_at.as_deref(),
+            );
+            crate::background_completion::push_datetime_field(
+                &mut datetime_fields,
+                &[],
+                "unclaimed_deadline_at",
+                datetime_row.unclaimed_deadline_at.as_deref(),
+            );
+            crate::background_completion::push_datetime_field(
+                &mut datetime_fields,
+                &[],
+                "cancel_cascade_intent_at",
+                datetime_row.cancel_cascade_intent_at.as_deref(),
+            );
+            crate::background_completion::push_datetime_field(
+                &mut datetime_fields,
+                &[],
+                "stuck_since",
+                datetime_row.stuck_since.as_deref(),
+            );
+            let datetime_fragment = if datetime_fields.is_empty() {
+                String::new()
+            } else {
+                format!(", {}", datetime_fields.join(", "))
+            };
+            // CAS on running: a straggler tick must never stamp telemetry
+            // onto a terminal row.
             let mutation = format!(
                 r#"mutation {{
                     update_AgentToolCall(
-                        filter: {{ tool_call_id: {{ _eq: "{id}" }} }},
-                        input: {{ partial_output_tail: "{tail}", partial_output_seq: {seq} }}
+                        filter: {{
+                            _and: [
+                                {{ tool_call_id: {{ _eq: "{id}" }} }},
+                                {{ lifecycle_state: {{ _eq: "running" }} }}
+                            ]
+                        }},
+                        input: {{ partial_output_tail: "{tail}", partial_output_seq: {seq}{datetimes} }}
                     ) {{ _docID }}
                 }}"#,
                 id = crate::graphql::escape_graphql_string(&tool_call_id),
                 tail = crate::graphql::escape_graphql_string(&tail),
+                datetimes = datetime_fragment,
             );
             let response = self.node.execute(&mutation).await;
             if response.has_errors() {
