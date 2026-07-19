@@ -197,6 +197,25 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 hook.set_request_deadline_at(request_deadline).await;
                 let persistence_hook = hook.clone();
 
+                // Live output: persist rolling tails for in-flight tools every
+                // few seconds so observers (desktop/CLI) can follow a running
+                // command by polling documents. Aborts with the request scope.
+                let _live_output_flusher = AbortOnDrop({
+                    let hook = persistence_hook.clone();
+                    tokio::spawn(async move {
+                        let mut ticker =
+                            tokio::time::interval(std::time::Duration::from_secs(2));
+                        ticker
+                            .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                        loop {
+                            ticker.tick().await;
+                            if let Err(error) = hook.flush_live_output_tails().await {
+                                tracing::debug!(error = %error, "live output flush failed");
+                            }
+                        }
+                    })
+                });
+
                 // Owned completion loop (#400): drive our own multi-turn stream
                 // over the model + tool surface. Per-request sampling is resolved
                 // into the loop config from the behavior + request.
@@ -911,5 +930,14 @@ mod tests {
 
         node.shutdown().await;
         let _ = std::fs::remove_dir_all(data_path);
+    }
+}
+
+/// Abort a helper task however its owning scope exits.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }

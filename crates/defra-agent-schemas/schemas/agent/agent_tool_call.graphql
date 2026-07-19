@@ -37,4 +37,6 @@ type AgentToolCall @branchable {
     cancel_cascade_intent_at: DateTime
     cancel_pending_remote_ack: Boolean
     stuck_since: DateTime
+    partial_output_tail: String
+    partial_output_seq: Int
 }

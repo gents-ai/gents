@@ -331,6 +331,9 @@ pub struct DefraSessionHook {
     background_tool_registry: BackgroundToolRegistry,
     background_executions: BackgroundExecutionRegistry,
     background_live_outputs: LiveToolOutputRegistry,
+    /// Last persisted partial_output_seq per in-flight tool call; skips
+    /// no-change flushes and is pruned to in-flight ids on every pass.
+    live_output_flushed_seq: Arc<Mutex<HashMap<String, i64>>>,
 }
 
 enum PolicyDecision {
@@ -371,6 +374,7 @@ impl DefraSessionHook {
             background_tool_registry: BackgroundToolRegistry::default(),
             background_executions: BackgroundExecutionRegistry::default(),
             background_live_outputs: LiveToolOutputRegistry::default(),
+            live_output_flushed_seq: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -410,6 +414,7 @@ impl DefraSessionHook {
             background_tool_registry: BackgroundToolRegistry::default(),
             background_executions: BackgroundExecutionRegistry::default(),
             background_live_outputs: LiveToolOutputRegistry::default(),
+            live_output_flushed_seq: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -510,6 +515,68 @@ impl DefraSessionHook {
 
     pub async fn set_request_deadline_at(&self, deadline_at: Option<DateTime<Utc>>) {
         self.state.lock().await.request_deadline_at = deadline_at;
+    }
+
+    /// Persist a capped rolling tail of live output for every in-flight tool
+    /// call whose byte counter moved since the last flush. Additive telemetry
+    /// on the AgentToolCall document — no lifecycle transition is touched.
+    /// Per-call failures are logged and skipped so one bad row cannot stall
+    /// the sweep.
+    pub(crate) async fn flush_live_output_tails(&self) -> anyhow::Result<usize> {
+        const TAIL_PERSIST_BYTES: usize = 4096;
+
+        let in_flight: Vec<String> = {
+            let map = self.in_flight_lifecycles.lock().await;
+            map.keys().cloned().collect()
+        };
+        {
+            let mut flushed = self.live_output_flushed_seq.lock().await;
+            flushed.retain(|id, _| in_flight.contains(id));
+        }
+
+        let mut count = 0usize;
+        for tool_call_id in in_flight {
+            let Some(snapshot) = self.background_live_outputs.snapshot(&tool_call_id).await else {
+                continue;
+            };
+            let seq = snapshot.combined.total_bytes_seen as i64;
+            if seq == 0 {
+                continue;
+            }
+            {
+                let mut flushed = self.live_output_flushed_seq.lock().await;
+                if flushed.get(&tool_call_id).copied() == Some(seq) {
+                    continue;
+                }
+                flushed.insert(tool_call_id.clone(), seq);
+            }
+            let bytes = &snapshot.combined.bytes;
+            let start = bytes.len().saturating_sub(TAIL_PERSIST_BYTES);
+            let tail = String::from_utf8_lossy(&bytes[start..]).to_string();
+            let mutation = format!(
+                r#"mutation {{
+                    update_AgentToolCall(
+                        filter: {{ tool_call_id: {{ _eq: "{id}" }} }},
+                        input: {{ partial_output_tail: "{tail}", partial_output_seq: {seq} }}
+                    ) {{ _docID }}
+                }}"#,
+                id = crate::graphql::escape_graphql_string(&tool_call_id),
+                tail = crate::graphql::escape_graphql_string(&tail),
+            );
+            let response = self.node.execute(&mutation).await;
+            if response.has_errors() {
+                tracing::debug!(
+                    tool_call_id = %tool_call_id,
+                    errors = ?response.errors,
+                    "live output tail flush failed; will retry next tick"
+                );
+                let mut flushed = self.live_output_flushed_seq.lock().await;
+                flushed.remove(&tool_call_id);
+            } else {
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 
     pub(crate) async fn timeout_expired_tool_calls(&self) -> anyhow::Result<usize> {

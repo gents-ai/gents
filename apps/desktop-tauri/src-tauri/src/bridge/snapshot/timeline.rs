@@ -57,6 +57,8 @@ fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
         status_kind: tool_status_kind(tool.lifecycle_state.as_deref().or(tool.status.as_deref())),
         status: tool.status.clone(),
         args: parse_tool_detail_value(tool.args.as_deref()),
+        partial_output_tail: tool.partial_output_tail.clone(),
+        partial_output_seq: tool.partial_output_seq,
         result: parse_tool_detail_value(tool.result.as_deref()),
         denial: tool.denial.clone(),
         cancel_cause: tool.cancel_cause.clone(),
