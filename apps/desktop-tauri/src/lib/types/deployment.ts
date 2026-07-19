@@ -247,3 +247,17 @@ export type DesktopClientSnapshot = {
   bootstrap: BootstrapSummary;
   client?: RuntimeSnapshot | null;
 };
+
+/// Raw runtime tool-surface explanation: camelCase envelope from the bridge,
+/// snake_case `surface` payload straight from the runtime's serializer.
+export type ToolSurfaceExplanationView = {
+  behaviorId: string;
+  enabled: boolean;
+  toolSelectionId?: string | null;
+  toolSelectionSource: string;
+  toolPolicyVersion?: string | null;
+  toolPolicySemantics: string;
+  ceilingSource: string;
+  mcpServicesOnline: boolean;
+  surface: Record<string, unknown>;
+};

@@ -14,6 +14,7 @@ export type {
   EventTriggerView,
   InferenceBackendView,
   InferenceProfileView,
+  ToolSurfaceExplanationView,
   RuntimeSnapshot,
   RuntimeView,
   ScheduleView,

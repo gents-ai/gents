@@ -396,6 +396,30 @@ export function createDesktopUiHarness(
       notify("peers");
       return snapshot();
     },
+    async explainToolSurface(agentDid, behaviorId) {
+      if (agentDid !== AGENT_DID) {
+        throw new Error(
+          "tool-surface explanation for remote agents is not yet supported",
+        );
+      }
+      return {
+        behaviorId,
+        enabled: true,
+        toolSelectionId: "default-tools",
+        toolSelectionSource: "document",
+        toolPolicyVersion: null,
+        toolPolicySemantics: "legacy-permissive",
+        ceilingSource: "init_json",
+        mcpServicesOnline: true,
+        surface: {
+          tool_names: ["read_file", "list_files", "defra_exec"],
+          included: { read_file: ["ceiling allows readonly file tools"] },
+          excluded: { write_file: ["ceiling is readonly"] },
+          unavailable: {},
+          warnings: [],
+        },
+      };
+    },
     async fetchPeerStatus() {
       return {
         label: "Bombadil UI Agent",
