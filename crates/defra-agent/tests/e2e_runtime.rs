@@ -13,6 +13,8 @@ mod agent_behavior_migration;
 mod completion_retry_tape;
 #[path = "e2e_runtime/defradb_time_travel.rs"]
 mod defradb_time_travel;
+#[path = "e2e_runtime/defradb_v0612_store_upgrade.rs"]
+mod defradb_v0612_store_upgrade;
 #[path = "e2e_runtime/document_config_bootstrap.rs"]
 mod document_config_bootstrap;
 #[path = "e2e_runtime/event_source_subscription_factory_smoke.rs"]

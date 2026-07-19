@@ -37,7 +37,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/sourcenetwork/defra-agent"
@@ -57,22 +57,22 @@ codex-model-provider-info = { git = "https://github.com/openai/codex", rev = "c4
 codex-protocol = { git = "https://github.com/openai/codex", rev = "c4e53d103c102f8d5201247adbc60bbddd47c88d" }
 codex-tui = { git = "https://github.com/openai/codex", rev = "c4e53d103c102f8d5201247adbc60bbddd47c88d" }
 codex-utils-absolute-path = { git = "https://github.com/openai/codex", rev = "c4e53d103c102f8d5201247adbc60bbddd47c88d" }
-# defradb.rs v0.16.0: durable Redb writes, KMS-timeout merge retries, Go v1
+# defradb.rs v0.16.1: v0.15 store migration plus the v0.16.0 release fixes
 # default/action parity, ordered GraphQL mutation fragments, bulk ACP endpoints,
 # CID-indexed pending-DAG waiters, and the release conformance hardening batch.
-acp = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "4d7a2f42f2e7a675acdbae0d82a339e64b63dbc1" }
-crypto = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "4d7a2f42f2e7a675acdbae0d82a339e64b63dbc1" }
-defra-core = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "4d7a2f42f2e7a675acdbae0d82a339e64b63dbc1" }
+acp = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "1c38ab0c397437beb2664b212f85abb6ea6cd841" }
+crypto = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "1c38ab0c397437beb2664b212f85abb6ea6cd841" }
+defra-core = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "1c38ab0c397437beb2664b212f85abb6ea6cd841" }
 defra-agent-protocol = { path = "crates/defra-agent-protocol" }
 defra-agent-schemas = { path = "crates/defra-agent-schemas" }
 defra-agent-desktop-core = { path = "crates/defra-agent-desktop-core" }
 defra-agent-lean-contract = { path = "crates/defra-agent-lean-contract" }
-defra-node = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "4d7a2f42f2e7a675acdbae0d82a339e64b63dbc1" }
-defra-p2p-adapter = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "4d7a2f42f2e7a675acdbae0d82a339e64b63dbc1" }
+defra-node = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "1c38ab0c397437beb2664b212f85abb6ea6cd841" }
+defra-p2p-adapter = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "1c38ab0c397437beb2664b212f85abb6ea6cd841" }
 dirs = "5"
-events = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "4d7a2f42f2e7a675acdbae0d82a339e64b63dbc1" }
+events = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "1c38ab0c397437beb2664b212f85abb6ea6cd841" }
 hostname = "0.4"
-identity = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "4d7a2f42f2e7a675acdbae0d82a339e64b63dbc1" }
+identity = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "1c38ab0c397437beb2664b212f85abb6ea6cd841" }
 # Must stay version-aligned with the iroh used by the defradb.rs `p2p` crate;
 # the CLI uses it to inspect the default relay set at startup (#588).
 iroh = "1"
@@ -80,8 +80,8 @@ minijinja = { version = "2", default-features = false, features = ["builtins", "
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
-p2p = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "4d7a2f42f2e7a675acdbae0d82a339e64b63dbc1" }
-query = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "4d7a2f42f2e7a675acdbae0d82a339e64b63dbc1" }
+p2p = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "1c38ab0c397437beb2664b212f85abb6ea6cd841" }
+query = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "1c38ab0c397437beb2664b212f85abb6ea6cd841" }
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rig-core = "0.35.0"
