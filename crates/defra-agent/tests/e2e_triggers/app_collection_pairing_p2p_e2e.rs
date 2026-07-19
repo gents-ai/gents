@@ -127,7 +127,12 @@ async fn seed_materializable_peer(
             ) {{ _docID }}
         }}"#
     );
-    let resp = node.execute(&network_mutation).await;
+    let resp = execute_graphql_with_conflict_retry(
+        node,
+        &network_mutation,
+        "seed materializable AgentNetwork",
+    )
+    .await;
     assert!(
         !resp.has_errors(),
         "upsert AgentNetwork failed: {:?}",
@@ -167,7 +172,12 @@ async fn seed_materializable_peer(
             ) {{ _docID }}
         }}"#
     );
-    let resp = node.execute(&mem_mutation).await;
+    let resp = execute_graphql_with_conflict_retry(
+        node,
+        &mem_mutation,
+        "seed materializable NetworkMembership",
+    )
+    .await;
     assert!(
         !resp.has_errors(),
         "upsert NetworkMembership failed: {:?}",
@@ -255,7 +265,7 @@ async fn create_task(node: &EmbeddedNode, task_id: &str, behavior_id: &str, prom
             }}) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
+    let response = execute_graphql_with_conflict_retry(node, &mutation, "create e2e Task").await;
     assert!(
         !response.has_errors(),
         "create Task failed: {:?}",
@@ -290,7 +300,8 @@ async fn create_event_trigger_with_filter(
             }}) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
+    let response =
+        execute_graphql_with_conflict_retry(node, &mutation, "create e2e EventTrigger").await;
     assert!(
         !response.has_errors(),
         "create EventTrigger failed: {:?}",
@@ -351,7 +362,9 @@ async fn write_app_collection_pairing(
             }}) {{ _docID }}
         }}"#
     );
-    let resp = node.execute(&mutation).await;
+    let resp =
+        execute_graphql_with_conflict_retry(node, &mutation, "create e2e DataPlanePairingDesired")
+            .await;
     assert!(
         !resp.has_errors(),
         "create DataPlanePairingDesired: {:?}",
@@ -567,7 +580,8 @@ async fn write_change_proposed(node: &EmbeddedNode, external_id: &str, kind: &st
             }}) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
+    let response =
+        execute_graphql_with_conflict_retry(node, &mutation, "create e2e ChangeProposed").await;
     assert!(
         !response.has_errors(),
         "add_ChangeProposed failed: {:?}",
@@ -998,7 +1012,12 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
             }}) {{ _docID }}
         }}"#
     );
-    let resp = db_a.node.execute(&mutation).await;
+    let resp = execute_graphql_with_conflict_retry(
+        db_a.node.as_ref(),
+        &mutation,
+        "create blank e2e DataPlanePairingDesired",
+    )
+    .await;
     assert!(
         !resp.has_errors(),
         "create blank DataPlanePairingDesired: {:?}",
