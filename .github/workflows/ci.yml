@@ -60,6 +60,9 @@ jobs:
         run: |
           curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          cargo_dir="$(dirname "$(rustup which cargo)")"
+          echo "${cargo_dir}" >> "$GITHUB_PATH"
+          "${cargo_dir}/cargo" --version
           "$HOME/.elan/bin/elan" --version
 
       - name: Install protobuf compiler
@@ -170,6 +173,9 @@ jobs:
         run: |
           curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          cargo_dir="$(dirname "$(rustup which cargo)")"
+          echo "${cargo_dir}" >> "$GITHUB_PATH"
+          "${cargo_dir}/cargo" --version
           "$HOME/.elan/bin/elan" --version
 
       - name: Install protobuf compiler
