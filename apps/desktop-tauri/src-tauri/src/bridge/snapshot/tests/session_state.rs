@@ -993,6 +993,8 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
             timestamp: Some("2026-05-20T10:30:00Z".to_string()),
         }],
         tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {
+            partial_output_tail: None,
+            partial_output_seq: None,
             tool_call_key: "tool-1".to_string(),
             session_id: Some("session-1".to_string()),
             request_id: None,
@@ -1158,6 +1160,8 @@ fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_pol
             timestamp: Some("2026-05-20T10:30:00Z".to_string()),
         }],
         tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {
+            partial_output_tail: None,
+            partial_output_seq: None,
             tool_call_key: "tool-cascade-1".to_string(),
             session_id: Some("session-1".to_string()),
             request_id: None,
@@ -1371,6 +1375,8 @@ fn transcript_contract_tool_calls(
     let result_ids = transcript_contract_result_ids(case);
     (0..case.post_tool_call_count)
         .map(|index| defra_agent_protocol::row::AgentToolCallRow {
+            partial_output_tail: None,
+            partial_output_seq: None,
             tool_call_key: format!("tool-{}-{index}", case.name),
             session_id: Some("session-1".to_string()),
             request_id: Some("req-1".to_string()),
