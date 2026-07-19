@@ -348,6 +348,15 @@ pub(in crate::agent) async fn run_agent(
         engine.run(sources, trigger_engine_cancel).await;
     });
 
+    // DefraDB's event bus is live-only: updates published before a subscriber
+    // exists cannot be replayed. Establish the control subscription before
+    // the readiness task can publish `Ready`, so callers that wait for Ready
+    // cannot race the watcher startup and lose their first config mutation.
+    let control_subscription = agent
+        .document_runtime_context()
+        .is_some()
+        .then(|| agent.node.subscribe(&[defra_node::EventName::Update]));
+
     let ready_cancel = cancel.child_token();
     let ready_startup_barrier = startup_barrier.clone();
     let ready_observer = agent.process_state_observer.clone();
@@ -591,6 +600,8 @@ pub(in crate::agent) async fn run_agent(
 
     if agent.document_runtime_context().is_some() {
         let control_node = agent.node.clone();
+        let control_subscription =
+            control_subscription.expect("document runtime context has control subscription");
         let control_agent_did = agent.agent_did().to_string();
         let control_context = agent
             .document_runtime_context()
@@ -603,6 +614,7 @@ pub(in crate::agent) async fn run_agent(
             BackgroundTaskResult::Control(
                 super::control_watcher::run_control_watcher(
                     control_node,
+                    control_subscription,
                     control_agent_did,
                     control_context,
                     control_tx,
