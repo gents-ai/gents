@@ -550,7 +550,7 @@ async fn list_subagent_tree_response(
     };
     let Some(graphql) = core.graphql_for_agent(&agent_did).await else {
         return build_local_subagent_tree(
-            core.node(),
+            core.node_arc(),
             root_request_id,
             request.include_terminal.unwrap_or(false),
             effective_subagent_tree_max_depth(request.max_depth),
