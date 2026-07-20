@@ -40,6 +40,7 @@ import type {
   ToolServiceTestRequest,
   ToolServiceTestResult,
   ToolSurfaceExplanationView,
+  NetworkStatusView,
 } from "./types";
 import type {
   DesktopOperationsSnapshot,
@@ -124,6 +125,7 @@ export type DesktopApiAdapter = {
     agentDid: string,
     behaviorId: string,
   ) => Promise<ToolSurfaceExplanationView>;
+  fetchNetworkStatus: () => Promise<NetworkStatusView>;
   fetchSessionSnapshot: (
     sessionId: string,
     agentDid?: string | null,
@@ -238,6 +240,9 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
       agentDid,
       behaviorId,
     });
+  },
+  fetchNetworkStatus() {
+    return invokeDesktop<NetworkStatusView>("desktop_network_status");
   },
   fetchSessionSnapshot(sessionId, agentDid, requestId) {
     return invokeDesktop<DesktopSessionSnapshot | null>("desktop_session_snapshot", {
@@ -433,6 +438,10 @@ export async function repairP2P() {
 
 export async function explainToolSurface(agentDid: string, behaviorId: string) {
   return desktopApiAdapter().explainToolSurface(agentDid, behaviorId);
+}
+
+export async function fetchNetworkStatus() {
+  return desktopApiAdapter().fetchNetworkStatus();
 }
 
 export async function fetchSessionSnapshot(

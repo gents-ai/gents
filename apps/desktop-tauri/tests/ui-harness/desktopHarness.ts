@@ -112,6 +112,30 @@ export function createDesktopUiHarness(
         content: greeting,
         timestamp: "2026-06-03T14:05:00Z",
       },
+      ...(activeTurn
+        ? [
+            {
+              kind: "toolGroup" as const,
+              itemKey: "live-tools",
+              messageSequence: 2,
+              tools: [
+                {
+                  itemKey: "live-exec",
+                  toolName: "defra_exec",
+                  statusKind: "running",
+                  args: {
+                    rawText: JSON.stringify({ command: "cargo test -p defra-agent" }),
+                    fields: [],
+                  },
+                  result: null,
+                  partialOutputTail:
+                    "Compiling defra-agent v0.7.0\ntest lifecycle::claims ... ok\ntest lifecycle::persistence ... ok",
+                  partialOutputSeq: 4096,
+                },
+              ],
+            },
+          ]
+        : []),
       ...(scenario === "coding"
         ? [
             {
@@ -418,6 +442,31 @@ export function createDesktopUiHarness(
           unavailable: {},
           warnings: [],
         },
+      };
+    },
+    async fetchNetworkStatus() {
+      return {
+        localPeerId: "12D3KooWBombadilLocalPeer",
+        listenAddresses: ["/ip4/127.0.0.1/tcp/9292/p2p/12D3KooWBombadilLocalPeer"],
+        connectedPeers: [deployment.peerId],
+        replicators: [
+          {
+            peerId: deployment.peerId,
+            address: deployment.addr,
+            collections: ["AgentRequest", "AgentResponse", "AgentMessage"],
+            status: 0,
+            lastStatusChange: TWO_HOURS_AGO,
+          },
+        ],
+        savedPeers: [
+          {
+            peerId: deployment.peerId,
+            label: deployment.label,
+            addr: deployment.addr,
+            agentDid: deployment.agentDid,
+            source: deployment.source,
+          },
+        ],
       };
     },
     async fetchPeerStatus() {

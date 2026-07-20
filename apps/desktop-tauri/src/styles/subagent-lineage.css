@@ -1,4 +1,11 @@
 @layer components {
+  .subagent-lineage-partial {
+    color: var(--color-warning-soft);
+    font-size: var(--text-xs);
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
   .subagent-lineage {
     display: grid;
     grid-template-rows: auto auto minmax(0, 1fr);

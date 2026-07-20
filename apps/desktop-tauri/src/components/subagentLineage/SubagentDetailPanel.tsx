@@ -13,6 +13,7 @@ export function SubagentDetailPanel({ selected }: { selected: Selected }) {
     return (
       <dl className="subagent-lineage-detail-grid">
         <DetailRow label="request id" value={node.requestId} />
+        <DetailRow label="resolved via" value={node.resolvedVia ?? "local node"} />
         <DetailRow label="session" value={node.sessionId} />
         <DetailRow label="deployment" value={node.agentDid} mono />
         <DetailRow label="behavior" value={node.behaviorId} />

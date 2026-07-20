@@ -27,4 +27,7 @@ echo "Using SCCACHE_DIR=${SCCACHE_DIR}"
 echo "Using SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE:-sccache default}"
 
 sccache --version
-sccache --start-server
+if ! sccache --start-server; then
+  echo "::notice::sccache server was already starting or running; verifying connectivity."
+  sccache --show-stats >/dev/null
+fi

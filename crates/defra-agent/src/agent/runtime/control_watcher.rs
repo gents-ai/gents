@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use defra_node::EventName;
 use tokio::sync::{mpsc, watch};
 
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
@@ -20,6 +19,7 @@ const CONTROL_WATCHER_IDLE_SLEEP: Duration = Duration::from_secs(60 * 60 * 24 * 
 
 pub(super) async fn run_control_watcher(
     node: Arc<defra_node::EmbeddedNode>,
+    mut subscription: events::Subscription,
     agent_did: String,
     resolve_context: DocumentResolveContext,
     proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
@@ -29,7 +29,6 @@ pub(super) async fn run_control_watcher(
 ) -> Result<()> {
     let mut document_view =
         document_view::load_document_runtime_view(node.as_ref(), &agent_did).await?;
-    let mut subscription = node.subscribe(&[EventName::Update]);
     let sleep = tokio::time::sleep(CONTROL_WATCHER_IDLE_SLEEP);
     tokio::pin!(sleep);
     let mut dirty = false;
