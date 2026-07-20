@@ -7,6 +7,7 @@ use rig::completion::{CompletionError, Usage};
 
 use super::controller::InferenceCallRecord;
 use crate::graphql::escape_graphql_string;
+use crate::retry::execute_graphql_with_conflict_retry;
 
 pub(super) fn spawn_persistence<F>(future: F)
 where
@@ -45,7 +46,12 @@ pub(super) async fn persist_call_queued(
 ) -> Result<String> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "queued", None, Some(&now), None, None, None);
-    let resp = node.execute(&mutation).await;
+    let resp = execute_graphql_with_conflict_retry(
+        node.as_ref(),
+        &mutation,
+        "persist queued InferenceCall",
+    )
+    .await;
     if resp.has_errors() {
         anyhow::bail!("persisting queued InferenceCall failed: {:?}", resp.errors);
     }
@@ -58,7 +64,12 @@ pub(super) async fn persist_call_started(
 ) -> Result<String, CompletionError> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "running", None, Some(&now), Some(&now), None, None);
-    let resp = node.execute(&mutation).await;
+    let resp = execute_graphql_with_conflict_retry(
+        node.as_ref(),
+        &mutation,
+        "persist running InferenceCall",
+    )
+    .await;
     if resp.has_errors() {
         return Err(CompletionError::ProviderError(format!(
             "persisting running InferenceCall failed: {:?}",
@@ -74,7 +85,12 @@ pub(super) async fn persist_existing_call_running(
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = upsert_call_running_mutation(call, &now);
-    let resp = node.execute(&mutation).await;
+    let resp = execute_graphql_with_conflict_retry(
+        node.as_ref(),
+        &mutation,
+        "persist existing running InferenceCall",
+    )
+    .await;
     if resp.has_errors() {
         anyhow::bail!("persisting running InferenceCall failed: {:?}", resp.errors);
     }
@@ -98,7 +114,12 @@ pub(super) async fn persist_terminal_call(
         Some(&now),
         usage,
     );
-    let resp = node.execute(&mutation).await;
+    let resp = execute_graphql_with_conflict_retry(
+        node.as_ref(),
+        &mutation,
+        "persist terminal InferenceCall",
+    )
+    .await;
     if resp.has_errors() {
         anyhow::bail!(
             "persisting terminal InferenceCall failed: {:?}",
@@ -117,7 +138,12 @@ pub(super) async fn persist_existing_call_terminal(
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = upsert_call_terminal_mutation(call, call_state, failure_reason, &now, usage);
-    let resp = node.execute(&mutation).await;
+    let resp = execute_graphql_with_conflict_retry(
+        node.as_ref(),
+        &mutation,
+        "persist existing terminal InferenceCall",
+    )
+    .await;
     if resp.has_errors() {
         anyhow::bail!(
             "persisting terminal InferenceCall failed: {:?}",

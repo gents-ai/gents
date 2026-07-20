@@ -61,7 +61,26 @@ async fn backend_restart_cluster_recovers() {
     }
 
     for (doc_id, request_id, marker) in &request_doc_ids {
-        wait_for_request_lifecycle_state(db.node.as_ref(), doc_id, "completed").await;
+        let terminal_state = wait_for_request_terminal_state(db.node.as_ref(), doc_id).await;
+        if terminal_state != "completed" {
+            let snapshot = fetch_request_snapshot(db.node.as_ref(), doc_id).await;
+            let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
+            let all_calls = fetch_call_diagnostics(db.node.as_ref(), request_id).await;
+            let response = fetch_response_diagnostic(db.node.as_ref(), request_id).await;
+            let request_counts = request_doc_ids
+                .iter()
+                .map(|(_, request_id, marker)| {
+                    (request_id.as_str(), backend.observed_requests(marker))
+                })
+                .collect::<Vec<_>>();
+            panic!(
+                "request {request_id} unexpectedly reached {terminal_state}; \
+                 failure_reason={:?}; inference_calls={calls:?}; \
+                 all_calls={all_calls:?}; response={response:?}; \
+                 backend_request_counts={request_counts:?}",
+                snapshot.failure_reason
+            );
+        }
 
         let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
         assert_retry_recovered(&calls, 1);
@@ -560,6 +579,31 @@ async fn fetch_response_error_message(
         .map(ToOwned::to_owned)
 }
 
+async fn fetch_response_diagnostic(node: &EmbeddedNode, request_id: &str) -> Option<Value> {
+    let request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentResponse(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
+                status
+                error_message
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "fetch response diagnostic failed: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentResponse"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .cloned()
+}
+
 async fn fetch_inference_calls(
     node: &EmbeddedNode,
     request_id: &str,
@@ -605,6 +649,43 @@ async fn fetch_inference_calls(
         .into_iter()
         .map(|value| serde_json::from_value(value).expect("decode TimelineInferenceCallRow"))
         .collect()
+}
+
+async fn fetch_call_diagnostics(node: &EmbeddedNode, request_id: &str) -> Vec<Value> {
+    let request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            InferenceCall(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                order: {{ call_seq: ASC }}
+            ) {{
+                call_id
+                call_seq
+                attempt
+                call_kind
+                call_state
+                failure_reason
+                queued_at
+                started_at
+                ended_at
+                backend_id
+                controller_generation
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "fetch call diagnostics failed: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("InferenceCall"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
 }
 
 async fn build_timeline(node: &EmbeddedNode, request_id: &str) -> RunTimeline {
