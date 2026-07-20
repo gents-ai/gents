@@ -89,6 +89,7 @@ end ToolOperation
 
 /-- Failure classes at the tool boundary. -/
 inductive FailureClass where
+  | approvalDenied
   | argumentInvalid
   | serviceUnavailable
   | transport
@@ -100,6 +101,7 @@ inductive FailureClass where
 namespace FailureClass
 
 def toDefraDB : FailureClass → String
+  | .approvalDenied => "approvalDenied"
   | .argumentInvalid => "argumentInvalid"
   | .serviceUnavailable => "serviceUnavailable"
   | .transport => "transport"
@@ -108,7 +110,8 @@ def toDefraDB : FailureClass → String
   | .external => "external"
 
 def all : List FailureClass :=
-  [ .argumentInvalid
+  [ .approvalDenied
+  , .argumentInvalid
   , .serviceUnavailable
   , .transport
   , .toolReturnedError
@@ -121,6 +124,7 @@ end FailureClass
 /-- Pre-dispatch decision. -/
 inductive PreflightDecision where
   | dispatch
+  | hold
   | block (failure : FailureClass)
   deriving DecidableEq, Repr
 
@@ -128,10 +132,12 @@ namespace PreflightDecision
 
 def toContract : PreflightDecision → String
   | .dispatch => "dispatch"
+  | .hold => "hold"
   | .block _ => "block"
 
 def failureClass : PreflightDecision → Option FailureClass
   | .dispatch => none
+  | .hold => none
   | .block failure => some failure
 
 end PreflightDecision
@@ -210,6 +216,7 @@ def preflightCaseName
   let suffix :=
     match decision with
     | .dispatch => "dispatch"
+    | .hold => "hold"
     | .block failure => "blocks_" ++ failure.toDefraDB
   "preflight_" ++ health.toDefraDB ++ "_" ++ schema.toDefraDB ++ "_" ++ suffix
 

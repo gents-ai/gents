@@ -55,6 +55,42 @@ inductive Transition : ToolCallContext → ToolCallContext → Prop where
       (h_post  : post = { pre with state := .cancelled })
       : Transition pre post
 
+  | holdForApproval {pre post : ToolCallContext}
+      (h_state : pre.state = .pending)
+      (h_post  : post = { pre with state := .awaitingApproval })
+      : Transition pre post
+
+  | recordApproval {pre post : ToolCallContext} (decision : ApprovalDecision)
+      (h_state : pre.state = .awaitingApproval)
+      (h_none  : pre.approval = none)
+      (h_post  : post = { pre with approval := some decision })
+      : Transition pre post
+
+  | approve {pre post : ToolCallContext}
+      (h_state    : pre.state = .awaitingApproval)
+      (h_evidence : pre.approval = some .approved)
+      (h_post     : post = { pre with state := .running
+                                    , startedAt := some pre.currentTime })
+      : Transition pre post
+
+  | deny {pre post : ToolCallContext}
+      (h_state    : pre.state = .awaitingApproval)
+      (h_evidence : pre.approval = some .denied)
+      (h_post     : post = { pre with state := .failed
+                                    , failureClass := some .approvalDenied })
+      : Transition pre post
+
+  | cancelWhileHeld {pre post : ToolCallContext} (cause : CancelCause)
+      (h_state : pre.state = .awaitingApproval)
+      (h_post  : post = { pre with state := .cancelled })
+      : Transition pre post
+
+  | timeoutWhileHeld {pre post : ToolCallContext}
+      (h_state    : pre.state = .awaitingApproval)
+      (h_deadline : pre.deadlineExceeded)
+      (h_post     : post = { pre with state := .timedOut })
+      : Transition pre post
+
   | background {pre post : ToolCallContext}
       (h_state : pre.state = .running)
       (h_mode  : pre.awaitMode = .foreground)

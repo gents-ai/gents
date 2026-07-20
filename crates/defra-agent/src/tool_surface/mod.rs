@@ -46,6 +46,7 @@ pub struct ToolSurface {
     subagent_tools: SubagentToolConfig,
     orchestration_tools: OrchestrationToolConfig,
     background_tools: BackgroundToolConfig,
+    approval_required_tools: Vec<String>,
     custom_tools: Vec<CustomToolFactory>,
     pub(super) enable_memory: bool,
     pub(super) enable_context_budget_tool: bool,
@@ -111,6 +112,10 @@ impl ToolSurface {
 
     pub(crate) fn background_tools(&self) -> &BackgroundToolConfig {
         &self.background_tools
+    }
+
+    pub(crate) fn approval_required_tools(&self) -> &[String] {
+        &self.approval_required_tools
     }
 
     #[allow(dead_code)]

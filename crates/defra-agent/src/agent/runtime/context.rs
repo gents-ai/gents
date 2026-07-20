@@ -209,6 +209,7 @@ impl RuntimeContext {
                         preamble,
                         loop_tools.clone(),
                         background_tool_registry,
+                        tool_surface.approval_required_tools().to_vec(),
                         client,
                     )
                     .await
@@ -234,6 +235,7 @@ impl RuntimeContext {
                         preamble,
                         loop_tools.clone(),
                         background_tool_registry,
+                        tool_surface.approval_required_tools().to_vec(),
                         client,
                     )
                     .await
@@ -258,6 +260,7 @@ impl RuntimeContext {
                     preamble,
                     loop_tools.clone(),
                     background_tool_registry,
+                    tool_surface.approval_required_tools().to_vec(),
                     client,
                 )
                 .await
@@ -297,6 +300,7 @@ impl RuntimeContext {
                     preamble,
                     loop_tools.clone(),
                     background_tool_registry,
+                    tool_surface.approval_required_tools().to_vec(),
                     client,
                 )
                 .await
@@ -314,6 +318,7 @@ impl RuntimeContext {
         preamble: String,
         loop_tools: Arc<Vec<Box<dyn ToolDyn>>>,
         background_tool_registry: BackgroundToolRegistry,
+        approval_required_tools: Vec<String>,
         client: C,
     ) -> Result<()>
     where
@@ -338,7 +343,8 @@ impl RuntimeContext {
             self.background_execution_registry.clone(),
             self.startup_barrier.clone(),
             self.startup_demotions.clone(),
-        );
+        )
+        .with_approval_required_tools(approval_required_tools);
         daemon.run(request_rx, shutdown).await
     }
 }

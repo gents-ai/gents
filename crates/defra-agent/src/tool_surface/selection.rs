@@ -109,6 +109,9 @@ pub struct ToolSelection {
     pub enable_meta_tools: bool,
     pub allowed_mcp_service_ids: Vec<String>,
     pub backgroundable_tool_names: Vec<String>,
+    /// Tool names that hold in `awaitingApproval` until an operator writes an
+    /// AgentToolApproval decision (or the call deadline expires).
+    pub approval_required_tools: Vec<String>,
     /// Enable hook-managed workflow orchestration tools.
     pub orchestration_enabled: bool,
     /// Enable the feature-gated, per-agent persistent key-value memory tool.
@@ -145,6 +148,7 @@ impl Default for ToolSelection {
             enable_meta_tools: true,
             allowed_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            approval_required_tools: Vec::new(),
             orchestration_enabled: false,
             enable_memory: false,
             enable_session_history_tool: false,
@@ -197,6 +201,10 @@ impl ToolSelection {
                 .unwrap_or_default(),
             backgroundable_tool_names: selection
                 .backgroundable_tool_names
+                .clone()
+                .unwrap_or_default(),
+            approval_required_tools: selection
+                .approval_required_tools
                 .clone()
                 .unwrap_or_default(),
             orchestration_enabled: selection.orchestration_enabled.unwrap_or(false),

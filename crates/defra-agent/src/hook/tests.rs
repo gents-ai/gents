@@ -29,6 +29,7 @@ fn session_state_for_test() -> SessionState {
         current_request_id: None,
         current_requester_did: None,
         request_deadline_at: None,
+        approval_required_tools: Vec::new(),
         agent_name: "agent".to_string(),
         sequence: 0,
         transcript_turn: TranscriptTurnState::Idle,
@@ -1932,6 +1933,246 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
                 if tool_result.id == "call-2"
                     && matches!(first_content(&tool_result.content), ToolResultContent::Text(Text { text }) if text == "second result"))
     ));
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+async fn write_approval_document(
+    node: &defra_node::EmbeddedNode,
+    tool_call_id: &str,
+    agent_did: &str,
+    decision: &str,
+    reason: &str,
+) {
+    let escaped_tool_call_id = crate::graphql::escape_graphql_string(tool_call_id);
+    let escaped_agent_did = crate::graphql::escape_graphql_string(agent_did);
+    let escaped_decision = crate::graphql::escape_graphql_string(decision);
+    let escaped_reason = crate::graphql::escape_graphql_string(reason);
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentToolApproval(input: {{
+                approval_id: "approval-{escaped_tool_call_id}",
+                tool_call_id: "{escaped_tool_call_id}",
+                request_id: "req-hold",
+                agent_did: "{escaped_agent_did}",
+                decision: "{escaped_decision}",
+                approver_did: "did:key:operator",
+                reason: "{escaped_reason}",
+                created_at: "{created_at}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create AgentToolApproval failed: {:?}",
+        resp.errors
+    );
+}
+
+async fn wait_for_lifecycle_state(
+    node: &defra_node::EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+    expected: &str,
+) {
+    for _ in 0..200 {
+        let session = crate::graphql::escape_graphql_string(session_id);
+        let call = crate::graphql::escape_graphql_string(tool_call_id);
+        let resp = node
+            .execute(&format!(
+                r#"{{
+                    AgentToolCall(
+                        filter: {{
+                            session_id: {{ _eq: "{session}" }},
+                            tool_call_id: {{ _eq: "{call}" }}
+                        }},
+                        limit: 1
+                    ) {{ lifecycle_state }}
+                }}"#
+            ))
+            .await;
+        assert!(
+            !resp.has_errors(),
+            "poll tool call failed: {:?}",
+            resp.errors
+        );
+        let state = resp
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentToolCall"))
+            .and_then(|rows| rows.as_array())
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("lifecycle_state"))
+            .and_then(|value| value.as_str())
+            .map(str::to_string);
+        if state.as_deref() == Some(expected) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("tool call {tool_call_id} never reached lifecycle_state {expected}");
+}
+
+async fn hook_with_held_tool(
+    data_path: &std::path::Path,
+    deadline: chrono::DateTime<chrono::Utc>,
+) -> (Arc<defra_node::EmbeddedNode>, DefraSessionHook, String) {
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    let user_prompt = user_text_message("Run a guarded tool");
+    assert!(matches!(
+        hook.on_completion_call(&user_prompt, &[]).await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    hook.set_active_request_id(Some("req-hold".to_string()))
+        .await;
+    hook.set_request_deadline_at(Some(deadline)).await;
+    hook.set_approval_required_tools(vec!["guarded".to_string()])
+        .await;
+    (node, hook, session_id)
+}
+
+#[tokio::test]
+async fn held_tool_call_dispatches_after_operator_approval() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-approve-{}", uuid::Uuid::new_v4()));
+    let deadline = chrono::Utc::now() + chrono::Duration::seconds(60);
+    let (node, hook, session_id) = hook_with_held_tool(&data_path, deadline).await;
+
+    let approver_node = node.clone();
+    let approver_session = session_id.clone();
+    let approver = tokio::spawn(async move {
+        wait_for_lifecycle_state(
+            &approver_node,
+            &approver_session,
+            "internal-approve",
+            "awaitingApproval",
+        )
+        .await;
+        write_approval_document(
+            &approver_node,
+            "internal-approve",
+            "did:defra-agent:general",
+            "approved",
+            "",
+        )
+        .await;
+    });
+
+    let action = hook
+        .on_tool_call("guarded", None, "internal-approve", "{}")
+        .await;
+    approver.await.unwrap();
+    assert!(
+        matches!(action, ToolCallHookAction::Continue),
+        "approved held call must dispatch, got {action:?}"
+    );
+
+    let row = fetch_tool_call_row(&node, &session_id, "internal-approve").await;
+    assert_eq!(
+        row.get("lifecycle_state").and_then(|value| value.as_str()),
+        Some("running")
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn held_tool_call_denied_skips_with_operator_reason() {
+    let data_path = std::env::temp_dir().join(format!("agent-hook-deny-{}", uuid::Uuid::new_v4()));
+    let deadline = chrono::Utc::now() + chrono::Duration::seconds(60);
+    let (node, hook, session_id) = hook_with_held_tool(&data_path, deadline).await;
+
+    let approver_node = node.clone();
+    let approver_session = session_id.clone();
+    let approver = tokio::spawn(async move {
+        wait_for_lifecycle_state(
+            &approver_node,
+            &approver_session,
+            "internal-deny",
+            "awaitingApproval",
+        )
+        .await;
+        write_approval_document(
+            &approver_node,
+            "internal-deny",
+            "did:defra-agent:general",
+            "denied",
+            "not on my watch",
+        )
+        .await;
+    });
+
+    let action = hook
+        .on_tool_call("guarded", None, "internal-deny", "{}")
+        .await;
+    approver.await.unwrap();
+    match &action {
+        ToolCallHookAction::Skip { reason } => {
+            assert!(
+                reason.contains("denied by operator") && reason.contains("not on my watch"),
+                "unexpected denial reason: {reason}"
+            );
+        }
+        other => panic!("denied held call must skip, got {other:?}"),
+    }
+
+    let row = fetch_tool_call_row(&node, &session_id, "internal-deny").await;
+    assert_eq!(
+        row.get("lifecycle_state").and_then(|value| value.as_str()),
+        Some("failed")
+    );
+    assert_eq!(
+        row.get("tool_failure_class")
+            .and_then(|value| value.as_str()),
+        Some("approvalDenied")
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn held_tool_call_times_out_when_unanswered() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-hold-timeout-{}", uuid::Uuid::new_v4()));
+    // Deadline already exceeded: the first watcher pass drives timeoutWhileHeld.
+    let deadline = chrono::Utc::now() - chrono::Duration::seconds(1);
+    let (node, hook, session_id) = hook_with_held_tool(&data_path, deadline).await;
+
+    let action = hook
+        .on_tool_call("guarded", None, "internal-hold-timeout", "{}")
+        .await;
+    match &action {
+        ToolCallHookAction::Skip { reason } => {
+            assert!(
+                reason.contains("approval deadline exceeded"),
+                "unexpected timeout reason: {reason}"
+            );
+        }
+        other => panic!("unanswered held call must time out, got {other:?}"),
+    }
+
+    let row = fetch_tool_call_row(&node, &session_id, "internal-hold-timeout").await;
+    assert_eq!(
+        row.get("lifecycle_state").and_then(|value| value.as_str()),
+        Some("timedOut")
+    );
 
     let _ = std::fs::remove_dir_all(&data_path);
 }

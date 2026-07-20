@@ -25,6 +25,12 @@ theorem terminal_irreversible
   | timeout h_state _ _             => simp_all [isTerminal]
   | cancelBeforeDispatch _ h_state _ => simp_all [isTerminal]
   | cancelDuringRun _ h_state _      => simp_all [isTerminal]
+  | holdForApproval h_state _        => simp_all [isTerminal]
+  | recordApproval _ h_state _ _     => simp_all [isTerminal]
+  | approve h_state _ _              => simp_all [isTerminal]
+  | deny h_state _ _                 => simp_all [isTerminal]
+  | cancelWhileHeld _ h_state _      => simp_all [isTerminal]
+  | timeoutWhileHeld h_state _ _     => simp_all [isTerminal]
   | background h_state _ _          => simp_all [isTerminal]
   | foreground h_state _ _          => simp_all [isTerminal]
   | detach h_live _ _               => simp_all [isTerminal]
@@ -56,6 +62,12 @@ theorem timedOut_requires_deadline_exceeded
   | complete _ _ _ h_post'          => simp_all
   | fail _ _ h_post'                => simp_all
   | timeout _ h_deadline _          => exact h_deadline
+  | holdForApproval _ h_post'        => simp_all
+  | recordApproval _ _ _ h_post'     => simp_all
+  | approve _ _ h_post'              => simp_all
+  | deny _ _ h_post'                 => simp_all
+  | cancelWhileHeld _ _ h_post'      => simp_all
+  | timeoutWhileHeld _ h_deadline _  => exact h_deadline
   | cancelBeforeDispatch _ _ h_post' => simp_all
   | cancelDuringRun _ _ h_post'      => simp_all
   | background _ _ h_post'          => simp_all
@@ -77,6 +89,12 @@ theorem completed_implies_committed
   | dispatch _ h_post'              => simp_all
   | spawnFailed _ _ h_post'         => simp_all
   | complete _ h_persist _ h_post'  => simp_all
+  | holdForApproval _ h_post'        => simp_all
+  | recordApproval _ _ _ h_post'     => simp_all
+  | approve _ _ h_post'              => simp_all
+  | deny _ _ h_post'                 => simp_all
+  | cancelWhileHeld _ _ h_post'      => simp_all
+  | timeoutWhileHeld _ _ h_post'     => simp_all
   | fail _ _ h_post'                => simp_all
   | timeout _ _ h_post'             => simp_all
   | cancelBeforeDispatch _ _ h_post' => simp_all
@@ -99,6 +117,11 @@ theorem live_call_reaches_terminal
   -- .pending  → cancelBeforeDispatch → .cancelled (terminal)
   -- .running  → timeAdvance(deadline+1); timeout → .timedOut (terminal)
   match h_state : c.state with
+  | .awaitingApproval =>
+      let post : ToolCallContext := { c with state := .cancelled }
+      have h_trans : Transition c post :=
+        Transition.cancelWhileHeld .userCancelled (h_state := h_state) (h_post := rfl)
+      exact ⟨post, Trace.step h_trans Trace.refl, Or.inr (Or.inr (Or.inr rfl))⟩
   | .pending =>
       let post : ToolCallContext := { c with state := .cancelled }
       have h_trans : Transition c post :=
@@ -152,6 +175,12 @@ theorem transition_preserves_requestId
   | timeout _ _ h_post             => rw [h_post]
   | cancelBeforeDispatch _ _ h_post => rw [h_post]
   | cancelDuringRun _ _ h_post      => rw [h_post]
+  | holdForApproval _ h_post         => rw [h_post]
+  | recordApproval _ _ _ h_post      => rw [h_post]
+  | approve _ _ h_post               => rw [h_post]
+  | deny _ _ h_post                  => rw [h_post]
+  | cancelWhileHeld _ _ h_post       => rw [h_post]
+  | timeoutWhileHeld _ _ h_post      => rw [h_post]
   | background _ _ h_post          => rw [h_post]
   | foreground _ _ h_post          => rw [h_post]
   | detach _ _ h_post              => rw [h_post]
@@ -174,6 +203,12 @@ theorem transition_preserves_callId
   | timeout _ _ h_post             => rw [h_post]
   | cancelBeforeDispatch _ _ h_post => rw [h_post]
   | cancelDuringRun _ _ h_post      => rw [h_post]
+  | holdForApproval _ h_post         => rw [h_post]
+  | recordApproval _ _ _ h_post      => rw [h_post]
+  | approve _ _ h_post               => rw [h_post]
+  | deny _ _ h_post                  => rw [h_post]
+  | cancelWhileHeld _ _ h_post       => rw [h_post]
+  | timeoutWhileHeld _ _ h_post      => rw [h_post]
   | background _ _ h_post          => rw [h_post]
   | foreground _ _ h_post          => rw [h_post]
   | detach _ _ h_post              => rw [h_post]
@@ -195,35 +230,80 @@ theorem dispatch_sets_startedAt
   | timeout h_state _ h_post'       => exfalso; simp_all
   | cancelBeforeDispatch _ _ h_post' => exfalso; rw [h_post'] at h_post; simp at h_post
   | cancelDuringRun _ h_state h_post' => exfalso; simp_all
+  | holdForApproval h_state h_post'  => exfalso; simp_all
+  | recordApproval _ h_state _ h_post' => exfalso; simp_all
+  | approve h_state _ h_post'        => exfalso; simp_all
+  | deny h_state _ h_post'           => exfalso; simp_all
+  | cancelWhileHeld _ h_state h_post' => exfalso; simp_all
+  | timeoutWhileHeld h_state _ h_post' => exfalso; simp_all
   | background h_state _ h_post'    => exfalso; simp_all
   | foreground h_state _ h_post'    => exfalso; simp_all
   | detach h_live _ h_post'         => exfalso; rw [h_post'] at h_post; simp_all
   | timeAdvance _ _ h_post'         => exfalso; rw [h_post'] at h_post; simp_all
   | persistenceStep _ _ _ h_post'   => exfalso; rw [h_post'] at h_post; simp_all
 
-/-- Helper: a transition that does not change `state` from `.pending` to `.running`
-    preserves `startedAt`. Captures "only dispatch writes startedAt." -/
+/-- Helper: a transition that does not enter `.running` (from `.pending` via
+    dispatch or from `.awaitingApproval` via approve) preserves `startedAt`.
+    Captures "only dispatch and approve write startedAt." -/
 theorem startedAt_preserved_outside_dispatch
     {pre post : ToolCallContext}
     (h_step  : Transition pre post)
-    (h_not   : ¬ (pre.state = .pending ∧ post.state = .running)) :
+    (h_not   : ¬ ((pre.state = .pending ∨ pre.state = .awaitingApproval)
+                    ∧ post.state = .running)) :
     post.startedAt = pre.startedAt := by
   cases h_step with
   | dispatch h_state h_post' =>
       exfalso
       apply h_not
-      exact ⟨h_state, by rw [h_post']⟩
+      exact ⟨Or.inl h_state, by rw [h_post']⟩
+  | approve h_state _ h_post' =>
+      exfalso
+      apply h_not
+      exact ⟨Or.inr h_state, by rw [h_post']⟩
   | spawnFailed _ _ h_post'         => rw [h_post']
   | complete _ _ _ h_post'          => rw [h_post']
   | fail _ _ h_post'                => rw [h_post']
   | timeout _ _ h_post'             => rw [h_post']
   | cancelBeforeDispatch _ _ h_post' => rw [h_post']
   | cancelDuringRun _ _ h_post'      => rw [h_post']
+  | holdForApproval _ h_post'        => rw [h_post']
+  | recordApproval _ _ _ h_post'     => rw [h_post']
+  | deny _ _ h_post'                 => rw [h_post']
+  | cancelWhileHeld _ _ h_post'      => rw [h_post']
+  | timeoutWhileHeld _ _ h_post'     => rw [h_post']
   | background _ _ h_post'          => rw [h_post']
   | foreground _ _ h_post'          => rw [h_post']
   | detach _ _ h_post'              => rw [h_post']
   | timeAdvance _ _ h_post'         => rw [h_post']
   | persistenceStep _ _ _ h_post'   => rw [h_post']
+
+/-- Approval soundness: the only transition that takes a held call to
+    `.running` is `approve`, and it requires recorded `approved` evidence. -/
+theorem held_runs_only_with_approval
+    {pre post : ToolCallContext}
+    (h_step : Transition pre post)
+    (h_pre  : pre.state = .awaitingApproval)
+    (h_post : post.state = .running) :
+    pre.approval = some .approved := by
+  cases h_step with
+  | dispatch h_state _              => simp_all
+  | spawnFailed _ h_state _         => simp_all
+  | complete h_state _ _ _          => simp_all
+  | fail _ h_state _                => simp_all
+  | timeout h_state _ _             => simp_all
+  | cancelBeforeDispatch _ h_state _ => simp_all
+  | cancelDuringRun _ h_state _      => simp_all
+  | holdForApproval _ h_post'        => simp_all
+  | recordApproval _ _ _ h_post'     => simp_all
+  | approve _ h_evidence _           => exact h_evidence
+  | deny _ _ h_post'                 => simp_all
+  | cancelWhileHeld _ _ h_post'      => simp_all
+  | timeoutWhileHeld _ _ h_post'     => simp_all
+  | background h_state _ _          => simp_all
+  | foreground h_state _ _          => simp_all
+  | detach _ _ h_post'              => simp_all
+  | timeAdvance _ _ h_post'         => simp_all
+  | persistenceStep _ _ _ h_post'   => simp_all
 
 end ToolCallContext
 end ToolExecution

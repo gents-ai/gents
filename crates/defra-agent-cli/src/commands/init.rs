@@ -599,6 +599,7 @@ fn tool_selection_for_package(
         enable_meta_tools: Some(profile.enable_meta_tools),
         allowed_mcp_service_ids: Some(Vec::new()),
         backgroundable_tool_names: Some(default_backgroundable_tool_names(tool_package)),
+        approval_required_tools: None,
         subagent_targets: Some(Vec::new()),
         subagent_spawn_enabled: Some(false),
         orchestration_enabled: Some(false),

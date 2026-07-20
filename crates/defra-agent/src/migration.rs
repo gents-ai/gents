@@ -80,6 +80,10 @@ const ADD_TOOL_SELECTION_BACKGROUND_TOOLS_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"backgroundable_tool_names","Kind":"[String]"}}
 ]"#;
 
+const ADD_TOOL_SELECTION_APPROVAL_REQUIRED_PATCH: &str = r#"[
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"approval_required_tools","Kind":"[String]"}}
+]"#;
+
 #[allow(dead_code)]
 const ADD_AGENT_TOOL_CALL_R5_PATCH: &str = r#"[
     {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"unclaimed_deadline_at","Kind":"DateTime"}},
@@ -865,10 +869,29 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
                 v10 = %v10.version_id,
                 "ToolSelection patched with context budget flag"
             );
-            // Intentionally advance the cursor even though v10 is currently the
-            // final hand-written patch. The next patch must inspect v10 rather
-            // than the stale v9 schema (see abc30235).
             active_version = v10;
+        }
+
+        if collection_has_field(&active_version, "approval_required_tools") {
+            tracing::debug!("ToolSelection already has approval_required_tools; skipping patch");
+        } else {
+            let pre_version_id = active_version.version_id.clone();
+            let v11 = node
+                .patch_collection("ToolSelection", ADD_TOOL_SELECTION_APPROVAL_REQUIRED_PATCH)
+                .await
+                .context("patch_collection ToolSelection approval_required_tools")?;
+            node.set_active_collection_version(&v11.version_id)
+                .await
+                .context("set_active_collection_version ToolSelection approval_required_tools")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v11 = %v11.version_id,
+                "ToolSelection patched with approval_required_tools"
+            );
+            // Intentionally advance the cursor even though v11 is currently the
+            // final hand-written patch. The next patch must inspect v11 rather
+            // than the stale v10 schema (see abc30235).
+            active_version = v11;
         }
     } else {
         tracing::debug!("ToolSelection collection absent; subagent patch no-op");
@@ -1426,6 +1449,28 @@ pub async fn ensure_peer_endpoint_migrations(node: Arc<EmbeddedNode>) -> Result<
         Ok(()) => Ok(()),
         Err(error) if error.to_string().contains("already exists") => Ok(()),
         Err(error) => Err(error).context("add PeerEndpoint schema"),
+    }
+}
+
+/// Idempotent migration ensuring the `AgentToolApproval` collection exists.
+/// No-op on a fresh database (the collection comes from `schemas::ALL`); adds
+/// the schema on an upgraded database.
+pub async fn ensure_agent_tool_approval_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    if node
+        .get_collection("AgentToolApproval")
+        .context("get AgentToolApproval collection")?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    match node
+        .add_schema(defra_agent_protocol::schemas::AGENT_TOOL_APPROVAL)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
+        Err(error) => Err(error).context("add AgentToolApproval schema"),
     }
 }
 
@@ -2799,6 +2844,9 @@ pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()
     ensure_tool_call_migrations(node.clone())
         .await
         .context("ensure tool-call migrations")?;
+    ensure_agent_tool_approval_migrations(node.clone())
+        .await
+        .context("ensure AgentToolApproval migrations")?;
     ensure_subagent_extensions_migrations(node.clone())
         .await
         .context("ensure subagent extension migrations")?;
@@ -2894,6 +2942,16 @@ mod patch_kind_tests {
             assert_eq!(
                 kind, NILLABLE_STRING_ARRAY_KIND,
                 "backgroundable_tool_names must use [String], got {kind}"
+            );
+        }
+        for (name, kind) in field_kinds(ADD_TOOL_SELECTION_APPROVAL_REQUIRED_PATCH) {
+            assert_eq!(
+                name, "approval_required_tools",
+                "unexpected field in approval-required patch"
+            );
+            assert_eq!(
+                kind, NILLABLE_STRING_ARRAY_KIND,
+                "approval_required_tools must use [String], got {kind}"
             );
         }
         for (name, kind) in field_kinds(ADD_PEER_PAIRING_DESIRED_PROFILES_PATCH) {

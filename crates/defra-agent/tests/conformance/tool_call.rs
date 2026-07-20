@@ -11,6 +11,20 @@ fn tool_call_transitions_match_lean_contract() {
     assert_lean_transition_is_legal("ToolCall", "running", "timedOut");
     assert_lean_transition_is_legal("ToolCall", "running", "cancelled");
 
+    // Approval gate: hold, evidence write (state-preserving), approve, deny,
+    // cancel-while-held, timeout-while-held.
+    assert_lean_transition_is_legal("ToolCall", "pending", "awaitingApproval");
+    assert_lean_transition_is_legal("ToolCall", "awaitingApproval", "awaitingApproval");
+    assert_lean_transition_is_legal("ToolCall", "awaitingApproval", "running");
+    assert_lean_transition_is_legal("ToolCall", "awaitingApproval", "failed");
+    assert_lean_transition_is_legal("ToolCall", "awaitingApproval", "cancelled");
+    assert_lean_transition_is_legal("ToolCall", "awaitingApproval", "timedOut");
+    // A held call is only reachable from pending and never completes directly.
+    assert_lean_transition_is_illegal("ToolCall", "running", "awaitingApproval");
+    assert_lean_transition_is_illegal("ToolCall", "completed", "awaitingApproval");
+    assert_lean_transition_is_illegal("ToolCall", "awaitingApproval", "completed");
+    assert_lean_transition_is_illegal("ToolCall", "awaitingApproval", "pending");
+
     // T1 — terminal irreversibility
     assert_lean_transition_is_illegal("ToolCall", "completed", "running");
     assert_lean_transition_is_illegal("ToolCall", "failed", "running");
@@ -130,6 +144,7 @@ pub(super) fn lean_tool_call_cancel_actions_name_cancel_cause() {
     for cause in causes {
         let before = format!("cancelBeforeDispatch_{cause}");
         let during = format!("cancelDuringRun_{cause}");
+        let held = format!("cancelWhileHeld_{cause}");
         assert!(
             machine.actions.iter().any(|action| action == &before),
             "ToolCall actions must include cause-qualified action {before:?}"
@@ -138,15 +153,38 @@ pub(super) fn lean_tool_call_cancel_actions_name_cancel_cause() {
             machine.actions.iter().any(|action| action == &during),
             "ToolCall actions must include cause-qualified action {during:?}"
         );
+        assert!(
+            machine.actions.iter().any(|action| action == &held),
+            "ToolCall actions must include cause-qualified action {held:?}"
+        );
     }
 
     assert!(
-        !machine
-            .actions
-            .iter()
-            .any(|action| action == "cancelBeforeDispatch" || action == "cancelDuringRun"),
+        !machine.actions.iter().any(|action| {
+            action == "cancelBeforeDispatch"
+                || action == "cancelDuringRun"
+                || action == "cancelWhileHeld"
+        }),
         "ToolCall cancel actions must name the CancelCause vocabulary string"
     );
+}
+
+#[test]
+fn lean_emits_approval_actions_in_tool_call_machine() {
+    let machine = lean_state_machine_contract("ToolCall");
+    for name in [
+        "holdForApproval",
+        "recordApproval_approved",
+        "recordApproval_denied",
+        "approve",
+        "deny",
+        "timeoutWhileHeld",
+    ] {
+        assert!(
+            machine.actions.iter().any(|action| action == name),
+            "ToolCall actions must include approval action {name:?}"
+        );
+    }
 }
 
 #[test]
