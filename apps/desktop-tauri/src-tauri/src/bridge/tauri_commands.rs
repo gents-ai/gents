@@ -4,6 +4,7 @@ pub(crate) mod lifecycle;
 pub(crate) mod operations;
 pub(crate) mod peers;
 pub(crate) mod tasks;
+pub(crate) mod tools_explain;
 
 #[cfg(test)]
 #[path = "tauri_commands/operations_tests.rs"]
