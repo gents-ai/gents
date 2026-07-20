@@ -15,6 +15,7 @@ import { McpHealthPanel } from "./mcpHealth";
 import { OperationsRail, OperationsRailProvider } from "./operations";
 import type { OperationsRailTabDescriptor } from "./operations";
 import { BackgroundedToolsPanel } from "./backgroundedTools";
+import { WorkspaceTreePanel } from "./workspace/WorkspaceTreePanel";
 import { RequestTracePanel } from "./trace/RequestTracePanel";
 import { useOperationsSnapshot } from "./backgroundedTools/useOperationsSnapshot";
 import { SubagentLineageView } from "./subagentLineage";
@@ -254,6 +255,11 @@ export function ActiveChatWorkspace({
             rootRequestId={rootRequestId}
           />
         ),
+      },
+      {
+        id: "workspace",
+        label: "Files",
+        render: () => <WorkspaceTreePanel />,
       },
       {
         id: "backend-health",

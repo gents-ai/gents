@@ -420,6 +420,36 @@ export function createDesktopUiHarness(
       notify("peers");
       return snapshot();
     },
+    async listWorkspace(subpath) {
+      const path = (subpath ?? "").replace(/^\/+|\/+$/g, "");
+      if (path.includes("..")) {
+        throw new Error("path escapes the workspace root");
+      }
+      const tree: Record<
+        string,
+        { name: string; kind: "dir" | "file"; size?: number }[]
+      > = {
+        "": [
+          { name: "src", kind: "dir" },
+          { name: "Cargo.toml", kind: "file", size: 812 },
+          { name: "README.md", kind: "file", size: 2048 },
+        ],
+        src: [
+          { name: "lib.rs", kind: "file", size: 4096 },
+          { name: "main.rs", kind: "file", size: 1024 },
+        ],
+      };
+      const entries = tree[path];
+      if (!entries) {
+        throw new Error(`cannot list ${path}: no such directory`);
+      }
+      return {
+        root: "/tmp/agent-tool-root",
+        subpath: path,
+        entries,
+        truncated: false,
+      };
+    },
     async forkSession(request) {
       const source = sessions.get(request.sessionId);
       if (!source) {

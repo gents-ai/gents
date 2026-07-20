@@ -219,3 +219,16 @@ export type McpServiceProbeResult = {
 export type DesktopProbeMcpServiceRequest = {
   serviceId: string;
 };
+
+export type WorkspaceEntryView = {
+  name: string;
+  kind: "dir" | "file";
+  size?: number | null;
+};
+
+export type WorkspaceListingView = {
+  root: string;
+  subpath: string;
+  entries: WorkspaceEntryView[];
+  truncated: boolean;
+};

@@ -39,6 +39,7 @@ import type {
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
+  WorkspaceListingView,
   SessionForkResult,
   RequestResendResult,
   RequestTimelineView,
@@ -124,6 +125,7 @@ export type DesktopApiAdapter = {
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
   fetchPeerStatus: (serverAddress: string) => Promise<unknown>;
   repairP2P: () => Promise<DesktopClientSnapshot>;
+  listWorkspace: (subpath?: string | null) => Promise<WorkspaceListingView>;
   fetchRequestTimeline: (
     agentDid: string,
     requestId: string,
@@ -248,6 +250,11 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   repairP2P() {
     return invokeDesktop<DesktopClientSnapshot>("desktop_p2p_repair");
+  },
+  listWorkspace(subpath) {
+    return invokeDesktop<WorkspaceListingView>("desktop_workspace_list", {
+      subpath: subpath ?? null,
+    });
   },
   fetchRequestTimeline(agentDid, requestId) {
     return invokeDesktop<RequestTimelineView>("desktop_request_timeline", {
@@ -465,6 +472,10 @@ export async function fetchPeerStatus(serverAddress: string) {
 
 export async function repairP2P() {
   return desktopApiAdapter().repairP2P();
+}
+
+export async function listWorkspace(subpath?: string | null) {
+  return desktopApiAdapter().listWorkspace(subpath);
 }
 
 export async function fetchRequestTimeline(agentDid: string, requestId: string) {
