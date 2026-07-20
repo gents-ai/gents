@@ -1,0 +1,716 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		027095066152A2A0DFBC88F4 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = BFD6C2A5CF924D61621434DF /* assets */; };
+		1E64AD915A4F7696C6BF32C1 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BBD1F79C40B0CBE965AD3217 /* CoreGraphics.framework */; };
+		27D0033E67956A30E6667A8B /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D046836AB214ABD92DDF33A9 /* Metal.framework */; };
+		5191F2F0CABF5E7957D8C1CE /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5D70843AB86DA4E2A5FE57D4 /* UIKit.framework */; };
+		77CF8E01B92ADAD5CE98D869 /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = E7F5E2EE5804D71C05447DD7 /* libapp.a */; };
+		866089C125E6E9C9C09EE3FE /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8F638140E8910C4F73002937 /* Assets.xcassets */; };
+		8DDD882E30F6D85FDCF81FE9 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 211201CAAE1B9ECF72949C0F /* main.mm */; };
+		8F7A70C1C645A07E6C2A1E66 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 710C36912F09C267A2C47336 /* MetalKit.framework */; };
+		A19A058080BC5FCB8960017A /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2D14DA4E44FBB91720598788 /* WebKit.framework */; };
+		A4A82AC31B718B3A133B23BD /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = A39591B673C3BF192DA9B1C5 /* LaunchScreen.storyboard */; };
+		CC4419A72074E169F5484549 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 584915DD074DDCA68029D7BC /* SystemConfiguration.framework */; };
+		E1EEED367BF424C7C0C436BD /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 096E444F93FB2312F2D88A70 /* Security.framework */; };
+		EF677288C7C2DD99CADB4A2E /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B9FA17A0165EAAAADABF904 /* QuartzCore.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		01C24C1CFEAC86A13B6C3426 /* cause_derivation.rs */ = {isa = PBXFileReference; path = cause_derivation.rs; sourceTree = "<group>"; };
+		038D9FAB4932604AA6B4B097 /* runtime_tasks.rs */ = {isa = PBXFileReference; path = runtime_tasks.rs; sourceTree = "<group>"; };
+		0466ED1CDA27E3C189F747D1 /* defra-agent-desktop-tauri_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "defra-agent-desktop-tauri_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		096E444F93FB2312F2D88A70 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		0FEEA2B7DFF955EB0AB8EDF6 /* config.rs */ = {isa = PBXFileReference; path = config.rs; sourceTree = "<group>"; };
+		12DE0D9D029935636E0383D7 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+		141B2008A23F679397BB6D31 /* operations.rs */ = {isa = PBXFileReference; path = operations.rs; sourceTree = "<group>"; };
+		1CDA4092197E425103271726 /* cause_derivation.rs */ = {isa = PBXFileReference; path = cause_derivation.rs; sourceTree = "<group>"; };
+		1F500A004B6DAAD1611B84D7 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
+		211201CAAE1B9ECF72949C0F /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
+		23B3FF83306BE1FA70FB7F58 /* views.rs */ = {isa = PBXFileReference; path = views.rs; sourceTree = "<group>"; };
+		24D321627480780EF35AE35D /* operations.rs */ = {isa = PBXFileReference; path = operations.rs; sourceTree = "<group>"; };
+		262F5618E62EE318B5327C2E /* requests.rs */ = {isa = PBXFileReference; path = requests.rs; sourceTree = "<group>"; };
+		2837976A25E9E292BF9026D4 /* operations_signature.rs */ = {isa = PBXFileReference; path = operations_signature.rs; sourceTree = "<group>"; };
+		2AEACBDCA4A3D96300E21C92 /* subagent_tree.rs */ = {isa = PBXFileReference; path = subagent_tree.rs; sourceTree = "<group>"; };
+		2D14DA4E44FBB91720598788 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+		391D334EE4A712A981505AC9 /* backend.rs */ = {isa = PBXFileReference; path = backend.rs; sourceTree = "<group>"; };
+		3CDA32F0F93C6CF41D478A66 /* operations_tests.rs */ = {isa = PBXFileReference; path = operations_tests.rs; sourceTree = "<group>"; };
+		3D64F860B40FB865CB8469F4 /* operations_cascade.rs */ = {isa = PBXFileReference; path = operations_cascade.rs; sourceTree = "<group>"; };
+		4B1862D125277E729C7C7202 /* http.rs */ = {isa = PBXFileReference; path = http.rs; sourceTree = "<group>"; };
+		4B9FA17A0165EAAAADABF904 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		4E6CA25B9F2B631BE8A626A5 /* commands.rs */ = {isa = PBXFileReference; path = commands.rs; sourceTree = "<group>"; };
+		4F09747AD95F3F0729159CEA /* types.rs */ = {isa = PBXFileReference; path = types.rs; sourceTree = "<group>"; };
+		50D60B9B0FCA758D2A692AC0 /* session_stale_rows.rs */ = {isa = PBXFileReference; path = session_stale_rows.rs; sourceTree = "<group>"; };
+		584915DD074DDCA68029D7BC /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
+		5D70843AB86DA4E2A5FE57D4 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		6100EF11D40E1F33C079CA93 /* tauri_commands.rs */ = {isa = PBXFileReference; path = tauri_commands.rs; sourceTree = "<group>"; };
+		657E4CDBE9C30CD8C485ACEB /* bridge_runner.rs */ = {isa = PBXFileReference; path = bridge_runner.rs; sourceTree = "<group>"; };
+		668C9C3DFA3EA6BC0577DE00 /* session_state.rs */ = {isa = PBXFileReference; path = session_state.rs; sourceTree = "<group>"; };
+		69A3ADD4E75B1A52FE04F2B0 /* chat.rs */ = {isa = PBXFileReference; path = chat.rs; sourceTree = "<group>"; };
+		7094758267FE2E0122E637CA /* session.rs */ = {isa = PBXFileReference; path = session.rs; sourceTree = "<group>"; };
+		710C36912F09C267A2C47336 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		78408B66D3B27D1E20A5B993 /* routes.rs */ = {isa = PBXFileReference; path = routes.rs; sourceTree = "<group>"; };
+		7928B6A060774F71AAB60071 /* task.rs */ = {isa = PBXFileReference; path = task.rs; sourceTree = "<group>"; };
+		79C9D52BD9814B3DB48A9530 /* peer.rs */ = {isa = PBXFileReference; path = peer.rs; sourceTree = "<group>"; };
+		83E5275A6A0CA1BE131DCCAB /* replication.rs */ = {isa = PBXFileReference; path = replication.rs; sourceTree = "<group>"; };
+		84E941B06C55C5D2823DDB95 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
+		8617EA6B42BE8C78FFC713A5 /* chat.rs */ = {isa = PBXFileReference; path = chat.rs; sourceTree = "<group>"; };
+		885B18125B858E13572CCD3D /* operations_snapshot.rs */ = {isa = PBXFileReference; path = operations_snapshot.rs; sourceTree = "<group>"; };
+		89D5B334245B6C2544A7F276 /* logging.rs */ = {isa = PBXFileReference; path = logging.rs; sourceTree = "<group>"; };
+		8AE867E04AB6071A24811B11 /* tests.rs */ = {isa = PBXFileReference; path = tests.rs; sourceTree = "<group>"; };
+		8BC00DD8686A549E7C20E793 /* cascade.rs */ = {isa = PBXFileReference; path = cascade.rs; sourceTree = "<group>"; };
+		8E67B29199A9903D410305D5 /* util.rs */ = {isa = PBXFileReference; path = util.rs; sourceTree = "<group>"; };
+		8F638140E8910C4F73002937 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		90958E03E4E4782DC3068EDF /* subagent_lineage.rs */ = {isa = PBXFileReference; path = subagent_lineage.rs; sourceTree = "<group>"; };
+		92FC4381C02BE2FC6AB3637C /* session_basic.rs */ = {isa = PBXFileReference; path = session_basic.rs; sourceTree = "<group>"; };
+		95FA38E94FDB377E49C4C7C9 /* tool_service.rs */ = {isa = PBXFileReference; path = tool_service.rs; sourceTree = "<group>"; };
+		9FA39BBDE83EE49819AD3184 /* deployment.rs */ = {isa = PBXFileReference; path = deployment.rs; sourceTree = "<group>"; };
+		A05497AA94B5606DEB93C2BC /* runtime.rs */ = {isa = PBXFileReference; path = runtime.rs; sourceTree = "<group>"; };
+		A0D1EF3FC99F351F2EA1F6FF /* agent.rs */ = {isa = PBXFileReference; path = agent.rs; sourceTree = "<group>"; };
+		A39591B673C3BF192DA9B1C5 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		A7CB709D01337BE501D66F5E /* snapshot.rs */ = {isa = PBXFileReference; path = snapshot.rs; sourceTree = "<group>"; };
+		A821D7639F5DE8D9BCE6E2BA /* lifecycle.rs */ = {isa = PBXFileReference; path = lifecycle.rs; sourceTree = "<group>"; };
+		A9578655A462BDBEAB820310 /* session_timeline.rs */ = {isa = PBXFileReference; path = session_timeline.rs; sourceTree = "<group>"; };
+		AAFD7A058AE962BB9E058CD0 /* session.rs */ = {isa = PBXFileReference; path = session.rs; sourceTree = "<group>"; };
+		AB7724DABCD5F5FD04D400CE /* workspace.rs */ = {isa = PBXFileReference; path = workspace.rs; sourceTree = "<group>"; };
+		B1106FD5A05EDC7E9834310B /* tests.rs */ = {isa = PBXFileReference; path = tests.rs; sourceTree = "<group>"; };
+		B61A54F4556367084B606339 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
+		B96271FDCDBCB458E01EDA3E /* util.rs */ = {isa = PBXFileReference; path = util.rs; sourceTree = "<group>"; };
+		BB1401162B71B4F6CF20A95C /* tasks.rs */ = {isa = PBXFileReference; path = tasks.rs; sourceTree = "<group>"; };
+		BBD1F79C40B0CBE965AD3217 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		BC2D4669CE4BA2CBB5B19E2E /* protocol.rs */ = {isa = PBXFileReference; path = protocol.rs; sourceTree = "<group>"; };
+		BD821229BD2592A6CEA9B43A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		BDDDFEE01C39280851C11C14 /* timeline.rs */ = {isa = PBXFileReference; path = timeline.rs; sourceTree = "<group>"; };
+		BFD6C2A5CF924D61621434DF /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
+		C132FC9058841444C389883D /* bootstrap.rs */ = {isa = PBXFileReference; path = bootstrap.rs; sourceTree = "<group>"; };
+		C35074A6F00532C6C723D096 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
+		C7510455FFE1EA138404BBF0 /* mcp_health.rs */ = {isa = PBXFileReference; path = mcp_health.rs; sourceTree = "<group>"; };
+		C7BE95D8C71EBD463D0EED1E /* peers.rs */ = {isa = PBXFileReference; path = peers.rs; sourceTree = "<group>"; };
+		C9A74EFF2384E5FB7893F2AD /* defra-agent-desktop-tauri_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "defra-agent-desktop-tauri_iOS.entitlements"; sourceTree = "<group>"; };
+		CBFB109A8C598FDD1D653E46 /* support.rs */ = {isa = PBXFileReference; path = support.rs; sourceTree = "<group>"; };
+		D046836AB214ABD92DDF33A9 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		D2E3E46E40ABDD272EF8ADA8 /* mcp_health.rs */ = {isa = PBXFileReference; path = mcp_health.rs; sourceTree = "<group>"; };
+		D2E51A6003ABEAD41D6E29B9 /* operations_interrupt.rs */ = {isa = PBXFileReference; path = operations_interrupt.rs; sourceTree = "<group>"; };
+		D5729F57871E2855B17C1E9D /* config.rs */ = {isa = PBXFileReference; path = config.rs; sourceTree = "<group>"; };
+		DDE4E918A41348B700942708 /* diagnostics.rs */ = {isa = PBXFileReference; path = diagnostics.rs; sourceTree = "<group>"; };
+		E7F5E2EE5804D71C05447DD7 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		EBCAC6A37FC0605E4714CDD5 /* state.rs */ = {isa = PBXFileReference; path = state.rs; sourceTree = "<group>"; };
+		ED281B2E9E627CE8A922BA75 /* live_fixture.rs */ = {isa = PBXFileReference; path = live_fixture.rs; sourceTree = "<group>"; };
+		ED47DF98DDDDB467D4F8505D /* runtime.rs */ = {isa = PBXFileReference; path = runtime.rs; sourceTree = "<group>"; };
+		F966706FB1C76D63142F5867 /* events.rs */ = {isa = PBXFileReference; path = events.rs; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		11DBE6600A7DBA9DA43D5F40 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				77CF8E01B92ADAD5CE98D869 /* libapp.a in Frameworks */,
+				1E64AD915A4F7696C6BF32C1 /* CoreGraphics.framework in Frameworks */,
+				27D0033E67956A30E6667A8B /* Metal.framework in Frameworks */,
+				8F7A70C1C645A07E6C2A1E66 /* MetalKit.framework in Frameworks */,
+				EF677288C7C2DD99CADB4A2E /* QuartzCore.framework in Frameworks */,
+				E1EEED367BF424C7C0C436BD /* Security.framework in Frameworks */,
+				CC4419A72074E169F5484549 /* SystemConfiguration.framework in Frameworks */,
+				5191F2F0CABF5E7957D8C1CE /* UIKit.framework in Frameworks */,
+				A19A058080BC5FCB8960017A /* WebKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		0345F1C7DF2F0EA8B4AAF6CF /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				0F23811AE954CBDC014D621D /* defra-agent-desktop-tauri */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		0F23811AE954CBDC014D621D /* defra-agent-desktop-tauri */ = {
+			isa = PBXGroup;
+			children = (
+				211201CAAE1B9ECF72949C0F /* main.mm */,
+				1261817374610E840DB7BE5E /* bindings */,
+			);
+			path = "defra-agent-desktop-tauri";
+			sourceTree = "<group>";
+		};
+		1261817374610E840DB7BE5E /* bindings */ = {
+			isa = PBXGroup;
+			children = (
+				84E941B06C55C5D2823DDB95 /* bindings.h */,
+			);
+			path = bindings;
+			sourceTree = "<group>";
+		};
+		1385F01C760A599E7DF9527A /* operations_snapshot */ = {
+			isa = PBXGroup;
+			children = (
+				B1106FD5A05EDC7E9834310B /* tests.rs */,
+			);
+			path = operations_snapshot;
+			sourceTree = "<group>";
+		};
+		19E3766EFF67801B86B4D3BB /* types */ = {
+			isa = PBXGroup;
+			children = (
+				262F5618E62EE318B5327C2E /* requests.rs */,
+				8E67B29199A9903D410305D5 /* util.rs */,
+				23B3FF83306BE1FA70FB7F58 /* views.rs */,
+				98A45FD6B5C651294A7D3C94 /* views */,
+			);
+			path = types;
+			sourceTree = "<group>";
+		};
+		3EE24089739288B6B0E7C089 /* src */ = {
+			isa = PBXGroup;
+			children = (
+				12DE0D9D029935636E0383D7 /* lib.rs */,
+				B61A54F4556367084B606339 /* main.rs */,
+				D27C9A5183FF874D0F6AD77B /* bin */,
+				BD5B87A69189BC797BD1E819 /* bridge */,
+				B7147BC4007955F46B63BD92 /* runner */,
+			);
+			name = src;
+			path = ../../src;
+			sourceTree = "<group>";
+		};
+		3F974D0FB39FFF0DC4728167 /* tauri_commands */ = {
+			isa = PBXGroup;
+			children = (
+				69A3ADD4E75B1A52FE04F2B0 /* chat.rs */,
+				0FEEA2B7DFF955EB0AB8EDF6 /* config.rs */,
+				A821D7639F5DE8D9BCE6E2BA /* lifecycle.rs */,
+				3CDA32F0F93C6CF41D478A66 /* operations_tests.rs */,
+				24D321627480780EF35AE35D /* operations.rs */,
+				C7BE95D8C71EBD463D0EED1E /* peers.rs */,
+				BB1401162B71B4F6CF20A95C /* tasks.rs */,
+			);
+			path = tauri_commands;
+			sourceTree = "<group>";
+		};
+		5260419C7D85C4DF20291859 /* snapshot */ = {
+			isa = PBXGroup;
+			children = (
+				2837976A25E9E292BF9026D4 /* operations_signature.rs */,
+				885B18125B858E13572CCD3D /* operations_snapshot.rs */,
+				038D9FAB4932604AA6B4B097 /* runtime_tasks.rs */,
+				A05497AA94B5606DEB93C2BC /* runtime.rs */,
+				AAFD7A058AE962BB9E058CD0 /* session.rs */,
+				2AEACBDCA4A3D96300E21C92 /* subagent_tree.rs */,
+				8AE867E04AB6071A24811B11 /* tests.rs */,
+				BDDDFEE01C39280851C11C14 /* timeline.rs */,
+				1385F01C760A599E7DF9527A /* operations_snapshot */,
+				792AECCED4B513D55A5097C0 /* tests */,
+			);
+			path = snapshot;
+			sourceTree = "<group>";
+		};
+		58C1C11DB6AB576A419C0115 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				0466ED1CDA27E3C189F747D1 /* defra-agent-desktop-tauri_iOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		5DDF40AF30292D7270ACDDE6 /* http */ = {
+			isa = PBXGroup;
+			children = (
+				BC2D4669CE4BA2CBB5B19E2E /* protocol.rs */,
+				78408B66D3B27D1E20A5B993 /* routes.rs */,
+			);
+			path = http;
+			sourceTree = "<group>";
+		};
+		629D1D1D13BCF07D5D86FD63 /* commands */ = {
+			isa = PBXGroup;
+			children = (
+				8617EA6B42BE8C78FFC713A5 /* chat.rs */,
+				D5729F57871E2855B17C1E9D /* config.rs */,
+				C7510455FFE1EA138404BBF0 /* mcp_health.rs */,
+				79C9D52BD9814B3DB48A9530 /* peer.rs */,
+				7928B6A060774F71AAB60071 /* task.rs */,
+				95FA38E94FDB377E49C4C7C9 /* tool_service.rs */,
+				B96271FDCDBCB458E01EDA3E /* util.rs */,
+			);
+			path = commands;
+			sourceTree = "<group>";
+		};
+		792AECCED4B513D55A5097C0 /* tests */ = {
+			isa = PBXGroup;
+			children = (
+				D2E3E46E40ABDD272EF8ADA8 /* mcp_health.rs */,
+				ED47DF98DDDDB467D4F8505D /* runtime.rs */,
+				92FC4381C02BE2FC6AB3637C /* session_basic.rs */,
+				50D60B9B0FCA758D2A692AC0 /* session_stale_rows.rs */,
+				668C9C3DFA3EA6BC0577DE00 /* session_state.rs */,
+				A9578655A462BDBEAB820310 /* session_timeline.rs */,
+				90958E03E4E4782DC3068EDF /* subagent_lineage.rs */,
+			);
+			path = tests;
+			sourceTree = "<group>";
+		};
+		8091CB10AF870B6125D24F88 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				BBD1F79C40B0CBE965AD3217 /* CoreGraphics.framework */,
+				E7F5E2EE5804D71C05447DD7 /* libapp.a */,
+				D046836AB214ABD92DDF33A9 /* Metal.framework */,
+				710C36912F09C267A2C47336 /* MetalKit.framework */,
+				4B9FA17A0165EAAAADABF904 /* QuartzCore.framework */,
+				096E444F93FB2312F2D88A70 /* Security.framework */,
+				584915DD074DDCA68029D7BC /* SystemConfiguration.framework */,
+				5D70843AB86DA4E2A5FE57D4 /* UIKit.framework */,
+				2D14DA4E44FBB91720598788 /* WebKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		814278BFBD89496A25AF0571 /* Externals */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Externals;
+			sourceTree = "<group>";
+		};
+		98A45FD6B5C651294A7D3C94 /* views */ = {
+			isa = PBXGroup;
+			children = (
+				C132FC9058841444C389883D /* bootstrap.rs */,
+				9FA39BBDE83EE49819AD3184 /* deployment.rs */,
+				F966706FB1C76D63142F5867 /* events.rs */,
+				141B2008A23F679397BB6D31 /* operations.rs */,
+				7094758267FE2E0122E637CA /* session.rs */,
+			);
+			path = views;
+			sourceTree = "<group>";
+		};
+		9985A418C256E0EB46E5E867 /* bridge_runner */ = {
+			isa = PBXGroup;
+			children = (
+				DDE4E918A41348B700942708 /* diagnostics.rs */,
+				4B1862D125277E729C7C7202 /* http.rs */,
+				5DDF40AF30292D7270ACDDE6 /* http */,
+			);
+			path = bridge_runner;
+			sourceTree = "<group>";
+		};
+		B7147BC4007955F46B63BD92 /* runner */ = {
+			isa = PBXGroup;
+			children = (
+				ED281B2E9E627CE8A922BA75 /* live_fixture.rs */,
+				E2C60F389FB71A0743CD40BD /* live_fixture */,
+			);
+			path = runner;
+			sourceTree = "<group>";
+		};
+		BD5B87A69189BC797BD1E819 /* bridge */ = {
+			isa = PBXGroup;
+			children = (
+				8BC00DD8686A549E7C20E793 /* cascade.rs */,
+				01C24C1CFEAC86A13B6C3426 /* cause_derivation.rs */,
+				4E6CA25B9F2B631BE8A626A5 /* commands.rs */,
+				89D5B334245B6C2544A7F276 /* logging.rs */,
+				1F500A004B6DAAD1611B84D7 /* mod.rs */,
+				A7CB709D01337BE501D66F5E /* snapshot.rs */,
+				EBCAC6A37FC0605E4714CDD5 /* state.rs */,
+				6100EF11D40E1F33C079CA93 /* tauri_commands.rs */,
+				4F09747AD95F3F0729159CEA /* types.rs */,
+				629D1D1D13BCF07D5D86FD63 /* commands */,
+				5260419C7D85C4DF20291859 /* snapshot */,
+				3F974D0FB39FFF0DC4728167 /* tauri_commands */,
+				F8C09331CC3EFB37B93743DE /* tests */,
+				19E3766EFF67801B86B4D3BB /* types */,
+			);
+			path = bridge;
+			sourceTree = "<group>";
+		};
+		CE59BE113551BF4AD6EBF1FA /* defra-agent-desktop-tauri_iOS */ = {
+			isa = PBXGroup;
+			children = (
+				C9A74EFF2384E5FB7893F2AD /* defra-agent-desktop-tauri_iOS.entitlements */,
+				BD821229BD2592A6CEA9B43A /* Info.plist */,
+			);
+			path = "defra-agent-desktop-tauri_iOS";
+			sourceTree = "<group>";
+		};
+		D27C9A5183FF874D0F6AD77B /* bin */ = {
+			isa = PBXGroup;
+			children = (
+				657E4CDBE9C30CD8C485ACEB /* bridge_runner.rs */,
+				9985A418C256E0EB46E5E867 /* bridge_runner */,
+			);
+			path = bin;
+			sourceTree = "<group>";
+		};
+		E2C60F389FB71A0743CD40BD /* live_fixture */ = {
+			isa = PBXGroup;
+			children = (
+				A0D1EF3FC99F351F2EA1F6FF /* agent.rs */,
+				391D334EE4A712A981505AC9 /* backend.rs */,
+				83E5275A6A0CA1BE131DCCAB /* replication.rs */,
+				AB7724DABCD5F5FD04D400CE /* workspace.rs */,
+			);
+			path = live_fixture;
+			sourceTree = "<group>";
+		};
+		F6A9A4F0A502BB704BAEBD9C = {
+			isa = PBXGroup;
+			children = (
+				BFD6C2A5CF924D61621434DF /* assets */,
+				8F638140E8910C4F73002937 /* Assets.xcassets */,
+				A39591B673C3BF192DA9B1C5 /* LaunchScreen.storyboard */,
+				CE59BE113551BF4AD6EBF1FA /* defra-agent-desktop-tauri_iOS */,
+				814278BFBD89496A25AF0571 /* Externals */,
+				0345F1C7DF2F0EA8B4AAF6CF /* Sources */,
+				3EE24089739288B6B0E7C089 /* src */,
+				8091CB10AF870B6125D24F88 /* Frameworks */,
+				58C1C11DB6AB576A419C0115 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		F8C09331CC3EFB37B93743DE /* tests */ = {
+			isa = PBXGroup;
+			children = (
+				1CDA4092197E425103271726 /* cause_derivation.rs */,
+				C35074A6F00532C6C723D096 /* mod.rs */,
+				3D64F860B40FB865CB8469F4 /* operations_cascade.rs */,
+				D2E51A6003ABEAD41D6E29B9 /* operations_interrupt.rs */,
+				CBFB109A8C598FDD1D653E46 /* support.rs */,
+			);
+			path = tests;
+			sourceTree = "<group>";
+		};
+		"TEMP_70096B9D-45B0-491A-A588-5EAC22BF0E53" /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = arm64;
+			sourceTree = "<group>";
+		};
+		"TEMP_8F930999-1BD7-4F75-9AA5-1837912CF2C1" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		BC936A50434A9514F0ABB8CE /* defra-agent-desktop-tauri_iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 325B86C332A174575832401F /* Build configuration list for PBXNativeTarget "defra-agent-desktop-tauri_iOS" */;
+			buildPhases = (
+				E40BE8CDA711000E00390229 /* Build Rust Code */,
+				4F0376862215EE7508B070B7 /* Sources */,
+				D8EE4EC3FF6FCE4537E83866 /* Resources */,
+				11DBE6600A7DBA9DA43D5F40 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "defra-agent-desktop-tauri_iOS";
+			packageProductDependencies = (
+			);
+			productName = "defra-agent-desktop-tauri_iOS";
+			productReference = 0466ED1CDA27E3C189F747D1 /* defra-agent-desktop-tauri_iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		8898B8AFF2C5813E6249C6AE /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = 4112FAE25358A7B630C0FBF1 /* Build configuration list for PBXProject "defra-agent-desktop-tauri" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = F6A9A4F0A502BB704BAEBD9C;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 58C1C11DB6AB576A419C0115 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				BC936A50434A9514F0ABB8CE /* defra-agent-desktop-tauri_iOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		D8EE4EC3FF6FCE4537E83866 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				866089C125E6E9C9C09EE3FE /* Assets.xcassets in Resources */,
+				A4A82AC31B718B3A133B23BD /* LaunchScreen.storyboard in Resources */,
+				027095066152A2A0DFBC88F4 /* assets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		E40BE8CDA711000E00390229 /* Build Rust Code */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust Code";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a",
+				"$(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4F0376862215EE7508B070B7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8DDD882E30F6D85FDCF81FE9 /* main.mm in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		09D7762BB8D8F1320B8EAD9A /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = debug;
+		};
+		42D6DE9A73D451CCCEAE665F /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = release;
+		};
+		C30C6119B4D5AE56E1224D2E /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "defra-agent-desktop-tauri_iOS/defra-agent-desktop-tauri_iOS.entitlements";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = "defra-agent-desktop-tauri_iOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.sourcenetwork.defra-agent-desktop;
+				PRODUCT_NAME = "defra-agent desktop";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
+				DEVELOPMENT_TEAM = "NXJ753WW5X";
+			};
+			name = release;
+		};
+		EC42A111CE473A73BAD83F59 /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "defra-agent-desktop-tauri_iOS/defra-agent-desktop-tauri_iOS.entitlements";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = "defra-agent-desktop-tauri_iOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.sourcenetwork.defra-agent-desktop;
+				PRODUCT_NAME = "defra-agent desktop";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
+				DEVELOPMENT_TEAM = "NXJ753WW5X";
+			};
+			name = debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		325B86C332A174575832401F /* Build configuration list for PBXNativeTarget "defra-agent-desktop-tauri_iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EC42A111CE473A73BAD83F59 /* debug */,
+				C30C6119B4D5AE56E1224D2E /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+		4112FAE25358A7B630C0FBF1 /* Build configuration list for PBXProject "defra-agent-desktop-tauri" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				09D7762BB8D8F1320B8EAD9A /* debug */,
+				42D6DE9A73D451CCCEAE665F /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 8898B8AFF2C5813E6249C6AE /* Project object */;
+}

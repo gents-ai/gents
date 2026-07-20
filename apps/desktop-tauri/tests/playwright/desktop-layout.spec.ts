@@ -107,4 +107,29 @@ test.describe("desktop responsive layout guardrails", () => {
     await expect(page.locator(".config-workspace")).toBeVisible();
     await expectNoPageHorizontalOverflow(page);
   });
+
+  test("empty-fleet remote connection submit stays reachable on mobile", async ({
+    page,
+  }) => {
+    test.skip(
+      (page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) > 760,
+      "mobile viewport guardrail",
+    );
+
+    await gotoHarness(page, "empty-fleet");
+    await page.getByTestId("fleet-remote-disclosure").locator("summary").click();
+    await page.getByTestId("fleet-add-server-address").fill("http://studio-1:9191");
+
+    const submit = page.getByTestId("fleet-add-submit");
+    await expect(submit).toBeAttached();
+    await submit.scrollIntoViewIfNeeded();
+    await expect(submit).toBeVisible();
+    await submit.click({ trial: true });
+
+    const shellScrollTop = await page
+      .locator(".app-shell")
+      .evaluate((element) => element.scrollTop);
+    expect(shellScrollTop).toBeGreaterThan(0);
+    await expectNoPageHorizontalOverflow(page);
+  });
 });

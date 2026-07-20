@@ -13,58 +13,55 @@ use super::super::types::{
     ClientUpdateEvent, DesktopBootstrapSummary, DesktopClientSnapshot, DesktopInitRequest,
 };
 
+const CLIENT_START_STACK_SIZE: usize = 16 * 1024 * 1024;
+
 #[tauri::command]
-pub(crate) fn desktop_bootstrap_summary() -> Result<DesktopBootstrapSummary, String> {
-    tauri::async_runtime::block_on(build_bootstrap_summary())
+pub(crate) async fn desktop_bootstrap_summary() -> Result<DesktopBootstrapSummary, String> {
+    build_bootstrap_summary().await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_init_local_standard(
+pub(crate) async fn desktop_init_local_standard(
     request: DesktopInitRequest,
 ) -> Result<DesktopInitSummary, String> {
-    tauri::async_runtime::block_on(async move {
-        let agent_home = match request.agent_home {
-            Some(path) => path,
-            None => default_agent_home().map_err(|error| error.to_string())?,
-        };
-        let desktop_paths = match request.desktop_home {
-            Some(root) => DesktopPaths::from_root(root),
-            None => DesktopPaths::discover().map_err(|error| error.to_string())?,
-        };
+    let agent_home = match request.agent_home {
+        Some(path) => path,
+        None => default_agent_home().map_err(|error| error.to_string())?,
+    };
+    let desktop_paths = match request.desktop_home {
+        Some(root) => DesktopPaths::from_root(root),
+        None => DesktopPaths::discover().map_err(|error| error.to_string())?,
+    };
 
-        if request.dangerously_overwrite {
-            dangerously_overwrite_desktop_home(desktop_paths.root())
-                .map_err(|error| error.to_string())?;
-        } else if request.reset {
-            let _ =
-                reset_desktop_runtime_state(&desktop_paths).map_err(|error| error.to_string())?;
-        }
+    if request.dangerously_overwrite {
+        dangerously_overwrite_desktop_home(desktop_paths.root())
+            .map_err(|error| error.to_string())?;
+    } else if request.reset {
+        let _ = reset_desktop_runtime_state(&desktop_paths).map_err(|error| error.to_string())?;
+    }
 
-        init_standard_local_runtime(DesktopInitOptions {
-            agent_home,
-            desktop_paths,
-            label: request
-                .label
-                .filter(|label| !label.trim().is_empty())
-                .unwrap_or_else(|| "Local Agent".to_string()),
-        })
-        .await
-        .map_err(|error| error.to_string())
+    init_standard_local_runtime(DesktopInitOptions {
+        agent_home,
+        desktop_paths,
+        label: request
+            .label
+            .filter(|label| !label.trim().is_empty())
+            .unwrap_or_else(|| "Local Agent".to_string()),
     })
+    .await
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub(crate) fn desktop_client_start(
+pub(crate) async fn desktop_client_start(
     app: AppHandle,
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, String> {
     if let Some(core) = current_core(&state) {
-        return tauri::async_runtime::block_on(build_client_snapshot(Some(&core)));
+        return build_client_snapshot(Some(&core)).await;
     }
 
-    let core = Arc::new(
-        tauri::async_runtime::block_on(ClientCore::start()).map_err(|error| error.to_string())?,
-    );
+    let core = Arc::new(start_client_core_with_large_stack()?);
     let updates_task = spawn_client_update_task(app.clone(), Arc::clone(&core));
 
     {
@@ -80,11 +77,11 @@ pub(crate) fn desktop_client_start(
         },
     );
 
-    tauri::async_runtime::block_on(build_client_snapshot(Some(&core)))
+    build_client_snapshot(Some(&core)).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_client_shutdown(
+pub(crate) async fn desktop_client_shutdown(
     app: AppHandle,
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, String> {
@@ -98,7 +95,7 @@ pub(crate) fn desktop_client_shutdown(
     }
 
     if let Some(core) = core {
-        tauri::async_runtime::block_on(core.shutdown()).map_err(|error| error.to_string())?;
+        core.shutdown().await.map_err(|error| error.to_string())?;
     }
 
     let _ = app.emit(
@@ -108,15 +105,30 @@ pub(crate) fn desktop_client_shutdown(
         },
     );
 
-    tauri::async_runtime::block_on(build_client_snapshot(None))
+    build_client_snapshot(None).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_client_snapshot(
+pub(crate) async fn desktop_client_snapshot(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, String> {
     let core = current_core(&state);
-    tauri::async_runtime::block_on(build_client_snapshot(core.as_ref()))
+    build_client_snapshot(core.as_ref()).await
+}
+
+fn start_client_core_with_large_stack() -> Result<ClientCore, String> {
+    // iOS gives its WebKit/main thread a much smaller stack than macOS. DefraDB
+    // schema migration can legitimately exceed it during first client startup,
+    // so keep the command asynchronous and poll startup on a temporary thread
+    // with explicit headroom.
+    std::thread::Builder::new()
+        .name("desktop-client-start".to_string())
+        .stack_size(CLIENT_START_STACK_SIZE)
+        .spawn(|| tauri::async_runtime::block_on(ClientCore::start()))
+        .map_err(|error| format!("spawning desktop client startup thread: {error}"))?
+        .join()
+        .map_err(|_| "desktop client startup thread panicked".to_string())?
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
