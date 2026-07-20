@@ -2,6 +2,14 @@ use super::*;
 use crate::llm::message::{Text, ToolCall, ToolFunction};
 
 #[test]
+fn canonical_failure_class_parser_preserves_approval_denied() {
+    assert_eq!(
+        failure_class_from_str("approvalDenied"),
+        Some(ToolFailureClass::ApprovalDenied)
+    );
+}
+
+#[test]
 fn successful_completed_result_has_no_failure_class() {
     let analysis = analyze_tool_call("read", r#"{"path":"README.md"}"#, "contents", "completed");
 
