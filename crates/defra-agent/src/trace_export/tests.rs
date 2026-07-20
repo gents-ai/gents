@@ -2,7 +2,7 @@ use super::*;
 use crate::llm::message::{Text, ToolCall, ToolFunction};
 
 #[test]
-fn canonical_approval_denied_failure_class_is_preserved() {
+fn canonical_failure_class_parser_preserves_approval_denied() {
     assert_eq!(
         failure_class_from_str("approvalDenied"),
         Some(ToolFailureClass::ApprovalDenied)

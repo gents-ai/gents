@@ -563,7 +563,7 @@ fn failure_class_from_str(raw: &str) -> Option<ToolFailureClass> {
         return Some(failure_class);
     }
     match raw {
-        // Legacy snake_case strings — rebucketed to 5-variant spec.
+        // Legacy snake_case strings rebucketed into the canonical vocabulary.
         "service_unavailable"
         | "tool_not_found"
         | "tool_not_allowed"
