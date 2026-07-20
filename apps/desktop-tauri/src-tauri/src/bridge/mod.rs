@@ -43,6 +43,7 @@ pub fn run() {
             tauri_commands::peers::desktop_peer_rename,
             tauri_commands::peers::desktop_peer_status_fetch,
             tauri_commands::peers::desktop_p2p_repair,
+            tauri_commands::workspace::desktop_workspace_list,
             tauri_commands::lifecycle::desktop_client_snapshot,
             tauri_commands::lifecycle::desktop_set_selected_agent,
             tauri_commands::lifecycle::desktop_observer_metrics,

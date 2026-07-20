@@ -27,3 +27,4 @@ pub(super) async fn emit_config_update_and_snapshot(
     );
     build_client_snapshot(Some(core)).await
 }
+pub(crate) mod workspace;

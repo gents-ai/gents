@@ -90,4 +90,6 @@ export type {
   SubagentEdgeView,
   SubagentNodeView,
   SubagentTreeView,
+  WorkspaceEntryView,
+  WorkspaceListingView,
 } from "./types/operations";
