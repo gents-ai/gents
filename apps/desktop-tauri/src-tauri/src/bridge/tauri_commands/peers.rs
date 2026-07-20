@@ -11,7 +11,7 @@ use super::super::types::{
 use super::emit_config_update_and_snapshot;
 
 #[tauri::command]
-pub(crate) fn desktop_peer_add(
+pub(crate) async fn desktop_peer_add(
     app: AppHandle,
     request: PeerAddRequest,
     state: State<'_, DesktopAppState>,
@@ -20,27 +20,23 @@ pub(crate) fn desktop_peer_add(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        add_peer(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    add_peer(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_peer_status_fetch(
+pub(crate) async fn desktop_peer_status_fetch(
     request: PeerStatusFetchRequest,
 ) -> Result<serde_json::Value, String> {
-    tauri::async_runtime::block_on(async move {
-        fetch_runtime_connection_payload(&request.server_address)
-            .await
-            .map_err(|error| error.to_string())
-    })
+    fetch_runtime_connection_payload(&request.server_address)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub(crate) fn desktop_p2p_repair(
+pub(crate) async fn desktop_p2p_repair(
     app: AppHandle,
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, String> {
@@ -48,16 +44,14 @@ pub(crate) fn desktop_p2p_repair(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        repair_p2p(core.as_ref(), Duration::from_millis(250))
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    repair_p2p(core.as_ref(), Duration::from_millis(250))
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_peer_remove(
+pub(crate) async fn desktop_peer_remove(
     app: AppHandle,
     peer_id: String,
     state: State<'_, DesktopAppState>,
@@ -66,17 +60,15 @@ pub(crate) fn desktop_peer_remove(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        let mutation = remove_peer(core.as_ref(), peer_id)
-            .await
-            .map_err(|error| error.to_string())?;
-        let snapshot = emit_config_update_and_snapshot(&app, &core).await?;
-        Ok(PeerRemoveResponse::new(snapshot, mutation))
-    })
+    let mutation = remove_peer(core.as_ref(), peer_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let snapshot = emit_config_update_and_snapshot(&app, &core).await?;
+    Ok(PeerRemoveResponse::new(snapshot, mutation))
 }
 
 #[tauri::command]
-pub(crate) fn desktop_peer_rename(
+pub(crate) async fn desktop_peer_rename(
     app: AppHandle,
     peer_id: String,
     label: String,
@@ -86,10 +78,8 @@ pub(crate) fn desktop_peer_rename(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        rename_peer(core.as_ref(), peer_id, label)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    rename_peer(core.as_ref(), peer_id, label)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }

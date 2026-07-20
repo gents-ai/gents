@@ -52,7 +52,7 @@
   "devDependencies": {
     "@antithesishq/bombadil": "^0.6.0",
     "@playwright/test": "^1.61.0",
-    "@tauri-apps/cli": "^2",
+    "@tauri-apps/cli": "2.10.1",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",

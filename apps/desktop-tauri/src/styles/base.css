@@ -12,6 +12,14 @@
     overflow: hidden;
   }
 
+  @media (max-width: 760px) {
+    html,
+    body,
+    #root {
+      height: 100dvh;
+    }
+  }
+
   body {
     background: var(--source-black);
   }

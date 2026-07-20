@@ -4,6 +4,19 @@ linker = "./scripts/macos-clang-lld.sh"
 [target.x86_64-apple-darwin]
 linker = "./scripts/macos-clang-lld.sh"
 
+# The Tauri shell links the whole native runtime as a static iOS archive.
+# With dev debug info that archive exceeds 4 GiB and uses a BSD
+# `__.SYMDEF_64` table, which Tauri's mobile archive validator does not skip.
+# Keep desktop symbols while making iOS debug builds small enough to package.
+[target.aarch64-apple-ios]
+rustflags = ["-C", "debuginfo=0"]
+
+[target.aarch64-apple-ios-sim]
+rustflags = ["-C", "debuginfo=0"]
+
+[target.x86_64-apple-ios]
+rustflags = ["-C", "debuginfo=0"]
+
 [target.x86_64-unknown-linux-gnu]
 linker = "./scripts/linux-lld.sh"
 

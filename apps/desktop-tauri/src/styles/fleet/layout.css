@@ -252,8 +252,10 @@
     }
 
     .fleet-empty {
+      height: auto;
+      min-height: 100%;
       place-content: start center;
-      overflow: auto;
+      overflow: visible;
       padding-block: var(--space-2);
     }
 
