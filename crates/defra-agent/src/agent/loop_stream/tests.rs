@@ -1942,11 +1942,11 @@ async fn dispatch_tool_calls_known_tool_and_reports_unknown() {
     })];
 
     assert_eq!(
-        super::dispatch_tool(&tools, "echo", "{}".to_string()).await,
+        super::dispatch_tool(&tools, "echo", "{}".to_string(), None).await,
         "ECHOED".to_string()
     );
     assert_eq!(
-        super::dispatch_tool(&tools, "missing", "{}".to_string()).await,
+        super::dispatch_tool(&tools, "missing", "{}".to_string(), None).await,
         "error: unknown tool 'missing'".to_string()
     );
 }
@@ -1990,7 +1990,8 @@ async fn dispatch_tool_marks_unparseable_args_with_collision_free_marker() {
     // Truncated mid-string: escape-only repair cannot complete it, so it stays
     // UnparseableArgs and dispatch wraps a notice in the collision-free marker
     // (which on_tool_result maps to failed(ArgumentInvalid)) — not the tool output.
-    let result = super::dispatch_tool(&tools, "strict", r#"{"body":"cut off"#.to_string()).await;
+    let result =
+        super::dispatch_tool(&tools, "strict", r#"{"body":"cut off"#.to_string(), None).await;
     // The result must NOT use a forgeable human-readable prefix a real tool could emit.
     assert!(
         !result.starts_with("JsonError:"),

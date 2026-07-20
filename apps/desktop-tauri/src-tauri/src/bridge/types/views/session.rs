@@ -26,6 +26,8 @@ pub(crate) struct ToolCallView {
     pub tool_name: Option<String>,
     pub tool_call_id: Option<String>,
     pub args: Option<String>,
+    pub partial_output_tail: Option<String>,
+    pub partial_output_seq: Option<i64>,
     pub result: Option<String>,
     pub status: Option<String>,
     pub lifecycle_state: Option<String>,
@@ -76,6 +78,10 @@ pub(crate) struct RenderedToolCallView {
     pub status_kind: String,
     pub args: Option<ToolDetailValueView>,
     pub result: Option<ToolDetailValueView>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub partial_output_tail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub partial_output_seq: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub denial: Option<CommandDenialView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]

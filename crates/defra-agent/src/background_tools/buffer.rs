@@ -25,6 +25,11 @@ impl LiveToolOutputRegistry {
         }
     }
 
+    /// Ids of every tool call currently holding a live buffer.
+    pub(crate) async fn live_ids(&self) -> Vec<String> {
+        self.inner.lock().await.keys().cloned().collect()
+    }
+
     pub(crate) async fn snapshot(&self, tool_call_id: &str) -> Option<LiveToolOutputSnapshot> {
         self.inner
             .lock()

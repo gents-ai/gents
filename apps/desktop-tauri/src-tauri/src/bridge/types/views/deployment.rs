@@ -383,3 +383,37 @@ mod peer_remove_response_tests {
         assert_eq!(value["mutation"]["warning"], "partial cleanup");
     }
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NetworkStatusView {
+    pub local_peer_id: Option<String>,
+    pub local_peer_id_error: Option<String>,
+    pub listen_addresses: Vec<String>,
+    pub listen_addresses_error: Option<String>,
+    pub connected_peers: Vec<String>,
+    pub connected_peers_error: Option<String>,
+    pub replicators: Vec<NetworkReplicatorView>,
+    pub replicators_error: Option<String>,
+    pub saved_peers: Vec<NetworkSavedPeerView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NetworkReplicatorView {
+    pub peer_id: Option<String>,
+    pub address: Option<String>,
+    pub collections: Vec<String>,
+    pub status: Option<u8>,
+    pub last_status_change: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NetworkSavedPeerView {
+    pub peer_id: String,
+    pub label: String,
+    pub addr: String,
+    pub agent_did: String,
+    pub source: Option<String>,
+}

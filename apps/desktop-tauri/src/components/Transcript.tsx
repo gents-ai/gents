@@ -164,8 +164,12 @@ function ToolGroups({ tools }: { tools: RenderedToolCallView[] }) {
           return <CodeToolItem key={tool.itemKey} view={codeView} />;
         }
         const argsPreview = toolArgsPreview(tool.args);
+        const liveTail =
+          (tool.statusKind ?? "").toLowerCase() === "running"
+            ? (tool.partialOutputTail ?? null)
+            : null;
         return (
-          <details className="tool-item" key={tool.itemKey}>
+          <details className="tool-item" key={tool.itemKey} open={liveTail != null}>
             <summary className="tool-item-summary">
               <span className="tool-item-summary-left">
                 <span aria-hidden="true" className={toolStatusClass(tool.statusKind)} />
@@ -189,6 +193,18 @@ function ToolGroups({ tools }: { tools: RenderedToolCallView[] }) {
                 <CancelCauseDetails cause={tool.cancelCause} />
               ) : null}
               <ToolDetailSection label="args" value={tool.args} />
+              {liveTail != null ? (
+                <div
+                  className="tool-live-tail"
+                  data-testid={`tool-live-${tool.itemKey}`}
+                >
+                  <span className="tool-live-tail-label">
+                    live output
+                    <span aria-hidden="true" className="tool-live-dot" />
+                  </span>
+                  <pre>{liveTail}</pre>
+                </div>
+              ) : null}
               <ToolDetailSection label="result" value={tool.result} />
             </div>
           </details>

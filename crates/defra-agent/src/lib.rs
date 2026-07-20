@@ -77,6 +77,7 @@ pub(crate) mod registry;
 pub mod rendered_request;
 pub mod retry;
 pub mod run_timeline;
+pub mod run_timeline_fetch;
 pub(crate) mod runtime_snapshot;
 pub(crate) mod runtime_status;
 pub(crate) mod runtime_trace;

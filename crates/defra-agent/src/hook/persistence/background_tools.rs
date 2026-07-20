@@ -129,6 +129,7 @@ impl DefraSessionHook {
         let execution_request_id = request_id.clone();
         let execution_tool_name = target_tool_name.clone();
         let live_output_writer = live_outputs.writer_for(background_tool_call_id.clone());
+        self.ensure_live_output_flusher();
         let workspace_cwd = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
             .and_then(|runtime| runtime.workspace_cwd);
         tokio::spawn(async move {

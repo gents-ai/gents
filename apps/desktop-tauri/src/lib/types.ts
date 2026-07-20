@@ -14,6 +14,10 @@ export type {
   EventTriggerView,
   InferenceBackendView,
   InferenceProfileView,
+  ToolSurfaceExplanationView,
+  NetworkStatusView,
+  NetworkReplicatorView,
+  NetworkSavedPeerView,
   RuntimeSnapshot,
   RuntimeView,
   ScheduleView,
@@ -68,6 +72,10 @@ export type {
   ResponseView,
   ToolDetailFieldView,
   ToolDetailValueView,
+  SessionForkResult,
+  RequestResendResult,
+  RequestTimelineView,
+  RunTimelineEventView,
 } from "./types/session";
 export type {
   ActiveRequestView,

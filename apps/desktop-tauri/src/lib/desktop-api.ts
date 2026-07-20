@@ -40,6 +40,11 @@ import type {
   ToolServiceTestRequest,
   ToolServiceTestResult,
   WorkspaceListingView,
+  SessionForkResult,
+  RequestResendResult,
+  RequestTimelineView,
+  ToolSurfaceExplanationView,
+  NetworkStatusView,
 } from "./types";
 import type {
   DesktopOperationsSnapshot,
@@ -121,6 +126,15 @@ export type DesktopApiAdapter = {
   fetchPeerStatus: (serverAddress: string) => Promise<unknown>;
   repairP2P: () => Promise<DesktopClientSnapshot>;
   listWorkspace: (subpath?: string | null) => Promise<WorkspaceListingView>;
+  fetchRequestTimeline: (
+    agentDid: string,
+    requestId: string,
+  ) => Promise<RequestTimelineView>;
+  explainToolSurface: (
+    agentDid: string,
+    behaviorId: string,
+  ) => Promise<ToolSurfaceExplanationView>;
+  fetchNetworkStatus: () => Promise<NetworkStatusView>;
   fetchSessionSnapshot: (
     sessionId: string,
     agentDid?: string | null,
@@ -133,6 +147,13 @@ export type DesktopApiAdapter = {
     content: string;
   }) => Promise<ChatSendResult>;
   renameConversation: (request: { sessionId: string; title: string }) => Promise<void>;
+  forkSession: (request: {
+    agentDid: string;
+    sessionId: string;
+    atUserTurn: number;
+    behaviorId?: string | null;
+  }) => Promise<SessionForkResult>;
+  resendRequest: (requestId: string) => Promise<RequestResendResult>;
   saveAgentConfig: (request: AgentConfigSaveRequest) => Promise<DesktopClientSnapshot>;
   saveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<DesktopClientSnapshot>;
   saveSkillConfig: (request: SkillSaveRequest) => Promise<DesktopClientSnapshot>;
@@ -235,6 +256,21 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
       subpath: subpath ?? null,
     });
   },
+  fetchRequestTimeline(agentDid, requestId) {
+    return invokeDesktop<RequestTimelineView>("desktop_request_timeline", {
+      agentDid,
+      requestId,
+    });
+  },
+  explainToolSurface(agentDid, behaviorId) {
+    return invokeDesktop<ToolSurfaceExplanationView>("desktop_tool_surface_explain", {
+      agentDid,
+      behaviorId,
+    });
+  },
+  fetchNetworkStatus() {
+    return invokeDesktop<NetworkStatusView>("desktop_network_status");
+  },
   fetchSessionSnapshot(sessionId, agentDid, requestId) {
     return invokeDesktop<DesktopSessionSnapshot | null>("desktop_session_snapshot", {
       sessionId,
@@ -247,6 +283,17 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   renameConversation(request) {
     return invokeDesktop<void>("desktop_conversation_rename", { request });
+  },
+  forkSession(request) {
+    return invokeDesktop<SessionForkResult>("desktop_session_fork", {
+      agentDid: request.agentDid,
+      sessionId: request.sessionId,
+      atUserTurn: request.atUserTurn,
+      behaviorId: request.behaviorId ?? null,
+    });
+  },
+  resendRequest(requestId) {
+    return invokeDesktop<RequestResendResult>("desktop_request_resend", { requestId });
   },
   saveAgentConfig(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_agent_config_save", {
@@ -431,6 +478,18 @@ export async function listWorkspace(subpath?: string | null) {
   return desktopApiAdapter().listWorkspace(subpath);
 }
 
+export async function fetchRequestTimeline(agentDid: string, requestId: string) {
+  return desktopApiAdapter().fetchRequestTimeline(agentDid, requestId);
+}
+
+export async function explainToolSurface(agentDid: string, behaviorId: string) {
+  return desktopApiAdapter().explainToolSurface(agentDid, behaviorId);
+}
+
+export async function fetchNetworkStatus() {
+  return desktopApiAdapter().fetchNetworkStatus();
+}
+
 export async function fetchSessionSnapshot(
   sessionId: string,
   agentDid?: string | null,
@@ -453,6 +512,19 @@ export async function renameConversation(request: {
   title: string;
 }) {
   return desktopApiAdapter().renameConversation(request);
+}
+
+export async function forkSession(request: {
+  agentDid: string;
+  sessionId: string;
+  atUserTurn: number;
+  behaviorId?: string | null;
+}) {
+  return desktopApiAdapter().forkSession(request);
+}
+
+export async function resendRequest(requestId: string) {
+  return desktopApiAdapter().resendRequest(requestId);
 }
 
 export async function saveAgentConfig(request: AgentConfigSaveRequest) {
