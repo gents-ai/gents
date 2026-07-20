@@ -107,12 +107,19 @@ pub(crate) struct SubagentTreeView {
     pub nodes: Vec<SubagentNodeView>,
     pub edges: Vec<SubagentEdgeView>,
     pub truncated: bool,
+    /// Deployments that could not be queried this walk; the tree may be
+    /// missing their branches. Empty when every access answered.
+    #[serde(default)]
+    pub partial_errors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SubagentNodeView {
     pub request_id: String,
+    /// Peer label the row was resolved from; None = the local node.
+    #[serde(default)]
+    pub resolved_via: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]

@@ -13,9 +13,11 @@ use lean_vocab_test::{lean_r5_cross_deployment_cases, LeanR5CrossDeploymentCase}
 /// caused-by lineage) survives the trip into the operator surface.
 fn subagent_tree_view_from_lean_case(case: &LeanR5CrossDeploymentCase) -> SubagentTreeView {
     SubagentTreeView {
+        partial_errors: Vec::new(),
         root_request_id: case.parent_request_id.clone(),
         nodes: vec![
             SubagentNodeView {
+                resolved_via: None,
                 request_id: case.parent_request_id.clone(),
                 session_id: None,
                 agent_did: Some(case.parent_deployment.clone()),
@@ -28,6 +30,7 @@ fn subagent_tree_view_from_lean_case(case: &LeanR5CrossDeploymentCase) -> Subage
                 backend_id: None,
             },
             SubagentNodeView {
+                resolved_via: None,
                 request_id: case.child_request_id.clone(),
                 session_id: None,
                 agent_did: Some(case.child_deployment.clone()),
