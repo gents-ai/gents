@@ -21,16 +21,28 @@ use uuid::Uuid;
 
 /// Drive `defra-agent demo` to completion with `input` fed to its shell.
 fn run_demo(tmp_home: &Path, args: &[&str], input: &str) -> Result<std::process::Output> {
-    let mut child = Command::new(cli_bin())
+    run_demo_with_env(tmp_home, args, input, &[])
+}
+
+fn run_demo_with_env(
+    tmp_home: &Path,
+    args: &[&str],
+    input: &str,
+    env: &[(&str, &Path)],
+) -> Result<std::process::Output> {
+    let mut command = Command::new(cli_bin());
+    command
         .env("HOME", tmp_home)
         .env("RUST_LOG", "error")
         .arg("demo")
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("spawning defra-agent demo")?;
+        .stderr(Stdio::piped());
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    let mut child = command.spawn().context("spawning defra-agent demo")?;
     {
         let stdin = child
             .stdin
@@ -139,6 +151,76 @@ async fn demo_single_node_chats_lists_skills_and_shuts_down_clean() -> Result<()
     assert!(
         home.join("init.json").exists(),
         "expected the demo to persist init.json under its home"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn demo_desktop_flag_initializes_and_launches_desktop() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home = tempdir.path().join("demo-home");
+    let desktop_log = tempdir.path().join("desktop.log");
+    let desktop_bin = tempdir.path().join("fake-desktop");
+    fs::write(
+        &desktop_bin,
+        r#"#!/bin/sh
+if [ "$#" -eq 0 ]; then
+  printf 'launch\n' >> "$FAKE_DESKTOP_LOG"
+else
+  printf 'init:%s\n' "$*" >> "$FAKE_DESKTOP_LOG"
+fi
+"#,
+    )?;
+    fs::set_permissions(&desktop_bin, fs::Permissions::from_mode(0o755))?;
+
+    let model = format!("demo-desktop-model-{}", Uuid::new_v4().simple());
+    let mock = MockChatEndpoint::start(&model, "unused")?;
+    let port = allocate_port()?;
+    let output = run_demo_with_env(
+        tempdir.path(),
+        &[
+            "--home",
+            home.to_str().unwrap(),
+            "--inference-url",
+            mock.endpoint(),
+            "--model",
+            &model,
+            "--desktop",
+            "--http-port",
+            &port.to_string(),
+        ],
+        "down\n",
+        &[
+            ("DEFRA_AGENT_DESKTOP_BIN", &desktop_bin),
+            ("FAKE_DESKTOP_LOG", &desktop_log),
+        ],
+    )?;
+    let stdout = require_success(&output)?;
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let launches = loop {
+        let launches = fs::read_to_string(&desktop_log).unwrap_or_default();
+        if launches.contains("launch") || Instant::now() >= deadline {
+            break launches;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(
+        stdout.contains("Desktop app launched"),
+        "expected desktop launch confirmation, got:\n{stdout}"
+    );
+    assert!(
+        launches.contains("init:")
+            && launches.contains("--status-endpoint")
+            && launches.contains("launch"),
+        "expected desktop init and launch invocations, got:\n{launches}"
+    );
+    assert!(
+        wait_port_free(port, Duration::from_secs(15)),
+        "desktop demo left an orphaned server listening on port {port}"
     );
     Ok(())
 }

@@ -33,53 +33,93 @@ fn request() -> AgentRequest {
 }
 
 #[test]
-fn thinking_default_enables_reasoning_capture() {
-    // The default outbound request must carry the kwarg that flips vLLM's
-    // reasoning trace ON, serialized so it lands as top-level
-    // `chat_template_kwargs.enable_thinking=true` in the completion body.
-    let value = thinking_default_params().expect("thinking default must be present");
+fn local_chat_completions_default_enables_reasoning_capture() {
+    let value = thinking_default_params(
+        BackendProviderKind::OpenAiCompatible,
+        crate::OpenAiWireApi::ChatCompletions,
+    )
+    .expect("local thinking default must be present");
 
     assert_eq!(value["chat_template_kwargs"]["enable_thinking"], true);
+    assert!(value.get("reasoning").is_none());
 }
 
 #[test]
-fn thinking_default_merges_under_provider_and_sampling_params() {
-    // Reproduces the merge wired into `loop_config`: thinking default is the
-    // leftmost base, with provider params then sampling params merged on top.
-    // The result must STILL carry `enable_thinking=true` (nothing clobbers it)
-    // while preserving the provider/sampling params alongside it.
-    let sampling = SamplingConfig {
-        temperature: Some(0.1),
-        top_p: Some(0.95),
-        top_k: Some(40),
-        max_tokens: Some(1024),
-        ..Default::default()
+fn generic_responses_default_does_not_assume_reasoning_support() {
+    assert!(thinking_default_params(
+        BackendProviderKind::OpenAiCompatible,
+        crate::OpenAiWireApi::Responses,
+    )
+    .is_none());
+    assert!(thinking_default_params(
+        BackendProviderKind::OpenRouter,
+        crate::OpenAiWireApi::ChatCompletions,
+    )
+    .is_none());
+}
+
+#[test]
+fn generic_responses_request_does_not_force_reasoning() {
+    use rig::completion::message::{Message, Text, UserContent};
+    use rig::one_or_many::OneOrMany;
+
+    let core_req = rig::completion::CompletionRequest {
+        model: None,
+        preamble: None,
+        chat_history: OneOrMany::one(Message::User {
+            content: OneOrMany::one(UserContent::Text(Text {
+                text: "hi".to_string(),
+            })),
+        }),
+        documents: Vec::new(),
+        tools: Vec::new(),
+        temperature: Some(0.0),
+        max_tokens: None,
+        tool_choice: None,
+        additional_params: thinking_default_params(
+            BackendProviderKind::OpenAiCompatible,
+            crate::OpenAiWireApi::Responses,
+        ),
+        output_schema: None,
     };
 
-    let value = merge_optional_params(
-        merge_optional_params(
-            thinking_default_params(),
-            provider_additional_params(BackendProviderKind::OpenRouter),
-        ),
-        sampling.additional_params(),
-    )
-    .expect("merged params should be present");
+    let openai_req = rig::providers::openai::responses_api::CompletionRequest::try_from((
+        "gpt-5.4-mini".to_string(),
+        core_req,
+    ))
+    .expect("OpenAI Responses request conversion should succeed");
+    let body = serde_json::to_value(&openai_req).expect("serializing OpenAI Responses request");
 
-    assert_eq!(value["chat_template_kwargs"]["enable_thinking"], true);
-    assert_eq!(value["provider"]["require_parameters"], true);
-    assert_eq!(value["top_p"], 0.95);
-    assert_eq!(value["top_k"], 40);
+    assert_eq!(body["temperature"], 0.0);
+    assert!(body.get("reasoning").is_none());
+    assert!(body.get("chat_template_kwargs").is_none());
+}
+
+#[test]
+fn chatgpt_codex_keeps_medium_reasoning_default() {
+    let value = thinking_default_params(
+        BackendProviderKind::ChatGptCodex,
+        crate::OpenAiWireApi::Responses,
+    )
+    .expect("ChatGPT Codex reasoning default must be present");
+
+    assert_eq!(value["reasoning"]["effort"], "medium");
+    assert!(value.get("chat_template_kwargs").is_none());
 }
 
 #[test]
 fn caller_can_override_thinking_default_off() {
-    // A caller that explicitly disables thinking deep-merges on top of the
-    // default base and wins, proving the default stays overridable.
     let caller_override =
         Some(serde_json::json!({ "chat_template_kwargs": { "enable_thinking": false } }));
 
-    let value = merge_optional_params(thinking_default_params(), caller_override)
-        .expect("merged params should be present");
+    let value = merge_optional_params(
+        thinking_default_params(
+            BackendProviderKind::OpenAiCompatible,
+            crate::OpenAiWireApi::ChatCompletions,
+        ),
+        caller_override,
+    )
+    .expect("merged params should be present");
 
     assert_eq!(value["chat_template_kwargs"]["enable_thinking"], false);
 }
@@ -100,7 +140,10 @@ fn thinking_default_serializes_top_level_into_openai_body() {
     // backend with no sampling overrides: just the thinking-on base.
     let additional_params = merge_optional_params(
         merge_optional_params(
-            thinking_default_params(),
+            thinking_default_params(
+                BackendProviderKind::OpenAiCompatible,
+                crate::OpenAiWireApi::ChatCompletions,
+            ),
             provider_additional_params(BackendProviderKind::OpenAiCompatible),
         ),
         SamplingConfig::default().additional_params(),

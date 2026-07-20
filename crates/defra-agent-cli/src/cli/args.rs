@@ -198,6 +198,12 @@ pub(crate) struct DemoArgs {
         help = "API key (stored in the backend document). Prefer OPENAI_API_KEY"
     )]
     pub(crate) api_key: Option<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Launch the native desktop app as soon as the demo runtime is ready"
+    )]
+    pub(crate) desktop: bool,
     #[arg(long, default_value_t = 19501, help = "HTTP port for the first node")]
     pub(crate) http_port: u16,
 }

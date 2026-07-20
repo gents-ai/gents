@@ -96,7 +96,7 @@ via a cross-node subagent (the child runs on the Worker and its result replicate
 back), and `desktop` seeds that isolated desktop home and opens the Fleet
 Dashboard. Live chat needs a real backend reachable on both nodes — keep
 `llama-server` running on `http://127.0.0.1:8080/v1`, or use a hosted preset
-(`defra-agent demo --backend-preset openai --model gpt-4.1-mini`, with
+(`defra-agent demo --desktop --backend-preset openai --model gpt-5.4-mini`, with
 `OPENAI_API_KEY` in the environment).
 
 ## Tests

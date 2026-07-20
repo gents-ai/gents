@@ -38,7 +38,8 @@ Dashboard UI, and `reconfigure` to switch backends.
 New chat turns use the configured model backend, reachable on both nodes. Keep
 the local `llama-server` above running, or launch with a hosted preset and
 model, e.g. `OPENAI_API_KEY=... defra-agent demo --backend-preset openai --model
-gpt-4.1-mini`.
+gpt-5.4-mini`. Add `--desktop` to launch the native app as soon as the runtime
+is ready.
 
 ## Why this exists
 
