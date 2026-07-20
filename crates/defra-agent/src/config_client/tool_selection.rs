@@ -102,7 +102,7 @@ mod tests {
             ..Default::default()
         };
 
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
         write_tool_selection_document(&access, &selection).await?;
 
         let node = match &access {
@@ -173,7 +173,7 @@ mod tests {
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
 
         // A valid `subagent_targets` entry is the JSON serialization of a named
         // SubagentTarget, not a bare behavior id.
@@ -278,7 +278,7 @@ mod tests {
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
 
         let applied = ToolSelectionDocument {
             selection_id: "test-clear-fields".to_string(),
@@ -410,6 +410,10 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
                 .backgroundable_tool_names
                 .as_ref()
                 .and_then(|values| string_list_field("backgroundable_tool_names", values)),
+            selection
+                .approval_required_tools
+                .as_ref()
+                .and_then(|values| string_list_field("approval_required_tools", values)),
             optional_bool_field("enable_memory", selection.enable_memory),
             optional_bool_field(
                 "enable_session_history_tool",

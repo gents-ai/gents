@@ -22,6 +22,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolCallState {
     Pending,
+    AwaitingApproval,
     Running,
     Completed,
     Failed,
@@ -31,8 +32,9 @@ pub enum ToolCallState {
 
 impl ToolCallState {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 7] = [
         Self::Pending,
+        Self::AwaitingApproval,
         Self::Running,
         Self::Completed,
         Self::Failed,
@@ -43,6 +45,7 @@ impl ToolCallState {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
+            Self::AwaitingApproval => "awaitingApproval",
             Self::Running => "running",
             Self::Completed => "completed",
             Self::Failed => "failed",
@@ -54,6 +57,7 @@ impl ToolCallState {
     pub(crate) fn from_persisted(value: &str) -> Option<Self> {
         match value {
             "pending" => Some(Self::Pending),
+            "awaitingApproval" => Some(Self::AwaitingApproval),
             "running" => Some(Self::Running),
             "completed" => Some(Self::Completed),
             "failed" => Some(Self::Failed),
@@ -72,13 +76,14 @@ impl ToolCallState {
 
     #[cfg(test)]
     pub(crate) const fn is_cancellable(self) -> bool {
-        matches!(self, Self::Pending | Self::Running)
+        matches!(self, Self::Pending | Self::AwaitingApproval | Self::Running)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FailureClass {
+    ApprovalDenied,
     ArgumentInvalid,
     ServiceUnavailable,
     Transport,
@@ -88,7 +93,8 @@ pub enum FailureClass {
 }
 
 impl FailureClass {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
+        Self::ApprovalDenied,
         Self::ArgumentInvalid,
         Self::ServiceUnavailable,
         Self::Transport,
@@ -99,6 +105,7 @@ impl FailureClass {
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::ApprovalDenied => "approvalDenied",
             Self::ArgumentInvalid => "argumentInvalid",
             Self::ServiceUnavailable => "serviceUnavailable",
             Self::Transport => "transport",
@@ -110,6 +117,7 @@ impl FailureClass {
 
     pub fn from_persisted(value: &str) -> Option<Self> {
         match value {
+            "approvalDenied" => Some(Self::ApprovalDenied),
             "argumentInvalid" => Some(Self::ArgumentInvalid),
             "serviceUnavailable" => Some(Self::ServiceUnavailable),
             "transport" => Some(Self::Transport),
@@ -536,8 +544,8 @@ mod tests {
     }
 
     #[test]
-    fn all_lists_six_states() {
-        assert_eq!(ToolCallState::ALL.len(), 6);
+    fn all_lists_seven_states() {
+        assert_eq!(ToolCallState::ALL.len(), 7);
     }
 
     #[test]
@@ -549,8 +557,8 @@ mod tests {
     }
 
     #[test]
-    fn failure_class_all_lists_six_variants() {
-        assert_eq!(FailureClass::ALL.len(), 6);
+    fn failure_class_all_lists_seven_variants() {
+        assert_eq!(FailureClass::ALL.len(), 7);
     }
 
     #[test]

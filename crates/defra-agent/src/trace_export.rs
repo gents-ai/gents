@@ -736,8 +736,11 @@ fn retryable_for_failure_class(failure_class: ToolFailureClass) -> Option<bool> 
         | ToolFailureClass::ArgumentInvalid => Some(true),
         // Transport errors are retriable by definition.
         ToolFailureClass::Transport => Some(true),
-        // ToolReturnedError is non-retriable at the tool-call level.
-        ToolFailureClass::ToolReturnedError | ToolFailureClass::PolicyDenied => Some(false),
+        // ToolReturnedError is non-retriable at the tool-call level; a denied
+        // approval is an operator verdict, never retried automatically.
+        ToolFailureClass::ToolReturnedError
+        | ToolFailureClass::PolicyDenied
+        | ToolFailureClass::ApprovalDenied => Some(false),
     }
 }
 

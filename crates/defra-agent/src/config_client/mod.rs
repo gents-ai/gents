@@ -21,6 +21,7 @@
 //!   value; explicit clearing requires `field: null`.
 
 mod agent_behavior;
+mod approval;
 mod common;
 mod event_trigger;
 mod inference_backend;
@@ -31,6 +32,7 @@ mod txn;
 pub mod patch;
 
 pub use agent_behavior::write_agent_behavior_document;
+pub use approval::{list_held_tool_calls, write_tool_approval, HeldToolCall, ToolApprovalVerdict};
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
 pub use event_trigger::write_event_trigger_document;
 pub use inference_backend::{write_inference_backend_document, InferenceBackendUpsertDocument};
@@ -43,17 +45,20 @@ pub use txn::ConfigApplyTxn;
 
 mod tool_selection;
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use defra_agent_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use defra_node::EmbeddedNode;
 use serde_json::{json, Value};
 
-#[allow(clippy::large_enum_variant)]
 pub enum ConfigAccess {
     /// HTTP GraphQL endpoint. **Must end with `/graphql`** — transaction
     /// begin/commit/discard derive the REST API base by stripping that suffix.
     Graphql(String),
-    Local(EmbeddedNode),
+    /// Shared so callers that already hold the node (desktop client) can
+    /// construct access without moving it; `EmbeddedNode` is not `Clone`.
+    Local(Arc<EmbeddedNode>),
 }
 
 impl ConfigAccess {
@@ -107,9 +112,11 @@ fn is_probably_local_graphql_endpoint(graphql: &str) -> bool {
     graphql.contains("127.0.0.1") || graphql.contains("localhost")
 }
 
-/// Operator guidance appended to HTTP GraphQL errors. Only the CLI constructs
-/// the `Graphql` access mode, so this text never reaches agent-facing tool
-/// errors (the runtime always writes through the embedded node).
+/// Operator guidance appended to HTTP GraphQL errors. CLI-flavored on
+/// purpose; non-CLI constructors of `Graphql` access (desktop
+/// `request_timeline`) strip these hint lines before surfacing the error.
+/// Never reaches agent-facing tool errors (the runtime always writes
+/// through the embedded node).
 pub(crate) fn graphql_diagnostic_hint(graphql: &str) -> String {
     if is_probably_local_graphql_endpoint(graphql) {
         "Next:\n  1. If this home is not initialized, run `defra-agent init`\n  2. Start the runtime with `defra-agent server`\n  3. Inspect it with `defra-agent status`".to_string()

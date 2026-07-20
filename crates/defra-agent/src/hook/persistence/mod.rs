@@ -52,6 +52,7 @@ enum SubagentTargetHost {
     Remote,
 }
 
+mod approval;
 mod background_tools;
 mod goal_tools;
 mod helpers;

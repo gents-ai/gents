@@ -195,6 +195,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 )
                 .await;
                 hook.set_request_deadline_at(request_deadline).await;
+                hook.set_approval_required_tools(self.approval_required_tools.as_ref().clone())
+                    .await;
                 let persistence_hook = hook.clone();
 
                 // Owned completion loop (#400): drive our own multi-turn stream

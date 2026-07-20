@@ -453,6 +453,12 @@ pub struct AgentToolCallRow {
     pub cancel_cause: Option<String>,
     #[serde(default)]
     pub latency_ms: Option<i64>,
+    /// Rolling tail of live output for a running tool; flushed periodically.
+    #[serde(default)]
+    pub partial_output_tail: Option<String>,
+    /// Monotonic total-bytes-seen counter; readers detect growth.
+    #[serde(default)]
+    pub partial_output_seq: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

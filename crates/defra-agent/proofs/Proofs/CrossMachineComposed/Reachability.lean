@@ -367,7 +367,7 @@ theorem c2_running_reachable_domain_nonempty :
   · simp [interruptedWithRunningTool, interruptLatchedRunning, withRunningTool]
   · rfl
   · simp [IsDetached, runningTool, pendingTool]
-  · exact Or.inr rfl
+  · exact Or.inr (Or.inr rfl)
 
 end ReachabilityWitness
 end ComposedState

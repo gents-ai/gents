@@ -26,6 +26,7 @@ pub struct BehaviorToolConfig {
     subagent_tools: SubagentToolConfig,
     orchestration_tools: OrchestrationToolConfig,
     background_tools: BackgroundToolConfig,
+    approval_required_tools: Vec<String>,
     custom_tools: Vec<CustomToolFactory>,
     enable_memory: bool,
     enable_context_budget_tool: bool,
@@ -57,6 +58,7 @@ impl BehaviorToolConfig {
             subagent_tools: SubagentToolConfig::default(),
             orchestration_tools: OrchestrationToolConfig::default(),
             background_tools: BackgroundToolConfig::default(),
+            approval_required_tools: Vec::new(),
             custom_tools: Vec::new(),
             enable_memory: false,
             enable_context_budget_tool: true,
@@ -127,6 +129,7 @@ impl BehaviorToolConfig {
             enable_meta_tools: _,
             allowed_mcp_service_ids,
             backgroundable_tool_names,
+            approval_required_tools,
             orchestration_enabled: _,
             enable_memory,
             enable_session_history_tool: _,
@@ -193,6 +196,9 @@ impl BehaviorToolConfig {
             background_tools: BackgroundToolConfig {
                 allowlist: background_allowlist,
             },
+            // A hold requirement narrows the surface (dispatch waits on an
+            // operator verdict), so no ceiling filtering applies.
+            approval_required_tools: dedupe_strings(approval_required_tools),
             custom_tools,
             enable_memory: static_policy.memory && enable_memory,
             enable_context_budget_tool: static_policy.context_budget && enable_context_budget,
@@ -252,6 +258,10 @@ impl BehaviorToolConfig {
     }
 
     #[allow(dead_code)]
+    pub(crate) fn approval_required_tools(&self) -> &[String] {
+        &self.approval_required_tools
+    }
+
     pub(crate) fn background_tools(&self) -> &BackgroundToolConfig {
         &self.background_tools
     }
@@ -314,6 +324,7 @@ impl BehaviorToolConfig {
             subagent_tools,
             orchestration_tools: self.orchestration_tools.clone(),
             background_tools: self.background_tools.clone(),
+            approval_required_tools: self.approval_required_tools.clone(),
             custom_tools: self.custom_tools.clone(),
             enable_memory: effective_policy.memory && self.enable_memory,
             enable_context_budget_tool: effective_policy.context_budget

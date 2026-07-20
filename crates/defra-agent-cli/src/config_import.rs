@@ -1163,7 +1163,7 @@ doc_1: create_Task(input: { task_id: "b" }) { _docID }
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
         let doc = json!({
             "selection_id": "tools-a",
             "agent_did": "did:example:agent",

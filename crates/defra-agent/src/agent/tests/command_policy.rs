@@ -22,6 +22,7 @@ fn tool_selection_doc(bash_mode: &str) -> ToolSelectionDocument {
         enable_meta_tools: Some(false),
         allowed_mcp_service_ids: Some(Vec::new()),
         backgroundable_tool_names: Some(Vec::new()),
+        approval_required_tools: None,
         subagent_targets: Some(Vec::new()),
         subagent_spawn_enabled: Some(false),
         orchestration_enabled: Some(false),

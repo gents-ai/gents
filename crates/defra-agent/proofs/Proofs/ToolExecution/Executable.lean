@@ -26,6 +26,12 @@ inductive Action where
   | timeout
   | cancelBeforeDispatch (cause : CancelCause)
   | cancelDuringRun (cause : CancelCause)
+  | holdForApproval
+  | recordApproval (decision : ApprovalDecision)
+  | approve
+  | deny
+  | cancelWhileHeld (cause : CancelCause)
+  | timeoutWhileHeld
   deriving DecidableEq, Repr
 
 /-- Executable transition function for the tool-call layer. -/
@@ -65,6 +71,36 @@ def step? (pre : ToolCallContext) : Action → Option ToolCallContext
         some { pre with state := .cancelled }
       else
         none
+  | .holdForApproval =>
+      if pre.state = .pending then
+        some { pre with state := .awaitingApproval }
+      else
+        none
+  | .recordApproval decision =>
+      if pre.state = .awaitingApproval ∧ pre.approval = none then
+        some { pre with approval := some decision }
+      else
+        none
+  | .approve =>
+      if pre.state = .awaitingApproval ∧ pre.approval = some .approved then
+        some { pre with state := .running, startedAt := some pre.currentTime }
+      else
+        none
+  | .deny =>
+      if pre.state = .awaitingApproval ∧ pre.approval = some .denied then
+        some { pre with state := .failed, failureClass := some .approvalDenied }
+      else
+        none
+  | .cancelWhileHeld _ =>
+      if pre.state = .awaitingApproval then
+        some { pre with state := .cancelled }
+      else
+        none
+  | .timeoutWhileHeld =>
+      if pre.state = .awaitingApproval ∧ pre.deadlineExceeded then
+        some { pre with state := .timedOut }
+      else
+        none
 
 /-- Refinement: every successful `step?` corresponds to a relational `Transition`. -/
 theorem step_refines_transition
@@ -100,6 +136,34 @@ theorem step_refines_transition
       simp [step?] at h_step
       rcases h_step with ⟨h_state, h_post⟩
       exact Transition.cancelDuringRun cause (h_state := h_state) (h_post := h_post.symm)
+  | holdForApproval =>
+      simp [step?] at h_step
+      rcases h_step with ⟨h_state, h_post⟩
+      exact Transition.holdForApproval (h_state := h_state) (h_post := h_post.symm)
+  | recordApproval decision =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_state, h_none⟩, h_post⟩
+      exact Transition.recordApproval decision (h_state := h_state) (h_none := h_none)
+        (h_post := h_post.symm)
+  | approve =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_state, h_evidence⟩, h_post⟩
+      exact Transition.approve (h_state := h_state) (h_evidence := h_evidence)
+        (h_post := h_post.symm)
+  | deny =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_state, h_evidence⟩, h_post⟩
+      exact Transition.deny (h_state := h_state) (h_evidence := h_evidence)
+        (h_post := h_post.symm)
+  | cancelWhileHeld cause =>
+      simp [step?] at h_step
+      rcases h_step with ⟨h_state, h_post⟩
+      exact Transition.cancelWhileHeld cause (h_state := h_state) (h_post := h_post.symm)
+  | timeoutWhileHeld =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_state, h_deadline⟩, h_post⟩
+      exact Transition.timeoutWhileHeld (h_state := h_state) (h_deadline := h_deadline)
+        (h_post := h_post.symm)
 
 end ToolCallContext
 end ToolExecution

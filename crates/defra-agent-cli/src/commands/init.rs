@@ -163,7 +163,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         unreachable!("node_arc had exactly one strong reference at this point")
     });
 
-    let access = ConfigAccess::Local(node);
+    let access = ConfigAccess::Local(std::sync::Arc::new(node));
     let summary = initialize_runtime_home(
         &access,
         &args,
@@ -599,6 +599,7 @@ fn tool_selection_for_package(
         enable_meta_tools: Some(profile.enable_meta_tools),
         allowed_mcp_service_ids: Some(Vec::new()),
         backgroundable_tool_names: Some(default_backgroundable_tool_names(tool_package)),
+        approval_required_tools: None,
         subagent_targets: Some(Vec::new()),
         subagent_spawn_enabled: Some(false),
         orchestration_enabled: Some(false),

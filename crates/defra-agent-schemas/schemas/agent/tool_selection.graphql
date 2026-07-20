@@ -26,6 +26,10 @@ type ToolSelection {
     # deprecated: delegate_to_agent removed; field retained for schema-compat, unused.
     delegate_to: [String]
     backgroundable_tool_names: [String]
+    # Tool names that require an AgentToolApproval document before dispatch.
+    # A matched call holds in lifecycle_state "awaitingApproval" until an
+    # operator approves/denies or the call deadline expires.
+    approval_required_tools: [String]
     subagent_targets: [String]
     subagent_spawn_enabled: Boolean
     orchestration_enabled: Boolean

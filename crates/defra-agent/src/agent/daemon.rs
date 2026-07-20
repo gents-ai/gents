@@ -62,6 +62,9 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     background_tool_registry: crate::hook::BackgroundToolRegistry,
     background_execution_registry: crate::hook::BackgroundExecutionRegistry,
+    /// Tool names the behavior policy holds in `awaitingApproval` until an
+    /// operator writes an AgentToolApproval verdict.
+    approval_required_tools: Arc<Vec<String>>,
     startup_barrier: Arc<StartupBarrier>,
     startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
 }
@@ -119,9 +122,16 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             rendered_request_capture_factory,
             background_tool_registry,
             background_execution_registry,
+            approval_required_tools: Arc::new(Vec::new()),
             startup_barrier,
             startup_demotions,
         }
+    }
+
+    /// Set the approval-required tool names from the resolved tool surface.
+    pub(super) fn with_approval_required_tools(mut self, tools: Vec<String>) -> Self {
+        self.approval_required_tools = Arc::new(tools);
+        self
     }
 
     pub(super) async fn run(

@@ -177,6 +177,7 @@ fn tool_selection_command_plan(args: &ToolSelectionUpsertArgs) -> Result<ToolSel
         enable_meta_tools: args.enable_meta_tools,
         allowed_mcp_service_ids,
         backgroundable_tool_names,
+        approval_required_tools: None,
         subagent_targets: subagent_targets.clone(),
         subagent_spawn_enabled: args.subagent_spawn_enabled,
         orchestration_enabled: args.orchestration_enabled,

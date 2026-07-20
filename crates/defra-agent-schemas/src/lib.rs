@@ -26,6 +26,8 @@ pub const GOAL_NAME: &str = "Goal";
 pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
 pub const AGENT_TOOL_CALL_NAME: &str = "AgentToolCall";
 pub const AGENT_TOOL_CALL: &str = include_str!("../schemas/agent/agent_tool_call.graphql");
+pub const AGENT_TOOL_APPROVAL_NAME: &str = "AgentToolApproval";
+pub const AGENT_TOOL_APPROVAL: &str = include_str!("../schemas/agent/agent_tool_approval.graphql");
 pub const AGENT_TOOL_RESULT_NAME: &str = "AgentToolResult";
 pub const AGENT_TOOL_RESULT: &str = include_str!("../schemas/agent/agent_tool_result.graphql");
 pub const COMPACTION_ENTRY_NAME: &str = "CompactionEntry";
@@ -89,6 +91,7 @@ pub const ALL: &[&str] = &[
     GOAL,
     AGENT_MESSAGE,
     AGENT_TOOL_CALL,
+    AGENT_TOOL_APPROVAL,
     COMPACTION_ENTRY,
     PROJECTION_ACP_BINDING,
     TASK,
@@ -123,6 +126,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     GOAL_NAME,
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
+    AGENT_TOOL_APPROVAL_NAME,
     COMPACTION_ENTRY_NAME,
     PROJECTION_ACP_BINDING_NAME,
     TASK_NAME,
@@ -153,6 +157,7 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     GOAL_NAME,
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
+    AGENT_TOOL_APPROVAL_NAME,
     COMPACTION_ENTRY_NAME,
     TASK_NAME,
     SCHEDULE_NAME,
@@ -167,7 +172,7 @@ mod tests {
 
     #[test]
     fn all_contains_every_agent_schema() {
-        assert_eq!(ALL.len(), 30);
+        assert_eq!(ALL.len(), 31);
     }
 
     #[test]

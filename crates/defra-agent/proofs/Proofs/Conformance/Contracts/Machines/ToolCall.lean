@@ -23,6 +23,7 @@ def toolCallCancelActions : List (String × ToolExecution.ToolCallContext.Action
   toolCallCancelCauses.flatMap fun cause =>
     [ ("cancelBeforeDispatch_" ++ cause.toDefraDB, .cancelBeforeDispatch cause)
     , ("cancelDuringRun_" ++ cause.toDefraDB, .cancelDuringRun cause)
+    , ("cancelWhileHeld_" ++ cause.toDefraDB, .cancelWhileHeld cause)
     ]
 
 def toolCallActions : List (String × ToolExecution.ToolCallContext.Action) :=
@@ -31,6 +32,12 @@ def toolCallActions : List (String × ToolExecution.ToolCallContext.Action) :=
   , ("complete", .complete)
   , ("fail_external", .fail .external)
   , ("timeout", .timeout)
+  , ("holdForApproval", .holdForApproval)
+  , ("recordApproval_approved", .recordApproval .approved)
+  , ("recordApproval_denied", .recordApproval .denied)
+  , ("approve", .approve)
+  , ("deny", .deny)
+  , ("timeoutWhileHeld", .timeoutWhileHeld)
   ] ++ toolCallCancelActions
 
 def toolCallWithState (state : ToolExecution.ToolCallState) : ToolExecution.ToolCallContext :=
@@ -44,6 +51,15 @@ def toolCallWithState (state : ToolExecution.ToolCallState) : ToolExecution.Tool
   , failureClass := none
   , persistence := .committed
   }
+
+/-- Evidence-bearing samples: `approve`/`deny` require recorded approval
+evidence, which the plain per-state samples (approval = none) never carry.
+Without these the derived pair set would silently drop the
+`awaitingApproval → running/failed` edges. -/
+def toolCallApprovalSamples : List ToolExecution.ToolCallContext :=
+  [ { toolCallWithState .awaitingApproval with approval := some .approved }
+  , { toolCallWithState .awaitingApproval with approval := some .denied }
+  ]
 
 /-- Named transition rows for the ToolCall machine.
 
@@ -126,7 +142,7 @@ def toolCallMachine : StateMachineContract :=
       (terminalNames toolCallStates ToolExecution.ToolCallState.toDefraDB)
       (actionNames toolCallActions)
       (transitionPairsFromSamples
-        (toolCallStates.map toolCallWithState)
+        (toolCallStates.map toolCallWithState ++ toolCallApprovalSamples)
         toolCallActions
         ToolExecution.ToolCallContext.step?
         (fun call => call.state.toDefraDB))

@@ -112,6 +112,30 @@ export function createDesktopUiHarness(
         content: greeting,
         timestamp: "2026-06-03T14:05:00Z",
       },
+      ...(activeTurn
+        ? [
+            {
+              kind: "toolGroup" as const,
+              itemKey: "live-tools",
+              messageSequence: 2,
+              tools: [
+                {
+                  itemKey: "live-exec",
+                  toolName: "defra_exec",
+                  statusKind: "running",
+                  args: {
+                    rawText: JSON.stringify({ command: "cargo test -p defra-agent" }),
+                    fields: [],
+                  },
+                  result: null,
+                  partialOutputTail:
+                    "Compiling defra-agent v0.7.0\ntest lifecycle::claims ... ok\ntest lifecycle::persistence ... ok",
+                  partialOutputSeq: 4096,
+                },
+              ],
+            },
+          ]
+        : []),
       ...(scenario === "coding"
         ? [
             {
@@ -395,6 +419,156 @@ export function createDesktopUiHarness(
       deployment = { ...deployment, label };
       notify("peers");
       return snapshot();
+    },
+    async listWorkspace(subpath) {
+      const path = (subpath ?? "").replace(/^\/+|\/+$/g, "");
+      if (path.includes("..")) {
+        throw new Error("path escapes the workspace root");
+      }
+      const tree: Record<
+        string,
+        { name: string; kind: "dir" | "file"; size?: number }[]
+      > = {
+        "": [
+          { name: "src", kind: "dir" },
+          { name: "Cargo.toml", kind: "file", size: 812 },
+          { name: "README.md", kind: "file", size: 2048 },
+        ],
+        src: [
+          { name: "lib.rs", kind: "file", size: 4096 },
+          { name: "main.rs", kind: "file", size: 1024 },
+        ],
+      };
+      const entries = tree[path];
+      if (!entries) {
+        throw new Error(`cannot list ${path}: no such directory`);
+      }
+      return {
+        root: "/tmp/agent-tool-root",
+        subpath: path,
+        entries,
+        truncated: false,
+      };
+    },
+    async forkSession(request) {
+      const source = sessions.get(request.sessionId);
+      if (!source) {
+        throw new Error(`fork source not found: session_id=${request.sessionId}`);
+      }
+      const forkedId = `${request.sessionId}-fork-${request.atUserTurn}`;
+      sessions.set(forkedId, {
+        ...source,
+        sessionId: forkedId,
+        title: `${source.title} (fork)`,
+        turnState: "completed",
+        latestRequestId: null,
+      });
+      syncConversations();
+      notify("chat");
+      return {
+        sessionId: forkedId,
+        copiedMessages: source.timelineItems.filter(
+          (item) => item.kind === "userMessage" || item.kind === "assistantMessage",
+        ).length,
+        copiedToolCalls: 0,
+      };
+    },
+    async resendRequest(requestId) {
+      return { requestId: `${requestId}-resend`, sessionId: "session-intro" };
+    },
+    async fetchRequestTimeline(agentDid, requestId) {
+      if (agentDid !== AGENT_DID) {
+        throw new Error(`no deployment for ${agentDid}`);
+      }
+      return {
+        request_id: requestId,
+        session_id: "session-intro",
+        agent_did: agentDid,
+        behavior_id: DEFAULT_BEHAVIOR_ID,
+        child_request_ids: [],
+        events: [
+          {
+            kind: "request",
+            request_id: requestId,
+            lifecycle_state: "Completed",
+            timestamp: STARTED_AT,
+          },
+          {
+            kind: "message",
+            role: "user",
+            content: "hello there",
+            sequence: 1,
+            session_id: "session-intro",
+            timestamp: STARTED_AT,
+          },
+          {
+            kind: "tool_call",
+            tool_name: "defra_exec",
+            tool_call_id: "tc-1",
+            session_id: "session-intro",
+            status: "completed",
+            lifecycle_state: "Completed",
+            args: "{}",
+            result: "ok",
+            started_at: STARTED_AT,
+          },
+          {
+            kind: "response",
+            status: "materialized",
+            session_id: "session-intro",
+            timestamp: STARTED_AT,
+          },
+        ],
+      };
+    },
+    async explainToolSurface(agentDid, behaviorId) {
+      if (agentDid !== AGENT_DID) {
+        throw new Error(
+          "tool-surface explanation for remote agents is not yet supported",
+        );
+      }
+      return {
+        behaviorId,
+        enabled: true,
+        toolSelectionId: "default-tools",
+        toolSelectionSource: "document",
+        toolPolicyVersion: null,
+        toolPolicySemantics: "legacy-permissive",
+        ceilingSource: "init_json",
+        mcpServicesOnline: true,
+        surface: {
+          tool_names: ["read_file", "list_files", "defra_exec"],
+          included: { read_file: ["ceiling allows readonly file tools"] },
+          excluded: { write_file: ["ceiling is readonly"] },
+          unavailable: {},
+          warnings: [],
+        },
+      };
+    },
+    async fetchNetworkStatus() {
+      return {
+        localPeerId: "12D3KooWBombadilLocalPeer",
+        listenAddresses: ["/ip4/127.0.0.1/tcp/9292/p2p/12D3KooWBombadilLocalPeer"],
+        connectedPeers: [deployment.peerId],
+        replicators: [
+          {
+            peerId: deployment.peerId,
+            address: deployment.addr,
+            collections: ["AgentRequest", "AgentResponse", "AgentMessage"],
+            status: 0,
+            lastStatusChange: TWO_HOURS_AGO,
+          },
+        ],
+        savedPeers: [
+          {
+            peerId: deployment.peerId,
+            label: deployment.label,
+            addr: deployment.addr,
+            agentDid: deployment.agentDid,
+            source: deployment.source,
+          },
+        ],
+      };
     },
     async fetchPeerStatus() {
       return {
