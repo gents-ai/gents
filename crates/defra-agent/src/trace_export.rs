@@ -559,15 +559,11 @@ fn string_array_field(object: &serde_json::Map<String, Value>, field: &str) -> O
 fn failure_class_from_str(raw: &str) -> Option<ToolFailureClass> {
     // Accept both new camelCase persisted vocab and legacy snake_case strings
     // emitted by older MCP tool envelopes.
+    if let Some(failure_class) = ToolFailureClass::from_persisted(raw) {
+        return Some(failure_class);
+    }
     match raw {
-        // New canonical camelCase vocab (from FailureClass::as_str / serde).
-        "argumentInvalid" => Some(ToolFailureClass::ArgumentInvalid),
-        "serviceUnavailable" => Some(ToolFailureClass::ServiceUnavailable),
-        "transport" => Some(ToolFailureClass::Transport),
-        "toolReturnedError" => Some(ToolFailureClass::ToolReturnedError),
-        "policyDenied" => Some(ToolFailureClass::PolicyDenied),
-        "external" => Some(ToolFailureClass::External),
-        // Legacy snake_case strings — rebucketed to 5-variant spec.
+        // Legacy snake_case strings rebucketed into the canonical vocabulary.
         "service_unavailable"
         | "tool_not_found"
         | "tool_not_allowed"
