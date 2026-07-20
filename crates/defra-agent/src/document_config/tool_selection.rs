@@ -297,6 +297,11 @@ pub struct ToolSelectionDocument {
         default,
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
     )]
+    pub approval_required_tools: Option<Vec<String>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
     pub subagent_targets: Option<Vec<String>>,
     pub subagent_spawn_enabled: Option<bool>,
     pub orchestration_enabled: Option<bool>,
@@ -430,6 +435,16 @@ impl ToolSelectionDocument {
                 if tool_name.is_empty() {
                     return Err(anyhow::anyhow!(
                         "backgroundable_tool_names[{}] is empty; tool names must be non-empty strings",
+                        i
+                    ));
+                }
+            }
+        }
+        if let Some(tool_names) = &self.approval_required_tools {
+            for (i, tool_name) in tool_names.iter().enumerate() {
+                if tool_name.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "approval_required_tools[{}] is empty; tool names must be non-empty strings",
                         i
                     ));
                 }
@@ -589,6 +604,7 @@ pub(crate) async fn load_tool_selection_record(
                 enable_meta_tools
                 allowed_mcp_service_ids
                 backgroundable_tool_names
+                approval_required_tools
                 subagent_targets
                 subagent_spawn_enabled
                 orchestration_enabled
@@ -652,6 +668,7 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 enable_meta_tools
                 allowed_mcp_service_ids
                 backgroundable_tool_names
+                approval_required_tools
                 subagent_targets
                 subagent_spawn_enabled
                 orchestration_enabled
@@ -715,6 +732,7 @@ pub(crate) async fn list_tool_selection_records(
                 enable_meta_tools
                 allowed_mcp_service_ids
                 backgroundable_tool_names
+                approval_required_tools
                 subagent_targets
                 subagent_spawn_enabled
                 orchestration_enabled
@@ -772,6 +790,7 @@ pub(crate) async fn list_all_tool_selection_records(
                 enable_meta_tools
                 allowed_mcp_service_ids
                 backgroundable_tool_names
+                approval_required_tools
                 subagent_targets
                 subagent_spawn_enabled
                 orchestration_enabled
@@ -868,6 +887,10 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_string_list_field(
             "backgroundable_tool_names",
             selection.backgroundable_tool_names.as_deref(),
+        ),
+        graphql_fields::graphql_string_list_field(
+            "approval_required_tools",
+            selection.approval_required_tools.as_deref(),
         ),
         graphql_fields::graphql_string_list_field(
             "subagent_targets",
@@ -1000,6 +1023,10 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_string_list_field(
             "backgroundable_tool_names",
             selection.backgroundable_tool_names.as_deref(),
+        ),
+        graphql_fields::graphql_string_list_field(
+            "approval_required_tools",
+            selection.approval_required_tools.as_deref(),
         ),
         graphql_fields::graphql_string_list_field(
             "subagent_targets",

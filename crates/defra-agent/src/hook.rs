@@ -132,6 +132,7 @@ struct SessionState {
     current_request_id: Option<String>,
     current_requester_did: Option<String>,
     request_deadline_at: Option<DateTime<Utc>>,
+    approval_required_tools: Vec<String>,
     agent_name: String,
     sequence: u32,
     transcript_turn: TranscriptTurnState,
@@ -359,6 +360,7 @@ impl DefraSessionHook {
                 current_request_id: None,
                 current_requester_did: None,
                 request_deadline_at: None,
+                approval_required_tools: Vec::new(),
                 agent_name: agent_name.to_string(),
                 sequence: 0,
                 transcript_turn: TranscriptTurnState::Idle,
@@ -398,6 +400,7 @@ impl DefraSessionHook {
                 current_request_id: None,
                 current_requester_did: None,
                 request_deadline_at: None,
+                approval_required_tools: Vec::new(),
                 agent_name: agent_name.to_string(),
                 sequence: max_seq,
                 transcript_turn: TranscriptTurnState::Idle,
@@ -512,6 +515,20 @@ impl DefraSessionHook {
         self.state.lock().await.request_deadline_at = deadline_at;
     }
 
+    /// Set the tool names the behavior policy holds for operator approval.
+    pub async fn set_approval_required_tools(&self, tools: Vec<String>) {
+        self.state.lock().await.approval_required_tools = tools;
+    }
+
+    pub(crate) async fn approval_required_for(&self, tool_name: &str) -> bool {
+        self.state
+            .lock()
+            .await
+            .approval_required_tools
+            .iter()
+            .any(|name| name == tool_name)
+    }
+
     pub(crate) async fn timeout_expired_tool_calls(&self) -> anyhow::Result<usize> {
         let lifecycles = {
             let now = Utc::now();
@@ -537,6 +554,10 @@ impl DefraSessionHook {
                         "leaving background subagent bridge running after parent deadline sweep"
                     );
                 }
+            } else if lifecycle.state()
+                == crate::tool_call_lifecycle::ToolCallState::AwaitingApproval
+            {
+                lifecycle.timeout_while_held().await?;
             } else {
                 lifecycle.timeout().await?;
             }
@@ -554,6 +575,12 @@ impl DefraSessionHook {
 
         let count = lifecycles.len();
         for mut lifecycle in lifecycles {
+            if lifecycle.state() == crate::tool_call_lifecycle::ToolCallState::AwaitingApproval {
+                lifecycle
+                    .cancel_while_held(CancelCause::Interrupted)
+                    .await?;
+                continue;
+            }
             let dispatch = lifecycle
                 .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, &self.agent_did)
                 .await?;

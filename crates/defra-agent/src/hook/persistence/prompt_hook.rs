@@ -310,6 +310,7 @@ impl DefraSessionHook {
             };
         }
 
+        let hold_required = self.approval_required_for(tool_name).await;
         let result: anyhow::Result<()> = async {
             let (session_id, request_id, deadline_at, seq) =
                 self.ensure_assistant_turn_sequence().await?;
@@ -331,7 +332,11 @@ impl DefraSessionHook {
                 deadline_at,
             )
             .with_requester_did(self.active_requester_did().await);
-            lc.start_running().await?;
+            if hold_required {
+                lc.hold_for_approval().await?;
+            } else {
+                lc.start_running().await?;
+            }
 
             self.in_flight_lifecycles
                 .lock()
@@ -348,6 +353,24 @@ impl DefraSessionHook {
         .await;
 
         match result {
+            Ok(()) if hold_required => {
+                self.record_success();
+                // Block the turn on the operator verdict: Continue dispatches
+                // the now-running tool; Skip carries the deny/cancel/timeout
+                // reason back as the tool result.
+                match self
+                    .drive_held_tool_call(tool_name, internal_call_id)
+                    .instrument(tracing::info_span!(
+                        "tool.approval",
+                        tool_name = %tool_name,
+                        tool_call_id = %internal_call_id,
+                    ))
+                    .await
+                {
+                    Ok(action) => action,
+                    Err(e) => self.on_tool_persistence_error("await tool-call approval", &e),
+                }
+            }
             Ok(()) => {
                 self.record_success();
                 ToolCallHookAction::Continue

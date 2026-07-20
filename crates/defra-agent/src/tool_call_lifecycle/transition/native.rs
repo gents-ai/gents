@@ -458,4 +458,316 @@ impl ToolCallLifecycle {
         self.cancel_cause = Some(cause);
         Ok(())
     }
+
+    /// Pending → AwaitingApproval. Persists the row held for an operator
+    /// verdict; the tool is NOT dispatched and `started_at` stays null until
+    /// `approve_and_start`. Mirrors the Lean `holdForApproval` transition.
+    pub async fn hold_for_approval(&mut self) -> Result<()> {
+        if self.state == ToolCallState::AwaitingApproval {
+            // Idempotent re-entry (retry path).
+            return Ok(());
+        }
+        self.ensure_state(&[ToolCallState::Pending], "hold_for_approval")?;
+
+        let deadline_at_str = self.deadline_at.to_rfc3339();
+        let escaped_request_id = escape_graphql_string(&self.request_id);
+        let escaped_session_id = escape_graphql_string(&self.session_id);
+        let escaped_agent_did = escape_graphql_string(&self.agent_did);
+        let escaped_tool_call_id = escape_graphql_string(&self.tool_call_id);
+        let escaped_tool_name = escape_graphql_string(&self.tool_name);
+        let escaped_args = escape_graphql_string(&self.args);
+        let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
+        let message_sequence = self.message_sequence;
+        let requester_did_field = self.requester_did_fragment();
+        let workflow_fields = self.workflow_fields_fragment();
+
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "{tool_call_key}",
+                    request_id: "{escaped_request_id}",
+                    session_id: "{escaped_session_id}",
+                    agent_did: "{escaped_agent_did}",
+                    {requester_did_field}
+                    message_sequence: {message_sequence},
+                    tool_name: "{escaped_tool_name}",
+                    tool_call_id: "{escaped_tool_call_id}",
+                    args: "{escaped_args}",
+                    result: "",
+                    status: "called",
+                    lifecycle_state: "awaitingApproval",
+                    started_at: null,
+                    deadline_at: "{deadline_at_str}",
+                    {workflow_fields}
+                    selected_service_id: null,
+                    selected_tool_name: null,
+                    tool_failure_class: null,
+                    latency_ms: null
+                }}) {{ _docID }}
+            }}"#
+        );
+
+        let resp = execute_mutation_with_retry(&self.node, &mutation, "hold_for_approval")
+            .await
+            .context("hold_for_approval mutation")?;
+
+        let doc_id = extract_doc_id_from_create_response(&resp)
+            .ok_or_else(|| anyhow!("create_AgentToolCall returned no _docID"))?;
+
+        self.doc_id = Some(doc_id);
+        self.state = ToolCallState::AwaitingApproval;
+        Ok(())
+    }
+
+    /// Reload after a lost held-row compare (the row left `awaitingApproval`
+    /// under us — cancelled or timed out by another actor). Adopts current
+    /// row state so the caller can observe the terminal.
+    async fn sync_after_lost_held_compare(&mut self, method: &'static str) -> Result<()> {
+        let current =
+            ToolCallLifecycle::load(self.node.clone(), &self.session_id, &self.tool_call_id)
+                .await?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "{method} compare failed and AgentToolCall row disappeared for session_id={} tool_call_id={}",
+                        self.session_id,
+                        self.tool_call_id
+                    )
+                })?;
+        if current.state == ToolCallState::AwaitingApproval {
+            anyhow::bail!(
+                "{method} compare failed but AgentToolCall row is still awaitingApproval for session_id={} tool_call_id={}",
+                self.session_id,
+                self.tool_call_id
+            );
+        }
+        self.doc_id = current.doc_id;
+        self.deadline_at = current.deadline_at;
+        self.state = current.state;
+        self.started_at = current.started_at;
+        self.failure_class = current.failure_class;
+        self.cancel_cause = current.cancel_cause;
+        Ok(())
+    }
+
+    /// AwaitingApproval → Running on approved evidence. Sets `started_at`
+    /// (the Lean `approve` transition's startedAt discipline). Returns false
+    /// when the compare-and-set loses (row already left awaitingApproval).
+    pub async fn approve_and_start(&mut self) -> Result<bool> {
+        self.ensure_state(&[ToolCallState::AwaitingApproval], "approve_and_start")?;
+
+        let doc_id = self.doc_id.as_ref().ok_or_else(|| {
+            anyhow!("approve_and_start called before hold_for_approval persisted a row")
+        })?;
+        let now = Utc::now();
+        let escaped_doc_id = escape_graphql_string(doc_id);
+        let started_at_str = now.to_rfc3339();
+        // DefraDB requires DateTime fields to be re-supplied on update.
+        let deadline_at_str = self.deadline_at.to_rfc3339();
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{
+                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        lifecycle_state: {{ _eq: "awaitingApproval" }}
+                    }},
+                    input: {{
+                        lifecycle_state: "running",
+                        started_at: "{started_at_str}",
+                        deadline_at: "{deadline_at_str}"
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        let response = execute_mutation_with_retry(&self.node, &mutation, "approve_and_start")
+            .await
+            .context("approve_and_start mutation")?;
+        if !response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentToolCall"))
+            .is_some_and(response_has_documents)
+        {
+            self.sync_after_lost_held_compare("approve_and_start")
+                .await?;
+            return Ok(false);
+        }
+
+        self.state = ToolCallState::Running;
+        self.started_at = Some(now);
+        Ok(true)
+    }
+
+    /// AwaitingApproval → Failed on denied evidence. Sets
+    /// `failure_class = approvalDenied` (the Lean `deny` transition). Returns
+    /// false when the compare-and-set loses.
+    pub async fn deny_approval(&mut self, reason: &str) -> Result<bool> {
+        self.ensure_state(&[ToolCallState::AwaitingApproval], "deny_approval")?;
+
+        let doc_id = self.doc_id.as_ref().ok_or_else(|| {
+            anyhow!("deny_approval called before hold_for_approval persisted a row")
+        })?;
+        let now = Utc::now();
+        let escaped_doc_id = escape_graphql_string(doc_id);
+        let escaped_result = escape_graphql_string(reason);
+        let now_str = now.to_rfc3339();
+        // DefraDB requires DateTime fields to be re-supplied on update.
+        let deadline_at_str = self.deadline_at.to_rfc3339();
+        let failure_class_str = FailureClass::ApprovalDenied.as_str();
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{
+                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        lifecycle_state: {{ _eq: "awaitingApproval" }}
+                    }},
+                    input: {{
+                        result: "{escaped_result}",
+                        status: "completed",
+                        lifecycle_state: "failed",
+                        tool_failure_class: "{failure_class_str}",
+                        deadline_at: "{deadline_at_str}",
+                        completed_at: "{now_str}",
+                        latency_ms: 0
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        let response = execute_mutation_with_retry(&self.node, &mutation, "deny_approval")
+            .await
+            .context("deny_approval mutation")?;
+        if !response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentToolCall"))
+            .is_some_and(response_has_documents)
+        {
+            self.sync_after_lost_held_compare("deny_approval").await?;
+            return Ok(false);
+        }
+
+        self.state = ToolCallState::Failed;
+        self.failure_class = Some(FailureClass::ApprovalDenied);
+        Ok(true)
+    }
+
+    /// AwaitingApproval → Cancelled (the Lean `cancelWhileHeld` transition).
+    /// Returns false when the compare-and-set loses.
+    pub async fn cancel_while_held(&mut self, cause: CancelCause) -> Result<bool> {
+        self.ensure_state(&[ToolCallState::AwaitingApproval], "cancel_while_held")?;
+
+        let doc_id = self.doc_id.as_ref().ok_or_else(|| {
+            anyhow!("cancel_while_held called before hold_for_approval persisted a row")
+        })?;
+        let now = Utc::now();
+        let escaped_doc_id = escape_graphql_string(doc_id);
+        let escaped_result = escape_graphql_string("tool call cancelled while awaiting approval");
+        let now_str = now.to_rfc3339();
+        // DefraDB requires DateTime fields to be re-supplied on update.
+        let deadline_at_str = self.deadline_at.to_rfc3339();
+        let cancel_cause = cause.as_str();
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{
+                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        lifecycle_state: {{ _eq: "awaitingApproval" }}
+                    }},
+                    input: {{
+                        result: "{escaped_result}",
+                        status: "completed",
+                        lifecycle_state: "cancelled",
+                        cancel_cause: "{cancel_cause}",
+                        deadline_at: "{deadline_at_str}",
+                        completed_at: "{now_str}",
+                        latency_ms: 0
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        let response = execute_mutation_with_retry(&self.node, &mutation, "cancel_while_held")
+            .await
+            .context("cancel_while_held mutation")?;
+        if !response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentToolCall"))
+            .is_some_and(response_has_documents)
+        {
+            self.sync_after_lost_held_compare("cancel_while_held")
+                .await?;
+            return Ok(false);
+        }
+
+        self.state = ToolCallState::Cancelled;
+        self.cancel_cause = Some(cause);
+        Ok(true)
+    }
+
+    /// AwaitingApproval → TimedOut when the deadline expires unanswered (the
+    /// Lean `timeoutWhileHeld` transition). Returns false when the
+    /// compare-and-set loses.
+    pub async fn timeout_while_held(&mut self) -> Result<bool> {
+        self.ensure_state(&[ToolCallState::AwaitingApproval], "timeout_while_held")?;
+
+        let doc_id = self.doc_id.as_ref().ok_or_else(|| {
+            anyhow!("timeout_while_held called before hold_for_approval persisted a row")
+        })?;
+        let now = Utc::now();
+        let escaped_doc_id = escape_graphql_string(doc_id);
+        let escaped_result = escape_graphql_string(&format!(
+            "tool call approval deadline exceeded at {}",
+            self.deadline_at.to_rfc3339()
+        ));
+        let now_str = now.to_rfc3339();
+        // DefraDB requires DateTime fields to be re-supplied on update.
+        let deadline_at_str = self.deadline_at.to_rfc3339();
+        let failure_class = FailureClass::External.as_str();
+        let cancel_cause = CancelCause::Deadline.as_str();
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{
+                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        lifecycle_state: {{ _eq: "awaitingApproval" }}
+                    }},
+                    input: {{
+                        result: "{escaped_result}",
+                        status: "completed",
+                        lifecycle_state: "timedOut",
+                        tool_failure_class: "{failure_class}",
+                        cancel_cause: "{cancel_cause}",
+                        deadline_at: "{deadline_at_str}",
+                        completed_at: "{now_str}",
+                        latency_ms: 0
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        let response = execute_mutation_with_retry(&self.node, &mutation, "timeout_while_held")
+            .await
+            .context("timeout_while_held mutation")?;
+        if !response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentToolCall"))
+            .is_some_and(response_has_documents)
+        {
+            self.sync_after_lost_held_compare("timeout_while_held")
+                .await?;
+            return Ok(false);
+        }
+
+        self.state = ToolCallState::TimedOut;
+        self.failure_class = Some(FailureClass::External);
+        self.cancel_cause = Some(CancelCause::Deadline);
+        Ok(true)
+    }
 }

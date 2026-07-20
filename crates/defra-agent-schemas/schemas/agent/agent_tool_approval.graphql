@@ -1,0 +1,10 @@
+type AgentToolApproval @branchable {
+    approval_id: String @index(unique: true)
+    tool_call_id: String @index
+    request_id: String @index
+    agent_did: String @index @immutable
+    decision: String @index
+    approver_did: String @immutable
+    reason: String
+    created_at: DateTime
+}

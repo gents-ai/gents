@@ -16,9 +16,10 @@ than a Lean theorem.
 
 namespace ToolExecution
 
-/-- The 6 persisted states of the tool-call lifecycle. -/
+/-- The 7 persisted states of the tool-call lifecycle. -/
 inductive ToolCallState where
   | pending
+  | awaitingApproval
   | running
   | completed
   | failed
@@ -31,6 +32,7 @@ namespace ToolCallState
 /-- String vocabulary persisted in `AgentToolCall.lifecycle_state`. -/
 def toDefraDB : ToolCallState → String
   | .pending => "pending"
+  | .awaitingApproval => "awaitingApproval"
   | .running => "running"
   | .completed => "completed"
   | .failed => "failed"
@@ -40,6 +42,7 @@ def toDefraDB : ToolCallState → String
 /-- Parse the persisted vocabulary. -/
 def fromDefraDB? : String → Option ToolCallState
   | "pending" => some .pending
+  | "awaitingApproval" => some .awaitingApproval
   | "running" => some .running
   | "completed" => some .completed
   | "failed" => some .failed
@@ -53,7 +56,7 @@ theorem fromDefraDB_toDefraDB (s : ToolCallState) :
 
 /-- Exhaustive constructor list for Rust conformance vocabulary generation. -/
 def all : List ToolCallState :=
-  [ .pending, .running, .completed, .failed, .timedOut, .cancelled ]
+  [ .pending, .awaitingApproval, .running, .completed, .failed, .timedOut, .cancelled ]
 
 theorem all_complete (s : ToolCallState) : s ∈ all := by
   cases s <;> simp [all]
@@ -68,6 +71,8 @@ instance : HasTerminal ToolCallState where
     | .timedOut => isTrue (Or.inr (Or.inr (Or.inl rfl)))
     | .cancelled => isTrue (Or.inr (Or.inr (Or.inr rfl)))
     | .pending => isFalse (by intro h; rcases h with h | h | h | h <;> exact absurd h (by decide))
+    | .awaitingApproval =>
+        isFalse (by intro h; rcases h with h | h | h | h <;> exact absurd h (by decide))
     | .running => isFalse (by intro h; rcases h with h | h | h | h <;> exact absurd h (by decide))
 
 end ToolCallState
@@ -78,6 +83,14 @@ namespace ToolExecution
 
 /-- Identifier for an individual tool-call row. -/
 abbrev ToolCallId := Nat
+
+/-- Operator verdict recorded from an `AgentToolApproval` document. The
+    approver identity stays in the document layer; the lifecycle only needs
+    the decision. -/
+inductive ApprovalDecision where
+  | approved
+  | denied
+  deriving DecidableEq, Repr
 
 /-- Mutable per-tool-call context that transitions carry along. -/
 structure ToolCallContext where
@@ -90,6 +103,9 @@ structure ToolCallContext where
   currentTime    : Time
   failureClass   : Option FailureClass := none
   persistence    : PersistenceState
+  -- Subagent extensions:
+  -- Approvals extension: first recorded operator decision, if any.
+  approval       : Option ApprovalDecision := none
   -- Subagent extensions:
   awaitMode      : Subagent.AwaitMode := .foreground
   cancelPolicy   : Subagent.CancelPolicy := .cascade
@@ -107,7 +123,7 @@ instance (c : ToolCallContext) : Decidable c.deadlineExceeded :=
 
 /-- A call is cancellable iff it is in a non-terminal pre-state. -/
 def cancellable (c : ToolCallContext) : Prop :=
-  c.state = .pending ∨ c.state = .running
+  c.state = .pending ∨ c.state = .awaitingApproval ∨ c.state = .running
 
 instance (c : ToolCallContext) : Decidable c.cancellable := by
   unfold cancellable; infer_instance
