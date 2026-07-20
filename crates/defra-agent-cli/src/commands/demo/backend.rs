@@ -15,6 +15,8 @@ use crate::cli::args::DemoArgs;
 
 use super::util::{non_empty, prompt_line, prompt_secret, StdinLines};
 
+const DEFAULT_OPENAI_DEMO_MODEL: &str = "gpt-5.4-mini";
+
 /// How the demo's inference backend was resolved, ready to pass to `init`.
 #[derive(Clone)]
 pub(super) struct BackendChoice {
@@ -119,7 +121,7 @@ async fn detect_local() -> Option<(String, String)> {
 }
 
 fn openai_backend(model: Option<&str>, api_key: Option<&str>) -> BackendChoice {
-    let model = model.unwrap_or("gpt-4.1-mini").to_string();
+    let model = model.unwrap_or(DEFAULT_OPENAI_DEMO_MODEL).to_string();
     let mut init_args = vec![
         "--backend-preset".into(),
         "openai".into(),
@@ -137,7 +139,12 @@ fn openai_backend(model: Option<&str>, api_key: Option<&str>) -> BackendChoice {
 }
 
 fn preset_backend(preset: &str, model: Option<&str>, api_key: Option<&str>) -> BackendChoice {
-    let model = model.unwrap_or("gpt-4.1-mini").to_string();
+    let default_model = if preset == "openai" {
+        DEFAULT_OPENAI_DEMO_MODEL
+    } else {
+        "gpt-4.1-mini"
+    };
+    let model = model.unwrap_or(default_model).to_string();
     let mut init_args = vec![
         "--backend-preset".into(),
         preset.to_string(),
@@ -200,4 +207,23 @@ pub(super) fn read_backend_args(path: &Path) -> Vec<String> {
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openai_demo_defaults_to_reasoning_capable_model() {
+        for backend in [
+            openai_backend(None, None),
+            preset_backend("openai", None, None),
+        ] {
+            assert_eq!(backend.label, "openai · gpt-5.4-mini");
+            assert!(backend
+                .init_args
+                .windows(2)
+                .any(|pair| pair == ["--model-name", DEFAULT_OPENAI_DEMO_MODEL]));
+        }
+    }
 }

@@ -9,6 +9,7 @@ use crate::agent::loop_stream::LoopConfig;
 use crate::backend_provider::BackendProviderKind;
 use crate::config::{AgentBehavior, SamplingConfig};
 use crate::lifecycle::ExecutionOrigin;
+use crate::openai_wire::OpenAiWireApi;
 use crate::watcher::AgentRequest;
 
 fn effective_max_tokens(max_output_tokens: usize, sampling_max_tokens: Option<u64>) -> Option<u64> {
@@ -45,14 +46,11 @@ pub(crate) fn loop_config(
         context_message: None,
         temperature: behavior.sampling.temperature,
         max_tokens: effective_max_tokens(behavior.max_output_tokens, behavior.sampling.max_tokens),
-        // Thinking-on default is the leftmost base so that provider params,
-        // behavior sampling, and per-request overrides all deep-merge ON TOP of
-        // it (`merge_optional_params` lets the right-hand side win key-by-key).
-        // A caller that explicitly sets `chat_template_kwargs.enable_thinking`
-        // therefore overrides this default rather than being clobbered by it.
+        // Provider-specific reasoning defaults are the leftmost base so that
+        // behavior sampling and per-request overrides win key-by-key.
         additional_params: merge_optional_params(
             merge_optional_params(
-                thinking_default_params(),
+                thinking_default_params(behavior.backend_provider_kind, behavior.openai_wire_api),
                 provider_additional_params(behavior.backend_provider_kind),
             ),
             behavior.sampling.additional_params(),
@@ -151,33 +149,39 @@ fn merge_json_values(left: serde_json::Value, right: serde_json::Value) -> serde
     }
 }
 
-/// Default request params that turn the model's reasoning/thinking trace ON.
+/// Provider defaults that turn reasoning capture on where the wire contract
+/// supports it without assuming every OpenAI-compatible model can reason.
 ///
 /// vLLM's OpenAI-compatible server (with a `--reasoning-parser`, e.g.
 /// `deepseek_v4` on the d4f harvest server) only emits the chain-of-thought in
 /// the response `message.reasoning` field when the request carries
 /// `chat_template_kwargs={"enable_thinking": true}`. Without it the server
 /// defaults thinking OFF and the `reasoning` field is empty, so our harvest
-/// trajectories lose the model's reasoning. We default this ON for every
-/// outbound completion request; because it is merged as the leftmost base in
-/// [`loop_config`], any caller-supplied `chat_template_kwargs` deep-merges over
-/// it and a caller can flip `enable_thinking` back to `false` if desired.
+/// trajectories lose the model's reasoning. That local-only toggle must not be
+/// sent to hosted Responses or OpenRouter endpoints, which reject unknown
+/// parameters. ChatGPT Codex has a known Responses contract and retains its
+/// current `medium` reasoning default; generic Responses models use their own
+/// default until reasoning effort becomes explicit profile configuration (#540).
 ///
 /// The key is serialized flat into the OpenAI completion body (rig flattens
 /// `additional_params`), so it reaches vLLM as a top-level `chat_template_kwargs`
 /// object — exactly where the server reads it.
-fn thinking_default_params() -> Option<serde_json::Value> {
-    Some(serde_json::json!({
-        // Responses API (our default for OpenAI-compatible + ChatGptCodex):
-        // structured reasoning, controlled by `reasoning.effort`. This is the
-        // first-class, round-trippable reasoning surface. TODO(inference-profile):
-        // thread the effort level (low/medium/high) from behavior config instead
-        // of defaulting to medium.
-        "reasoning": { "effort": "medium" },
-        // Chat Completions fallback (CompletionsClient / vLLM `--reasoning-parser`):
-        // the legacy thinking toggle. Ignored by the Responses endpoint.
-        "chat_template_kwargs": { "enable_thinking": true }
-    }))
+fn thinking_default_params(
+    kind: BackendProviderKind,
+    wire_api: OpenAiWireApi,
+) -> Option<serde_json::Value> {
+    match (kind, wire_api) {
+        (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::ChatCompletions) => {
+            Some(serde_json::json!({
+                "chat_template_kwargs": { "enable_thinking": true }
+            }))
+        }
+        (BackendProviderKind::ChatGptCodex, _) => Some(serde_json::json!({
+            "reasoning": { "effort": "medium" }
+        })),
+        (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::Responses)
+        | (BackendProviderKind::OpenRouter, _) => None,
+    }
 }
 
 fn provider_additional_params(kind: BackendProviderKind) -> Option<serde_json::Value> {

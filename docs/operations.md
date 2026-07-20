@@ -94,7 +94,7 @@ inference server at `http://127.0.0.1:8080/v1`:
 llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
 ```
 
-or a hosted preset (`defra-agent demo --backend-preset openai --model gpt-4.1-mini`,
+or a hosted preset (`defra-agent demo --desktop --backend-preset openai --model gpt-5.4-mini`,
 with `OPENAI_API_KEY` in the environment). The first run offers an interactive
 backend picker and remembers the choice.
 

@@ -142,7 +142,7 @@ mod tests {
             .await
             .unwrap();
         crate::ensure_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::Local(node.into());
 
         // Persist a held row shaped like the runtime's hold_for_approval.
         let deadline = (chrono::Utc::now() + chrono::Duration::seconds(60)).to_rfc3339();

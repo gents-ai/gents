@@ -66,15 +66,8 @@ fn rust_idempotency(value: &str) -> ToolIdempotencyEvidence {
 }
 
 fn rust_failure_class(value: &str) -> ToolFailureClass {
-    match value {
-        "argumentInvalid" => ToolFailureClass::ArgumentInvalid,
-        "serviceUnavailable" => ToolFailureClass::ServiceUnavailable,
-        "transport" => ToolFailureClass::Transport,
-        "toolReturnedError" => ToolFailureClass::ToolReturnedError,
-        "policyDenied" => ToolFailureClass::PolicyDenied,
-        "external" => ToolFailureClass::External,
-        other => panic!("unknown Lean tool failure class {other:?}"),
-    }
+    ToolFailureClass::from_persisted(value)
+        .unwrap_or_else(|| panic!("unknown Lean tool failure class {value:?}"))
 }
 
 #[test]
