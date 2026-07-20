@@ -112,6 +112,30 @@ export function createDesktopUiHarness(
         content: greeting,
         timestamp: "2026-06-03T14:05:00Z",
       },
+      ...(activeTurn
+        ? [
+            {
+              kind: "toolGroup" as const,
+              itemKey: "live-tools",
+              messageSequence: 2,
+              tools: [
+                {
+                  itemKey: "live-exec",
+                  toolName: "defra_exec",
+                  statusKind: "running",
+                  args: {
+                    rawText: JSON.stringify({ command: "cargo test -p defra-agent" }),
+                    fields: [],
+                  },
+                  result: null,
+                  partialOutputTail:
+                    "Compiling defra-agent v0.7.0\ntest lifecycle::claims ... ok\ntest lifecycle::persistence ... ok",
+                  partialOutputSeq: 4096,
+                },
+              ],
+            },
+          ]
+        : []),
       ...(scenario === "coding"
         ? [
             {

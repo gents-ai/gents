@@ -353,6 +353,8 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
                 tool_name: normalize_optional(row.tool_name.as_deref()),
                 tool_call_id: normalize_optional(row.tool_call_id.as_deref()),
                 args: normalize_optional(row.args.as_deref()),
+                partial_output_tail: normalize_optional(row.partial_output_tail.as_deref()),
+                partial_output_seq: row.partial_output_seq,
                 result: normalize_optional(row.result.as_deref()),
                 status: normalize_optional(row.status.as_deref()),
                 lifecycle_state: normalize_optional(row.lifecycle_state.as_deref()),

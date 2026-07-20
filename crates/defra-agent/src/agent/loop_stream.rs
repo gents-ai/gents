@@ -51,7 +51,8 @@ use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 use super::stream_processor::AssistantTurnAccumulator;
 use crate::hook::DefraSessionHook;
 use crate::tool_call_lifecycle::runtime::{
-    cancelled_result, current_tool_runtime_context, deadline_remaining, timeout_result,
+    cancelled_result, current_tool_runtime_context, deadline_remaining,
+    scope_request_tool_execution_with_workspace_and_live_output, timeout_result,
     unparseable_args_notice, unparseable_args_result,
 };
 use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLimits};
@@ -603,10 +604,14 @@ where
                                 // failed(ArgumentInvalid), and we strip it here too
                                 // so the model sees only the clean notice and
                                 // re-emits corrected arguments next turn.
+                                let live_output = hook.as_ref().map(|hook| {
+                                    hook.foreground_live_output_writer(&internal_call_id)
+                                });
                                 let full_result = dispatch_tool(
                                     tools.as_slice(),
                                     &tool_name,
                                     tool_args.clone(),
+                                    live_output,
                                 )
                                 .await;
                                 let (bounded, _, _) = truncate_text(
@@ -992,7 +997,12 @@ fn value_to_json_string(value: &serde_json::Value) -> String {
 /// a [`ToolError::UnparseableArgs`] — a `JsonError:`-prefixed message (see
 /// [`tool_outcome_to_result`]). A tool's own error is rendered into the result
 /// string so the model can react to it, as before.
-async fn dispatch_tool(tools: &[Box<dyn ToolDyn>], name: &str, args: String) -> String {
+async fn dispatch_tool(
+    tools: &[Box<dyn ToolDyn>],
+    name: &str,
+    args: String,
+    live_output: Option<crate::background_tools::LiveToolOutputWriter>,
+) -> String {
     let Some(tool) = tools.iter().find(|tool| tool.name() == name) else {
         return format!("error: unknown tool '{name}'");
     };
@@ -1013,11 +1023,20 @@ async fn dispatch_tool(tools: &[Box<dyn ToolDyn>], name: &str, args: String) -> 
         }
     });
 
+    // Re-enter the runtime scope with a per-call live-output writer so the
+    // exec producers stream this call's output under its own document id.
+    let call = scope_request_tool_execution_with_workspace_and_live_output(
+        scope.deadline_at,
+        scope.cancellation_token.clone(),
+        scope.workspace_cwd.clone(),
+        live_output,
+        tool.call(args),
+    );
     tokio::select! {
         biased;
         _ = scope.cancellation_token.cancelled() => cancelled_result(),
         _ = &mut deadline => timeout_result(scope.deadline_at),
-        result = tool.call(args) => tool_outcome_to_result(name, result),
+        result = call => tool_outcome_to_result(name, result),
     }
 }
 

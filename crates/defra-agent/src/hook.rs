@@ -331,6 +331,13 @@ pub struct DefraSessionHook {
     background_tool_registry: BackgroundToolRegistry,
     background_executions: BackgroundExecutionRegistry,
     background_live_outputs: LiveToolOutputRegistry,
+    /// Last persisted partial_output_seq per in-flight tool call; skips
+    /// no-change flushes and is pruned to in-flight ids on every pass.
+    live_output_flushed_seq: Arc<Mutex<HashMap<String, i64>>>,
+    /// True while a demand-driven flusher task is alive. The task exists
+    /// only while live buffers exist, so paused-clock tests without
+    /// background tools never see its timer.
+    live_output_flusher_running: Arc<std::sync::atomic::AtomicBool>,
 }
 
 enum PolicyDecision {
@@ -371,6 +378,8 @@ impl DefraSessionHook {
             background_tool_registry: BackgroundToolRegistry::default(),
             background_executions: BackgroundExecutionRegistry::default(),
             background_live_outputs: LiveToolOutputRegistry::default(),
+            live_output_flushed_seq: Arc::new(Mutex::new(HashMap::new())),
+            live_output_flusher_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -410,6 +419,8 @@ impl DefraSessionHook {
             background_tool_registry: BackgroundToolRegistry::default(),
             background_executions: BackgroundExecutionRegistry::default(),
             background_live_outputs: LiveToolOutputRegistry::default(),
+            live_output_flushed_seq: Arc::new(Mutex::new(HashMap::new())),
+            live_output_flusher_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -510,6 +521,209 @@ impl DefraSessionHook {
 
     pub async fn set_request_deadline_at(&self, deadline_at: Option<DateTime<Utc>>) {
         self.state.lock().await.request_deadline_at = deadline_at;
+    }
+
+    /// Mint a live-output writer for a foreground tool call and make sure
+    /// the flusher is running. The registry key must equal the persisted
+    /// row's `tool_call_id` column — for foreground calls that is the
+    /// internal call id (`ToolCallLifecycle::new` persists it as such).
+    pub(crate) fn foreground_live_output_writer(
+        &self,
+        internal_call_id: &str,
+    ) -> crate::background_tools::LiveToolOutputWriter {
+        self.ensure_live_output_flusher();
+        self.background_live_outputs.writer_for(internal_call_id)
+    }
+
+    /// Drop a finished call's live buffer so the flusher can go idle.
+    pub(crate) async fn release_live_output(&self, tool_call_id: &str) {
+        self.background_live_outputs.remove(tool_call_id).await;
+        self.live_output_flushed_seq
+            .lock()
+            .await
+            .remove(tool_call_id);
+    }
+
+    /// Start the demand-driven flusher if it is not already running. Called
+    /// whenever a live-output writer is handed out; the task exits on the
+    /// first pass that finds no live buffers.
+    pub(crate) fn ensure_live_output_flusher(&self) {
+        use std::sync::atomic::Ordering;
+        if self
+            .live_output_flusher_running
+            .swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        let hook = self.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(2));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                match hook.flush_live_output_tails().await {
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::debug!(error = %error, "live output flush failed");
+                    }
+                }
+                if hook.background_live_outputs.live_ids().await.is_empty() {
+                    break;
+                }
+            }
+            hook.live_output_flusher_running
+                .store(false, std::sync::atomic::Ordering::Release);
+        });
+    }
+
+    /// Persist a capped rolling tail of live output for every in-flight tool
+    /// call whose byte counter moved since the last flush. Additive telemetry
+    /// on the AgentToolCall document — no lifecycle transition is touched.
+    /// Per-call failures are logged and skipped so one bad row cannot stall
+    /// the sweep.
+    pub(crate) async fn flush_live_output_tails(&self) -> anyhow::Result<usize> {
+        const TAIL_PERSIST_BYTES: usize = 4096;
+
+        // The live registry is keyed by the ids its producers write under
+        // (background tool-call ids) — NOT the in-flight lifecycle map, whose
+        // internal call ids never appear in the registry.
+        let live_ids = self.background_live_outputs.live_ids().await;
+        {
+            let mut flushed = self.live_output_flushed_seq.lock().await;
+            flushed.retain(|id, _| live_ids.contains(id));
+        }
+
+        let mut count = 0usize;
+        for tool_call_id in live_ids {
+            let Some(snapshot) = self.background_live_outputs.snapshot(&tool_call_id).await else {
+                continue;
+            };
+            let seq = snapshot.combined.total_bytes_seen as i64;
+            if seq == 0 {
+                continue;
+            }
+            {
+                let mut flushed = self.live_output_flushed_seq.lock().await;
+                if flushed.get(&tool_call_id).copied() == Some(seq) {
+                    continue;
+                }
+                flushed.insert(tool_call_id.clone(), seq);
+            }
+            let bytes = &snapshot.combined.bytes;
+            let start = bytes.len().saturating_sub(TAIL_PERSIST_BYTES);
+            let tail = String::from_utf8_lossy(&bytes[start..]).to_string();
+
+            // DefraDB re-validates the whole document on update, so existing
+            // DateTime columns must be resupplied or the write errors. Fetch
+            // the row's current values (and skip rows that are not running —
+            // the CAS filter below would no-op anyway).
+            let row_query = format!(
+                r#"{{
+                    AgentToolCall(
+                        filter: {{ tool_call_id: {{ _eq: "{id}" }} }},
+                        limit: 1
+                    ) {{
+                        lifecycle_state
+                        started_at
+                        deadline_at
+                        completed_at
+                        unclaimed_deadline_at
+                        cancel_cascade_intent_at
+                        stuck_since
+                    }}
+                }}"#,
+                id = crate::graphql::escape_graphql_string(&tool_call_id),
+            );
+            let row_response = self.node.execute(&row_query).await;
+            let Some(row_value) = row_response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("AgentToolCall"))
+                .and_then(|value| value.as_array())
+                .and_then(|rows| rows.first())
+                .cloned()
+            else {
+                continue;
+            };
+            if row_value.get("lifecycle_state").and_then(|v| v.as_str()) != Some("running") {
+                continue;
+            }
+            let datetime_row: crate::background_completion::AgentToolCallDateTimeRow =
+                serde_json::from_value(row_value).unwrap_or_default();
+            let mut datetime_fields = Vec::new();
+            crate::background_completion::push_datetime_field(
+                &mut datetime_fields,
+                &[],
+                "started_at",
+                datetime_row.started_at.as_deref(),
+            );
+            crate::background_completion::push_datetime_field(
+                &mut datetime_fields,
+                &[],
+                "deadline_at",
+                datetime_row.deadline_at.as_deref(),
+            );
+            crate::background_completion::push_datetime_field(
+                &mut datetime_fields,
+                &[],
+                "completed_at",
+                datetime_row.completed_at.as_deref(),
+            );
+            crate::background_completion::push_datetime_field(
+                &mut datetime_fields,
+                &[],
+                "unclaimed_deadline_at",
+                datetime_row.unclaimed_deadline_at.as_deref(),
+            );
+            crate::background_completion::push_datetime_field(
+                &mut datetime_fields,
+                &[],
+                "cancel_cascade_intent_at",
+                datetime_row.cancel_cascade_intent_at.as_deref(),
+            );
+            crate::background_completion::push_datetime_field(
+                &mut datetime_fields,
+                &[],
+                "stuck_since",
+                datetime_row.stuck_since.as_deref(),
+            );
+            let datetime_fragment = if datetime_fields.is_empty() {
+                String::new()
+            } else {
+                format!(", {}", datetime_fields.join(", "))
+            };
+            // CAS on running: a straggler tick must never stamp telemetry
+            // onto a terminal row.
+            let mutation = format!(
+                r#"mutation {{
+                    update_AgentToolCall(
+                        filter: {{
+                            _and: [
+                                {{ tool_call_id: {{ _eq: "{id}" }} }},
+                                {{ lifecycle_state: {{ _eq: "running" }} }}
+                            ]
+                        }},
+                        input: {{ partial_output_tail: "{tail}", partial_output_seq: {seq}{datetimes} }}
+                    ) {{ _docID }}
+                }}"#,
+                id = crate::graphql::escape_graphql_string(&tool_call_id),
+                tail = crate::graphql::escape_graphql_string(&tail),
+                datetimes = datetime_fragment,
+            );
+            let response = self.node.execute(&mutation).await;
+            if response.has_errors() {
+                tracing::debug!(
+                    tool_call_id = %tool_call_id,
+                    errors = ?response.errors,
+                    "live output tail flush failed; will retry next tick"
+                );
+                let mut flushed = self.live_output_flushed_seq.lock().await;
+                flushed.remove(&tool_call_id);
+            } else {
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 
     pub(crate) async fn timeout_expired_tool_calls(&self) -> anyhow::Result<usize> {

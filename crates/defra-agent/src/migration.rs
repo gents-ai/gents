@@ -88,6 +88,11 @@ const ADD_AGENT_TOOL_CALL_R5_PATCH: &str = r#"[
     {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"stuck_since","Kind":"DateTime"}}
 ]"#;
 
+const ADD_AGENT_TOOL_CALL_LIVE_OUTPUT_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"partial_output_tail","Kind":"String"}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"partial_output_seq","Kind":"Int"}}
+]"#;
+
 const ADD_AGENT_TOOL_CALL_WORKFLOW_PATCH: &str = r#"[
     {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"workflow_group_id","Kind":"String"}},
     {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"workflow_role","Kind":"String"}}
@@ -576,6 +581,27 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
         tracing::debug!("AgentToolCall collection absent; subagent patch no-op");
         return Ok(());
     };
+
+    if let Some(ref cv) = active_atc_collection {
+        if collection_has_field(cv, "partial_output_tail") {
+            tracing::debug!("AgentToolCall already has live-output fields; skipping patch");
+        } else {
+            let pre_version_id = cv.version_id.clone();
+            let patched = node
+                .patch_collection("AgentToolCall", ADD_AGENT_TOOL_CALL_LIVE_OUTPUT_PATCH)
+                .await
+                .context("patch_collection AgentToolCall live-output fields")?;
+            node.set_active_collection_version(&patched.version_id)
+                .await
+                .context("set_active_collection_version AgentToolCall live-output fields")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                patched = %patched.version_id,
+                "AgentToolCall patched with live-output tail fields"
+            );
+            active_atc_collection = Some(patched);
+        }
+    }
 
     if let Some(ref cv) = active_atc_collection {
         if collection_has_field(cv, "unclaimed_deadline_at") {
