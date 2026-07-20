@@ -10,6 +10,8 @@ export type ChatHeaderProps = {
   selectedConversationTitle: string | null;
   selectedSessionId: string | null;
   onRenameConversationTitle: (sessionId: string, title: string) => void | Promise<void>;
+  onForkConversation?: (sessionId: string) => void | Promise<void>;
+  forking?: boolean;
 };
 
 export function ChatHeader({
@@ -18,6 +20,8 @@ export function ChatHeader({
   selectedConversationTitle,
   selectedSessionId,
   onRenameConversationTitle,
+  onForkConversation,
+  forking = false,
 }: ChatHeaderProps) {
   const visibleConversationTitle = selectedSessionId
     ? displayConversationTitle(selectedConversationTitle)
@@ -93,6 +97,18 @@ export function ChatHeader({
               >
                 Edit
               </button>
+              {onForkConversation && selectedSessionId ? (
+                <button
+                  className="icon-button"
+                  data-testid="conversation-fork"
+                  disabled={forking}
+                  onClick={() => void onForkConversation(selectedSessionId)}
+                  title="Fork this conversation from its current state into a new one"
+                  type="button"
+                >
+                  {forking ? "Forking..." : "Fork"}
+                </button>
+              ) : null}
             </div>
           )
         ) : (

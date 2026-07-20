@@ -72,6 +72,8 @@ export type {
   ResponseView,
   ToolDetailFieldView,
   ToolDetailValueView,
+  SessionForkResult,
+  RequestResendResult,
   RequestTimelineView,
   RunTimelineEventView,
 } from "./types/session";
