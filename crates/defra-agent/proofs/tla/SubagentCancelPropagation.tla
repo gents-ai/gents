@@ -6,7 +6,7 @@ EXTENDS Naturals, FiniteSets, TLC
 (*                                                                         *)
 (* Spec design:                                                            *)
 (*   docs/superpowers/specs/2026-05-13-subagent-cancel-propagation-        *)
-(*   tla-design.md                                                         *)
+(*   tla-design.md (removed from the tree; see git history)                *)
 (*                                                                         *)
 (* The local Lean bridge transition is abstracted as durable A-side        *)
 (* cancel intent. This module verifies delivery to the B-side child        *)

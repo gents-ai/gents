@@ -25,7 +25,7 @@ See `../README.md` for how this fits the broader formal-verification model.
   load-bearing; `PeerClaim` arms an illegal foreign claim to prove the safety
   invariant is falsifiable. Rust bindings cover persistent cap/window behavior,
   real P2P replay after cap exhaustion, and reconnect-triggered replicator
-  reinstall. Spec design: `docs/superpowers/specs/2026-07-08-replicated-request-convergence-664-design.md`.
+  reinstall. Spec design: `docs/superpowers/specs/2026-07-08-replicated-request-convergence-664-design.md` (removed from the tree; see git history).
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup

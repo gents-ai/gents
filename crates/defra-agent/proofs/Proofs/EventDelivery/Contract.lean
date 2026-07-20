@@ -4,7 +4,7 @@
 Shared abstract contract for lossy-subscription + bounded-rescan event delivery.
 Three runtime sources instantiate this contract: the request watcher, the
 event-trigger source, and the subagent source. See
-`docs/superpowers/specs/2026-05-13-event-drop-resync-lean-design.md` for the
+`docs/superpowers/specs/2026-05-13-event-drop-resync-lean-design.md` (removed from the tree; see git history) for the
 full design and the operational mapping to Rust call sites.
 -/
 

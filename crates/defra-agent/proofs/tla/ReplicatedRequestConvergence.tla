@@ -6,7 +6,7 @@ EXTENDS Naturals, FiniteSets, TLC
 (*                                                                         *)
 (* Spec design:                                                            *)
 (*   docs/superpowers/specs/2026-07-08-replicated-request-convergence-     *)
-(*   664-design.md                                                         *)
+(*   664-design.md (removed from the tree; see git history)                *)
 (*                                                                         *)
 (* Under party-scoped subagent-host replication one AgentRequest document  *)
 (* is replicated only to its requesting peer. SAFETY already holds: the    *)

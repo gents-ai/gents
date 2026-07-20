@@ -5,7 +5,7 @@ import Proofs.MCPHealth.Transition
 
 Safety, arithmetic, and liveness facts about `step?` / `run?`. Property
 tags (H1–H8, H6') match the spec table in §8 of
-`docs/superpowers/specs/2026-05-13-mcp-health-lean-design.md`.
+`docs/superpowers/specs/2026-05-13-mcp-health-lean-design.md` (removed from the tree; see git history).
 
 This file is built additively. Task 4 adds the easy safety/arithmetic facts;
 later tasks add H7 (K=1 collapse), H6 / H6' (liveness), and H5 (anti-flapping
