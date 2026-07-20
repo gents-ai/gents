@@ -39,6 +39,7 @@ import type {
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
+  NetworkStatusView,
 } from "./types";
 import type {
   DesktopOperationsSnapshot,
@@ -119,6 +120,7 @@ export type DesktopApiAdapter = {
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
   fetchPeerStatus: (serverAddress: string) => Promise<unknown>;
   repairP2P: () => Promise<DesktopClientSnapshot>;
+  fetchNetworkStatus: () => Promise<NetworkStatusView>;
   fetchSessionSnapshot: (
     sessionId: string,
     agentDid?: string | null,
@@ -227,6 +229,9 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   repairP2P() {
     return invokeDesktop<DesktopClientSnapshot>("desktop_p2p_repair");
+  },
+  fetchNetworkStatus() {
+    return invokeDesktop<NetworkStatusView>("desktop_network_status");
   },
   fetchSessionSnapshot(sessionId, agentDid, requestId) {
     return invokeDesktop<DesktopSessionSnapshot | null>("desktop_session_snapshot", {
@@ -418,6 +423,10 @@ export async function fetchPeerStatus(serverAddress: string) {
 
 export async function repairP2P() {
   return desktopApiAdapter().repairP2P();
+}
+
+export async function fetchNetworkStatus() {
+  return desktopApiAdapter().fetchNetworkStatus();
 }
 
 export async function fetchSessionSnapshot(
