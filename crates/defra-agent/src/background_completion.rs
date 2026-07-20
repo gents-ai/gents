@@ -110,13 +110,13 @@ struct ChildAckProbeRow {
 }
 
 #[derive(Debug, Deserialize, Default)]
-struct AgentToolCallDateTimeRow {
-    started_at: Option<String>,
-    deadline_at: Option<String>,
-    completed_at: Option<String>,
-    unclaimed_deadline_at: Option<String>,
-    cancel_cascade_intent_at: Option<String>,
-    stuck_since: Option<String>,
+pub(crate) struct AgentToolCallDateTimeRow {
+    pub(crate) started_at: Option<String>,
+    pub(crate) deadline_at: Option<String>,
+    pub(crate) completed_at: Option<String>,
+    pub(crate) unclaimed_deadline_at: Option<String>,
+    pub(crate) cancel_cascade_intent_at: Option<String>,
+    pub(crate) stuck_since: Option<String>,
 }
 
 pub async fn reconcile_unclaimed_cross_deployment_spawns(
@@ -490,7 +490,7 @@ async fn agent_tool_call_datetime_update_fragment(
     }
 }
 
-fn push_datetime_field(
+pub(crate) fn push_datetime_field(
     fields: &mut Vec<String>,
     omit: &[&str],
     field: &'static str,

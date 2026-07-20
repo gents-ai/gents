@@ -261,6 +261,16 @@ export function SubagentLineageView({
         </div>
       </header>
 
+      {tree?.partialErrors?.length ? (
+        <p
+          className="subagent-lineage-partial"
+          data-testid="lineage-partial-errors"
+          role="alert"
+        >
+          Some deployments could not be queried — branches may be missing:{" "}
+          {tree.partialErrors.join("; ")}
+        </p>
+      ) : null}
       <div
         className="subagent-lineage-filters"
         role="toolbar"

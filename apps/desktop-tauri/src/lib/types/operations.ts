@@ -86,10 +86,14 @@ export type SubagentTreeView = {
   nodes: SubagentNodeView[];
   edges: SubagentEdgeView[];
   truncated: boolean;
+  /** Deployments that could not be queried; their branches may be missing. */
+  partialErrors?: string[];
 };
 
 export type SubagentNodeView = {
   requestId: string;
+  /** Peer label the row was resolved from; absent = the local node. */
+  resolvedVia?: string | null;
   sessionId?: string | null;
   agentDid?: string | null;
   behaviorId?: string | null;
@@ -214,4 +218,17 @@ export type McpServiceProbeResult = {
 
 export type DesktopProbeMcpServiceRequest = {
   serviceId: string;
+};
+
+export type WorkspaceEntryView = {
+  name: string;
+  kind: "dir" | "file";
+  size?: number | null;
+};
+
+export type WorkspaceListingView = {
+  root: string;
+  subpath: string;
+  entries: WorkspaceEntryView[];
+  truncated: boolean;
 };

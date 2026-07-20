@@ -1,0 +1,93 @@
+@layer workspace {
+  .workspace-tree {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    min-height: 0;
+  }
+
+  .workspace-tree-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+  }
+
+  .workspace-tree-path {
+    font-size: var(--text-xs);
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .workspace-crumb {
+    min-height: 0;
+    padding: 0 var(--space-1);
+    font-size: var(--text-xs);
+  }
+
+  .workspace-tree-error {
+    color: var(--color-error);
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+  }
+
+  .workspace-entries {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  .workspace-entry {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-1) var(--space-3);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--color-text-soft);
+  }
+
+  button.workspace-entry-dir {
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    color: var(--color-info);
+  }
+
+  button.workspace-entry-dir:hover {
+    background: rgb(var(--overlay-rgb) / 0.05);
+  }
+
+  .workspace-entry-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .workspace-entry-size {
+    flex: none;
+    font-size: var(--text-2xs);
+    color: var(--color-text-muted);
+  }
+
+  .workspace-entry-copy {
+    opacity: 0;
+  }
+
+  .workspace-entry:hover .workspace-entry-copy,
+  .workspace-entry-copy:focus-visible {
+    opacity: 1;
+  }
+
+  .workspace-empty {
+    padding: var(--space-3);
+  }
+}

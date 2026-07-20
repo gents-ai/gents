@@ -265,7 +265,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
     // We only assert that the schedule exists with the expected
     // apply-owned shape here.
 
-    core.delete_skill("did:defra:amy", "amy-skill").await?;
+    core.delete_skill("amy-skill", "did:defra:amy").await?;
     let snapshot = core.store().snapshot();
     assert!(!snapshot
         .skills

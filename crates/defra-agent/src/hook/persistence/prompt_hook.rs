@@ -387,6 +387,7 @@ impl DefraSessionHook {
         args: &str,
         result: &str,
     ) -> HookAction {
+        self.release_live_output(internal_call_id).await;
         let persist_result: anyhow::Result<HookAction> = async {
             if let Some(terminal) = classify_managed_tool_result(result) {
                 let lifecycle = self

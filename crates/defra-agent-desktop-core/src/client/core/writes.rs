@@ -23,6 +23,7 @@ use super::bootstrap::{
     normalize_required, p2p_pairing_enabled_for_graphql, sync_branchable_collections_with_retry,
     BRANCHABLE_PAIR_SYNC_ENV, REMOTE_P2P_PAIRING_ENV,
 };
+use super::p2p_ops;
 use super::p2p_ops::{p2p_disconnect_peer, p2p_remove_replicator};
 use super::{ClientCore, ClientPeerStatus, PEER_ADD_OPERATION_TIMEOUT};
 
@@ -323,6 +324,106 @@ impl ClientCore {
                 }
             }
         });
+    }
+
+    /// Fork a conversation at a user turn, routed like every per-agent
+    /// operation. The caller principal must own the source session; the
+    /// runtime's fork machinery enforces that and the busy/turn-range rules.
+    pub async fn fork_session(
+        &self,
+        agent_did: &str,
+        source_session_id: &str,
+        at_user_turn: u32,
+        target_behavior_id: Option<&str>,
+    ) -> Result<defra_agent::ForkOutcome> {
+        let agent_did = normalize_required("agent_did", agent_did)?;
+        let source_session_id = normalize_required("source_session_id", source_session_id)?;
+        let params = defra_agent::ForkParams {
+            source_session_id,
+            fork_at_user_turn: at_user_turn,
+            caller_agent_did: agent_did,
+            target_behavior_id,
+        };
+        let result = match self.graphql_for_agent(agent_did).await {
+            Some(graphql) => defra_agent::fork_via_http(&graphql, params).await,
+            None => defra_agent::fork(self.node(), params).await,
+        };
+        match result {
+            Ok(outcome) => {
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop_core::writes",
+                    action = "session_fork",
+                    row_id = %outcome.session_id,
+                    source_session_id,
+                    "desktop write saved"
+                );
+                Ok(outcome)
+            }
+            Err(error) => {
+                Err(self.record_mutation_error("fork session", anyhow::Error::from(error)))
+            }
+        }
+    }
+
+    /// Reconstruct a request's persisted event timeline, routed like every
+    /// per-agent operation: remote GraphQL when the peer registers an
+    /// endpoint, the local node otherwise. Bounded so a dead peer fails the
+    /// panel instead of hanging it.
+    pub async fn request_timeline(
+        &self,
+        agent_did: &str,
+        request_id: &str,
+    ) -> Result<defra_agent::run_timeline::RunTimeline> {
+        let agent_did = normalize_required("agent_did", agent_did)?;
+        let request_id = normalize_required("request_id", request_id)?;
+        let access = match self.graphql_for_agent(agent_did).await {
+            Some(graphql) => defra_agent::config_client::ConfigAccess::Graphql(graphql),
+            None => defra_agent::config_client::ConfigAccess::Local(self.node_arc()),
+        };
+        let timeline = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            defra_agent::run_timeline_fetch::load_run_timeline(&access, request_id),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))?
+        // The GraphQL transport appends CLI-flavored operator hints
+        // ("run `defra-agent init`", "Retry with `--graphql ...`") that are
+        // meaningless inside the desktop app.
+        .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))?;
+        Ok(timeline)
+    }
+
+    /// Live P2P/network state for the visibility panel. Each probe fails
+    /// independently — a dead subsystem reports its error instead of hiding
+    /// the healthy ones.
+    pub async fn network_status(&self) -> NetworkStatus {
+        let local_peer_id = p2p_ops::p2p_local_peer_id(&self.p2p).await;
+        let listen_addresses = p2p_ops::p2p_listen_addresses(&self.p2p).await;
+        let connected_peers = p2p_ops::p2p_connected_peers(&self.p2p).await;
+        let replicators = p2p_ops::p2p_get_replicators(&self.p2p).await;
+        let saved_peers = self.peer_directory.read().await.records().to_vec();
+
+        NetworkStatus {
+            local_peer_id: local_peer_id.map_err(|error| error.to_string()),
+            listen_addresses: listen_addresses.map_err(|error| error.to_string()),
+            connected_peers: connected_peers.map_err(|error| error.to_string()),
+            replicators: replicators
+                .map(|rows| {
+                    rows.into_iter()
+                        .map(|info| NetworkReplicator {
+                            peer_id: info.id,
+                            address: info.address,
+                            collections: info.collections,
+                            status: info.status,
+                            last_status_change: info.last_status_change,
+                        })
+                        .collect()
+                })
+                .map_err(|error| error.to_string()),
+            saved_peers,
+        }
     }
 
     pub async fn graphql_for_agent(&self, agent_did: &str) -> Option<String> {
@@ -2073,4 +2174,38 @@ mod delete_source_tests {
             tool_selections_referencing_behavior(&selections, "did:key:alpha", "writer").is_empty()
         );
     }
+}
+
+/// Drop advice lines that only make sense at a CLI prompt.
+fn strip_cli_operator_hints(message: &str) -> String {
+    message
+        .lines()
+        .filter(|line| {
+            !line.contains("defra-agent init")
+                && !line.contains("defra-agent server")
+                && !line.contains("--graphql")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
+/// Independent probe results; `Err` carries the probe's failure message.
+#[derive(Debug, Clone)]
+pub struct NetworkStatus {
+    pub local_peer_id: std::result::Result<String, String>,
+    pub listen_addresses: std::result::Result<Vec<String>, String>,
+    pub connected_peers: std::result::Result<Vec<String>, String>,
+    pub replicators: std::result::Result<Vec<NetworkReplicator>, String>,
+    pub saved_peers: Vec<super::super::peer_directory::PeerRecord>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NetworkReplicator {
+    pub peer_id: Option<String>,
+    pub address: Option<String>,
+    pub collections: Vec<String>,
+    pub status: Option<u8>,
+    pub last_status_change: Option<String>,
 }

@@ -163,7 +163,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         unreachable!("node_arc had exactly one strong reference at this point")
     });
 
-    let access = ConfigAccess::Local(node);
+    let access = ConfigAccess::Local(std::sync::Arc::new(node));
     let summary = initialize_runtime_home(
         &access,
         &args,

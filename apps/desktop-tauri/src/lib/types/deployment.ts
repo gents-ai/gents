@@ -247,3 +247,45 @@ export type DesktopClientSnapshot = {
   bootstrap: BootstrapSummary;
   client?: RuntimeSnapshot | null;
 };
+
+/// Raw runtime tool-surface explanation: camelCase envelope from the bridge,
+/// snake_case `surface` payload straight from the runtime's serializer.
+export type ToolSurfaceExplanationView = {
+  behaviorId: string;
+  enabled: boolean;
+  toolSelectionId?: string | null;
+  toolSelectionSource: string;
+  toolPolicyVersion?: string | null;
+  toolPolicySemantics: string;
+  ceilingSource: string;
+  mcpServicesOnline: boolean;
+  surface: Record<string, unknown>;
+};
+
+export type NetworkReplicatorView = {
+  peerId?: string | null;
+  address?: string | null;
+  collections: string[];
+  status?: number | null;
+  lastStatusChange?: string | null;
+};
+
+export type NetworkSavedPeerView = {
+  peerId: string;
+  label: string;
+  addr: string;
+  agentDid: string;
+  source?: string | null;
+};
+
+export type NetworkStatusView = {
+  localPeerId?: string | null;
+  localPeerIdError?: string | null;
+  listenAddresses: string[];
+  listenAddressesError?: string | null;
+  connectedPeers: string[];
+  connectedPeersError?: string | null;
+  replicators: NetworkReplicatorView[];
+  replicatorsError?: string | null;
+  savedPeers: NetworkSavedPeerView[];
+};

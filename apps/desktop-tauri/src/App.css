@@ -1,4 +1,4 @@
-@layer tokens, base, primitives, shell, sidebar, chat, fleet, config, transcript, components, backend-health, backgrounded-tools, utilities;
+@layer tokens, base, primitives, shell, sidebar, chat, fleet, config, transcript, components, backend-health, backgrounded-tools, utilities, trace, workspace;
 
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/funnel-display";
@@ -32,3 +32,5 @@
 @import "./styles/backgrounded-tools.css";
 @import "./styles/cancel-ux.css";
 @import "./styles/utilities.css";
+@import "./styles/trace.css";
+@import "./styles/workspace-tree.css";

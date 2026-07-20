@@ -600,7 +600,7 @@ pub(crate) async fn resolve_config_access(
             unreachable!("node_arc had exactly one strong reference at this point")
         })
     };
-    Ok((ConfigAccess::Local(node), home_dir))
+    Ok((ConfigAccess::Local(std::sync::Arc::new(node)), home_dir))
 }
 
 pub(crate) fn persistent_node_builder(data_dir: &Path) -> NodeBuilder {
