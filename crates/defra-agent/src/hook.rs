@@ -523,6 +523,27 @@ impl DefraSessionHook {
         self.state.lock().await.request_deadline_at = deadline_at;
     }
 
+    /// Mint a live-output writer for a foreground tool call and make sure
+    /// the flusher is running. The registry key must equal the persisted
+    /// row's `tool_call_id` column — for foreground calls that is the
+    /// internal call id (`ToolCallLifecycle::new` persists it as such).
+    pub(crate) fn foreground_live_output_writer(
+        &self,
+        internal_call_id: &str,
+    ) -> crate::background_tools::LiveToolOutputWriter {
+        self.ensure_live_output_flusher();
+        self.background_live_outputs.writer_for(internal_call_id)
+    }
+
+    /// Drop a finished call's live buffer so the flusher can go idle.
+    pub(crate) async fn release_live_output(&self, tool_call_id: &str) {
+        self.background_live_outputs.remove(tool_call_id).await;
+        self.live_output_flushed_seq
+            .lock()
+            .await
+            .remove(tool_call_id);
+    }
+
     /// Start the demand-driven flusher if it is not already running. Called
     /// whenever a live-output writer is handed out; the task exits on the
     /// first pass that finds no live buffers.
