@@ -420,6 +420,51 @@ export function createDesktopUiHarness(
       notify("peers");
       return snapshot();
     },
+    async fetchRequestTimeline(agentDid, requestId) {
+      if (agentDid !== AGENT_DID) {
+        throw new Error(`no deployment for ${agentDid}`);
+      }
+      return {
+        request_id: requestId,
+        session_id: "session-intro",
+        agent_did: agentDid,
+        behavior_id: DEFAULT_BEHAVIOR_ID,
+        child_request_ids: [],
+        events: [
+          {
+            kind: "request",
+            request_id: requestId,
+            lifecycle_state: "Completed",
+            timestamp: STARTED_AT,
+          },
+          {
+            kind: "message",
+            role: "user",
+            content: "hello there",
+            sequence: 1,
+            session_id: "session-intro",
+            timestamp: STARTED_AT,
+          },
+          {
+            kind: "tool_call",
+            tool_name: "defra_exec",
+            tool_call_id: "tc-1",
+            session_id: "session-intro",
+            status: "completed",
+            lifecycle_state: "Completed",
+            args: "{}",
+            result: "ok",
+            started_at: STARTED_AT,
+          },
+          {
+            kind: "response",
+            status: "materialized",
+            session_id: "session-intro",
+            timestamp: STARTED_AT,
+          },
+        ],
+      };
+    },
     async explainToolSurface(agentDid, behaviorId) {
       if (agentDid !== AGENT_DID) {
         throw new Error(

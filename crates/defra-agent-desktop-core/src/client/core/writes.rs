@@ -326,6 +326,34 @@ impl ClientCore {
         });
     }
 
+    /// Reconstruct a request's persisted event timeline, routed like every
+    /// per-agent operation: remote GraphQL when the peer registers an
+    /// endpoint, the local node otherwise. Bounded so a dead peer fails the
+    /// panel instead of hanging it.
+    pub async fn request_timeline(
+        &self,
+        agent_did: &str,
+        request_id: &str,
+    ) -> Result<defra_agent::run_timeline::RunTimeline> {
+        let agent_did = normalize_required("agent_did", agent_did)?;
+        let request_id = normalize_required("request_id", request_id)?;
+        let access = match self.graphql_for_agent(agent_did).await {
+            Some(graphql) => defra_agent::config_client::ConfigAccess::Graphql(graphql),
+            None => defra_agent::config_client::ConfigAccess::Local(self.node_arc()),
+        };
+        let timeline = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            defra_agent::run_timeline_fetch::load_run_timeline(&access, request_id),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))?
+        // The GraphQL transport appends CLI-flavored operator hints
+        // ("run `defra-agent init`", "Retry with `--graphql ...`") that are
+        // meaningless inside the desktop app.
+        .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))?;
+        Ok(timeline)
+    }
+
     /// Live P2P/network state for the visibility panel. Each probe fails
     /// independently — a dead subsystem reports its error instead of hiding
     /// the healthy ones.
@@ -2105,6 +2133,21 @@ mod delete_source_tests {
             tool_selections_referencing_behavior(&selections, "did:key:alpha", "writer").is_empty()
         );
     }
+}
+
+/// Drop advice lines that only make sense at a CLI prompt.
+fn strip_cli_operator_hints(message: &str) -> String {
+    message
+        .lines()
+        .filter(|line| {
+            !line.contains("defra-agent init")
+                && !line.contains("defra-agent server")
+                && !line.contains("--graphql")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 /// Independent probe results; `Err` carries the probe's failure message.

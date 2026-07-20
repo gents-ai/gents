@@ -1657,7 +1657,7 @@ mod live_tests {
         ensure_runtime_schemas(&node).await?;
 
         // No local AgentBehavior is seeded; the target names a remote agent_did.
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
 
         let manifest = manifest_with_subagent_targets(vec![SubagentTarget {
             name: "remote-researcher".to_string(),
@@ -1689,7 +1689,7 @@ mod live_tests {
             .await?;
         ensure_runtime_schemas(&node).await?;
 
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
 
         let manifest = manifest_with_subagent_targets(vec![SubagentTarget {
             name: "researcher".to_string(),
@@ -1727,7 +1727,7 @@ mod live_tests {
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
         let peer_id = "aa".repeat(32);
         let peer_did = "did:key:remote";
         let address = format!("{peer_id}@127.0.0.1:4100");
@@ -1838,7 +1838,7 @@ mod live_tests {
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
         let peer_id = "bb".repeat(32);
         let address = format!("{peer_id}@127.0.0.1:4100");
         let mut manifest = manifest_with_subagent_targets(Vec::new());
@@ -2043,7 +2043,7 @@ mod live_tests {
             .with_storage_backend(StorageBackend::RocksDb)
             .build()
             .await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
         let live_bundle = build_desired_state_live_bundle(&access, &manifest).await?;
         let (live_principal, live_manifest) = live_manifest_from_bundle(&manifest, &live_bundle)?;
         let removal = diff_manifests(
@@ -2110,7 +2110,7 @@ mod live_tests {
             .await?;
         ensure_runtime_schemas(&node).await?;
 
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
 
         // Seed a minimal AgentPrincipal so build_desired_state_live_bundle can
         // find the agent on the second (post-apply) read.
@@ -2321,7 +2321,7 @@ mod live_tests {
             .await?;
         ensure_runtime_schemas(&node).await?;
 
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
 
         // Seed a minimal AgentPrincipal so build_desired_state_live_bundle can
         // find the agent on the second (post-apply) read.

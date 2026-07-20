@@ -39,6 +39,7 @@ import type {
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
+  RequestTimelineView,
   ToolSurfaceExplanationView,
   NetworkStatusView,
 } from "./types";
@@ -121,6 +122,10 @@ export type DesktopApiAdapter = {
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
   fetchPeerStatus: (serverAddress: string) => Promise<unknown>;
   repairP2P: () => Promise<DesktopClientSnapshot>;
+  fetchRequestTimeline: (
+    agentDid: string,
+    requestId: string,
+  ) => Promise<RequestTimelineView>;
   explainToolSurface: (
     agentDid: string,
     behaviorId: string,
@@ -234,6 +239,12 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   repairP2P() {
     return invokeDesktop<DesktopClientSnapshot>("desktop_p2p_repair");
+  },
+  fetchRequestTimeline(agentDid, requestId) {
+    return invokeDesktop<RequestTimelineView>("desktop_request_timeline", {
+      agentDid,
+      requestId,
+    });
   },
   explainToolSurface(agentDid, behaviorId) {
     return invokeDesktop<ToolSurfaceExplanationView>("desktop_tool_surface_explain", {
@@ -434,6 +445,10 @@ export async function fetchPeerStatus(serverAddress: string) {
 
 export async function repairP2P() {
   return desktopApiAdapter().repairP2P();
+}
+
+export async function fetchRequestTimeline(agentDid: string, requestId: string) {
+  return desktopApiAdapter().fetchRequestTimeline(agentDid, requestId);
 }
 
 export async function explainToolSurface(agentDid: string, behaviorId: string) {
