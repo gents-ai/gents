@@ -1,0 +1,99 @@
+@layer trace {
+  .trace-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    min-height: 0;
+  }
+
+  .trace-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+  }
+
+  .trace-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .trace-error {
+    color: var(--color-error);
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+  }
+
+  .trace-events {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  .trace-event {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: var(--space-3) var(--space-4);
+    background: rgb(var(--source-ink-2-rgb) / 0.6);
+  }
+
+  .trace-event-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+
+  .trace-kind {
+    flex: none;
+    font-size: var(--text-2xs);
+  }
+
+  .trace-kind-tool_call {
+    color: var(--color-info);
+  }
+
+  .trace-kind-response {
+    color: var(--color-success);
+  }
+
+  .trace-kind-inference_call {
+    color: var(--color-warning-soft);
+  }
+
+  .trace-event-summary {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--text-sm);
+    color: var(--color-text-soft);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .trace-event-time {
+    flex: none;
+    font-size: var(--text-2xs);
+    color: var(--color-text-muted);
+  }
+
+  .trace-event-details summary {
+    cursor: pointer;
+    font-size: var(--text-2xs);
+    color: var(--color-text-muted);
+  }
+
+  .trace-event-details pre {
+    margin: var(--space-3) 0 0;
+    font-size: var(--text-2xs);
+    overflow-x: auto;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+}

@@ -7,7 +7,7 @@
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::{EmbeddedNode, QueryResponse};
 use serde::{Deserialize, Serialize};
 
 use crate::graphql::escape_graphql_string;
@@ -704,10 +704,7 @@ pub async fn delete_goal(node: &EmbeddedNode, goal: &GoalDocument) -> Result<boo
             delete_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, agent_did: {{ _eq: "{agent_did}" }} }}) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        bail!("delete goal failed: {:?}", response.errors);
-    }
+    let response = execute_goal_mutation_response(node, &mutation, "delete goal").await?;
     Ok(response
         .data
         .as_ref()
@@ -734,10 +731,7 @@ pub async fn delete_goals_for_session(
             }}) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        bail!("delete session goals failed: {:?}", response.errors);
-    }
+    let response = execute_goal_mutation_response(node, &mutation, "delete session goals").await?;
     Ok(response
         .data
         .as_ref()
@@ -911,11 +905,21 @@ async fn load_goal_by_doc_id(node: &EmbeddedNode, doc_id: &str) -> Result<Option
 }
 
 async fn execute_goal_mutation(node: &EmbeddedNode, mutation: &str, label: &str) -> Result<()> {
-    let response = node.execute(mutation).await;
+    execute_goal_mutation_response(node, mutation, label)
+        .await
+        .map(|_| ())
+}
+
+async fn execute_goal_mutation_response(
+    node: &EmbeddedNode,
+    mutation: &str,
+    label: &str,
+) -> Result<QueryResponse> {
+    let response = crate::retry::execute_graphql_with_conflict_retry(node, mutation, label).await;
     if response.has_errors() {
         bail!("{label} failed: {:?}", response.errors);
     }
-    Ok(())
+    Ok(response)
 }
 
 fn mutation_returned_rows(value: &serde_json::Value) -> bool {

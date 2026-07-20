@@ -4,6 +4,7 @@ export * from "@antithesishq/bombadil/browser/defaults";
 
 const shellState = extract((state) => {
   const document = state.document;
+  const errorBanner = document.querySelector('[data-testid="error-banner"]');
   const surfaceSelectors = [
     '[data-testid="fleet-dashboard"]',
     '[data-testid="fleet-empty"]',
@@ -12,8 +13,17 @@ const shellState = extract((state) => {
   ];
   return {
     shellMounted: Boolean(document.querySelector(".app-shell")),
-    errorBanner:
-      document.querySelector('[data-testid="error-banner"]')?.textContent ?? "",
+    errorBanner: {
+      visible: Boolean(errorBanner),
+      message: normalizeText(
+        errorBanner?.querySelector(".error-banner-message")?.textContent ?? "",
+      ),
+      isAlert: errorBanner?.getAttribute("role") === "alert",
+      copyActionCount: errorBanner?.querySelectorAll("button.copy-button").length ?? 0,
+      dismissActionCount:
+        errorBanner?.querySelectorAll('[data-testid="error-banner-dismiss"]').length ??
+        0,
+    },
     documentWidth: Math.max(
       document.documentElement.scrollWidth,
       document.body?.scrollWidth ?? 0,
@@ -161,9 +171,16 @@ export const desktop_shell_has_one_primary_surface = always(
   () => shellState.current.primarySurfaceCount === 1,
 );
 
-export const desktop_shell_does_not_show_global_errors = always(
-  () => shellState.current.errorBanner.length === 0,
-);
+export const desktop_global_errors_are_actionable = always(() => {
+  const banner = shellState.current.errorBanner;
+  return (
+    !banner.visible ||
+    (banner.message.length > 0 &&
+      banner.isAlert &&
+      banner.copyActionCount === 1 &&
+      banner.dismissActionCount === 1)
+  );
+});
 
 export const desktop_shell_does_not_horizontally_overflow = always(
   () => shellState.current.documentWidth <= shellState.current.viewportWidth + 2,

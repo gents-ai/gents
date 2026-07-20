@@ -124,3 +124,22 @@ pub(crate) fn desktop_request_resend(
         })
     })
 }
+
+#[tauri::command]
+pub(crate) fn desktop_request_timeline(
+    agent_did: String,
+    request_id: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<serde_json::Value, String> {
+    let Some(core) = current_core(&state) else {
+        return Err("desktop client is not running".to_string());
+    };
+
+    tauri::async_runtime::block_on(async move {
+        let timeline = core
+            .request_timeline(&agent_did, &request_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        serde_json::to_value(&timeline).map_err(|error| error.to_string())
+    })
+}

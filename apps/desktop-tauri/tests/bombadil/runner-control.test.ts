@@ -119,6 +119,40 @@ describe("Bombadil watchdog recovery", () => {
     expect(child.killSignals).toEqual([]);
   });
 
+  it("preserves a successful run when macOS denies cleanup of its exited group", async () => {
+    const child = new FakeChild(432);
+    child.finish(0);
+    const signals: Array<[number, string]> = [];
+
+    await stopProcess(child, {
+      killProcessGroup: true,
+      killByPid: (pid: number, signal: string | number) => {
+        signals.push([pid, String(signal)]);
+        const error = new Error("operation not permitted") as NodeJS.ErrnoException;
+        error.code = "EPERM";
+        throw error;
+      },
+    });
+
+    expect(signals).toEqual([[-432, "SIGTERM"]]);
+    expect(child.exitCode).toBe(0);
+  });
+
+  it("rejects permission errors while the Bombadil leader is still running", async () => {
+    const child = new FakeChild(543);
+
+    await expect(
+      stopProcess(child, {
+        killProcessGroup: true,
+        killByPid: () => {
+          const error = new Error("operation not permitted") as NodeJS.ErrnoException;
+          error.code = "EPERM";
+          throw error;
+        },
+      }),
+    ).rejects.toMatchObject({ code: "EPERM" });
+  });
+
   it("drains the killed Bombadil leader before allowing a retry", async () => {
     const child = new FakeChild(654);
     const signals: Array<[number, string]> = [];

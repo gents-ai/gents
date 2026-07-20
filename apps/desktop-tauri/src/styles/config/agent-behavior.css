@@ -1,4 +1,59 @@
 @layer config {
+  .behavior-tool-surface {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    align-items: flex-start;
+  }
+
+  .behavior-tool-surface-body {
+    width: 100%;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: var(--space-5);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    background: rgb(var(--source-ink-2-rgb) / 0.6);
+  }
+
+  .behavior-tool-surface-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+  }
+
+  .behavior-tool-surface-meta {
+    margin: 0;
+    font-size: var(--text-xs);
+  }
+
+  .behavior-tool-surface-error {
+    color: var(--color-error);
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+  }
+
+  .behavior-tool-surface-warning {
+    color: var(--color-warning-soft);
+    font-size: var(--text-xs);
+    margin: 0;
+  }
+
+  .behavior-tool-surface-names {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .behavior-tool-surface-reasons {
+    margin: 0;
+    padding-left: var(--space-7);
+    font-size: var(--text-sm);
+    color: var(--color-text-soft);
+  }
+
   .agent-config-editor {
     align-content: start;
   }

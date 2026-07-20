@@ -53,18 +53,11 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
 
-    let watcher_task = tokio::spawn(run_control_watcher(
-        node.clone(),
-        agent.agent_did().to_string(),
-        resolve_context,
-        proposal_tx,
-        runtime_status.clone(),
-        mpsc::channel::<()>(1).1,
-        shutdown_rx,
-    ));
-
-    tokio::task::yield_now().await;
-
+    // Subscribe first, then publish before the watcher future is ever polled.
+    // DefraDB subscriptions are live-only, so this deterministically guards
+    // the startup ordering that prevents a post-Ready config update from
+    // falling into the gap between readiness and watcher startup.
+    let subscription = node.subscribe(&[defra_node::EventName::Update]);
     let mut default_behavior =
         crate::load_agent_behavior(node.as_ref(), agent.default_behavior_id())
             .await
@@ -74,6 +67,17 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     crate::upsert_agent_behavior(node.as_ref(), &default_behavior)
         .await
         .unwrap();
+
+    let watcher_task = tokio::spawn(run_control_watcher(
+        node.clone(),
+        subscription,
+        agent.agent_did().to_string(),
+        resolve_context,
+        proposal_tx,
+        runtime_status.clone(),
+        mpsc::channel::<()>(1).1,
+        shutdown_rx,
+    ));
 
     tokio::task::yield_now().await;
     let debouncing = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
@@ -136,6 +140,7 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
 
     let watcher_task = tokio::spawn(run_control_watcher(
         node.clone(),
+        node.subscribe(&[defra_node::EventName::Update]),
         agent.agent_did().to_string(),
         resolve_context,
         proposal_tx,
@@ -244,6 +249,7 @@ async fn control_watcher_recovers_after_resolve_error() {
 
     let watcher_task = tokio::spawn(run_control_watcher(
         node.clone(),
+        node.subscribe(&[defra_node::EventName::Update]),
         agent.agent_did().to_string(),
         resolve_context,
         proposal_tx,
@@ -312,6 +318,7 @@ async fn control_watcher_resolves_tool_selection_into_reconciled_tool_surface() 
 
     let watcher_task = tokio::spawn(run_control_watcher(
         node.clone(),
+        node.subscribe(&[defra_node::EventName::Update]),
         agent.agent_did().to_string(),
         resolve_context,
         proposal_tx,

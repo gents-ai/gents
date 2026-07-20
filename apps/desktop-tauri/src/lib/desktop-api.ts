@@ -41,6 +41,9 @@ import type {
   ToolServiceTestResult,
   SessionForkResult,
   RequestResendResult,
+  RequestTimelineView,
+  ToolSurfaceExplanationView,
+  NetworkStatusView,
 } from "./types";
 import type {
   DesktopOperationsSnapshot,
@@ -121,6 +124,15 @@ export type DesktopApiAdapter = {
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
   fetchPeerStatus: (serverAddress: string) => Promise<unknown>;
   repairP2P: () => Promise<DesktopClientSnapshot>;
+  fetchRequestTimeline: (
+    agentDid: string,
+    requestId: string,
+  ) => Promise<RequestTimelineView>;
+  explainToolSurface: (
+    agentDid: string,
+    behaviorId: string,
+  ) => Promise<ToolSurfaceExplanationView>;
+  fetchNetworkStatus: () => Promise<NetworkStatusView>;
   fetchSessionSnapshot: (
     sessionId: string,
     agentDid?: string | null,
@@ -236,6 +248,21 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   repairP2P() {
     return invokeDesktop<DesktopClientSnapshot>("desktop_p2p_repair");
+  },
+  fetchRequestTimeline(agentDid, requestId) {
+    return invokeDesktop<RequestTimelineView>("desktop_request_timeline", {
+      agentDid,
+      requestId,
+    });
+  },
+  explainToolSurface(agentDid, behaviorId) {
+    return invokeDesktop<ToolSurfaceExplanationView>("desktop_tool_surface_explain", {
+      agentDid,
+      behaviorId,
+    });
+  },
+  fetchNetworkStatus() {
+    return invokeDesktop<NetworkStatusView>("desktop_network_status");
   },
   fetchSessionSnapshot(sessionId, agentDid, requestId) {
     return invokeDesktop<DesktopSessionSnapshot | null>("desktop_session_snapshot", {
@@ -438,6 +465,18 @@ export async function fetchPeerStatus(serverAddress: string) {
 
 export async function repairP2P() {
   return desktopApiAdapter().repairP2P();
+}
+
+export async function fetchRequestTimeline(agentDid: string, requestId: string) {
+  return desktopApiAdapter().fetchRequestTimeline(agentDid, requestId);
+}
+
+export async function explainToolSurface(agentDid: string, behaviorId: string) {
+  return desktopApiAdapter().explainToolSurface(agentDid, behaviorId);
+}
+
+export async function fetchNetworkStatus() {
+  return desktopApiAdapter().fetchNetworkStatus();
 }
 
 export async function fetchSessionSnapshot(

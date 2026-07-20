@@ -12,6 +12,7 @@ import type {
   SkillView,
   ToolSelectionView,
 } from "../../lib/types";
+import { BehaviorToolSurface } from "./BehaviorToolSurface";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { isDirty } from "./configDirty";
 import {
@@ -491,6 +492,11 @@ export function BehaviorConfigEditor({
           <dd>{resolvedModel}</dd>
         </div>
       </div>
+
+      <BehaviorToolSurface
+        agentDid={agentDid}
+        behaviorId={behavior?.behaviorId ?? null}
+      />
 
       <section className="behavior-skills-box" data-testid="behavior-skills">
         <p className="eyebrow">Skills</p>
