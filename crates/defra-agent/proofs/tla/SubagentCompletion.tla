@@ -6,7 +6,7 @@ EXTENDS Naturals, FiniteSets, TLC
 (*                                                                         *)
 (* Spec design:                                                            *)
 (*   docs/superpowers/specs/2026-05-12-subagent-completion-cross-          *)
-(*   deployment-tla-design.md                                              *)
+(*   deployment-tla-design.md (removed from the tree; see git history)     *)
 (*                                                                         *)
 (* Parent bridge rows live on deployment A; child request terminal state   *)
 (* is durable on deployment B; A learns through document-gossip delivery.  *)

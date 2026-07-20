@@ -7,5 +7,5 @@ import Proofs.Identity.Conformance
 # Identity
 
 Barrel for the `AgentPrincipal` / `AgentBehavior` / `AgentDeployment`
-split model. See `docs/superpowers/specs/2026-05-13-identity-split-lean-design.md`.
+split model. See `docs/superpowers/specs/2026-05-13-identity-split-lean-design.md` (removed from the tree; see git history).
 -/

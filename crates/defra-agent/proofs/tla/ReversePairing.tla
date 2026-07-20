@@ -5,6 +5,7 @@ EXTENDS Naturals, FiniteSets, TLC
 (* Reverse-pairing subscription/replicator convergence between two peers.  *)
 (* Spec design:                                                            *)
 (*   docs/superpowers/specs/2026-05-08-reverse-pairing-tla-design.md       *)
+(*   (removed from the tree; see git history)                              *)
 (*                                                                         *)
 (* This module models the abstract control-plane: state, RPC kinds, and    *)
 (* actions. MCReversePairing.tla instantiates with bounded constants for   *)

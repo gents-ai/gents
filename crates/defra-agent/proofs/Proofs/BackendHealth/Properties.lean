@@ -8,7 +8,7 @@ below the threshold), one success promotes, operator intent is never
 overridden upward, and the unprobed state never vetoes routing.
 
 Property tags B1–B6 match §1 of
-`docs/superpowers/specs/2026-07-07-backend-probe-health-640-design.md`.
+`docs/superpowers/specs/2026-07-07-backend-probe-health-640-design.md` (removed from the tree; see git history).
 -/
 
 namespace Proofs.BackendHealth

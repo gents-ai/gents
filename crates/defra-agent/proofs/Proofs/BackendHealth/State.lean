@@ -5,7 +5,7 @@ import Proofs.Basic
 
 Per-backend, per-runtime state machine for the scheduled inference-backend
 prober (#640). See
-`docs/superpowers/specs/2026-07-07-backend-probe-health-640-design.md`.
+`docs/superpowers/specs/2026-07-07-backend-probe-health-640-design.md` (removed from the tree; see git history).
 
 Measured health is observer-relative and lives in-memory on each runtime;
 this model governs the local machine only. The shared `InferenceBackend`

@@ -3,7 +3,7 @@
 //! Each running node writes (and periodically refreshes) its own row in
 //! `PeerRegistry`, keyed by `peer_id`. This makes nodes discoverable to peers
 //! that replicate the collection — the foundation of the service-discovery
-//! layer described in `docs/superpowers/specs/2026-06-13-peer-registry-service-discovery-design.md`.
+//! layer described in `docs/superpowers/specs/2026-06-13-peer-registry-service-discovery-design.md` (removed from the tree; see git history).
 
 use std::sync::Arc;
 use std::time::Duration;

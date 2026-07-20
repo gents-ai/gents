@@ -3,7 +3,7 @@
 //! `p2p network` is a top-level declarative noun (alongside `p2p pairings`).
 //! It targets the `PeerRegistry` collection, which is the foundation of the
 //! service-discovery layer described in
-//! `docs/superpowers/specs/2026-06-13-peer-registry-service-discovery-design.md`.
+//! `docs/superpowers/specs/2026-06-13-peer-registry-service-discovery-design.md` (removed from the tree; see git history).
 
 use std::io::{self, Write};
 

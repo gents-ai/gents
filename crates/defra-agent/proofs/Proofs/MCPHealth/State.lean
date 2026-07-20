@@ -4,7 +4,7 @@ import Proofs.Basic
 # MCP Health / Eviction — Types
 
 Per-service state machine for the MCP connection-pool health checker. See
-`docs/superpowers/specs/2026-05-13-mcp-health-lean-design.md` for the design.
+`docs/superpowers/specs/2026-05-13-mcp-health-lean-design.md` (removed from the tree; see git history) for the design.
 
 `HealthState` is the four-state lifecycle from #186. `ServiceModel` carries the
 state plus a `failureCount` that distinguishes the two semantic flavors of

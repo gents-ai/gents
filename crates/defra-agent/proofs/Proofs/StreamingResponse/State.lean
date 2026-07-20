@@ -7,7 +7,7 @@ import Proofs.Transcript.State
 # StreamingResponse State
 
 State vocabulary for the AgentResponse streaming → terminal lifecycle.
-See `docs/superpowers/specs/2026-05-14-agent-response-streaming-lean-design.md`.
+See `docs/superpowers/specs/2026-05-14-agent-response-streaming-lean-design.md` (removed from the tree; see git history).
 -/
 
 namespace StreamingResponse

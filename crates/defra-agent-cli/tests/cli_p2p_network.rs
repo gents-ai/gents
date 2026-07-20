@@ -10,7 +10,7 @@
 //! 3. **Authorization** — a member-signed invite gates *entry* (join), and
 //!    `subagent_allow_cross_deployment` gates *delegation* (subagent dispatch).
 //!
-//! See `docs/superpowers/specs/2026-06-13-peer-registry-service-discovery-design.md`.
+//! See `docs/superpowers/specs/2026-06-13-peer-registry-service-discovery-design.md` (removed from the tree; see git history).
 //!
 //! All waits are condition-polled with timeouts (no fixed sleeps): flaky tests
 //! are defects here.

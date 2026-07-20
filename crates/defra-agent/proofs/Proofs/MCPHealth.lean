@@ -11,5 +11,5 @@ Per-service Lean state machine for the MCP connection-pool health checker.
 Four-state lifecycle (`healthy → degraded → evicted → reconnecting`)
 parameterized by a failure-count threshold K. K=1 matches today's Rust;
 K ≥ 2 admits the bounded-flap regime. See
-`docs/superpowers/specs/2026-05-13-mcp-health-lean-design.md` for the design.
+`docs/superpowers/specs/2026-05-13-mcp-health-lean-design.md` (removed from the tree; see git history) for the design.
 -/
