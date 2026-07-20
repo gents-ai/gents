@@ -4,6 +4,7 @@
 //! #276) and the MCP-health commands (panel #278) are live.
 
 use std::sync::Arc;
+#[cfg(test)]
 use std::time::Duration;
 
 use chrono::Utc;
@@ -11,6 +12,7 @@ use defra_agent::backend_registry::{derive_display_state, list_all_backends};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent_desktop_core::client::ClientCore;
+#[cfg(test)]
 use reqwest::Url;
 use tauri::State;
 
@@ -19,7 +21,7 @@ use super::super::snapshot::operations_snapshot::{
     project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
 };
 use super::super::snapshot::subagent_tree::{
-    build_local_subagent_tree, effective_subagent_tree_max_depth,
+    build_subagent_tree, effective_subagent_tree_max_depth, SubagentTreeAccess, TreeQueryAccess,
 };
 use super::super::state::{current_core, DesktopAppState};
 use super::super::types::{
@@ -30,6 +32,7 @@ use super::super::types::{
     RuntimeLivenessView, SubagentTreeView,
 };
 
+#[cfg(test)]
 const SUBAGENT_TREE_TIMEOUT: Duration = Duration::from_secs(10);
 const BACKGROUND_TOOL_CALL_LIMIT: usize = 256;
 
@@ -256,55 +259,43 @@ pub(crate) async fn desktop_list_subagent_tree(
     let core = current_core(&state)
         .ok_or_else(|| "desktop bridge has not finished bootstrapping".to_string())?;
 
-    let agent_did = match request.agent_did.as_deref().map(str::trim) {
-        Some(value) if !value.is_empty() => value.to_string(),
-        _ => core
-            .selected_agent_did()
-            .ok_or_else(|| "no agent selected; pass agentDid explicitly".to_string())?,
-    };
-
-    let Some(graphql) = core.graphql_for_agent(&agent_did).await else {
-        return build_local_subagent_tree(
-            core.node(),
-            root_request_id,
-            request.include_terminal.unwrap_or(false),
-            effective_subagent_tree_max_depth(request.max_depth),
-        )
-        .await
-        .map_err(|error| format!("local subagent tree query failed: {error:#}"));
-    };
-    let url = subagent_tree_url(&graphql, root_request_id, &request)?;
-
-    let client = reqwest::Client::builder()
-        .timeout(SUBAGENT_TREE_TIMEOUT)
-        .build()
-        .map_err(|error| format!("build subagent tree http client: {error}"))?;
-
-    let response = client
-        .get(url.clone())
-        .send()
-        .await
-        .map_err(|error| format!("subagent tree fetch failed: {error}"))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!(
-            "subagent tree fetch returned {status}: {}",
-            body.trim()
-        ));
+    // Cross-node lineage: the walk fans out to the local node plus every
+    // saved peer with a GraphQL endpoint, so children spawned on other
+    // deployments resolve regardless of which agent is selected.
+    let mut accesses = vec![SubagentTreeAccess {
+        label: None,
+        access: TreeQueryAccess::Local(core.node_arc()),
+    }];
+    for record in core.peer_records().await {
+        let Some(graphql) = record
+            .graphql
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        accesses.push(SubagentTreeAccess {
+            label: Some(record.label.clone()),
+            access: TreeQueryAccess::Graphql(graphql.to_string()),
+        });
     }
 
-    response
-        .json::<SubagentTreeView>()
-        .await
-        .map_err(|error| format!("decode subagent tree response: {error}"))
+    build_subagent_tree(
+        &accesses,
+        root_request_id,
+        request.include_terminal.unwrap_or(false),
+        effective_subagent_tree_max_depth(request.max_depth),
+    )
+    .await
+    .map_err(|error| format!("subagent tree query failed: {error:#}"))
 }
 
 /// Translate the agent's GraphQL URL into the runtime's `/subagents/tree`
 /// endpoint URL. Mirrors the path-stripping logic in
 /// `defra_agent_desktop_core::local_runtime::runtime_status_url` but targets
 /// the R5 subagent-lineage handler.
+#[cfg(test)]
 fn subagent_tree_url(
     graphql: &str,
     root_request_id: &str,

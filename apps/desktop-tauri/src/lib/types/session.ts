@@ -32,6 +32,8 @@ export type RenderedToolCallView = {
   args?: ToolDetailValueView | null;
   result?: ToolDetailValueView | null;
   denial?: CommandDenialView | null;
+  partialOutputTail?: string | null;
+  partialOutputSeq?: number | null;
   cancelCause?: DerivedCancelCauseView | null;
 };
 

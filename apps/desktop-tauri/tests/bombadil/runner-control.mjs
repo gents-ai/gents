@@ -67,8 +67,17 @@ export async function stopProcess(
     return;
   }
 
+  const termSignalSent = sendSignal(
+    child,
+    "SIGTERM",
+    killProcessGroup,
+    killByPid,
+    alreadyExited,
+  );
+  if (!termSignalSent) {
+    return;
+  }
   const exitPromise = alreadyExited ? Promise.resolve() : waitForExit(child);
-  sendSignal(child, "SIGTERM", killProcessGroup, killByPid);
   await Promise.race([exitPromise, delay(graceMs)]);
 
   let sentFinalKill = false;
@@ -76,7 +85,10 @@ export async function stopProcess(
     // Bombadil launches Chrome descendants. The CLI may exit on SIGTERM while
     // a wedged browser remains in its process group, so always fence the group
     // with SIGKILL after the grace period (ESRCH simply means it is clean).
-    sendSignal(child, "SIGKILL", true, killByPid);
+    const killSignalSent = sendSignal(child, "SIGKILL", true, killByPid, alreadyExited);
+    if (!killSignalSent) {
+      return;
+    }
     sentFinalKill = true;
   } else if (child.exitCode === null && child.signalCode === null) {
     child.kill("SIGKILL");
@@ -122,17 +134,29 @@ async function waitForProcessGroupDrain(pid, timeoutMs, killByPid) {
   }
 }
 
-function sendSignal(child, signal, killProcessGroup, killByPid) {
+function sendSignal(
+  child,
+  signal,
+  killProcessGroup,
+  killByPid,
+  ignorePermissionDenied = false,
+) {
   if (killProcessGroup && Number.isInteger(child.pid) && child.pid > 0) {
     try {
       killByPid(-child.pid, signal);
-      return;
+      return true;
     } catch (error) {
       if (error?.code === "ESRCH") {
         if (child.exitCode === null && child.signalCode === null) {
           child.kill(signal);
         }
-        return;
+        return true;
+      }
+      if (error?.code === "EPERM" && ignorePermissionDenied) {
+        // A naturally exited Bombadil leader can leave a process-group ID that
+        // macOS reports as unsignalable. The successful child result remains
+        // authoritative; cleanup must not turn that run into a failure.
+        return false;
       }
       throw error;
     }
@@ -141,6 +165,7 @@ function sendSignal(child, signal, killProcessGroup, killByPid) {
   if (child.exitCode === null && child.signalCode === null) {
     child.kill(signal);
   }
+  return true;
 }
 
 function waitForExit(child) {
