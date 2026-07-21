@@ -882,17 +882,6 @@ impl DefraSessionHook {
     }
 }
 
-impl Drop for DefraSessionHook {
-    fn drop(&mut self) {
-        // Drain the in-flight map. Lifecycles dropped without completing a
-        // transition leave their AgentToolCall row in state Running on disk —
-        // startup recovery sweeps these on daemon restart.
-        if let Ok(mut map) = self.in_flight_lifecycles.try_lock() {
-            map.clear();
-        }
-    }
-}
-
 fn decide_persistence_outcome(
     failure_policy: FailurePolicy,
     counters: &HookCounters,

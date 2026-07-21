@@ -77,6 +77,64 @@ async fn legacy_request_id_setter_clears_requester_lineage() {
     node.shutdown().await;
 }
 
+#[tokio::test]
+async fn dropping_hook_clone_preserves_in_flight_tool_lifecycle() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-clone-drop-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Read notes.txt"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    hook.set_active_request_id(Some("request-clone-drop".to_string()))
+        .await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
+        .await;
+
+    assert!(matches!(
+        hook.on_tool_call("read_file", None, "call-clone-drop", "{}")
+            .await,
+        ToolCallHookAction::Continue
+    ));
+    assert!(hook
+        .in_flight_lifecycles
+        .lock()
+        .await
+        .contains_key("call-clone-drop"));
+
+    drop(hook.clone());
+
+    assert!(hook
+        .in_flight_lifecycles
+        .lock()
+        .await
+        .contains_key("call-clone-drop"));
+    assert!(matches!(
+        hook.on_tool_result("read_file", None, "call-clone-drop", "{}", "done")
+            .await,
+        HookAction::Continue
+    ));
+
+    drop(hook);
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
 fn failure_policy_from_contract(policy: &str) -> FailurePolicy {
     match policy {
         "failOpen" => FailurePolicy::FailOpen,
