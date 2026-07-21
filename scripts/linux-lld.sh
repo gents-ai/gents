@@ -4,7 +4,7 @@ set -euo pipefail
 # Linux linker wrapper that drives the system `cc` with a fast LLD linker.
 #
 # Mirrors scripts/macos-clang-lld.sh. Link time dominates incremental rebuilds
-# of the large workspace binaries (defra-agent-cli, the Tauri app), and GNU
+# of the large workspace binaries (gents-cli, the Tauri app), and GNU
 # `ld.bfd` — the default — is the slowest option. We prefer, in order:
 #   1. a system `mold` (fastest),
 #   2. a system `lld`,

@@ -8563,7 +8563,7 @@ dependencies = [
 
 [[package]]
 name = "gents"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "acp",
  "agent-tool-call-lifecycle-v1-to-v2-lens",
@@ -8622,7 +8622,7 @@ dependencies = [
 
 [[package]]
 name = "gents-cli"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "acp",
  "anyhow",
@@ -8676,7 +8676,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -8690,7 +8690,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-core"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8718,7 +8718,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-tauri"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8746,7 +8746,7 @@ dependencies = [
 
 [[package]]
 name = "gents-fs-runner"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "globset",
@@ -8758,7 +8758,7 @@ dependencies = [
 
 [[package]]
 name = "gents-lean-contract"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -8767,7 +8767,7 @@ dependencies = [
 
 [[package]]
 name = "gents-protocol"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8786,7 +8786,7 @@ dependencies = [
 
 [[package]]
 name = "gents-schemas"
-version = "0.7.2"
+version = "0.8.0"
 
 [[package]]
 name = "gethostname"

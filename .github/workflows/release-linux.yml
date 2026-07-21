@@ -1,10 +1,16 @@
-name: Release Linux defra-agent
+name: Release Linux gents
 
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: Release version without the v prefix; must match workspace.package.version.
+        required: true
+        type: string
+        default: "0.8.0"
 
 concurrency:
   group: release-linux-${{ github.ref }}
@@ -71,7 +77,7 @@ jobs:
         shell: bash
 
     env:
-      GIT_CONFIG_GLOBAL: /tmp/defra-agent-release-${{ github.run_id }}-${{ matrix.target }}.gitconfig
+      GIT_CONFIG_GLOBAL: /tmp/gents-release-${{ github.run_id }}-${{ matrix.target }}.gitconfig
       TARGET_TRIPLE: ${{ matrix.target }}
       CARGO_PROFILE_RELEASE_LTO: ${{ matrix.release_lto }}
       CARGO_BUILD_JOBS: ${{ matrix.cargo_jobs }}
@@ -80,6 +86,44 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Validate release version
+        env:
+          RELEASE_VERSION_INPUT: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+
+          workspace_version="$(awk '
+            /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+            /^\[/ { in_workspace_package = 0 }
+            in_workspace_package && $1 == "version" {
+              gsub(/"/, "", $3)
+              print $3
+              exit
+            }
+          ' Cargo.toml)"
+          if [[ -z "${workspace_version}" ]]; then
+            echo "::error::Could not read workspace.package.version from Cargo.toml."
+            exit 1
+          fi
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            expected_tag="v${workspace_version}"
+            if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
+              echo "::error::Release tag ${GITHUB_REF_NAME} does not match workspace version ${expected_tag}."
+              exit 1
+            fi
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            if [[ "${RELEASE_VERSION_INPUT}" != "${workspace_version}" ]]; then
+              echo "::error::Requested release version ${RELEASE_VERSION_INPUT} does not match workspace version ${workspace_version}."
+              exit 1
+            fi
+          else
+            echo "::error::Unsupported release trigger ${GITHUB_EVENT_NAME}."
+            exit 1
+          fi
+
+          echo "RELEASE_VERSION=${workspace_version}" >> "${GITHUB_ENV}"
 
       - name: Rewrite Git SSH dependencies to HTTPS
         env:
@@ -127,16 +171,17 @@ jobs:
             exit 1
           fi
           make release-cli
-          file target/release/defra-agent
+          file target/release/gents
 
       - name: Verify binary
         run: |
           set -euo pipefail
-          binary_path="target/release/defra-agent"
+          binary_path="target/release/gents"
           version_output="$("${binary_path}" version)"
           printf '%s\n' "${version_output}"
-          if [[ -z "${version_output}" ]]; then
-            echo "::error::defra-agent version produced no output."
+          expected_prefix="gents ${RELEASE_VERSION} ("
+          if [[ "${version_output}" != "${expected_prefix}"* ]]; then
+            echo "::error::gents version output does not start with '${expected_prefix}'."
             exit 1
           fi
 
@@ -146,7 +191,7 @@ jobs:
           GLIBC_BASELINE: ${{ matrix.glibc_baseline }}
         run: |
           set -euo pipefail
-          binary_path="target/release/defra-agent"
+          binary_path="target/release/gents"
           required="$(objdump -T "${binary_path}" | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' | sed 's/GLIBC_//' | sort -Vu | tail -1)"
           echo "max required glibc: ${required} (baseline: ${GLIBC_BASELINE})"
           newest="$(printf '%s\n%s\n' "${GLIBC_BASELINE}" "${required}" | sort -V | tail -1)"
@@ -160,7 +205,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          artifact_basename="defra-agent-${TARGET_TRIPLE}"
+          artifact_basename="gents-${TARGET_TRIPLE}"
           dist_dir="${RUNNER_TEMP}/dist"
           rm -rf "${dist_dir}"
 
@@ -172,6 +217,52 @@ jobs:
           echo "checksum_file=${checksum_file}" >> "${GITHUB_OUTPUT}"
           echo "artifact_basename=${artifact_basename}" >> "${GITHUB_OUTPUT}"
           ls -lh "${dist_dir}"
+
+      - name: Verify packaged artifact
+        env:
+          ARTIFACT_BASENAME: ${{ steps.package.outputs.artifact_basename }}
+          CHECKSUM_FILE: ${{ steps.package.outputs.checksum_file }}
+          TARBALL: ${{ steps.package.outputs.tarball }}
+        run: |
+          set -euo pipefail
+
+          dist_dir="$(dirname "${TARBALL}")"
+          (
+            cd "${dist_dir}"
+            sha256sum -c "$(basename "${CHECKSUM_FILE}")"
+          )
+
+          archive_files="$(tar -tzf "${TARBALL}" | sed '/\/$/d' | LC_ALL=C sort)"
+          expected_binary="${ARTIFACT_BASENAME}/gents"
+          expected_license="${ARTIFACT_BASENAME}/LICENSE"
+          expected_files="$(printf '%s\n' "${expected_license}" "${expected_binary}")"
+          if [[ "${archive_files}" != "${expected_files}" ]]; then
+            echo "::error::Release archive must contain exactly ${expected_license} and ${expected_binary}; found:"
+            printf '%s\n' "${archive_files}"
+            exit 1
+          fi
+
+          verify_root="$(mktemp -d "${RUNNER_TEMP}/gents-linux-release-verify.XXXXXX")"
+          trap 'rm -rf "${verify_root}"' EXIT
+          tar -xzf "${TARBALL}" -C "${verify_root}"
+          packaged_binary="${verify_root}/${expected_binary}"
+          packaged_license="${verify_root}/${expected_license}"
+          if [[ ! -x "${packaged_binary}" ]]; then
+            echo "::error::Packaged Gents binary is missing or not executable."
+            exit 1
+          fi
+          if ! cmp -s LICENSE "${packaged_license}"; then
+            echo "::error::Packaged Apache-2.0 LICENSE is missing or differs from the repository LICENSE."
+            exit 1
+          fi
+
+          version_output="$("${packaged_binary}" version)"
+          printf '%s\n' "${version_output}"
+          expected_prefix="gents ${RELEASE_VERSION} ("
+          if [[ "${version_output}" != "${expected_prefix}"* ]]; then
+            echo "::error::Packaged gents version output does not start with '${expected_prefix}'."
+            exit 1
+          fi
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
@@ -226,7 +317,7 @@ jobs:
             gh release create "${GITHUB_REF_NAME}" \
               --verify-tag \
               --title "${GITHUB_REF_NAME}" \
-              --notes "defra-agent release artifacts." \
+              --notes "gents release artifacts." \
               || gh release view "${GITHUB_REF_NAME}" >/dev/null
           fi
           gh release upload "${GITHUB_REF_NAME}" dist/*.tar.gz dist/*.tar.gz.sha256 --clobber

@@ -1,4 +1,4 @@
-name: Release macOS defra-agent
+name: Release macOS gents
 
 on:
   push:
@@ -6,6 +6,11 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
+      release_version:
+        description: Release version without the v prefix; must match workspace.package.version.
+        required: true
+        type: string
+        default: "0.8.0"
       codesign_timestamp:
         description: Timestamp mode for codesign. Signed releases notarize, so timestamping must succeed unless dry_run_unsigned is true.
         required: true
@@ -38,19 +43,58 @@ env:
   RUST_BACKTRACE: "1"
   SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '60G' }}
   SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
-  MACOS_CODESIGN_IDENTIFIER: org.sourcenetwork.defra-agent
+  MACOS_CODESIGN_IDENTIFIER: com.source-inc.gents.cli
+  MACOS_KEYCHAIN_ACCESS_GROUP_BASE: com.source-inc.gents
   TARGET_TRIPLE: aarch64-apple-darwin
 
 jobs:
   build-sign-package:
     name: Build, sign, and package macOS CLI
     runs-on: [self-hosted, macOS, ARM64, studio]
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Validate release version
+        env:
+          RELEASE_VERSION_INPUT: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+
+          workspace_version="$(awk '
+            /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+            /^\[/ { in_workspace_package = 0 }
+            in_workspace_package && $1 == "version" {
+              gsub(/"/, "", $3)
+              print $3
+              exit
+            }
+          ' Cargo.toml)"
+          if [[ -z "${workspace_version}" ]]; then
+            echo "::error::Could not read workspace.package.version from Cargo.toml."
+            exit 1
+          fi
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            expected_tag="v${workspace_version}"
+            if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
+              echo "::error::Release tag ${GITHUB_REF_NAME} does not match workspace version ${expected_tag}."
+              exit 1
+            fi
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            if [[ "${RELEASE_VERSION_INPUT}" != "${workspace_version}" ]]; then
+              echo "::error::Requested release version ${RELEASE_VERSION_INPUT} does not match workspace version ${workspace_version}."
+              exit 1
+            fi
+          else
+            echo "::error::Unsupported release trigger ${GITHUB_EVENT_NAME}."
+            exit 1
+          fi
+
+          echo "RELEASE_VERSION=${workspace_version}" >> "${GITHUB_ENV}"
 
       - name: Rewrite Git SSH dependencies to HTTPS
         env:
@@ -66,6 +110,8 @@ jobs:
           git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       - name: Install protobuf compiler
         run: |
@@ -118,7 +164,7 @@ jobs:
           fi
 
           if [[ "${is_release_tag}" == "true" && "${dry_run_unsigned}" == "true" ]]; then
-            echo "::error::Tagged defra-agent releases must be signed; dry_run_unsigned is not allowed for release tags."
+            echo "::error::Tagged gents releases must be signed; dry_run_unsigned is not allowed for release tags."
             exit 1
           fi
 
@@ -176,11 +222,11 @@ jobs:
             exit 0
           fi
 
-          keychain_path="${MACOS_CODESIGN_KEYCHAIN_PATH_VAR:-${HOME}/Library/Keychains/defra-agent-signing.keychain-db}"
+          keychain_path="${MACOS_CODESIGN_KEYCHAIN_PATH_VAR:-${HOME}/Library/Keychains/gents-signing.keychain-db}"
           keychain_password="${MACOS_CODESIGN_KEYCHAIN_PASSWORD}"
           login_keychain="${HOME}/Library/Keychains/login.keychain-db"
-          original_keychains_path="${RUNNER_TEMP}/defra-agent-original-keychains.txt"
-          original_default_keychain_path="${RUNNER_TEMP}/defra-agent-original-default-keychain.txt"
+          original_keychains_path="${RUNNER_TEMP}/gents-original-keychains.txt"
+          original_default_keychain_path="${RUNNER_TEMP}/gents-original-default-keychain.txt"
 
           if [[ ! -f "${keychain_path}" ]]; then
             echo "::error::Native macOS signing keychain not found at ${keychain_path}."
@@ -235,7 +281,7 @@ jobs:
           echo "SIGNING_IDENTITY=${signing_identity}" >> "${GITHUB_ENV}"
           echo "SIGNING_IDENTITY_NAME=${signing_identity_name}" >> "${GITHUB_ENV}"
 
-          smoke_bin="${RUNNER_TEMP}/defra-agent-codesign-smoke"
+          smoke_bin="${RUNNER_TEMP}/gents-codesign-smoke"
           cp /bin/echo "${smoke_bin}"
           codesign --remove-signature "${smoke_bin}" 2>/dev/null || true
           codesign \
@@ -266,14 +312,14 @@ jobs:
             echo "::error::Expected ${TARGET_TRIPLE} macOS runner, got ${host_triple}."
             exit 1
           fi
-          cargo build -p defra-agent-cli --release
-          file target/release/defra-agent
+          cargo build -p gents-cli --release --locked
+          file target/release/gents
 
       - name: Generate dSYM and strip release binary
         run: |
           .github/scripts/prepare-macos-release-dsym.sh \
-            target/release/defra-agent \
-            target/release/defra-agent.dSYM
+            target/release/gents \
+            target/release/gents.dSYM
 
       - name: Sign binary with native macOS identity
         env:
@@ -287,7 +333,7 @@ jobs:
             exit 0
           fi
 
-          binary_path="target/release/defra-agent"
+          binary_path="target/release/gents"
           keychain_path="${SIGNING_KEYCHAIN}"
           signing_identity="${SIGNING_IDENTITY_NAME}"
           timestamp_mode="${RELEASE_CODESIGN_TIMESTAMP_MODE:-auto}"
@@ -302,6 +348,7 @@ jobs:
             echo "::error::Could not extract Apple Team ID from SIGNING_IDENTITY_NAME '${signing_identity}'."
             exit 1
           fi
+          echo "APPLE_TEAM_ID=${apple_team_id}" >> "${GITHUB_ENV}"
 
           # The release/entitlements.plist requests `keychain-access-groups`, a
           # RESTRICTED entitlement. On a Developer-ID, hardened-runtime binary
@@ -382,22 +429,22 @@ jobs:
             exit 0
           fi
 
-          binary_path="target/release/defra-agent"
-          notary_dir="${RUNNER_TEMP}/defra-agent-notary"
+          binary_path="target/release/gents"
+          notary_dir="${RUNNER_TEMP}/gents-notary"
           staging_dir="${notary_dir}/payload"
-          notary_zip="${notary_dir}/defra-agent-notary.zip"
+          notary_zip="${notary_dir}/gents-notary.zip"
           notary_key_path="${notary_dir}/AuthKey_${MACOS_NOTARY_KEY_ID}.p8"
 
           rm -rf "${notary_dir}"
           mkdir -p "${staging_dir}"
-          cp "${binary_path}" "${staging_dir}/defra-agent"
-          chmod 0755 "${staging_dir}/defra-agent"
+          cp "${binary_path}" "${staging_dir}/gents"
+          chmod 0755 "${staging_dir}/gents"
           printf '%s\n' "${MACOS_NOTARY_API_KEY}" > "${notary_key_path}"
           chmod 0600 "${notary_key_path}"
 
           (
             cd "${staging_dir}"
-            /usr/bin/ditto -c -k --keepParent defra-agent "${notary_zip}"
+            /usr/bin/ditto -c -k --keepParent gents "${notary_zip}"
           )
 
           xcrun notarytool submit "${notary_zip}" \
@@ -415,12 +462,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          binary_path="target/release/defra-agent"
+          binary_path="target/release/gents"
           if [[ "${SIGNING_ENABLED}" == "true" ]]; then
             codesign --verify --strict --verbose=2 "${binary_path}"
 
             signature_details="$(codesign -d -vv "${binary_path}" 2>&1)"
             printf '%s\n' "${signature_details}"
+            if ! grep -Fxq "Identifier=${MACOS_CODESIGN_IDENTIFIER}" <<< "${signature_details}"; then
+              echo "::error::Signed release artifact does not have identifier ${MACOS_CODESIGN_IDENTIFIER}."
+              exit 1
+            fi
             if ! grep -q '^Authority=' <<< "${signature_details}"; then
               echo "::error::Signed release artifact has no signing authority. This usually means it is still ad-hoc signed."
               exit 1
@@ -440,8 +491,9 @@ jobs:
             # restricted entitlement with no provisioning profile it makes AMFI
             # kill the binary at launch. See the signing step's comment.
             if [[ "${MACOS_APPLY_SE_ENTITLEMENTS:-false}" == "true" ]]; then
-              if ! grep -q 'keychain-access-groups' <<< "${entitlements_output}"; then
-                echo "::error::MACOS_APPLY_SE_ENTITLEMENTS=true but signed artifact is missing keychain-access-groups entitlement."
+              expected_access_group="${APPLE_TEAM_ID}.${MACOS_KEYCHAIN_ACCESS_GROUP_BASE}"
+              if ! grep -Fq "<string>${expected_access_group}</string>" <<< "${entitlements_output}"; then
+                echo "::error::Signed artifact is missing exact keychain access group ${expected_access_group}."
                 exit 1
               fi
             elif grep -q 'keychain-access-groups' <<< "${entitlements_output}"; then
@@ -458,8 +510,9 @@ jobs:
 
           version_output="$("${binary_path}" version)"
           printf '%s\n' "${version_output}"
-          if [[ -z "${version_output}" ]]; then
-            echo "::error::defra-agent version produced no output."
+          expected_prefix="gents ${RELEASE_VERSION} ("
+          if [[ "${version_output}" != "${expected_prefix}"* ]]; then
+            echo "::error::gents version output does not start with '${expected_prefix}'."
             exit 1
           fi
 
@@ -468,7 +521,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          artifact_basename="defra-agent-${TARGET_TRIPLE}"
+          artifact_basename="gents-${TARGET_TRIPLE}"
           if [[ "${SIGNING_ENABLED}" != "true" ]]; then
             artifact_basename="${artifact_basename}-unsigned-dry-run"
           fi
@@ -476,7 +529,7 @@ jobs:
           package_parent="${RUNNER_TEMP}/package"
           package_root="${package_parent}/${artifact_basename}"
           symbols_parent="${RUNNER_TEMP}/symbols"
-          dsym_bundle_basename="defra-agent.dSYM"
+          dsym_bundle_basename="gents.dSYM"
           dsym_archive_basename="${artifact_basename}.dSYM"
           dist_dir="${RUNNER_TEMP}/dist"
           tarball="${dist_dir}/${artifact_basename}.tar.gz"
@@ -486,12 +539,16 @@ jobs:
 
           rm -rf "${package_parent}" "${symbols_parent}" "${dist_dir}"
           mkdir -p "${package_root}" "${symbols_parent}" "${dist_dir}"
-          cp target/release/defra-agent "${package_root}/defra-agent"
-          chmod 0755 "${package_root}/defra-agent"
-          cp -R target/release/defra-agent.dSYM "${symbols_parent}/${dsym_bundle_basename}"
+          cp target/release/gents "${package_root}/gents"
+          chmod 0755 "${package_root}/gents"
+          cp LICENSE "${package_root}/LICENSE"
+          chmod 0644 "${package_root}/LICENSE"
+          cp -R target/release/gents.dSYM "${symbols_parent}/${dsym_bundle_basename}"
+          cp LICENSE "${symbols_parent}/LICENSE"
+          chmod 0644 "${symbols_parent}/LICENSE"
 
           tar -C "${package_parent}" -czf "${tarball}" "${artifact_basename}"
-          tar -C "${symbols_parent}" -czf "${dsym_tarball}" "${dsym_bundle_basename}"
+          tar -C "${symbols_parent}" -czf "${dsym_tarball}" "${dsym_bundle_basename}" LICENSE
           (
             cd "${dist_dir}"
             shasum -a 256 "${artifact_basename}.tar.gz" > "${artifact_basename}.tar.gz.sha256"
@@ -504,6 +561,89 @@ jobs:
           echo "dsym_checksum_file=${dsym_checksum_file}" >> "${GITHUB_OUTPUT}"
           echo "artifact_basename=${artifact_basename}" >> "${GITHUB_OUTPUT}"
           ls -lh "${dist_dir}"
+
+      - name: Verify packaged artifact
+        env:
+          ARTIFACT_BASENAME: ${{ steps.package.outputs.artifact_basename }}
+          CHECKSUM_FILE: ${{ steps.package.outputs.checksum_file }}
+          DSYM_CHECKSUM_FILE: ${{ steps.package.outputs.dsym_checksum_file }}
+          DSYM_TARBALL: ${{ steps.package.outputs.dsym_tarball }}
+          TARBALL: ${{ steps.package.outputs.tarball }}
+        run: |
+          set -euo pipefail
+
+          dist_dir="$(dirname "${TARBALL}")"
+          (
+            cd "${dist_dir}"
+            shasum -a 256 -c "$(basename "${CHECKSUM_FILE}")"
+            shasum -a 256 -c "$(basename "${DSYM_CHECKSUM_FILE}")"
+          )
+
+          archive_files="$(tar -tzf "${TARBALL}" | sed '/\/$/d' | LC_ALL=C sort)"
+          expected_binary="${ARTIFACT_BASENAME}/gents"
+          expected_license="${ARTIFACT_BASENAME}/LICENSE"
+          expected_files="$(printf '%s\n' "${expected_license}" "${expected_binary}")"
+          if [[ "${archive_files}" != "${expected_files}" ]]; then
+            echo "::error::Release archive must contain exactly ${expected_license} and ${expected_binary}; found:"
+            printf '%s\n' "${archive_files}"
+            exit 1
+          fi
+          dsym_archive_entries="$(tar -tzf "${DSYM_TARBALL}")"
+          if grep -Ev '^(gents\.dSYM(/|$)|LICENSE$)' <<< "${dsym_archive_entries}" >/dev/null; then
+            echo "::error::Symbol archive contains an entry outside gents.dSYM and LICENSE."
+            printf '%s\n' "${dsym_archive_entries}"
+            exit 1
+          fi
+          if ! grep -Fx 'LICENSE' <<< "${dsym_archive_entries}" >/dev/null; then
+            echo "::error::Symbol archive is missing the Apache-2.0 LICENSE."
+            exit 1
+          fi
+
+          verify_root="$(mktemp -d "${RUNNER_TEMP}/gents-macos-release-verify.XXXXXX")"
+          trap 'rm -rf "${verify_root}"' EXIT
+          binary_root="${verify_root}/binary"
+          symbols_root="${verify_root}/symbols"
+          mkdir -p "${binary_root}" "${symbols_root}"
+          tar -xzf "${TARBALL}" -C "${binary_root}"
+          tar -xzf "${DSYM_TARBALL}" -C "${symbols_root}"
+
+          packaged_binary="${binary_root}/${expected_binary}"
+          packaged_license="${binary_root}/${expected_license}"
+          packaged_dsym="${symbols_root}/gents.dSYM"
+          packaged_dsym_license="${symbols_root}/LICENSE"
+          packaged_dwarf="${packaged_dsym}/Contents/Resources/DWARF/gents"
+          if [[ ! -x "${packaged_binary}" || ! -s "${packaged_dwarf}" ]]; then
+            echo "::error::Packaged Gents binary or gents.dSYM DWARF payload is missing."
+            exit 1
+          fi
+          if ! cmp -s LICENSE "${packaged_license}" || ! cmp -s LICENSE "${packaged_dsym_license}"; then
+            echo "::error::Packaged Apache-2.0 LICENSE is missing or differs from the repository LICENSE."
+            exit 1
+          fi
+
+          version_output="$("${packaged_binary}" version)"
+          printf '%s\n' "${version_output}"
+          expected_prefix="gents ${RELEASE_VERSION} ("
+          if [[ "${version_output}" != "${expected_prefix}"* ]]; then
+            echo "::error::Packaged gents version output does not start with '${expected_prefix}'."
+            exit 1
+          fi
+
+          binary_uuid="$(xcrun dwarfdump --uuid "${packaged_binary}" | awk '{ print $2, $3 }')"
+          dsym_uuid="$(xcrun dwarfdump --uuid "${packaged_dsym}" | awk '{ print $2, $3 }')"
+          if [[ -z "${binary_uuid}" || "${binary_uuid}" != "${dsym_uuid}" ]]; then
+            echo "::error::Packaged binary/dSYM UUID mismatch: binary='${binary_uuid}' dSYM='${dsym_uuid}'."
+            exit 1
+          fi
+
+          if [[ "${SIGNING_ENABLED}" == "true" ]]; then
+            codesign --verify --strict --verbose=2 "${packaged_binary}"
+            signature_details="$(codesign -d -vv "${packaged_binary}" 2>&1)"
+            if ! grep -Fxq "Identifier=${MACOS_CODESIGN_IDENTIFIER}" <<< "${signature_details}"; then
+              echo "::error::Packaged release artifact does not have identifier ${MACOS_CODESIGN_IDENTIFIER}."
+              exit 1
+            fi
+          fi
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
@@ -532,8 +672,13 @@ jobs:
             exit 1
           fi
 
-          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
-            gh release create "${GITHUB_REF_NAME}" --verify-tag --title "${GITHUB_REF_NAME}" --notes "Signed defra-agent macOS release artifact."
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --verify-tag \
+              --title "${GITHUB_REF_NAME}" \
+              --notes "Signed gents macOS release artifact." \
+              || gh release view "${GITHUB_REF_NAME}" >/dev/null
+          fi
           gh release upload "${GITHUB_REF_NAME}" \
             "${TARBALL}" \
             "${CHECKSUM_FILE}" \
@@ -549,8 +694,8 @@ jobs:
           set -euo pipefail
           git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
           git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-          original_keychains_path="${RUNNER_TEMP}/defra-agent-original-keychains.txt"
-          original_default_keychain_path="${RUNNER_TEMP}/defra-agent-original-default-keychain.txt"
+          original_keychains_path="${RUNNER_TEMP}/gents-original-keychains.txt"
+          original_default_keychain_path="${RUNNER_TEMP}/gents-original-default-keychain.txt"
 
           if [[ -f "${original_keychains_path}" ]]; then
             keychains=()

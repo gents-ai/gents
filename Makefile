@@ -22,7 +22,7 @@ help:
 	@echo "Release (CI calls these; TARGET=<triple> optional, defaults to host):"
 	@echo "  make release-cli           Build the release CLI (full features)"
 	@echo "  make release-cli-headless  Build the release CLI without embedded Codex TUI"
-	@echo "  make dist-cli              Build + package $(DIST_DIR)/defra-agent-<triple>.tar.gz(+sha256)"
+	@echo "  make dist-cli              Build + package $(DIST_DIR)/gents-<triple>.tar.gz(+sha256)"
 	@echo
 	@echo "Checks:"
 	@echo "  make fmt                   Format Rust and desktop UI code"
@@ -84,21 +84,23 @@ TARGET ?=
 DIST_DIR ?= dist
 CARGO_TARGET_FLAG := $(if $(TARGET),--target $(TARGET),)
 TARGET_TRIPLE := $(if $(TARGET),$(TARGET),$(shell rustc -Vv | awk '/^host:/ { print $$2 }'))
-RELEASE_BIN := target/$(if $(TARGET),$(TARGET)/,)release/defra-agent
-RELEASE_ARTIFACT := defra-agent-$(TARGET_TRIPLE)
+RELEASE_BIN := target/$(if $(TARGET),$(TARGET)/,)release/gents
+RELEASE_ARTIFACT := gents-$(TARGET_TRIPLE)
 
 .PHONY: release-cli release-cli-headless dist-cli
 release-cli:
-	$(CARGO) build -p gents-cli --release $(CARGO_TARGET_FLAG)
+	$(CARGO) build -p gents-cli --release --locked $(CARGO_TARGET_FLAG)
 
 release-cli-headless:
-	$(CARGO) build -p gents-cli --release --no-default-features $(CARGO_TARGET_FLAG)
+	$(CARGO) build -p gents-cli --release --locked --no-default-features $(CARGO_TARGET_FLAG)
 
 dist-cli: release-cli
 	@rm -rf "$(DIST_DIR)/$(RELEASE_ARTIFACT)"
 	@mkdir -p "$(DIST_DIR)/$(RELEASE_ARTIFACT)"
-	cp "$(RELEASE_BIN)" "$(DIST_DIR)/$(RELEASE_ARTIFACT)/defra-agent"
-	chmod 0755 "$(DIST_DIR)/$(RELEASE_ARTIFACT)/defra-agent"
+	cp "$(RELEASE_BIN)" "$(DIST_DIR)/$(RELEASE_ARTIFACT)/gents"
+	chmod 0755 "$(DIST_DIR)/$(RELEASE_ARTIFACT)/gents"
+	cp LICENSE "$(DIST_DIR)/$(RELEASE_ARTIFACT)/LICENSE"
+	chmod 0644 "$(DIST_DIR)/$(RELEASE_ARTIFACT)/LICENSE"
 	tar -C "$(DIST_DIR)" -czf "$(DIST_DIR)/$(RELEASE_ARTIFACT).tar.gz" "$(RELEASE_ARTIFACT)"
 	cd "$(DIST_DIR)" && sha256sum "$(RELEASE_ARTIFACT).tar.gz" > "$(RELEASE_ARTIFACT).tar.gz.sha256"
 	@rm -rf "$(DIST_DIR)/$(RELEASE_ARTIFACT)"
