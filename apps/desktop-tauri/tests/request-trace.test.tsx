@@ -31,7 +31,7 @@ describe("request trace panel", () => {
             content: "hi",
             timestamp: "2026-06-03T14:05:00Z",
           },
-          { kind: "tool_call", tool_name: "defra_exec", lifecycle_state: "Completed" },
+          { kind: "tool_call", tool_name: "gents_exec", lifecycle_state: "Completed" },
           { kind: "response", status: "materialized" },
         ],
       }),
@@ -39,7 +39,7 @@ describe("request trace panel", () => {
     render(<RequestTracePanel agentDid="did:a" rootRequestId="req-1" />);
 
     await waitFor(() => expect(screen.getByText("user: hi")).toBeInTheDocument());
-    expect(screen.getByText("defra_exec — Completed")).toBeInTheDocument();
+    expect(screen.getByText("gents_exec — Completed")).toBeInTheDocument();
     expect(screen.getByText("materialized")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy JSON" })).toBeInTheDocument();
   });

@@ -4,15 +4,15 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{
+use defra_agent_desktop_core::client::ClientCore;
+use gents::graphql::escape_graphql_string;
+use gents::{
     cli_tool, default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     default_tool_selection_id_for_behavior, ensure_agent_principal, load_agent_behavior,
-    subagent_target_entry, upsert_agent_behavior, AgentIdentity, DefraAgent,
-    DocumentRuntimeOptions, KeyIdentity, ToolCeiling,
+    subagent_target_entry, upsert_agent_behavior, AgentIdentity, DocumentRuntimeOptions, Gents,
+    KeyIdentity, ToolCeiling,
 };
-use defra_agent_desktop_core::client::ClientCore;
-use defra_agent_protocol::row::{AgentBehaviorRow, InferenceProfileRow, ToolSelectionRow};
+use gents_protocol::row::{AgentBehaviorRow, InferenceProfileRow, ToolSelectionRow};
 use serde_json::Value;
 use tokio::sync::watch;
 use tracing::Instrument;
@@ -66,7 +66,7 @@ pub(super) async fn spawn_live_agent(
     let docs =
         seed_live_behavior_documents(node_owner.as_ref(), &did, name, backend, subagent_backend)
             .await?;
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         node_owner.node_arc(),
         identity,
         DocumentRuntimeOptions {
@@ -288,7 +288,7 @@ async fn seed_live_behavior_documents(
 }
 
 async fn upsert_inference_backend(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     backend_id: &str,
     backend: &AgentBackendConfig,
 ) -> Result<()> {
@@ -339,7 +339,7 @@ async fn upsert_inference_backend(
 }
 
 async fn bind_default_behavior_backend(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
     backend_id: &str,
     backend: &AgentBackendConfig,
@@ -363,7 +363,7 @@ fn graphql_optional_string_field(name: &str, value: Option<&str>) -> String {
 }
 
 async fn wait_for_runtime_process_state(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
     expected_process_state: &str,
 ) -> Result<()> {

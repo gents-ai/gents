@@ -8,10 +8,10 @@
 //! depends on the full state survival to render the K-model badge and the
 //! evicted-vs-reconnecting distinction.
 
-#[path = "../../../../../../../crates/defra-agent/src/lean_vocab_test.rs"]
+#[path = "../../../../../../../crates/gents/src/lean_vocab_test.rs"]
 mod lean_vocab_test;
 
-use defra_agent_protocol::row::ToolServiceHealthStateRow;
+use gents_protocol::row::ToolServiceHealthStateRow;
 use lean_vocab_test::lean_mcp_health_cases;
 
 use crate::bridge::types::MCPServiceHealthView;

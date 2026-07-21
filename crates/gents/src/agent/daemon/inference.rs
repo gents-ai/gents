@@ -1,0 +1,917 @@
+use std::future::IntoFuture;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use anyhow::{anyhow, Result};
+use chrono::{DateTime, Utc};
+use futures::StreamExt;
+use tracing::Instrument;
+
+use super::{BehaviorDaemon, HandleRequestOutcome};
+use crate::admission::{self, CallKind};
+use crate::config::AgentBehavior;
+use crate::hook::DefraSessionHook;
+use crate::llm::message::Message;
+use crate::streaming::{StreamStatus, StreamWriter};
+use crate::watcher::AgentRequest;
+
+type RequestDeadline = Option<DateTime<Utc>>;
+
+fn terminal_response_has_visible_output(streamed_text: &str, final_text: Option<&str>) -> bool {
+    !streamed_text.trim().is_empty() || final_text.is_some_and(|text| !text.trim().is_empty())
+}
+
+fn request_deadline_remaining(deadline: RequestDeadline) -> Option<Duration> {
+    let deadline = deadline?;
+    let now = Utc::now();
+    if now >= deadline {
+        return Some(Duration::ZERO);
+    }
+    Some((deadline - now).to_std().unwrap_or(Duration::ZERO))
+}
+
+fn request_deadline_error(deadline: RequestDeadline, context: &str) -> anyhow::Error {
+    match deadline {
+        Some(deadline) => anyhow!(
+            "request deadline exceeded while {}; deadline={}",
+            context,
+            deadline.to_rfc3339()
+        ),
+        None => anyhow!("request deadline exceeded while {}", context),
+    }
+}
+
+fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Result<()> {
+    if request_deadline_remaining(deadline).is_some_and(|remaining| remaining.is_zero()) {
+        return Err(request_deadline_error(deadline, context));
+    }
+    Ok(())
+}
+
+fn request_workspace_cwd(request: &crate::watcher::AgentRequest) -> Option<PathBuf> {
+    let metadata = request.metadata.as_deref()?.trim();
+    if metadata.is_empty() {
+        return None;
+    }
+    let value = serde_json::from_str::<serde_json::Value>(metadata).ok()?;
+    value
+        .pointer("/codex_shim/cwd")
+        .or_else(|| value.get("workspace_cwd"))
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+}
+
+fn render_request_context_message(
+    node: &defra_node::EmbeddedNode,
+    behavior: &AgentBehavior,
+    request: &AgentRequest,
+) -> Result<Option<Message>> {
+    let Some(template) = behavior.request_context_template.as_deref() else {
+        return Ok(None);
+    };
+    if template.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let mut ctx = serde_json::Map::new();
+    ctx.insert(
+        "now".to_string(),
+        serde_json::json!(Utc::now().to_rfc3339()),
+    );
+    // Populate the (potentially expensive) live summary whenever the template
+    // could reference it. A literal substring check can never miss a real read
+    // — the catalog variable name must appear verbatim to be referenced — while
+    // a best-effort AST walk drops names bound inside set/with/filter/macro
+    // bodies, which would leave `collection_summary` undefined and fail the
+    // render under strict-undefined for an otherwise-valid template.
+    if template.contains("collection_summary") {
+        ctx.insert(
+            "collection_summary".to_string(),
+            serde_json::json!(crate::template::collection_summary(node)?),
+        );
+    }
+
+    let rendered = crate::template::render_request_context_template(
+        template,
+        serde_json::json!({
+            "node_did": behavior.agent_did(),
+            "behavior_id": behavior.behavior_id.as_str(),
+        }),
+        serde_json::Value::Object(ctx),
+        &crate::template::catalog::default_catalog(),
+    )
+    .map_err(|error| anyhow!("request_context_template render failed: {error}"))?;
+
+    tracing::debug!(
+        request_id = %request.request_id,
+        behavior_id = %behavior.behavior_id,
+        "rendered request context template"
+    );
+    Ok(Some(Message::user(format!(
+        "<context>\n{rendered}\n</context>"
+    ))))
+}
+
+async fn await_with_request_deadline<F, T>(
+    deadline: RequestDeadline,
+    future: F,
+    context: &str,
+) -> Result<T>
+where
+    F: IntoFuture<Output = T>,
+{
+    let future = future.into_future();
+    match request_deadline_remaining(deadline) {
+        None => Ok(future.await),
+        Some(remaining) if remaining.is_zero() => Err(request_deadline_error(deadline, context)),
+        Some(remaining) => tokio::time::timeout(remaining, future)
+            .await
+            .map_err(|_| request_deadline_error(deadline, context)),
+    }
+}
+
+impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
+    // Threads request, admission, shutdown, and interrupt state into a single
+    // inference drive. Splitting further would require re-threading the
+    // same receivers through private helpers with no readability gain.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn run_inference(
+        &mut self,
+        request: &crate::watcher::AgentRequest,
+        doc_id: &str,
+        history: &[crate::llm::message::Message],
+        lifecycle: &mut crate::lifecycle::RequestLifecycle,
+        shutdown: &mut tokio::sync::watch::Receiver<bool>,
+        interrupt_rx: &mut tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
+        request_token: &tokio_util::sync::CancellationToken,
+    ) -> Result<HandleRequestOutcome> {
+        let request_deadline = lifecycle.claimed_deadline_at();
+        let workspace_cwd = request_workspace_cwd(request);
+        let deadline_at = request
+            .deadline
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("")
+            .to_string();
+        let has_deadline = !deadline_at.is_empty();
+        let workspace_cwd_set = workspace_cwd.is_some();
+
+        // Render the per-request <context> message ONCE, before the loop-owned
+        // retry machinery. Rendering per provider attempt would recompute
+        // ctx.now, diverging from the persisted/visible request context.
+        let request_context_message =
+            render_request_context_message(self.node.as_ref(), &self.behavior, request)?;
+
+        ensure_request_deadline_open(request_deadline, "starting inference")?;
+        if *shutdown.borrow() {
+            return Err(anyhow!("shutdown requested during inference"));
+        }
+        if interrupt_rx.borrow().is_some() {
+            request_token.cancel();
+            return Err(anyhow!("request interrupted during inference"));
+        }
+
+        let attempt_index = 1_i64;
+        let request_id = request.request_id.clone();
+        let session_id = request.session_id.clone();
+        let behavior_id = self.behavior.behavior_id.clone();
+        let backend_id = lifecycle.backend_id().to_string();
+        let model_name = self.behavior.model_name.clone();
+        let outcome = async {
+                let hook = DefraSessionHook::resume_or_create_with_identity_policy(
+                    self.node.clone(),
+                    &request.session_id,
+                    &self.behavior.behavior_id,
+                    self.behavior.agent_did(),
+                    self.hook_failure_policy,
+                )
+                .await?
+                .with_background_tool_registry(self.background_tool_registry.clone())
+                .with_background_execution_registry(self.background_execution_registry.clone());
+                hook.set_active_request_lineage(
+                    Some(request.request_id.clone()),
+                    request.requester_did.clone(),
+                )
+                .await;
+                hook.set_request_deadline_at(request_deadline).await;
+                hook.set_approval_required_tools(self.approval_required_tools.as_ref().clone())
+                    .await;
+                let persistence_hook = hook.clone();
+
+                // Owned completion loop (#400): drive our own multi-turn stream
+                // over the model + tool surface. Per-request sampling is resolved
+                // into the loop config from the behavior + request.
+                let model = (*self.model).clone();
+                let mut loop_config = crate::completion_factory::loop_config_for_request(
+                    &self.behavior,
+                    self.preamble.clone(),
+                    request,
+                    self.loop_tools.len(),
+                );
+                loop_config.deadline = request_deadline;
+                if let Some(factory) = self.rendered_request_capture_factory.as_ref() {
+                    let context = crate::rendered_request::RenderedRequestContext::for_request(
+                        request,
+                        self.behavior.model_name.clone(),
+                        crate::rendered_request::RenderedRequestSource::for_behavior_provider(
+                            self.behavior.backend_provider_kind,
+                            self.behavior.openai_wire_api,
+                        ),
+                        self.behavior
+                            .openai_wire_api
+                            .normalizes_responses_wire(self.behavior.backend_provider_kind),
+                    );
+                    let sink = factory(context.clone());
+                    loop_config.on_rendered_request = Some(std::sync::Arc::new(
+                        move |turn_index, attempt, completion_request| {
+                            let context = context.clone();
+                            let sink = sink.clone();
+                            Box::pin(async move {
+                                let rendered =
+                                    crate::llm::rig_compat::rendered_completion_request(
+                                        &context,
+                                        turn_index,
+                                        attempt,
+                                        &completion_request,
+                                    )?;
+                                sink(rendered).await
+                            })
+                        },
+                    ));
+                }
+                loop_config.context_message = request_context_message.clone();
+                let loop_prompt = crate::llm::message::Message::user(request.content.clone());
+                let loop_history = history.to_vec();
+                let loop_tools = self.loop_tools.clone();
+                // Keep a per-attempt token for the admission permit and cancel it
+                // explicitly on interrupt before dropping the guarded stream. The
+                // permit's Drop path observes this token to persist the linked
+                // InferenceCall as cancelled rather than a generic stream drop.
+                let inference_token = request_token.child_token();
+                let inference_token_for_start = inference_token.clone();
+                let terminal_failure_reason = admission::terminal_failure_reason_observer();
+                let hook_for_start_interrupt = persistence_hook.clone();
+                let mut stream = admission::scope_call_with_token_and_failure_reason(
+                    CallKind::Inference,
+                    attempt_index,
+                    inference_token.clone(),
+                    terminal_failure_reason.clone(),
+                    async {
+                        tokio::select! {
+                            biased;
+                            _ = shutdown.changed() => {
+                                Err(anyhow!("shutdown requested before inference stream started"))
+                            }
+                            _ = interrupt_rx.changed() => {
+                                request_token.cancel();
+                                inference_token_for_start.cancel();
+                                if let Err(error) = hook_for_start_interrupt.cancel_in_flight_tool_calls().await {
+                                    tracing::warn!(
+                                        request_id = %request_id,
+                                        session_id = %session_id,
+                                        error = %error,
+                                        "failed to cancel in-flight tool calls before inference stream started"
+                                    );
+                                }
+                                Err(anyhow!("request interrupted during inference"))
+                            }
+                            stream = std::future::ready(Box::pin(crate::agent::loop_stream::run_loop_stream(
+                                model,
+                                Some(hook),
+                                loop_prompt,
+                                loop_history,
+                                loop_tools,
+                                loop_config,
+                            ))) => Ok(stream)
+                        }
+                    },
+                )
+                .await?;
+
+                admission::scope_call_with_token_and_failure_reason(
+                    CallKind::Inference,
+                    attempt_index,
+                    inference_token.clone(),
+                    terminal_failure_reason.clone(),
+                    async {
+                        let liveness_timeout = self.behavior.stream_liveness_timeout;
+
+                        let mut processor = crate::agent::stream_processor::StreamProcessor::new(
+                            &persistence_hook,
+                            &self.stream_writer,
+                            lifecycle,
+                            doc_id,
+                        );
+                        let mut stream_error = None;
+                        // A retry's backoff sleep runs *inside* the loop
+                        // generator, spanning the next `stream.next()` poll. The
+                        // liveness timeout wraps that poll, so a backoff longer
+                        // than `liveness_timeout` would otherwise be misread as a
+                        // dead stream and turned into a spurious terminal
+                        // "stream liveness timeout", defeating the retry (#648).
+                        // Carry the pending backoff forward and add it to the
+                        // next poll's liveness budget.
+                        let mut pending_backoff = std::time::Duration::ZERO;
+
+                        loop {
+                            let item = match tokio::select! {
+                                biased;
+                                _ = shutdown.changed() => {
+                                    return Err(anyhow!("shutdown requested during inference stream"));
+                                }
+                                _ = interrupt_rx.changed() => {
+                                    request_token.cancel();
+                                    inference_token.cancel();
+                                    if let Err(error) =
+                                        persistence_hook.cancel_in_flight_tool_calls().await
+                                    {
+                                        tracing::warn!(
+                                            request_id = %request_id,
+                                            session_id = %session_id,
+                                            error = %error,
+                                            "failed to cancel in-flight tool calls during request interrupt"
+                                        );
+                                    }
+                                    if let Err(error) = processor
+                                        .persist_partial_turn("persist interrupted assistant turn")
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            request_id = %request_id,
+                                            session_id = %session_id,
+                                            error = %error,
+                                            "failed to persist interrupted assistant turn before terminal transition"
+                                        );
+                                    }
+                                    // #442: a tool that completed inline before the
+                                    // interrupt recorded its result on the AgentToolCall
+                                    // row but may not have persisted its result message;
+                                    // backfill so the transcript stays pair-closed.
+                                    if let Err(error) = persistence_hook
+                                        .backfill_completed_tool_results()
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            request_id = %request_id,
+                                            session_id = %session_id,
+                                            error = %error,
+                                            "failed to backfill completed tool-result messages on interrupt"
+                                        );
+                                    }
+                                    return Err(anyhow!("request interrupted during inference"));
+                                }
+                                result = await_with_request_deadline(
+                                    request_deadline,
+                                    crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace(
+                                        request_deadline,
+                                        request_token.clone(),
+                                        workspace_cwd.clone(),
+                                        tokio::time::timeout(
+                                            liveness_timeout.saturating_add(pending_backoff),
+                                            stream.next(),
+                                        ),
+                                    ),
+                                    "waiting for inference stream item",
+                                ) => {
+                                    match result {
+                                        Ok(item) => item,
+                                        Err(error) => {
+                                            if let Err(sweep_error) =
+                                                persistence_hook.timeout_expired_tool_calls().await
+                                            {
+                                                tracing::warn!(
+                                                    request_id = %request_id,
+                                                    session_id = %session_id,
+                                                    error = %sweep_error,
+                                                    "failed to sweep expired in-flight tool calls after request deadline"
+                                                );
+                                            }
+                                            return Err(error);
+                                        }
+                                    }
+                                }
+                            } {
+                                Ok(Some(item)) => item,
+                                Ok(None) => break,
+                                Err(_) => {
+                                    if let Err(error) = persistence_hook
+                                        .fail_in_flight_tool_calls(
+                                            "stream liveness timeout while tool call was running",
+                                            crate::tool_call_lifecycle::FailureClass::External,
+                                        )
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            request_id = %request_id,
+                                            session_id = %session_id,
+                                            error = %error,
+                                            "failed to mark in-flight tool calls failed after stream liveness timeout"
+                                        );
+                                    }
+                                    let timeout_reason = format!(
+                                        "stream liveness timeout: no data received for {}s",
+                                        liveness_timeout.as_secs()
+                                    );
+                                    admission::set_terminal_failure_reason(
+                                        &terminal_failure_reason,
+                                        timeout_reason.clone(),
+                                    );
+                                    stream_error = Some(rig::agent::StreamingError::Completion(
+                                        rig::completion::CompletionError::ProviderError(
+                                            timeout_reason,
+                                        ),
+                                    ));
+                                    break;
+                                }
+                            };
+                            // The generator sleeps this backoff before its next
+                            // yield, so extend the *next* poll's liveness budget
+                            // by it (reset to zero for any non-retry item).
+                            pending_backoff = match &item {
+                                Ok(crate::agent::loop_stream::LoopStreamItem::AttemptFailed {
+                                    backoff,
+                                    will_retry: true,
+                                    ..
+                                })
+                                | Ok(crate::agent::loop_stream::LoopStreamItem::TurnRetracted {
+                                    backoff,
+                                    ..
+                                }) => *backoff,
+                                _ => std::time::Duration::ZERO,
+                            };
+                            match processor.process_item(item).await {
+                                Ok(crate::agent::stream_processor::StreamAction::Continue) => {}
+                                Ok(crate::agent::stream_processor::StreamAction::Done) => break,
+                                Ok(crate::agent::stream_processor::StreamAction::Error(error)) => {
+                                    stream_error = Some(error);
+                                    break;
+                                }
+                                Err(error) => return Err(error),
+                            }
+                        }
+
+                        if let Some(error) = stream_error {
+                            let _ = processor
+                                .persist_partial_turn("persist errored assistant turn")
+                                .await?;
+                            // #442: a tool that completed inline before the stream
+                            // stalled recorded its result on the AgentToolCall row but
+                            // may not have persisted its result message (the streamed
+                            // ToolResult never arrived); backfill so the transcript
+                            // stays pair-closed and the next request is not sent a
+                            // dangling assistant tool call.
+                            if let Err(error) = persistence_hook
+                                .backfill_completed_tool_results()
+                                .await
+                            {
+                                tracing::warn!(
+                                    request_id = %request_id,
+                                    session_id = %session_id,
+                                    error = %error,
+                                    "failed to backfill completed tool-result messages after stream error"
+                                );
+                            }
+
+                            let error_reason = format!("agent stream failed: {}", error);
+                            self.stream_writer
+                                .finalize_error(doc_id, &error_reason)
+                                .await?;
+
+                            return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
+                                error_reason
+                            )));
+                        }
+
+                        let mut streamed_text = std::mem::take(&mut processor.streamed_text);
+                        let final_text = processor.final_text.take();
+
+                        if let Some(text) = final_text.as_deref() {
+                            if streamed_text.is_empty() {
+                                let _ = self.stream_writer.write_tokens(doc_id, text).await?;
+                                streamed_text.push_str(text);
+                            } else if let Some(remainder) = text.strip_prefix(&streamed_text) {
+                                if !remainder.is_empty() {
+                                    let _ =
+                                        self.stream_writer.write_tokens(doc_id, remainder).await?;
+                                    streamed_text.push_str(remainder);
+                                }
+                            }
+                        }
+
+                        if !terminal_response_has_visible_output(
+                            &streamed_text,
+                            final_text.as_deref(),
+                        ) {
+                            let error_reason =
+                                "agent stream completed without producing any visible response content";
+                            self.stream_writer
+                                .finalize_error(doc_id, error_reason)
+                                .await?;
+
+                            return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
+                                error_reason
+                            )));
+                        }
+
+                        ensure_request_deadline_open(
+                            request_deadline,
+                            "finalizing inference response",
+                        )?;
+                        self.stream_writer
+                            .finalize(doc_id, StreamStatus::Complete)
+                            .await?;
+
+                        Ok(HandleRequestOutcome::Completed)
+                    },
+                )
+                .await
+            }
+            .instrument(tracing::info_span!(
+                "inference.attempt",
+                request_id = %request_id,
+                session_id = %session_id,
+                agent_did = %request.agent_did,
+                behavior_id = %behavior_id,
+                backend_id = %backend_id,
+                model_name = %model_name,
+                deadline_at = %deadline_at,
+                has_deadline,
+                subagent_depth = request.subagent_depth,
+                is_subagent = request.subagent_depth > 0
+                    || request.caused_by_parent_request_id.is_some()
+                    || request.caused_by_parent_tool_call_id.is_some(),
+                workspace_cwd_set,
+                attempt = attempt_index,
+                retry_attempt = false,
+            ))
+            .await?;
+
+        Ok(outcome)
+    }
+
+    pub(super) async fn write_error_response(
+        &self,
+        request: &crate::watcher::AgentRequest,
+        behavior_id: &str,
+        error: &anyhow::Error,
+    ) -> Result<()> {
+        let doc_id = self
+            .stream_writer
+            .begin_with_requester_did(
+                &request.session_id,
+                &request.request_id,
+                behavior_id,
+                request.requester_did.as_deref(),
+            )
+            .await?;
+        let error_reason = error.to_string();
+        let error_text = format!("Error: {}", error_reason);
+        let _ = self
+            .stream_writer
+            .write_tokens(&doc_id, &error_text)
+            .await?;
+        self.stream_writer
+            .finalize_error(&doc_id, &error_reason)
+            .await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        await_with_request_deadline, ensure_request_deadline_open, request_deadline_remaining,
+        terminal_response_has_visible_output, BehaviorDaemon,
+    };
+    use crate::agent::completion_retry::CompletionRetryProfileFields;
+    use crate::agent::runtime::StartupBarrier;
+    use crate::backend_provider::BackendProviderKind;
+    use crate::compaction::CompactionStrategy;
+    use crate::config::{AgentBehavior, SamplingConfig};
+    use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
+    use crate::identity::{AgentIdentity, AgentPrincipal, KeyIdentity};
+    use crate::llm::tool::ToolDyn;
+    use crate::prompt::LayeredPromptBuilder;
+    use crate::tool_surface::BehaviorToolConfig;
+    use crate::watcher::AgentRequest;
+    use futures::stream;
+    use rig::completion::{
+        CompletionError, CompletionModel, CompletionRequest, CompletionResponse,
+    };
+    use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[derive(Clone)]
+    struct RoutedReplyModel;
+
+    #[allow(refining_impl_trait)]
+    impl CompletionModel for RoutedReplyModel {
+        type Response = ();
+        type StreamingResponse = ();
+        type Client = ();
+
+        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+            Self
+        }
+
+        async fn completion(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+            Err(CompletionError::ProviderError(
+                "completion is unused in daemon lineage test".to_string(),
+            ))
+        }
+
+        async fn stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+            let items = vec![
+                Ok(RawStreamingChoice::Message("routed reply".to_string())),
+                Ok(RawStreamingChoice::FinalResponse(())),
+            ];
+            let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(items));
+            Ok(StreamingCompletionResponse::stream(inner))
+        }
+    }
+
+    fn test_behavior() -> Arc<AgentBehavior> {
+        let identity: Arc<dyn AgentIdentity> = Arc::new(
+            KeyIdentity::load_or_create(
+                std::env::temp_dir().join(format!("daemon-lineage-{}.key", uuid::Uuid::new_v4())),
+                None,
+            )
+            .expect("test identity"),
+        );
+        let principal = Arc::new(AgentPrincipal {
+            agent_did: identity.did().to_string(),
+            identity,
+            default_behavior_id: "general".to_string(),
+            display_name: None,
+            enabled: true,
+        });
+
+        Arc::new(AgentBehavior {
+            behavior_id: "general".to_string(),
+            principal,
+            backend_id: Some("backend-general".to_string()),
+            backend_provider_kind: BackendProviderKind::OpenAiCompatible,
+            openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
+            backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
+            backend_api_key: None,
+            backend_api_key_env_var: None,
+            model_name: "scripted".to_string(),
+            context_window: 8_192,
+            max_output_tokens: 1_024,
+            max_turns: 2,
+            system_prompt: "system".to_string(),
+            request_context_template: None,
+            tools: BehaviorToolConfig::meta_only(),
+            compaction_threshold: 0.75,
+            compaction_strategy: CompactionStrategy::StripThenSummarize,
+            stream_batch_ms: 0,
+            stream_liveness_timeout: Duration::from_secs(5),
+            deadline_duration: Duration::from_secs(30),
+            completion_retry: CompletionRetryProfileFields::default(),
+            sampling: SamplingConfig::default(),
+            skills: Vec::new(),
+        })
+    }
+
+    async fn create_routed_request(
+        node: &defra_node::EmbeddedNode,
+        behavior: &AgentBehavior,
+        requester_did: &str,
+    ) -> AgentRequest {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let created_at = chrono::Utc::now().to_rfc3339();
+        let escaped_request_id = crate::graphql::escape_graphql_string(&request_id);
+        let escaped_session_id = crate::graphql::escape_graphql_string(&session_id);
+        let escaped_agent_did = crate::graphql::escape_graphql_string(behavior.agent_did());
+        let escaped_requester_did = crate::graphql::escape_graphql_string(requester_did);
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentRequest(input: {{
+                    request_id: "{escaped_request_id}",
+                    agent_did: "{escaped_agent_did}",
+                    requester_did: "{escaped_requester_did}",
+                    behavior_id: "general",
+                    session_id: "{escaped_session_id}",
+                    retry_parent_request: "",
+                    retry_root_request: "{escaped_request_id}",
+                    superseded_by_request: "",
+                    content: "route this reply",
+                    status: "pending",
+                    lifecycle_state: "pending",
+                    backend_id: "backend-general",
+                    execution_origin: "interactive",
+                    failure_reason: "",
+                    created_at: "{created_at}",
+                    retry_count: 0,
+                    max_retries: 3,
+                    subagent_depth: 1
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = node.execute(&mutation).await;
+        assert!(
+            !response.has_errors(),
+            "create routed AgentRequest failed: {:?}",
+            response.errors
+        );
+        let doc_id = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("create_AgentRequest"))
+            .and_then(|value| value.get("_docID"))
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned);
+        let doc_id = match doc_id {
+            Some(doc_id) => doc_id,
+            None => {
+                let query = format!(
+                    r#"{{
+                        AgentRequest(
+                            filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                            limit: 1
+                        ) {{ _docID }}
+                    }}"#
+                );
+                let response = node.execute(&query).await;
+                assert!(
+                    !response.has_errors(),
+                    "query created AgentRequest failed: {:?}",
+                    response.errors
+                );
+                response
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("AgentRequest"))
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|rows| rows.first())
+                    .and_then(|row| row.get("_docID"))
+                    .and_then(serde_json::Value::as_str)
+                    .expect("created request _docID")
+                    .to_string()
+            }
+        };
+
+        AgentRequest {
+            doc_id,
+            request_id,
+            agent_did: behavior.agent_did().to_string(),
+            requester_did: Some(requester_did.to_string()),
+            behavior_id: Some(behavior.behavior_id.clone()),
+            session_id,
+            content: "route this reply".to_string(),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            max_tokens: None,
+            metadata: None,
+            execution_origin: Some("interactive".to_string()),
+            created_at,
+            deadline: None,
+            subagent_depth: 1,
+            caused_by_parent_request_id: Some("parent-request".to_string()),
+            caused_by_parent_tool_call_id: Some("parent-tool-call".to_string()),
+        }
+    }
+
+    #[test]
+    fn terminal_response_requires_visible_output() {
+        assert!(!terminal_response_has_visible_output("", None));
+        assert!(!terminal_response_has_visible_output("   ", Some("")));
+        assert!(!terminal_response_has_visible_output("", Some("   ")));
+        assert!(terminal_response_has_visible_output("hello", None));
+        assert!(terminal_response_has_visible_output("", Some("hello")));
+    }
+
+    #[test]
+    fn request_deadline_remaining_reports_expired_deadline() {
+        let deadline = chrono::Utc::now() - chrono::Duration::milliseconds(1);
+
+        assert_eq!(
+            request_deadline_remaining(Some(deadline)),
+            Some(Duration::ZERO)
+        );
+        assert!(ensure_request_deadline_open(Some(deadline), "test").is_err());
+    }
+
+    #[tokio::test]
+    async fn await_with_request_deadline_bounds_waits() {
+        let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(10);
+
+        let result = await_with_request_deadline(
+            Some(deadline),
+            tokio::time::sleep(Duration::from_secs(5)),
+            "test wait",
+        )
+        .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn await_with_request_deadline_allows_fast_work() {
+        let deadline = chrono::Utc::now() + chrono::Duration::seconds(1);
+
+        let result = await_with_request_deadline(Some(deadline), async { 42 }, "test wait")
+            .await
+            .expect("fast work should finish before deadline");
+
+        assert_eq!(result, 42);
+    }
+
+    #[tokio::test]
+    async fn daemon_request_path_stamps_requester_lineage_on_hook_messages() {
+        let data_path =
+            std::env::temp_dir().join(format!("daemon-requester-lineage-{}", uuid::Uuid::new_v4()));
+        let node = Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .data_path(&data_path)
+                .build()
+                .await
+                .expect("embedded node"),
+        );
+        crate::ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("runtime schemas");
+
+        let requester_did = "did:test:coordinator";
+        let behavior = test_behavior();
+        let request = create_routed_request(node.as_ref(), &behavior, requester_did).await;
+        let prompt_builder = LayeredPromptBuilder::for_behavior(
+            &behavior.system_prompt,
+            &behavior.behavior_id,
+            &[],
+            false,
+            behavior.context_window,
+            behavior.max_output_tokens,
+            &[],
+        );
+        let preamble = prompt_builder.preamble().to_string();
+        let loop_tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(Vec::new());
+        let mut daemon = BehaviorDaemon::new(
+            node.clone(),
+            behavior,
+            Arc::new(RoutedReplyModel),
+            preamble,
+            loop_tools,
+            prompt_builder,
+            FailurePolicy::default(),
+            None,
+            BackgroundToolRegistry::default(),
+            BackgroundExecutionRegistry::default(),
+            Arc::new(StartupBarrier::ready_for_test()),
+            Arc::new(crate::startup_readiness::StartupDemotions::new()),
+        );
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        daemon.process_request(request.clone(), shutdown_rx).await;
+
+        let escaped_session_id = crate::graphql::escape_graphql_string(&request.session_id);
+        let query = format!(
+            r#"{{
+                AgentMessage(
+                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}
+                ) {{
+                    role
+                    content
+                    requester_did
+                }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "query routed AgentMessage failed: {:?}",
+            response.errors
+        );
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentMessage"))
+            .and_then(serde_json::Value::as_array)
+            .expect("AgentMessage rows");
+        assert!(
+            rows.iter().any(|row| {
+                row.get("role").and_then(serde_json::Value::as_str) == Some("assistant")
+                    && row
+                        .get("content")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|content| content.contains("routed reply"))
+                    && row.get("requester_did").and_then(serde_json::Value::as_str)
+                        == Some(requester_did)
+            }),
+            "daemon-persisted assistant message must carry requester lineage; rows={rows:?}"
+        );
+
+        node.shutdown().await;
+        let _ = std::fs::remove_dir_all(data_path);
+    }
+}

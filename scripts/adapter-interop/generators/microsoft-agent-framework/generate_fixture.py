@@ -26,14 +26,14 @@ CONTEXT_ID = "context-ms-agent-framework-docker-1"
 REQUEST_ID = "req-ms-agent-framework-docker-1"
 RESEARCH_REQUEST_ID = "req-ms-agent-framework-research-docker-1"
 WRITER_REQUEST_ID = "req-ms-agent-framework-writer-docker-1"
-TASK_TEXT = "Map Microsoft Agent Framework group chat to Defra Agent projection fields."
+TASK_TEXT = "Map Microsoft Agent Framework group chat to Gents projection fields."
 
 
 AGENTS = [
     {
         "name": "Researcher",
         "role": "researcher",
-        "agent_did": "did:defra-agent:microsoft-agent-framework-researcher",
+        "agent_did": "did:test:microsoft-agent-framework-researcher",
         "behavior_id": "microsoft_agent_framework.researcher",
         "description": "Collects evidence from the shared group-chat conversation.",
         "instructions": "Gather concise facts that help map this workflow.",
@@ -46,7 +46,7 @@ AGENTS = [
     {
         "name": "Writer",
         "role": "writer",
-        "agent_did": "did:defra-agent:microsoft-agent-framework-writer",
+        "agent_did": "did:test:microsoft-agent-framework-writer",
         "behavior_id": "microsoft_agent_framework.writer",
         "description": "Synthesizes the adapter projection mapping.",
         "instructions": "Write the final projection mapping in one concise answer.",
@@ -61,7 +61,7 @@ AGENTS = [
 ORCHESTRATOR = {
     "name": "group_chat_orchestrator",
     "role": "orchestrator",
-    "agent_did": "did:defra-agent:microsoft-agent-framework-orchestrator",
+    "agent_did": "did:test:microsoft-agent-framework-orchestrator",
     "behavior_id": "microsoft_agent_framework.group_chat_orchestrator",
 }
 
@@ -130,13 +130,13 @@ class ScriptedChatClient(BaseChatClient):
                     )
                 ],
                 response_id=response_id,
-                model="defra-scripted-agent-framework",
+                model="gents-scripted-agent-framework",
             )
 
         return response()
 
     def service_url(self) -> str:
-        return "local://defra-scripted-agent-framework"
+        return "local://gents-scripted-agent-framework"
 
 
 def round_robin_selector(state: GroupChatState) -> str:
@@ -190,10 +190,10 @@ def build_projection(
         "source_behavior_id": ORCHESTRATOR["behavior_id"],
         "redaction_mode": "full",
         "provenance": {
-            "runtime": "defra-agent",
+            "runtime": "gents",
             "source_projection_id": "run_timeline",
             "source_projection_version": "v1",
-            "actor_did": "did:defra-agent:microsoft-agent-framework-fixture-reader",
+            "actor_did": "did:test:microsoft-agent-framework-fixture-reader",
         },
         "output": {
             "adapter": "multi_agent_task",
@@ -356,7 +356,7 @@ def build_mapping(clients: dict[str, ScriptedChatClient]) -> dict[str, Any]:
         "session_id": CONTEXT_ID,
         "agent_did": ORCHESTRATOR["agent_did"],
         "behavior_id": ORCHESTRATOR["behavior_id"],
-        "actor_did": "did:defra-agent:microsoft-agent-framework-fixture-reader",
+        "actor_did": "did:test:microsoft-agent-framework-fixture-reader",
         "status": "completed" if outputs else "stopped",
         "participants": [
             {
@@ -436,7 +436,7 @@ def write_fixture(
                 "agent-framework-orchestrations"
             ),
             "generator": "adapter-projections/generators/microsoft-agent-framework",
-            "capture": os.environ.get("DEFRA_FIXTURE_CAPTURE", "local"),
+            "capture": os.environ.get("GENTS_FIXTURE_CAPTURE", "local"),
             "api": [
                 "Agent",
                 "BaseChatClient",

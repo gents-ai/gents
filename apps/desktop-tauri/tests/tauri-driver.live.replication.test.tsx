@@ -8,7 +8,7 @@ import { createFixtureHelpers } from "./live-bridge-runner/adapter";
 /**
  * Live conformance witness for EventDelivery D1/D2.
  *
- * Lean source: crates/defra-agent/proofs/Proofs/EventDelivery/Properties.lean
+ * Lean source: crates/gents/proofs/Proofs/EventDelivery/Properties.lean
  *   - D1_delivery_convergence at :62
  *   - D2_fair_delivery_latency at :119
  *

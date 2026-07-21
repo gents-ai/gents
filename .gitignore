@@ -1,16 +1,16 @@
 /target
 /.DS_Store
-/crates/defra-agent/proofs/.lake
-/crates/defra-agent/proofs/build
+/crates/gents/proofs/.lake
+/crates/gents/proofs/build
 /demo/home/
 /demo/*.log
 /vendor/
 
 # TLA+ tooling and TLC state output
-/crates/defra-agent/proofs/tla/.tools/
-/crates/defra-agent/proofs/tla/states/
-/crates/defra-agent/proofs/tla/MCReversePairing_TTrace_*.tla
-/crates/defra-agent/proofs/tla/MCReversePairing_TTrace_*.bin
+/crates/gents/proofs/tla/.tools/
+/crates/gents/proofs/tla/states/
+/crates/gents/proofs/tla/MCReversePairing_TTrace_*.tla
+/crates/gents/proofs/tla/MCReversePairing_TTrace_*.bin
 
 # Standalone third_party package builds
 /third_party/*/target/

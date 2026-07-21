@@ -121,7 +121,7 @@ export function createDesktopUiHarness(
               tools: [
                 {
                   itemKey: "live-exec",
-                  toolName: "defra_exec",
+                  toolName: "gents_exec",
                   statusKind: "running",
                   args: {
                     rawText: JSON.stringify({ command: "cargo test -p defra-agent" }),
@@ -159,7 +159,7 @@ export function createDesktopUiHarness(
                     // Mirrors the runtime's edit_file envelope (EditFileMetadata
                     // + human body line) — see toolset/file_tools.rs.
                     rawText:
-                      'defra_fs: {"ok":true,"status":"success","tool":"edit_file","path":"src/parser.rs","returned_count":1,"total_count":1,"truncated":false,"replacements_applied":1,"replace_all":false,"bytes_written":36}\nedit_file: edited src/parser.rs (1 replacement)',
+                      'gents_fs: {"ok":true,"status":"success","tool":"edit_file","path":"src/parser.rs","returned_count":1,"total_count":1,"truncated":false,"replacements_applied":1,"replace_all":false,"bytes_written":36}\nedit_file: edited src/parser.rs (1 replacement)',
                     fields: [],
                   },
                 },
@@ -175,7 +175,7 @@ export function createDesktopUiHarness(
                     // Mirrors the runtime's command envelope framing
                     // (render_command_output in toolset/shared/command.rs).
                     rawText:
-                      'defra_exec: {"ok":true,"status":"success","command":"cargo test parser","exit_code":0,"timed_out":false,"execution_mode":"read_only","network_mode":"disabled"}\nstdout:\ntest result: ok. 2 passed\nstderr:\n(empty)',
+                      'gents_exec: {"ok":true,"status":"success","command":"cargo test parser","exit_code":0,"timed_out":false,"execution_mode":"read_only","network_mode":"disabled"}\nstdout:\ntest result: ok. 2 passed\nstderr:\n(empty)',
                     fields: [],
                   },
                 },
@@ -503,7 +503,7 @@ export function createDesktopUiHarness(
           },
           {
             kind: "tool_call",
-            tool_name: "defra_exec",
+            tool_name: "gents_exec",
             tool_call_id: "tc-1",
             session_id: "session-intro",
             status: "completed",
@@ -537,7 +537,7 @@ export function createDesktopUiHarness(
         ceilingSource: "init_json",
         mcpServicesOnline: true,
         surface: {
-          tool_names: ["read_file", "list_files", "defra_exec"],
+          tool_names: ["read_file", "list_files", "gents_exec"],
           included: { read_file: ["ceiling allows readonly file tools"] },
           excluded: { write_file: ["ceiling is readonly"] },
           unavailable: {},

@@ -76,9 +76,9 @@ def verify_capture_export(capture_path: Path, export_dir: Path) -> None:
         return
 
     stem = capture_path.stem
-    export = load_json(export_dir / f"{stem}.defra.json")
-    jsonl = load_jsonl(export_dir / f"{stem}.defra.jsonl")
-    eval_jsonl = load_jsonl(export_dir / f"{stem}.defra.eval-jsonl")
+    export = load_json(export_dir / f"{stem}.gents.json")
+    jsonl = load_jsonl(export_dir / f"{stem}.gents.jsonl")
+    eval_jsonl = load_jsonl(export_dir / f"{stem}.gents.eval-jsonl")
 
     assert export["projection_id"] == "multi_agent_task", export
     assert export["source_request_id"] == mapping["request_id"], export
@@ -155,7 +155,7 @@ def main() -> None:
         raise SystemExit("no mapped AutoGen captures were verified")
     if verified != 2:
         raise SystemExit(f"expected 2 mapped AutoGen captures, verified {verified}")
-    print(f"verified {verified} AutoGen Defra export roundtrip captures")
+    print(f"verified {verified} AutoGen Gents export roundtrip captures")
 
 
 if __name__ == "__main__":

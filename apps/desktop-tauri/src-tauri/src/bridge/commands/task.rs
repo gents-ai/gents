@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Result};
-use defra_agent::graphql::escape_graphql_string;
 use defra_agent_desktop_core::client::ClientCore;
-use defra_agent_protocol::row::{AgentRequestRow, EventTriggerRow, ScheduleRow, TaskRow};
+use gents::graphql::escape_graphql_string;
+use gents_protocol::row::{AgentRequestRow, EventTriggerRow, ScheduleRow, TaskRow};
 
 use super::super::types::{
     EventTriggerSaveRequest, ScheduleRunRequest, ScheduleSaveRequest, TaskRunRequest,

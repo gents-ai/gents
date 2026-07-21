@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use std::collections::BTreeMap;
 
-use defra_agent_protocol::timeline::{
+use gents_protocol::timeline::{
     build_timeline_order, TimelineMessageInput, TimelineRole, TimelineSlot,
 };
 

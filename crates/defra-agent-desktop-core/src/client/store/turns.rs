@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 
-use defra_agent_protocol::client_protocol::{
+use gents_protocol::client_protocol::{
     derive_turn as derive_client_turn, AttemptView, RequestLifecycleState, RequestSnapshot,
     ResponseSnapshot, ResponseStatus,
 };
-use defra_agent_protocol::row::AgentResponseRow;
+use gents_protocol::row::AgentResponseRow;
 
 use super::indexing::clean_string;
 use super::ClientStore;
@@ -12,7 +12,7 @@ use super::ClientStore;
 pub(super) fn derive_turn(
     store: &ClientStore,
     session_id: &str,
-) -> Option<defra_agent_protocol::client_protocol::ClientTurnState> {
+) -> Option<gents_protocol::client_protocol::ClientTurnState> {
     let latest_request_id = store.latest_request_id_for_session(session_id)?;
     let attempts = attempt_chain_for_request(store, &latest_request_id);
     derive_client_turn(&attempts)
@@ -21,7 +21,7 @@ pub(super) fn derive_turn(
 pub(super) fn derive_turn_for_request(
     store: &ClientStore,
     request_id: &str,
-) -> Option<defra_agent_protocol::client_protocol::ClientTurnState> {
+) -> Option<gents_protocol::client_protocol::ClientTurnState> {
     let attempts = attempt_chain_for_request(store, request_id);
     derive_client_turn(&attempts)
 }

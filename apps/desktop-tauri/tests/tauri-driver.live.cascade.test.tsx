@@ -8,9 +8,9 @@ import { describeLive, logTurn } from "./tauri-driver-live/helpers";
  * Live conformance witnesses for cascade-cancel properties.
  *
  * Lean source:
- *   - cascade_cancels_child (B3): crates/defra-agent/proofs/Proofs/Background/Properties/Cancellation.lean:22
+ *   - cascade_cancels_child (B3): crates/gents/proofs/Proofs/Background/Properties/Cancellation.lean:22
  *   - detach_does_not_cancel_child (B3'): :190 (not exercised here)
- *   - interrupted_request_cancels_live_linked_tools (C2): crates/defra-agent/proofs/Proofs/CrossMachineComposed/ToolTermination.lean:54
+ *   - interrupted_request_cancels_live_linked_tools (C2): crates/gents/proofs/Proofs/CrossMachineComposed/ToolTermination.lean:54
  *
  * Each `it()` block is annotated with the Lean theorem(s) it witnesses.
  * If a theorem's statement changes, this file MUST be updated to match —

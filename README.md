@@ -47,7 +47,7 @@ Agent frameworks bolt persistence, identity, and coordination onto a loop. defra
 
 - **The data store is the control plane.** Configure an agent by writing documents; trigger work by writing documents; debug by reading them. The runtime watches request documents and writes responses back. Multi-agent coordination is document replication, not RPC.
 - **Identity is cryptographic and layered.** A *principal* (DID) is the permission and audit boundary. *Behaviors* — prompt, tools, model — are reusable interfaces on a principal. *Deployments* place principals on hosts. Least privilege falls out of the model.
-- **The core is proven.** The request, process, persistence, tool-call, and subagent lifecycles — and what the runtime feeds the model — are specified in Lean 4 with zero `sorry`s, fenced by conformance tests, and only then implemented. See [the proofs](crates/defra-agent/proofs/README.md).
+- **The core is proven.** The request, process, persistence, tool-call, and subagent lifecycles — and what the runtime feeds the model — are specified in Lean 4 with zero `sorry`s, fenced by conformance tests, and only then implemented. See [the proofs](crates/gents/proofs/README.md).
 
 ## Architecture
 
@@ -66,11 +66,11 @@ Agent frameworks bolt persistence, identity, and coordination onto a loop. defra
      CLI (operate)   desktop (observe)   other peers (replicate)
 ```
 
-- **Runtime** (`crates/defra-agent`) — the agent loop, lifecycles, tool execution, triggers/schedules, compaction, recovery. The core; everything else supports it.
-- **Protocol** (`crates/defra-agent-protocol`) — schemas, the persisted message vocabulary, and the turn-observation protocol shared by every peer.
-- **CLI** (`crates/defra-agent-cli`) — init/serve/chat, plus declarative config apply/diff: agent manifests in, documents out.
+- **Runtime** (`crates/gents`) — the agent loop, lifecycles, tool execution, triggers/schedules, compaction, recovery. The core; everything else supports it.
+- **Protocol** (`crates/gents-protocol`) — schemas, the persisted message vocabulary, and the turn-observation protocol shared by every peer.
+- **CLI** (`crates/gents-cli`) — init/serve/chat, plus declarative config apply/diff: agent manifests in, documents out.
 - **Desktop** (`apps/desktop-tauri`, `crates/defra-agent-desktop*`) — an observer UI over the same documents, paired via P2P.
-- **Proofs** (`crates/defra-agent/proofs`) — the Lean models the runtime conforms to.
+- **Proofs** (`crates/gents/proofs`) — the Lean models the runtime conforms to.
 
 Subagents are requests: a parent's tool call spawns a child request — possibly on another deployment — and the child's terminal state projects back onto the parent's transcript. Automation is the same shape: Tasks, Schedules, and EventTriggers materialize requests with lineage stamped on every one.
 
@@ -80,7 +80,7 @@ Building from source needs a few system dependencies (Rust, a C/C++ toolchain,
 `protoc`, `libclang`, OpenSSL headers, SSH access to the private DefraDB repos).
 Build, test, and toolchain setup live in **[DEVELOPMENT.md](DEVELOPMENT.md)**.
 
-The development flow is foundation-first: Lean model → conformance tests → implementation. `CLAUDE.md` is the working brief; the [proofs README](crates/defra-agent/proofs/README.md) maps the formal coverage.
+The development flow is foundation-first: Lean model → conformance tests → implementation. `CLAUDE.md` is the working brief; the [proofs README](crates/gents/proofs/README.md) maps the formal coverage.
 
 ## Status
 

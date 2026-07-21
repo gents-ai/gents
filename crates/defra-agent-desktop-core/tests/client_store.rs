@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use defra_agent_desktop_core::client::{
     ClientCore, ClientCoreOptions, ClientStore, ClientStoreRows, DesktopPaths,
 };
-use defra_agent_protocol::client_protocol::ClientTurnState;
-use defra_agent_protocol::row::{
+use gents_protocol::client_protocol::ClientTurnState;
+use gents_protocol::row::{
     AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow, AgentResponseRow,
     AgentRuntimeRow, AgentSessionRow,
 };

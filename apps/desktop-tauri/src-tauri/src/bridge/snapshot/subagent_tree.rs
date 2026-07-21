@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use serde::Deserialize;
 use serde_json::Value;
 

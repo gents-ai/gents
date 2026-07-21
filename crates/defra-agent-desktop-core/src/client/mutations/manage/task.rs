@@ -31,12 +31,10 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
-use defra_agent::{
-    task_run_conversation_title, write_manual_agent_request_with_conversation_title,
-};
-use defra_agent_protocol::graphql::normalize_optional_rfc3339;
-use defra_agent_protocol::row::{EventTriggerRow, ScheduleRow, TaskRow};
 use defra_node::EmbeddedNode;
+use gents::{task_run_conversation_title, write_manual_agent_request_with_conversation_title};
+use gents_protocol::graphql::normalize_optional_rfc3339;
+use gents_protocol::row::{EventTriggerRow, ScheduleRow, TaskRow};
 use serde_json::Value;
 
 use super::super::graphql::{
@@ -304,7 +302,7 @@ pub async fn fire_task_now(
 /// desktop store, so this path stays correct even if the store is
 /// stale (e.g., the schedule was just created and the watcher has not
 /// caught up yet). The `SELECT` mirrors every field on
-/// `defra_agent_protocol::row::TaskRow` so `serde_json::from_value`
+/// `gents_protocol::row::TaskRow` so `serde_json::from_value`
 /// does not fail on a missing column.
 pub async fn fire_schedule_now(node: &EmbeddedNode, schedule_row: &ScheduleRow) -> Result<String> {
     let task_id = schedule_row

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_agent::BackendProviderKind;
+use gents::BackendProviderKind;
 
 const LIVE_BACKEND_PREFIX: &str = "DEFRA_AGENT_DESKTOP_LIVE_BACKEND";
 

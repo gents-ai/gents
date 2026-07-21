@@ -146,7 +146,7 @@ export type RequestResendResult = {
 };
 
 /// Raw runtime `RunTimeline` JSON (snake_case — serialized straight from
-/// defra_agent::run_timeline, not a bridge camelCase view).
+/// gents::run_timeline, not a bridge camelCase view).
 export type RunTimelineEventView = { kind: string } & Record<string, unknown>;
 
 export type RequestTimelineView = {

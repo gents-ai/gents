@@ -1,0 +1,78 @@
+[package]
+name = "gents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Reusable DefraDB-backed agent framework extracted from agent-daemon"
+
+[features]
+default = ["defra-node/http", "defra-node/p2p", "rocksdb"]
+agent-memory = []
+rocksdb = ["defra-node/rocksdb"]
+
+[dependencies]
+anyhow.workspace = true
+async-stream = "0.3"
+async-trait = "0.1"
+base64.workspace = true
+bs58 = "0.5"
+bytes.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+codex-login.workspace = true
+codex-model-provider-info.workspace = true
+crypto.workspace = true
+defra-core.workspace = true
+defra-p2p-adapter.workspace = true
+gents-fs-runner = { path = "../gents-fs-runner" }
+gents-protocol.workspace = true
+defra-node.workspace = true
+dirs.workspace = true
+events.workspace = true
+futures = "0.3"
+hostname.workspace = true
+identity.workspace = true
+libc = "0.2"
+minijinja.workspace = true
+opentelemetry.workspace = true
+p2p.workspace = true
+query.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex = "1"
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+rig-core.workspace = true
+reqwest.workspace = true
+rmcp = { version = "1.2.0", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
+tokio-util = "0.7"
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { version = "3.7.0", features = ["OSX_10_15"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+acp.workspace = true
+axum = "0.8"
+proptest = "1"
+tar = "0.4"
+zstd = "0.13"
+agent-tool-call-lifecycle-v1-to-v2-lens = { path = "../gents-lenses/agent_tool_call_lifecycle_v1_to_v2", default-features = false }
+gents-lean-contract.workspace = true
+jsonschema = { version = "0.46.5", default-features = false }

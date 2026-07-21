@@ -1,0 +1,74 @@
+[package]
+name = "gents-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Consumer CLI for the gents library"
+autobins = false
+
+[features]
+default = ["codex-tui"]
+codex-tui = ["dep:codex-arg0", "dep:codex-config", "dep:codex-tui"]
+
+[[bin]]
+name = "gents"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum = { version = "0.8", features = ["ws"] }
+bs58 = "0.5"
+qrcode = { version = "0.14", default-features = false }
+chrono.workspace = true
+ciborium = "0.2"
+clap.workspace = true
+codex-app-server-protocol.workspace = true
+codex-arg0 = { workspace = true, optional = true }
+codex-config = { workspace = true, optional = true }
+codex-login.workspace = true
+codex-model-provider-info.workspace = true
+codex-protocol.workspace = true
+codex-tui = { workspace = true, optional = true }
+codex-utils-absolute-path.workspace = true
+gents = { path = "../gents" }
+gents-fs-runner = { path = "../gents-fs-runner" }
+gents-protocol.workspace = true
+defra-node.workspace = true
+defra-p2p-adapter.workspace = true
+futures-util = "0.3"
+iroh.workspace = true
+query.workspace = true
+hostname.workspace = true
+opentelemetry.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry_sdk.workspace = true
+p2p.workspace = true
+reqwest.workspace = true
+rig-core.workspace = true
+rmcp = { version = "1.2.0", features = [
+    "server",
+    "transport-streamable-http-server",
+    "macros",
+    "client",
+    "transport-streamable-http-client-reqwest",
+    "reqwest",
+] }
+schemars = "1"
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+acp.workspace = true
+async-trait = "0.1"
+gents-lean-contract.workspace = true
+identity.workspace = true
+jsonschema = { version = "0.46.5", default-features = false }
+regex = "1"
+tempfile = "3"
+tokio-tungstenite = "0.26.2"

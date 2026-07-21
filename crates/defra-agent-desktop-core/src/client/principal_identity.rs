@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use crypto::Key;
-use defra_agent::identity::{AgentIdentity, ServiceAccount};
+use gents::identity::{AgentIdentity, ServiceAccount};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 use serde::{Deserialize, Serialize};
 

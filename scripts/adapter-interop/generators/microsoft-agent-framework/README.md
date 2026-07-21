@@ -2,7 +2,7 @@
 
 This generator executes a real Microsoft Agent Framework group-chat workflow
 with deterministic custom `BaseChatClient` instances. It captures native
-workflow and group-chat events and writes a wrapped Defra Agent
+workflow and group-chat events and writes a wrapped Gents
 `multi_agent_task` adapter projection fixture.
 
 It emits:

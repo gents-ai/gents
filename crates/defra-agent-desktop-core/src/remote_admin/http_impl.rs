@@ -8,10 +8,10 @@ use async_trait::async_trait;
 use reqwest::{header::CONTENT_TYPE, Client, Method, RequestBuilder};
 use serde::{Deserialize, Serialize};
 
-use defra_agent::agent::p2p_reconcile::{
+use defra_node::EmbeddedNode;
+use gents::agent::p2p_reconcile::{
     PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
 };
-use defra_node::EmbeddedNode;
 
 use crate::client::PrincipalIdentity;
 

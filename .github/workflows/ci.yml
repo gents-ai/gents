@@ -115,16 +115,16 @@ jobs:
       - name: Run PR smoke tests
         if: github.event_name == 'pull_request'
         run: |
-          cargo test -p defra-agent --lib runtime_status::tests::
-          cargo test -p defra-agent --lib toolset::tests::read_only_bash
-          cargo test -p defra-agent-cli --test cli_server server_startup_with_iroh_p2p_reports_runtime_connectivity -- --nocapture --test-threads=1
-          cargo test -p defra-agent-cli --test cli_status -- --nocapture --test-threads=1
-          cargo test -p defra-agent-cli --test cli_reconciliation reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
+          cargo test -p gents --lib runtime_status::tests::
+          cargo test -p gents --lib toolset::tests::read_only_bash
+          cargo test -p gents-cli --test cli_server server_startup_with_iroh_p2p_reports_runtime_connectivity -- --nocapture --test-threads=1
+          cargo test -p gents-cli --test cli_status -- --nocapture --test-threads=1
+          cargo test -p gents-cli --test cli_reconciliation reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
           cargo test -p defra-agent-desktop-tauri --lib
 
       - name: Run full library and integration tests
         if: github.event_name != 'pull_request'
-        run: cargo test -p defra-agent --lib --tests
+        run: cargo test -p gents --lib --tests
 
       - name: Run desktop Tauri crate tests
         if: github.event_name != 'pull_request'
@@ -132,7 +132,7 @@ jobs:
 
       - name: Run full CLI test suite
         if: github.event_name != 'pull_request'
-        run: cargo test -p defra-agent-cli -- --nocapture --test-threads=1
+        run: cargo test -p gents-cli -- --nocapture --test-threads=1
 
       - name: Cleanup git auth
         if: always()
@@ -209,11 +209,11 @@ jobs:
         run: .github/scripts/setup-rust-build-cache.sh
 
       - name: Build proofs
-        working-directory: crates/defra-agent/proofs
+        working-directory: crates/gents/proofs
         run: lake build
 
       - name: Run proof conformance tests
-        run: cargo test -p defra-agent --test conformance
+        run: cargo test -p gents --test conformance
 
       - name: Cleanup git auth
         if: always()

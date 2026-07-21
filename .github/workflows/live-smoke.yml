@@ -22,9 +22,9 @@ env:
   RUST_BACKTRACE: "1"
   SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '60G' }}
   SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
-  DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT: ${{ github.event.inputs.inference_endpoint }}
-  DEFRA_AGENT_CLI_E2E_MODEL_NAME: ${{ github.event.inputs.model_name }}
-  DEFRA_AGENT_CLI_E2E_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
+  GENTS_CLI_E2E_MODEL_ENDPOINT: ${{ github.event.inputs.inference_endpoint }}
+  GENTS_CLI_E2E_MODEL_NAME: ${{ github.event.inputs.model_name }}
+  GENTS_CLI_E2E_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
   DEFRA_AGENT_TAURI_LIVE_INFERENCE_URL: ${{ github.event.inputs.inference_endpoint }}
   DEFRA_AGENT_TAURI_LIVE_MODEL_NAME: ${{ github.event.inputs.model_name }}
   DEFRA_AGENT_TAURI_LIVE_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
@@ -86,7 +86,7 @@ jobs:
         run: .github/scripts/setup-rust-build-cache.sh
 
       - name: Run live CLI smoke test
-        run: cargo test -p defra-agent-cli --test cli_live standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools -- --ignored --nocapture --test-threads=1
+        run: cargo test -p gents-cli --test cli_live standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools -- --ignored --nocapture --test-threads=1
 
       - name: Cleanup git auth
         if: always()

@@ -1,0 +1,9 @@
+[package]
+name = "gents-schemas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Dependency-free GraphQL schema bundle for gents agent collections"
+
+[dependencies]

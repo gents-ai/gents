@@ -427,8 +427,8 @@ mod tests {
     use axum::response::{IntoResponse, Response};
     use axum::routing::{get, post};
     use axum::Router;
-    use defra_agent::default_behavior_id_for_agent;
     use defra_agent_desktop_core::client::ClientCore;
+    use gents::default_behavior_id_for_agent;
     use serde_json::Value;
     use tokio::sync::oneshot;
 

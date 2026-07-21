@@ -15,14 +15,14 @@ CONTEXT_ID = "context-crewai-docker-1"
 REQUEST_ID = "req-crewai-docker-1"
 RESEARCH_REQUEST_ID = "req-crewai-research-docker-1"
 REVIEW_REQUEST_ID = "req-crewai-review-docker-1"
-TASK_TEXT = "Map a CrewAI multi-agent task to Defra Agent projection fields."
+TASK_TEXT = "Map a CrewAI multi-agent task to Gents projection fields."
 
 HIERARCHICAL_CONTEXT_ID = "context-crewai-hierarchical-docker-1"
 HIERARCHICAL_REQUEST_ID = "req-crewai-hierarchical-docker-1"
 HIERARCHICAL_RESEARCH_REQUEST_ID = "req-crewai-hierarchical-research-docker-1"
 HIERARCHICAL_REVIEW_REQUEST_ID = "req-crewai-hierarchical-review-docker-1"
 HIERARCHICAL_TASK_TEXT = (
-    "Manage a CrewAI hierarchical crew for Defra Agent projection fields."
+    "Manage a CrewAI hierarchical crew for Gents projection fields."
 )
 
 
@@ -31,7 +31,7 @@ AGENTS = [
         "name": "planner",
         "role": "planner",
         "title": "CrewAI Planner",
-        "agent_did": "did:defra-agent:crewai-planner",
+        "agent_did": "did:test:crewai-planner",
         "behavior_id": "crewai.planner",
         "goal": "Plan adapter interoperability work.",
         "backstory": "Plans multi-agent work and passes scoped tasks to researchers.",
@@ -44,7 +44,7 @@ AGENTS = [
         "name": "researcher",
         "role": "researcher",
         "title": "CrewAI Researcher",
-        "agent_did": "did:defra-agent:crewai-researcher",
+        "agent_did": "did:test:crewai-researcher",
         "behavior_id": "crewai.researcher",
         "goal": "Research CrewAI task and context behavior.",
         "backstory": "Finds framework-specific evidence for projection compatibility.",
@@ -57,7 +57,7 @@ AGENTS = [
         "name": "reviewer",
         "role": "reviewer",
         "title": "CrewAI Reviewer",
-        "agent_did": "did:defra-agent:crewai-reviewer",
+        "agent_did": "did:test:crewai-reviewer",
         "behavior_id": "crewai.reviewer",
         "goal": "Review and approve adapter output.",
         "backstory": "Approves the final mapped multi-agent task projection.",
@@ -69,7 +69,7 @@ HIERARCHICAL_MANAGER = {
     "name": "manager",
     "role": "manager",
     "title": "CrewAI Manager",
-    "agent_did": "did:defra-agent:crewai-manager",
+    "agent_did": "did:test:crewai-manager",
     "behavior_id": "crewai.manager",
 }
 
@@ -78,7 +78,7 @@ HIERARCHICAL_AGENTS = [
         "name": "researcher",
         "role": "researcher",
         "title": "CrewAI Hierarchical Researcher",
-        "agent_did": "did:defra-agent:crewai-hierarchical-researcher",
+        "agent_did": "did:test:crewai-hierarchical-researcher",
         "behavior_id": "crewai.hierarchical_researcher",
         "goal": "Research hierarchical CrewAI delegation behavior.",
         "backstory": "Receives delegated work from a hierarchical crew manager.",
@@ -92,7 +92,7 @@ HIERARCHICAL_AGENTS = [
         "name": "reviewer",
         "role": "reviewer",
         "title": "CrewAI Hierarchical Reviewer",
-        "agent_did": "did:defra-agent:crewai-hierarchical-reviewer",
+        "agent_did": "did:test:crewai-hierarchical-reviewer",
         "behavior_id": "crewai.hierarchical_reviewer",
         "goal": "Review hierarchical projection evidence.",
         "backstory": "Receives delegated review work from the manager.",
@@ -112,7 +112,7 @@ HIERARCHICAL_MANAGER_RESPONSES = [
         '"coworker":"CrewAI Hierarchical Researcher",'
         '"task":"Research CrewAI hierarchical process evidence.",'
         '"context":"We need manager-to-worker child request evidence for the '
-        'Defra Agent multi_agent_task projection."}'
+        'Gents multi_agent_task projection."}'
     ),
     (
         "Thought: The researcher returned the required evidence.\n"
@@ -141,7 +141,7 @@ class ScriptedLLM(BaseLLM):
         responses: list[str],
         wrap_final_answer: bool = True,
     ) -> None:
-        super().__init__(model=f"defra-scripted-{agent_name}", temperature=0)
+        super().__init__(model=f"gents-scripted-{agent_name}", temperature=0)
         self.agent_name = agent_name
         self.responses = responses
         self.wrap_final_answer = wrap_final_answer
@@ -316,14 +316,14 @@ def build_projection(result: Any, tasks: list[Task]) -> dict[str, Any]:
         "projection_version": "v1",
         "source_request_id": REQUEST_ID,
         "source_session_id": CONTEXT_ID,
-        "source_agent_did": "did:defra-agent:crewai-crew",
+        "source_agent_did": "did:test:crewai-crew",
         "source_behavior_id": "crewai.sequential_crew",
         "redaction_mode": "full",
         "provenance": {
-            "runtime": "defra-agent",
+            "runtime": "gents",
             "source_projection_id": "run_timeline",
             "source_projection_version": "v1",
-            "actor_did": "did:defra-agent:crewai-fixture-reader",
+            "actor_did": "did:test:crewai-fixture-reader",
         },
         "output": {
             "adapter": "multi_agent_task",
@@ -353,7 +353,7 @@ def build_projection(result: Any, tasks: list[Task]) -> dict[str, Any]:
                         "parent_request_id": REQUEST_ID,
                         "child_request_id": RESEARCH_REQUEST_ID,
                         "parent_tool_call_id": "crewai:context:planner-to-researcher",
-                        "agent_did": "did:defra-agent:crewai-researcher",
+                        "agent_did": "did:test:crewai-researcher",
                         "behavior_id": "crewai.researcher",
                         "status": "completed",
                     },
@@ -361,7 +361,7 @@ def build_projection(result: Any, tasks: list[Task]) -> dict[str, Any]:
                         "parent_request_id": RESEARCH_REQUEST_ID,
                         "child_request_id": REVIEW_REQUEST_ID,
                         "parent_tool_call_id": "crewai:context:researcher-to-reviewer",
-                        "agent_did": "did:defra-agent:crewai-reviewer",
+                        "agent_did": "did:test:crewai-reviewer",
                         "behavior_id": "crewai.reviewer",
                         "status": "completed",
                     },
@@ -419,10 +419,10 @@ def build_hierarchical_projection(
         "source_behavior_id": HIERARCHICAL_MANAGER["behavior_id"],
         "redaction_mode": "full",
         "provenance": {
-            "runtime": "defra-agent",
+            "runtime": "gents",
             "source_projection_id": "run_timeline",
             "source_projection_version": "v1",
-            "actor_did": "did:defra-agent:crewai-fixture-reader",
+            "actor_did": "did:test:crewai-fixture-reader",
         },
         "output": {
             "adapter": "multi_agent_task",
@@ -620,9 +620,9 @@ def sequential_mapping(result: Any) -> dict[str, Any]:
         "scenario_id": "crewai.sequential_crew",
         "request_id": REQUEST_ID,
         "session_id": CONTEXT_ID,
-        "agent_did": "did:defra-agent:crewai-crew",
+        "agent_did": "did:test:crewai-crew",
         "behavior_id": "crewai.sequential_crew",
-        "actor_did": "did:defra-agent:crewai-fixture-reader",
+        "actor_did": "did:test:crewai-fixture-reader",
         "status": crew_status(result),
         "participants": [
             {
@@ -640,7 +640,7 @@ def sequential_mapping(result: Any) -> dict[str, Any]:
                 "child_request_id": RESEARCH_REQUEST_ID,
                 "parent_tool_call_id": "crewai:context:planner-to-researcher",
                 "tool_name": "task_context",
-                "agent_did": "did:defra-agent:crewai-researcher",
+                "agent_did": "did:test:crewai-researcher",
                 "behavior_id": "crewai.researcher",
                 "status": "completed",
             },
@@ -649,7 +649,7 @@ def sequential_mapping(result: Any) -> dict[str, Any]:
                 "child_request_id": REVIEW_REQUEST_ID,
                 "parent_tool_call_id": "crewai:context:researcher-to-reviewer",
                 "tool_name": "task_context",
-                "agent_did": "did:defra-agent:crewai-reviewer",
+                "agent_did": "did:test:crewai-reviewer",
                 "behavior_id": "crewai.reviewer",
                 "status": "completed",
             },
@@ -673,7 +673,7 @@ def hierarchical_mapping(result: Any) -> dict[str, Any]:
         "session_id": HIERARCHICAL_CONTEXT_ID,
         "agent_did": HIERARCHICAL_MANAGER["agent_did"],
         "behavior_id": HIERARCHICAL_MANAGER["behavior_id"],
-        "actor_did": "did:defra-agent:crewai-fixture-reader",
+        "actor_did": "did:test:crewai-fixture-reader",
         "status": crew_status(result),
         "participants": [
             {
@@ -748,7 +748,7 @@ def write_fixture(
             "package": "crewai",
             "package_version": crewai_version(),
             "generator": "adapter-projections/generators/crewai",
-            "capture": os.environ.get("DEFRA_FIXTURE_CAPTURE", "local"),
+            "capture": os.environ.get("GENTS_FIXTURE_CAPTURE", "local"),
             "api": [
                 "Agent",
                 "Task",
@@ -803,7 +803,7 @@ def write_hierarchical_fixture(
             "package": "crewai",
             "package_version": crewai_version(),
             "generator": "adapter-projections/generators/crewai",
-            "capture": os.environ.get("DEFRA_FIXTURE_CAPTURE", "local"),
+            "capture": os.environ.get("GENTS_FIXTURE_CAPTURE", "local"),
             "api": [
                 "Agent",
                 "Task",

@@ -11,8 +11,8 @@ anyhow.workspace = true
 async-trait = "0.1"
 chrono.workspace = true
 crypto.workspace = true
-defra-agent = { path = "../defra-agent" }
-defra-agent-protocol.workspace = true
+gents = { path = "../gents" }
+gents-protocol.workspace = true
 defra-node = { workspace = true, features = ["p2p", "rocksdb"] }
 defra-p2p-adapter.workspace = true
 dirs.workspace = true
@@ -28,6 +28,6 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-defra-agent-lean-contract.workspace = true
+gents-lean-contract.workspace = true
 tempfile = "3"
 wiremock = "0.6"

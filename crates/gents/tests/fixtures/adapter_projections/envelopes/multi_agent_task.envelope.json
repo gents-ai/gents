@@ -1,0 +1,69 @@
+{
+  "output": {
+    "adapter": "multi_agent_task",
+    "projection": {
+      "context_id": "session-team-1",
+      "delegations": [
+        {
+          "agent_did": "did:test:researcher",
+          "behavior_id": "researcher",
+          "child_request_id": "req-team-research-1",
+          "parent_request_id": "req-team-1",
+          "parent_tool_call_id": "call-delegate-research",
+          "status": "completed"
+        }
+      ],
+      "messages": [
+        {
+          "content": "Coordinate a review of the adapter roadmap.",
+          "id": "session-team-1:message:1",
+          "request_id": "req-team-1",
+          "role": "user"
+        },
+        {
+          "content": "The research task completed and produced fixture recommendations.",
+          "id": "session-team-1:message:2",
+          "request_id": "req-team-1",
+          "role": "assistant"
+        }
+      ],
+      "participants": [
+        {
+          "agent_did": "did:test:coordinator",
+          "behavior_id": "coordinator",
+          "role": "owner"
+        },
+        {
+          "agent_did": "did:test:researcher",
+          "behavior_id": "researcher",
+          "role": "delegate"
+        }
+      ],
+      "status": "completed",
+      "task_id": "req-team-1",
+      "tool_events": [
+        {
+          "child_request_id": "req-team-research-1",
+          "id": "call-delegate-research",
+          "request_id": "req-team-1",
+          "selected_service_id": "gents",
+          "selected_tool_name": "delegate",
+          "status": "completed",
+          "tool_name": "delegate"
+        }
+      ]
+    }
+  },
+  "projection_id": "multi_agent_task",
+  "projection_version": "v1",
+  "provenance": {
+    "runtime": "gents",
+    "source_projection_id": "run_timeline",
+    "source_projection_version": "v1"
+  },
+  "redaction_mode": "full",
+  "source_agent_did": "did:test:coordinator",
+  "source_behavior_id": "coordinator",
+  "source_request_id": "req-team-1",
+  "source_session_id": "session-team-1"
+}

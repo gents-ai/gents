@@ -9,6 +9,6 @@ COPY generate_fixture.py .
 COPY verify_export.py .
 
 ENV OTEL_SDK_DISABLED=true
-ENV DEFRA_FIXTURE_CAPTURE=docker
+ENV GENTS_FIXTURE_CAPTURE=docker
 ENTRYPOINT ["python", "/fixture/generate_fixture.py"]
 CMD ["--out-dir", "/out"]

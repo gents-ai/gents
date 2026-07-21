@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use defra_agent_protocol::row::{AgentRequestRow, AgentToolCallRow};
-use defra_agent_protocol::transcript::{normalize_markdown_text, present_persisted_message};
+use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
+use gents_protocol::transcript::{normalize_markdown_text, present_persisted_message};
 
 use super::super::cause_derivation::{
     derive_response_cause, derive_tool_call_cause, RequestEvidence, ResponseEvidence,
@@ -239,8 +239,8 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
             .to_ascii_lowercase();
         matches!(
             turn_state,
-            Some(defra_agent_protocol::client_protocol::ClientTurnState::WaitingForClaim)
-                | Some(defra_agent_protocol::client_protocol::ClientTurnState::Streaming)
+            Some(gents_protocol::client_protocol::ClientTurnState::WaitingForClaim)
+                | Some(gents_protocol::client_protocol::ClientTurnState::Streaming)
         ) && response.materialized_message_sequence.is_none()
             && response.interrupted_at.is_none()
             && !matches!(
@@ -416,7 +416,7 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
     })
 }
 
-fn request_turn_root_id(request: &defra_agent_protocol::row::AgentRequestRow) -> String {
+fn request_turn_root_id(request: &gents_protocol::row::AgentRequestRow) -> String {
     normalize_optional(request.retry_root_request.as_deref())
         .unwrap_or_else(|| request.request_id.clone())
 }

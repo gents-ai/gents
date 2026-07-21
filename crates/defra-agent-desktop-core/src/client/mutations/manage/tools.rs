@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
-use defra_agent_protocol::row::{ToolSelectionRow, ToolServiceRegistryRow};
 use defra_node::EmbeddedNode;
+use gents_protocol::row::{ToolSelectionRow, ToolServiceRegistryRow};
 use serde_json::Value;
 
 use super::super::graphql::{

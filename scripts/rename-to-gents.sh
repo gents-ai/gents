@@ -225,6 +225,79 @@ declare -a STALE_TOKENS=(
   "org.sourcenetwork"
   "com.sourcenetwork.defra-agent-desktop"
   "org.sourcenetwork.defra-agent"
+  # Product-owned shorthand which cannot be covered by a broad bare-`defra`
+  # rule without corrupting legitimate DefraDB vocabulary.
+  "did:defra:"
+  "defra_exec"
+  "defra_fs"
+  "DEFRA_NATIVE_FS_RUNNER"
+  "DEFRA_CODEX_SHIM_TRACE"
+  "DEFRA_CHATGPT_CODEX_CLIENT_VERSION"
+  "DefraToolCallProgress"
+  "DefraCompactionProgress"
+  "DefraBackedWorkflow"
+  "DefraLifecycleState"
+  "DefraProcessState"
+  "DefraInferenceCallState"
+  "defra_tool_"
+  "defra_turn_"
+  '"defra"'
+  "defra-shim"
+  "/defra/skills"
+  ".defra.eval-jsonl"
+  ".defra.jsonl"
+  ".defra.json"
+  "defra-exports"
+  "defra:req"
+  "defra-chatgpt-codex"
+  "defra-child-stream"
+  "defra-message"
+  "defra-owned"
+  "defra-reasoning"
+  "defra-user"
+  # Additional product-owned internal/test/invoked-tooling shorthand found by
+  # the frozen-tree preflight. Keep these exact so DefraDB-derived names remain
+  # outside the product rename.
+  "stream_defra_turn"
+  "start_defra_turn"
+  "steer_defra_turn"
+  "decode_defra_compaction_progress"
+  "defra_model_selection_id"
+  "defra_request_id"
+  "is_defra_background_tool"
+  "is_defra_file_change_tool"
+  "is_defra_export_file"
+  "model_provider_filter_allows_defra"
+  "source_filters_classify_defra_spawned_children"
+  "deepest_defra_steering"
+  "streams_defra_response"
+  "project_defra_sessions"
+  "queues_defra_request"
+  "live_defra_filesystem"
+  "defra_binary"
+  "msg_defra_"
+  "defra-host-"
+  "defra-process-"
+  "defra-codex-"
+  "defra-fs-"
+  "defra-scripted-"
+  "Defra-native"
+  "Defra-owned"
+  "Defra remote runtime"
+  "Defra runtime"
+  "Defra tools"
+  "Defra import"
+  "Defra Test"
+  "defra-test@"
+  "defra agent"
+  "embedded Defra HTTP"
+  "valid Defra identity DID"
+  "DEFRA_FIXTURE_CAPTURE"
+  "DEFRA_LANGGRAPH_PROVIDER_MODE"
+  "DEFRA_LANGGRAPH_OPENAI_MODEL"
+  "defra:"
+  # This host is DefraDB-owned and must not be product-renamed.
+  "schemas.gents.ai"
 )
 
 # Guard allowlist — files where old names are permitted to remain. In
@@ -757,6 +830,39 @@ scan_slice_contracts() {
   esac
 }
 
+scan_regex_token() {
+  local slice="$1"
+  local label="$2"
+  local pattern="$3"
+  local file count token_total=0 file_count=0
+  local -a files
+  files=("")
+
+  while IFS= read -r -d '' file; do
+    in_slice "$slice" "$file" || continue
+    is_allowlisted "$file" && continue
+    is_regular_guard_excluded "$slice" "$file" && continue
+    [[ -L "$file" || ! -f "$file" ]] && continue
+    count=$({ grep -E -o -- "$pattern" "$file" 2>/dev/null || true; } | wc -l | tr -d ' ')
+    if [[ "$count" -gt 0 ]]; then
+      files+=("$file")
+      file_count=$((file_count + 1))
+      token_total=$((token_total + count))
+    fi
+  done < <(git grep -I -l -z -E -e "$pattern" -- . 2>/dev/null || true)
+
+  if [[ "$token_total" -gt 0 ]]; then
+    printf '  %-45s %4d path files %4d content files %6d occurrences\n' \
+      "$label" 0 "$file_count" "$token_total"
+    for file in "${files[@]}"; do
+      [[ -n "$file" ]] || continue
+      printf '    content: %s\n' "$file"
+    done
+    SCAN_TOTAL=$((SCAN_TOTAL + token_total))
+    SCAN_VIOLATIONS=$((SCAN_VIOLATIONS + 1))
+  fi
+}
+
 scan_stale_tokens() {
   local slice="$1"
   local token file link_target match last_content_file
@@ -845,6 +951,10 @@ scan_stale_tokens() {
 
   SCAN_TOTAL="$total"
   SCAN_VIOLATIONS="$violations"
+  scan_regex_token \
+    "$slice" \
+    "standalone DEFRA" \
+    '(^|[^[:alnum:]_])DEFRA([^[:alnum:]_]|$)'
   scan_slice_contracts "$slice"
 }
 

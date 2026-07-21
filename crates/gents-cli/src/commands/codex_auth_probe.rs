@@ -1,0 +1,151 @@
+use anyhow::{bail, Context, Result};
+use serde::Deserialize;
+
+use crate::cli::args::CodexAuthProbeArgs;
+use crate::config_writes::ConfigAccess;
+use crate::{resolve_agent_did, resolve_config_access};
+
+#[derive(Deserialize)]
+struct ModelsResponse {
+    #[serde(default)]
+    models: Vec<ModelSummary>,
+    #[serde(default)]
+    data: Vec<OpenAiModelSummary>,
+}
+
+#[derive(Deserialize)]
+struct ModelSummary {
+    slug: String,
+    #[serde(default)]
+    display_name: String,
+}
+
+#[derive(Deserialize)]
+struct OpenAiModelSummary {
+    id: String,
+}
+
+pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
+    let (access, home_dir) =
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+    let agent_did = resolve_agent_did(Some(&home_dir), args.agent_did.as_deref())?;
+    let provider = gents::chatgpt_codex::normalize_provider(&args.provider);
+    let credential = load_oauth_credential(&access, &agent_did, &provider)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!(gents::chatgpt_codex::classify_chatgpt_auth_error(
+                &agent_did,
+                &provider,
+                &gents::chatgpt_codex::ChatGptAuthProblem::Missing,
+            ))
+        })?;
+    // Read-only: the probe NEVER refreshes the token. Refreshing here would make the probe a
+    // second, uncoordinated writer of the rotating refresh token (concurrent with the owning
+    // runtime), which the provider's reuse-detection would treat as a leak and REVOKE the
+    // credential. If the stored access token is expired, the /models call below 401s and we
+    // surface actionable guidance; the owning runtime is the single writer that refreshes.
+
+    let backend_url = gents::chatgpt_codex::default_backend_endpoint();
+    let models_url = format!("{}/models", backend_url.trim_end_matches('/'));
+    let mut request = reqwest::Client::new()
+        .get(&models_url)
+        .query(&[(
+            "client_version",
+            gents::chatgpt_codex::chatgpt_codex_client_version(),
+        )])
+        .bearer_auth(&credential.access_token);
+    for (name, value) in gents::chatgpt_codex::build_chatgpt_codex_headers(
+        credential.account_id.as_deref(),
+        credential.is_fedramp,
+    )? {
+        if let Some(name) = name {
+            request = request.header(name, value);
+        }
+    }
+
+    let response = request
+        .send()
+        .await
+        .context("failed to send models request to ChatGPT Codex backend")?;
+    let status = response.status();
+    let etag = response
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    let body = response
+        .bytes()
+        .await
+        .context("failed to read models response from ChatGPT Codex backend")?;
+    if !status.is_success() {
+        let body = String::from_utf8_lossy(&body);
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            let guidance = gents::chatgpt_codex::classify_chatgpt_auth_error(
+                &agent_did,
+                &provider,
+                &gents::chatgpt_codex::ChatGptAuthProblem::Expired,
+            );
+            bail!("models request failed with HTTP {status}: {body}\n{guidance}");
+        }
+        bail!("models request failed with HTTP {status}: {body}");
+    }
+    let ModelsResponse { models, data } =
+        serde_json::from_slice(&body).context("failed to decode models response")?;
+
+    println!("Agent DID: {agent_did}");
+    println!("Credential: {}", credential.credential_id);
+    println!(
+        "Auth: ChatGPT (account: {}, plan: {})",
+        credential
+            .account_id
+            .as_deref()
+            .unwrap_or("<unknown-account>"),
+        credential.chatgpt_plan_type.as_deref().unwrap_or("Unknown")
+    );
+    println!("Backend: {backend_url}");
+    println!(
+        "Access token expires: {}",
+        credential.access_token_expires_at
+    );
+    if let Some(etag) = etag {
+        println!("Models etag: {etag}");
+    }
+    let mut rendered = models
+        .into_iter()
+        .map(|model| {
+            let display_name = model.display_name.trim();
+            if display_name.is_empty() || display_name == model.slug {
+                model.slug
+            } else {
+                format!("{} ({display_name})", model.slug)
+            }
+        })
+        .chain(data.into_iter().map(|model| model.id))
+        .collect::<Vec<_>>();
+    rendered.sort();
+    println!("Models returned: {}", rendered.len());
+
+    let max_models = args.max_models.min(rendered.len());
+    for model in rendered.iter().take(max_models) {
+        println!("- {model}");
+    }
+
+    if max_models < rendered.len() {
+        println!("- ... {} more", rendered.len() - max_models);
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn load_oauth_credential(
+    access: &ConfigAccess,
+    agent_did: &str,
+    provider: &str,
+) -> Result<Option<gents::chatgpt_codex::OAuthCredential>> {
+    let query = gents::chatgpt_codex::oauth_credential_query(agent_did, provider);
+    let response = access.execute(&query).await?;
+    gents::chatgpt_codex::oauth_credentials_from_response(&response)
+        .into_iter()
+        .next()
+        .transpose()
+}

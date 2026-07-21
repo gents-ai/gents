@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
-use defra_agent_protocol::schemas::{
+use defra_node::EmbeddedNode;
+use gents_protocol::schemas::{
     ALL, ALL_COLLECTION_NAMES, BRANCHABLE_COLLECTION_NAMES, RUNTIME_ALL, RUNTIME_COLLECTION_NAMES,
 };
-use defra_node::EmbeddedNode;
 
 async fn ensure_schema_set(node: &EmbeddedNode, schemas: &[&str]) -> Result<()> {
     for sdl in schemas {

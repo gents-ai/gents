@@ -37,7 +37,7 @@ function commandCall(
     statusKind: "success",
     args: { rawText: JSON.stringify({ command: "make build" }), fields: [] },
     result: {
-      rawText: `defra_exec: ${JSON.stringify(meta)}\n${body}`,
+      rawText: `gents_exec: ${JSON.stringify(meta)}\n${body}`,
       fields: [],
     },
   } as unknown as RenderedToolCallView;

@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use defra_agent_desktop_core::client::ClientCore;
-use defra_agent_protocol::client_protocol::ClientTurnState;
+use gents_protocol::client_protocol::ClientTurnState;
 use uuid::Uuid;
 
 use super::super::types::{ChatSendRequest, ChatSendResult, ConversationRenameRequest};

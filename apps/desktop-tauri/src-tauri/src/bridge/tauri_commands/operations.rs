@@ -8,10 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use defra_agent::backend_registry::{derive_display_state, list_all_backends};
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
 use defra_agent_desktop_core::client::ClientCore;
+use gents::backend_registry::{derive_display_state, list_all_backends};
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
 #[cfg(test)]
 use reqwest::Url;
 use tauri::State;
@@ -58,12 +58,12 @@ pub(crate) async fn desktop_operations_snapshot(
         .ok_or_else(|| "no agent selected; pass agentDid explicitly".to_string())?;
 
     // 1) In-process native executor snapshot. The runtime exposes this via
-    //    `defra_agent::active_native_executors()` (re-exported from
-    //    `defra_agent::native_executor_status`). Cast `pid: i32` -> `u32`
+    //    `gents::active_native_executors()` (re-exported from
+    //    `gents::native_executor_status`). Cast `pid: i32` -> `u32`
     //    for the view shape (the DefraDB schema has no native exec rows;
     //    this is purely in-process).
     let native_executors: Vec<NativeExecutorStatusView> =
-        defra_agent::native_executor_status::active_native_executors()
+        gents::native_executor_status::active_native_executors()
             .into_iter()
             .map(|ne| NativeExecutorStatusView {
                 id: ne.id as i64,

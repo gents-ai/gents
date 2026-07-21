@@ -65,7 +65,7 @@ To verify the download, fetch the matching `.sha256` asset and run
 Building from source instead (needs a Rust toolchain and a checkout):
 
 ```bash
-cargo install --profile dev-install --locked --path crates/defra-agent-cli
+cargo install --profile dev-install --locked --path crates/gents-cli
 ```
 
 That installs the `defra-agent` binary into `~/.cargo/bin`.
@@ -503,7 +503,7 @@ cannot hold.
 ## Testing
 
 The mocked end-to-end harness for the `init → server → codex/chat` flow lives
-in [crates/defra-agent-cli/tests](../crates/defra-agent-cli/tests). Gate with
+in [crates/gents-cli/tests](../crates/gents-cli/tests). Gate with
 the full package suites:
 
 ```bash
@@ -535,5 +535,5 @@ cargo test -p defra-agent-cli \
 - Desktop app, fleet, and P2P: [operations.md](operations.md)
 - macOS bash sandbox tiers: [macos-bash-sandbox.md](macos-bash-sandbox.md)
 - macOS release signing: [macos-signing.md](macos-signing.md)
-- Schema/data model: `crates/defra-agent-protocol/schemas/README.md`
-- Lean proof guide: `crates/defra-agent/proofs/README.md`
+- Schema/data model: `crates/gents-protocol/schemas/README.md`
+- Lean proof guide: `crates/gents/proofs/README.md`

@@ -4401,7 +4401,7 @@ impl Connection {
                     // already-Drained connection (was_draining only matches Draining),
                     // so without !was_drained a second stateless reset in the same
                     // poll double-pushes Draining and underflows active_connections
-                    // in the endpoint driver (n0-computer/noq#743 / defra-agent#634).
+                    // in the endpoint driver (n0-computer/noq#743 / gents#634).
                     let was_draining = self.state.move_to_drained(Some(conn_err));
                     if !was_draining && !was_drained {
                         self.endpoint_events.push_back(EndpointEventInner::Draining);

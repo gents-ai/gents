@@ -110,7 +110,7 @@ fn resolve_behavior_id(
 }
 
 pub(super) fn default_behavior_id_for_agent(agent_did: &str) -> String {
-    defra_agent::default_behavior_id_for_agent(agent_did)
+    gents::default_behavior_id_for_agent(agent_did)
 }
 
 fn default_display_name_for_did(agent_did: &str) -> String {

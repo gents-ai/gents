@@ -4,8 +4,8 @@ mod turns;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use defra_agent_protocol::client_protocol::ClientTurnState;
-use defra_agent_protocol::row::{
+use gents_protocol::client_protocol::ClientTurnState;
+use gents_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
     AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
     CompactionEntryRow, EventTriggerRow, GoalRow, InferenceBackendRow, InferenceProfileRow,

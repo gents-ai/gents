@@ -19,9 +19,9 @@ anyhow.workspace = true
 clap.workspace = true
 chrono.workspace = true
 blake3 = "1"
-defra-agent = { path = "../../../crates/defra-agent" }
+gents = { path = "../../../crates/gents" }
 defra-agent-desktop-core.workspace = true
-defra-agent-protocol = { path = "../../../crates/defra-agent-protocol" }
+gents-protocol = { path = "../../../crates/gents-protocol" }
 hostname.workspace = true
 reqwest.workspace = true
 tauri = { version = "2", features = [] }
@@ -36,5 +36,5 @@ uuid.workspace = true
 
 [dev-dependencies]
 axum = "0.8"
-defra-agent-lean-contract.workspace = true
+gents-lean-contract.workspace = true
 rig-core.workspace = true

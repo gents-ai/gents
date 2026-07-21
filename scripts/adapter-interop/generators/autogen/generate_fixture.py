@@ -20,7 +20,7 @@ from autogen_core import CancellationToken
 CONTEXT_ID = "context-autogen-docker-1"
 REQUEST_ID = "req-autogen-docker-1"
 CHILD_REQUEST_ID = "req-autogen-child-docker-1"
-TASK_TEXT = "Map a multi-agent task to Defra Agent projection fields."
+TASK_TEXT = "Map a multi-agent task to Gents projection fields."
 
 SWARM_CONTEXT_ID = "context-autogen-swarm-docker-1"
 SWARM_REQUEST_ID = "req-autogen-swarm-docker-1"
@@ -33,7 +33,7 @@ AGENTS = [
     {
         "name": "planner",
         "role": "planner",
-        "agent_did": "did:defra-agent:autogen-planner",
+        "agent_did": "did:test:autogen-planner",
         "behavior_id": "autogen.planner",
         "description": "Plans the task and delegates research.",
         "content": (
@@ -44,7 +44,7 @@ AGENTS = [
     {
         "name": "researcher",
         "role": "researcher",
-        "agent_did": "did:defra-agent:autogen-researcher",
+        "agent_did": "did:test:autogen-researcher",
         "behavior_id": "autogen.researcher",
         "description": "Completes delegated research.",
         "content": (
@@ -55,7 +55,7 @@ AGENTS = [
     {
         "name": "reviewer",
         "role": "reviewer",
-        "agent_did": "did:defra-agent:autogen-reviewer",
+        "agent_did": "did:test:autogen-reviewer",
         "behavior_id": "autogen.reviewer",
         "description": "Reviews and approves outputs.",
         "content": "APPROVE: final multi-agent projection output is ready",
@@ -66,7 +66,7 @@ SWARM_AGENTS = [
     {
         "name": "planner",
         "role": "planner",
-        "agent_did": "did:defra-agent:autogen-swarm-planner",
+        "agent_did": "did:test:autogen-swarm-planner",
         "behavior_id": "autogen.swarm.planner",
         "description": "Plans the task and hands off research.",
         "message_type": "handoff",
@@ -79,7 +79,7 @@ SWARM_AGENTS = [
     {
         "name": "researcher",
         "role": "researcher",
-        "agent_did": "did:defra-agent:autogen-swarm-researcher",
+        "agent_did": "did:test:autogen-swarm-researcher",
         "behavior_id": "autogen.swarm.researcher",
         "description": "Completes research and hands off review.",
         "message_type": "handoff",
@@ -92,7 +92,7 @@ SWARM_AGENTS = [
     {
         "name": "reviewer",
         "role": "reviewer",
-        "agent_did": "did:defra-agent:autogen-swarm-reviewer",
+        "agent_did": "did:test:autogen-swarm-reviewer",
         "behavior_id": "autogen.swarm.reviewer",
         "description": "Reviews the delegated task and approves it.",
         "message_type": "text",
@@ -208,14 +208,14 @@ def build_projection(result: TaskResult) -> dict[str, Any]:
         "projection_version": "v1",
         "source_request_id": REQUEST_ID,
         "source_session_id": CONTEXT_ID,
-        "source_agent_did": "did:defra-agent:autogen-team",
+        "source_agent_did": "did:test:autogen-team",
         "source_behavior_id": "autogen.round_robin_team",
         "redaction_mode": "full",
         "provenance": {
-            "runtime": "defra-agent",
+            "runtime": "gents",
             "source_projection_id": "run_timeline",
             "source_projection_version": "v1",
-            "actor_did": "did:defra-agent:autogen-fixture-reader",
+            "actor_did": "did:test:autogen-fixture-reader",
         },
         "output": {
             "adapter": "multi_agent_task",
@@ -237,7 +237,7 @@ def build_projection(result: TaskResult) -> dict[str, Any]:
                         "parent_request_id": REQUEST_ID,
                         "child_request_id": CHILD_REQUEST_ID,
                         "parent_tool_call_id": "autogen:handoff:planner-to-researcher",
-                        "agent_did": "did:defra-agent:autogen-researcher",
+                        "agent_did": "did:test:autogen-researcher",
                         "behavior_id": "autogen.researcher",
                         "status": "completed",
                     }
@@ -271,14 +271,14 @@ def build_swarm_projection(result: TaskResult) -> dict[str, Any]:
         "projection_version": "v1",
         "source_request_id": SWARM_REQUEST_ID,
         "source_session_id": SWARM_CONTEXT_ID,
-        "source_agent_did": "did:defra-agent:autogen-swarm-team",
+        "source_agent_did": "did:test:autogen-swarm-team",
         "source_behavior_id": "autogen.swarm_team",
         "redaction_mode": "full",
         "provenance": {
-            "runtime": "defra-agent",
+            "runtime": "gents",
             "source_projection_id": "run_timeline",
             "source_projection_version": "v1",
-            "actor_did": "did:defra-agent:autogen-fixture-reader",
+            "actor_did": "did:test:autogen-fixture-reader",
         },
         "output": {
             "adapter": "multi_agent_task",
@@ -300,7 +300,7 @@ def build_swarm_projection(result: TaskResult) -> dict[str, Any]:
                         "parent_request_id": SWARM_REQUEST_ID,
                         "child_request_id": SWARM_RESEARCH_REQUEST_ID,
                         "parent_tool_call_id": "autogen:swarm:handoff:planner-to-researcher",
-                        "agent_did": "did:defra-agent:autogen-swarm-researcher",
+                        "agent_did": "did:test:autogen-swarm-researcher",
                         "behavior_id": "autogen.swarm.researcher",
                         "status": "completed",
                     },
@@ -308,7 +308,7 @@ def build_swarm_projection(result: TaskResult) -> dict[str, Any]:
                         "parent_request_id": SWARM_RESEARCH_REQUEST_ID,
                         "child_request_id": SWARM_REVIEW_REQUEST_ID,
                         "parent_tool_call_id": "autogen:swarm:handoff:researcher-to-reviewer",
-                        "agent_did": "did:defra-agent:autogen-swarm-reviewer",
+                        "agent_did": "did:test:autogen-swarm-reviewer",
                         "behavior_id": "autogen.swarm.reviewer",
                         "status": "completed",
                     },
@@ -398,7 +398,7 @@ def write_fixture_file(
             "package": "autogen-agentchat",
             "package_version": autogen_version(),
             "generator": "adapter-projections/generators/autogen",
-            "capture": os.environ.get("DEFRA_FIXTURE_CAPTURE", "local"),
+            "capture": os.environ.get("GENTS_FIXTURE_CAPTURE", "local"),
             "api": source_api,
         },
         "native": native,
@@ -440,9 +440,9 @@ def write_fixture(out_dir: Path, result: TaskResult) -> Path:
             "scenario_id": "autogen.round_robin_group_chat",
             "request_id": REQUEST_ID,
             "session_id": CONTEXT_ID,
-            "agent_did": "did:defra-agent:autogen-team",
+            "agent_did": "did:test:autogen-team",
             "behavior_id": "autogen.round_robin_team",
-            "actor_did": "did:defra-agent:autogen-fixture-reader",
+            "actor_did": "did:test:autogen-fixture-reader",
             "status": task_status(result.stop_reason),
             "participants": [
                 {
@@ -464,7 +464,7 @@ def write_fixture(out_dir: Path, result: TaskResult) -> Path:
                     "child_request_id": CHILD_REQUEST_ID,
                     "parent_tool_call_id": "autogen:handoff:planner-to-researcher",
                     "tool_name": "handoff",
-                    "agent_did": "did:defra-agent:autogen-researcher",
+                    "agent_did": "did:test:autogen-researcher",
                     "behavior_id": "autogen.researcher",
                     "status": "completed",
                 }
@@ -512,9 +512,9 @@ def write_swarm_fixture(out_dir: Path, result: TaskResult) -> Path:
             "scenario_id": "autogen.swarm",
             "request_id": SWARM_REQUEST_ID,
             "session_id": SWARM_CONTEXT_ID,
-            "agent_did": "did:defra-agent:autogen-swarm-team",
+            "agent_did": "did:test:autogen-swarm-team",
             "behavior_id": "autogen.swarm_team",
-            "actor_did": "did:defra-agent:autogen-fixture-reader",
+            "actor_did": "did:test:autogen-fixture-reader",
             "status": task_status(result.stop_reason),
             "participants": [
                 {
@@ -538,7 +538,7 @@ def write_swarm_fixture(out_dir: Path, result: TaskResult) -> Path:
                     "child_request_id": SWARM_RESEARCH_REQUEST_ID,
                     "parent_tool_call_id": "autogen:swarm:handoff:planner-to-researcher",
                     "tool_name": "handoff",
-                    "agent_did": "did:defra-agent:autogen-swarm-researcher",
+                    "agent_did": "did:test:autogen-swarm-researcher",
                     "behavior_id": "autogen.swarm.researcher",
                     "status": "completed",
                 },
@@ -547,7 +547,7 @@ def write_swarm_fixture(out_dir: Path, result: TaskResult) -> Path:
                     "child_request_id": SWARM_REVIEW_REQUEST_ID,
                     "parent_tool_call_id": "autogen:swarm:handoff:researcher-to-reviewer",
                     "tool_name": "handoff",
-                    "agent_did": "did:defra-agent:autogen-swarm-reviewer",
+                    "agent_did": "did:test:autogen-swarm-reviewer",
                     "behavior_id": "autogen.swarm.reviewer",
                     "status": "completed",
                 },

@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
-use defra_agent_protocol::row::AgentBehaviorRow;
 use defra_node::EmbeddedNode;
+use gents_protocol::row::AgentBehaviorRow;
 use serde_json::Value;
 
 use super::super::graphql::{

@@ -1,0 +1,64 @@
+{
+  "output": {
+    "adapter": "openai_codex_run_trace",
+    "projection": {
+      "child_run_ids": [
+        "req-codex-child-1"
+      ],
+      "items": [
+        {
+          "id": "req-codex-1",
+          "input": "[training_safe_redacted]",
+          "lifecycle_state": "completed",
+          "status": "completed",
+          "timestamp": "2026-06-05T17:00:00Z",
+          "type": "request"
+        },
+        {
+          "content": "I will inspect the workspace.",
+          "id": "thread-codex-1:message:1",
+          "request_id": "req-codex-1",
+          "role": "assistant",
+          "timestamp": "2026-06-05T17:00:01Z",
+          "type": "message"
+        },
+        {
+          "arguments": "{\"cmd\":\"rg adapter_projection\"}",
+          "completed_at": "2026-06-05T17:00:03Z",
+          "child_run_id": "req-codex-child-1",
+          "id": "call-shell-1",
+          "name": "shell",
+          "output": "crates/gents/src/adapter_projection.rs",
+          "request_id": "req-codex-1",
+          "started_at": "2026-06-05T17:00:02Z",
+          "status": "completed",
+          "type": "tool_call"
+        },
+        {
+          "id": "req-codex-1",
+          "output": "Projection contracts verified.",
+          "reasoning": "Used local files only.",
+          "status": "completed",
+          "timestamp": "2026-06-05T17:00:04Z",
+          "type": "response"
+        }
+      ],
+      "run_id": "req-codex-1",
+      "status": "completed",
+      "thread_id": "thread-codex-1"
+    }
+  },
+  "projection_id": "openai_codex_run_trace",
+  "projection_version": "v1",
+  "provenance": {
+    "actor_did": "did:test:fixture-reader",
+    "runtime": "gents",
+    "source_projection_id": "run_timeline",
+    "source_projection_version": "v1"
+  },
+  "redaction_mode": "training_safe",
+  "source_agent_did": "did:test:planner",
+  "source_behavior_id": "planner",
+  "source_request_id": "req-codex-1",
+  "source_session_id": "thread-codex-1"
+}

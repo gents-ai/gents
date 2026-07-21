@@ -170,7 +170,7 @@ async fn ensure_desktop_schema_migrations(node: Arc<EmbeddedNode>) -> Result<()>
     // here previously omitted the conversation `@immutable` scope keys and the
     // PeerRegistry collection, so upgraded desktop databases silently lost
     // filtered replication. The shared entry point keeps the two hosts in lockstep.
-    defra_agent::migration::ensure_all_runtime_migrations(node)
+    gents::migration::ensure_all_runtime_migrations(node)
         .await
         .context("ensure desktop runtime schema migrations")?;
     Ok(())
@@ -318,7 +318,7 @@ pub(super) async fn write_peer_pairing_desired(
     node: &EmbeddedNode,
     record: &PeerRecord,
 ) -> Result<()> {
-    use defra_agent_protocol::graphql::escape_graphql_string;
+    use gents_protocol::graphql::escape_graphql_string;
 
     let peer_id = escape_graphql_string(&record.peer_id);
     let agent_did = escape_graphql_string(&record.agent_did);

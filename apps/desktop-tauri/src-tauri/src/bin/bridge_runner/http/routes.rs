@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use defra_agent::backend_registry::{derive_display_state, list_all_backends};
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
 use defra_agent_desktop_core::client::ClientCore;
+use gents::backend_registry::{derive_display_state, list_all_backends};
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
@@ -400,7 +400,7 @@ async fn operations_snapshot_response(
     core: Arc<ClientCore>,
     request: DesktopOperationsSnapshotRequest,
 ) -> Result<DesktopOperationsSnapshot> {
-    let native_executors = defra_agent::native_executor_status::active_native_executors()
+    let native_executors = gents::native_executor_status::active_native_executors()
         .into_iter()
         .map(|executor| NativeExecutorStatusView {
             id: executor.id as i64,

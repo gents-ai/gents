@@ -2,18 +2,18 @@
 resolver = "2"
 members = [
     "apps/desktop-tauri/src-tauri",
-    "crates/defra-agent",
-    "crates/defra-agent-cli",
+    "crates/gents",
+    "crates/gents-cli",
     "crates/defra-agent-desktop",
     "crates/defra-agent-desktop-core",
-    "crates/defra-agent-lean-contract",
-    "crates/defra-agent-lenses/agent_tool_call_lifecycle_v1_to_v2",
-    "crates/defra-agent-lenses/agent_subagent_v2_to_v3",
-    "crates/defra-native-fs-runner",
-    "crates/defra-agent-protocol",
-    "crates/defra-agent-schemas",
+    "crates/gents-lean-contract",
+    "crates/gents-lenses/agent_tool_call_lifecycle_v1_to_v2",
+    "crates/gents-lenses/agent_subagent_v2_to_v3",
+    "crates/gents-fs-runner",
+    "crates/gents-protocol",
+    "crates/gents-schemas",
 ]
-# Patched noq 1.0.1 (defra-agent#634) is pulled only via [patch.crates-io].
+# Patched noq 1.0.1 (gents#634) is pulled only via [patch.crates-io].
 # Keep it out of the workspace so `cargo fmt --all` / workspace tests don't own
 # upstream style; each crate has a local empty [workspace] for standalone tests.
 exclude = [
@@ -28,19 +28,19 @@ exclude = [
 # default-features=false dev-dep) is unaffected.
 default-members = [
     "apps/desktop-tauri/src-tauri",
-    "crates/defra-agent",
-    "crates/defra-agent-cli",
+    "crates/gents",
+    "crates/gents-cli",
     "crates/defra-agent-desktop",
     "crates/defra-agent-desktop-core",
-    "crates/defra-agent-protocol",
-    "crates/defra-agent-schemas",
+    "crates/gents-protocol",
+    "crates/gents-schemas",
 ]
 
 [workspace.package]
 version = "0.7.2"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/sourcenetwork/defra-agent"
+repository = "https://github.com/source-inc/gents"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -62,10 +62,10 @@ codex-utils-absolute-path = { git = "https://github.com/openai/codex", rev = "c4
 acp = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "ef772a439ec84d3fb1a7c0ef740085666ea008b4" }
 crypto = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "ef772a439ec84d3fb1a7c0ef740085666ea008b4" }
 defra-core = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "ef772a439ec84d3fb1a7c0ef740085666ea008b4" }
-defra-agent-protocol = { path = "crates/defra-agent-protocol" }
-defra-agent-schemas = { path = "crates/defra-agent-schemas" }
+gents-protocol = { path = "crates/gents-protocol" }
+gents-schemas = { path = "crates/gents-schemas" }
 defra-agent-desktop-core = { path = "crates/defra-agent-desktop-core" }
-defra-agent-lean-contract = { path = "crates/defra-agent-lean-contract" }
+gents-lean-contract = { path = "crates/gents-lean-contract" }
 defra-node = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "ef772a439ec84d3fb1a7c0ef740085666ea008b4" }
 defra-p2p-adapter = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "ef772a439ec84d3fb1a7c0ef740085666ea008b4" }
 dirs = "5"
@@ -141,7 +141,7 @@ rig-core = { git = "https://github.com/sourcenetwork/rig", rev = "1ebeeaee3b569b
 # - proto: edge-trigger Draining on terminal state (duplicate stateless reset)
 # - endpoint: don't panic in EndpointDriver::Drop on a poisoned mutex
 # - endpoint: fence active_connections underflow on duplicate Draining
-# See third_party/README.md, defradb.rs#1090, and defra-agent#634.
+# See third_party/README.md, defradb.rs#1090, and gents#634.
 noq = { path = "third_party/noq" }
 noq-proto = { path = "third_party/noq-proto" }
 

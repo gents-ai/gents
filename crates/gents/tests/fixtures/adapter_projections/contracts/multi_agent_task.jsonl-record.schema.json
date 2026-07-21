@@ -1,0 +1,63 @@
+{
+  "$id": "https://schemas.defra.ai/gents/adapter-projection/multi_agent_task/v1-jsonl-record.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "projection_id": {
+      "const": "multi_agent_task"
+    },
+    "projection_version": {
+      "const": "v1"
+    },
+    "record_id": {
+      "type": "string"
+    },
+    "record_index": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "record_kind": {
+      "enum": [
+        "multi_agent_participant",
+        "multi_agent_message",
+        "multi_agent_delegation",
+        "multi_agent_tool_event"
+      ]
+    },
+    "redaction_mode": {
+      "enum": [
+        "full",
+        "training_safe",
+        "public"
+      ]
+    },
+    "source_request_id": {
+      "type": "string"
+    },
+    "source_session_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "value": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "projection_id",
+    "projection_version",
+    "source_request_id",
+    "redaction_mode",
+    "record_kind",
+    "record_index",
+    "record_id",
+    "value"
+  ],
+  "title": "Multi-Agent Task Projection JSONL Record",
+  "type": "object"
+}

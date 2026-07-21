@@ -3,14 +3,14 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../../../.." && pwd)"
-out_dir="${1:-${DEFRA_AGENT_DOCKER_INTEROP_OUT:-/tmp/defra-agent-adapter-interop-fixtures}}"
+out_dir="${1:-${GENTS_DOCKER_INTEROP_OUT:-/tmp/gents-adapter-interop-fixtures}}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker is required for adapter projection interop fixture generation" >&2
   exit 127
 fi
 
-if [[ "${DEFRA_AGENT_DOCKER_INTEROP_KEEP:-0}" != "1" ]]; then
+if [[ "${GENTS_DOCKER_INTEROP_KEEP:-0}" != "1" ]]; then
   rm -rf "${out_dir}"
 fi
 mkdir -p "${out_dir}"
@@ -30,8 +30,8 @@ run_generator() {
 
 langgraph_env=()
 for var in \
-  DEFRA_LANGGRAPH_PROVIDER_MODE \
-  DEFRA_LANGGRAPH_OPENAI_MODEL \
+  GENTS_LANGGRAPH_PROVIDER_MODE \
+  GENTS_LANGGRAPH_OPENAI_MODEL \
   OPENAI_MODEL \
   OPENAI_BASE_URL \
   OPENAI_API_KEY
@@ -54,23 +54,23 @@ expected_fixtures=(
 
 run_generator \
   "langgraph" \
-  "defra-agent-langgraph-fixture" \
+  "gents-langgraph-fixture" \
   "scripts/adapter-interop/generators/langgraph" \
   "${langgraph_env[@]}"
 
 run_generator \
   "autogen" \
-  "defra-agent-autogen-fixture" \
+  "gents-autogen-fixture" \
   "scripts/adapter-interop/generators/autogen"
 
 run_generator \
   "crewai" \
-  "defra-agent-crewai-fixture" \
+  "gents-crewai-fixture" \
   "scripts/adapter-interop/generators/crewai"
 
 run_generator \
   "microsoft-agent-framework" \
-  "defra-agent-msaf-fixture" \
+  "gents-msaf-fixture" \
   "scripts/adapter-interop/generators/microsoft-agent-framework"
 
 fixture_count="$(find "${out_dir}" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d '[:space:]')"
@@ -89,61 +89,61 @@ done
 echo "generated ${fixture_count} adapter fixture files in ${out_dir}"
 find "${out_dir}" -maxdepth 1 -type f -name '*.json' -print | sort
 
-if [[ "${DEFRA_AGENT_DOCKER_INTEROP_SKIP_RUST:-0}" != "1" ]]; then
+if [[ "${GENTS_DOCKER_INTEROP_SKIP_RUST:-0}" != "1" ]]; then
   echo "validating generated fixtures with Rust external adapter harness"
   (
     cd "${repo_root}"
-    DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES="${out_dir}" \
-      cargo test -p defra-agent --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
+    GENTS_ADAPTER_INTEROP_FIXTURES="${out_dir}" \
+      cargo test -p gents --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
   )
 
-  export_dir="${out_dir}/defra-exports"
+  export_dir="${out_dir}/gents-exports"
   rm -rf "${export_dir}"
   mkdir -p "${export_dir}"
-  echo "round-tripping mapped native captures through embedded DefraDB and the defra-agent binary"
+  echo "round-tripping mapped native captures through embedded DefraDB and the gents binary"
   (
     cd "${repo_root}"
-    DEFRA_AGENT_ADAPTER_INTEROP_ROUNDTRIP_FIXTURES="${out_dir}" \
-      DEFRA_AGENT_ADAPTER_INTEROP_EXPORTS="${export_dir}" \
-      cargo test -p defra-agent-cli --test cli_adapter_interop_roundtrip -- --ignored --nocapture
+    GENTS_ADAPTER_INTEROP_ROUNDTRIP_FIXTURES="${out_dir}" \
+      GENTS_ADAPTER_INTEROP_EXPORTS="${export_dir}" \
+      cargo test -p gents-cli --test cli_adapter_interop_roundtrip -- --ignored --nocapture
   )
-  export_count="$(find "${export_dir}" -type f \( -name '*.defra.json' -o -name '*.defra.jsonl' -o -name '*.defra.eval-jsonl' \) | wc -l | tr -d '[:space:]')"
+  export_count="$(find "${export_dir}" -type f \( -name '*.gents.json' -o -name '*.gents.jsonl' -o -name '*.gents.eval-jsonl' \) | wc -l | tr -d '[:space:]')"
   expected_export_count="$((${#expected_fixtures[@]} * 3))"
   if [[ "${export_count}" -ne "${expected_export_count}" ]]; then
-    echo "expected exactly ${expected_export_count} Defra export files, found ${export_count}" >&2
+    echo "expected exactly ${expected_export_count} Gents export files, found ${export_count}" >&2
     find "${export_dir}" -type f -print | sort >&2
     exit 1
   fi
 
-  echo "verifying AutoGen Defra exports inside the AutoGen fixture image"
+  echo "verifying AutoGen Gents exports inside the AutoGen fixture image"
   docker run --rm \
     --entrypoint python \
     -v "${out_dir}:/out" \
     -v "${export_dir}:/exports" \
-    defra-agent-autogen-fixture \
+    gents-autogen-fixture \
     /fixture/verify_export.py --fixtures /out --exports /exports
 
-  echo "verifying LangGraph Defra exports inside the LangGraph fixture image"
+  echo "verifying LangGraph Gents exports inside the LangGraph fixture image"
   docker run --rm \
     --entrypoint python \
     -v "${out_dir}:/out" \
     -v "${export_dir}:/exports" \
-    defra-agent-langgraph-fixture \
+    gents-langgraph-fixture \
     /fixture/verify_export.py --fixtures /out --exports /exports
 
-  echo "verifying CrewAI Defra exports inside the CrewAI fixture image"
+  echo "verifying CrewAI Gents exports inside the CrewAI fixture image"
   docker run --rm \
     --entrypoint python \
     -v "${out_dir}:/out" \
     -v "${export_dir}:/exports" \
-    defra-agent-crewai-fixture \
+    gents-crewai-fixture \
     /fixture/verify_export.py --fixtures /out --exports /exports
 
-  echo "verifying Microsoft Agent Framework Defra exports inside the fixture image"
+  echo "verifying Microsoft Agent Framework Gents exports inside the fixture image"
   docker run --rm \
     --entrypoint python \
     -v "${out_dir}:/out" \
     -v "${export_dir}:/exports" \
-    defra-agent-msaf-fixture \
+    gents-msaf-fixture \
     /fixture/verify_export.py --fixtures /out --exports /exports
 fi

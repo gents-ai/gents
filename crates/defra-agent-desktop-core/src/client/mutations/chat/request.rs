@@ -1,8 +1,8 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_agent::skills::prompt_slash_skill_selection;
-use defra_agent_protocol::row::AgentRequestRow;
 use defra_node::EmbeddedNode;
+use gents::skills::prompt_slash_skill_selection;
+use gents_protocol::row::AgentRequestRow;
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
@@ -787,7 +787,7 @@ async fn fetch_retry_root(node: &EmbeddedNode, request_id: &str) -> Result<Optio
 }
 
 #[cfg(test)]
-#[path = "../../../../../defra-agent/src/lean_vocab_test.rs"]
+#[path = "../../../../../gents/src/lean_vocab_test.rs"]
 mod lean_vocab_test;
 
 #[cfg(test)]

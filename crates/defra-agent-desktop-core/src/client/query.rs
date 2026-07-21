@@ -1,21 +1,21 @@
 use std::collections::HashSet;
 
 use anyhow::{anyhow, bail, Context, Result};
-use defra_agent_protocol::graphql::escape_graphql_string;
-use defra_agent_protocol::row::{
+use defra_node::EmbeddedNode;
+use gents_protocol::graphql::escape_graphql_string;
+use gents_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
     AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
     CompactionEntryRow, EventTriggerRow, GoalRow, InferenceBackendRow, InferenceProfileRow,
     ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
-use defra_agent_protocol::schemas::{
+use gents_protocol::schemas::{
     AGENT_BEHAVIOR_NAME, AGENT_CONVERSATION_NAME, AGENT_MESSAGE_NAME, AGENT_PRINCIPAL_NAME,
     AGENT_REQUEST_NAME, AGENT_RESPONSE_NAME, AGENT_RUNTIME_NAME, AGENT_SESSION_NAME,
     AGENT_TOOL_CALL_NAME, AGENT_TOOL_RESULT_NAME, COMPACTION_ENTRY_NAME, EVENT_TRIGGER_NAME,
     GOAL_NAME, INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, SCHEDULE_NAME, SKILL_NAME,
     TASK_NAME, TOOL_SELECTION_NAME, TOOL_SERVICE_REGISTRY_NAME,
 };
-use defra_node::EmbeddedNode;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -1023,8 +1023,8 @@ pub async fn load_agent_scoped_snapshot(
 mod tests {
     use super::*;
     use crate::client::schema::ensure_runtime_schemas;
-    use defra_agent_protocol::schemas::AGENT_MESSAGE_NAME;
     use defra_node::NodeBuilder;
+    use gents_protocol::schemas::AGENT_MESSAGE_NAME;
     use std::sync::Arc;
 
     #[tokio::test]

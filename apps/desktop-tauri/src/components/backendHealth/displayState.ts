@@ -1,7 +1,7 @@
 import type { BackendDisplayState } from "./types";
 
 /**
- * JS mirror of `defra_agent::backend_registry::derive_display_state`.
+ * JS mirror of `gents::backend_registry::derive_display_state`.
  * Kept in sync by the bridge-snapshot consumer test in defra-agent
  * (`backend_registry::tests::display_state_matches_every_lean_backend_health_admission_case`)
  * and by the component test in `tests/backend-health-panel.test.tsx`,

@@ -1,0 +1,145 @@
+{
+  "$id": "https://schemas.defra.ai/gents/adapter-projection/langgraph_state_history/v1-eval-jsonl-record.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "adapter_record_id": {
+      "type": "string"
+    },
+    "adapter_record_kind": {
+      "enum": [
+        "langgraph_values",
+        "langgraph_node",
+        "langgraph_edge",
+        "langgraph_task"
+      ]
+    },
+    "child_request_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "input": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "output": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "parent_request_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "projection_id": {
+      "const": "langgraph_state_history"
+    },
+    "projection_version": {
+      "const": "v1"
+    },
+    "record_id": {
+      "type": "string"
+    },
+    "record_index": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "redaction_mode": {
+      "enum": [
+        "full",
+        "training_safe",
+        "public"
+      ]
+    },
+    "role": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sample_kind": {
+      "enum": [
+        "state_snapshot",
+        "state_node",
+        "state_transition",
+        "task"
+      ]
+    },
+    "source_request_id": {
+      "type": "string"
+    },
+    "source_session_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "status": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tool_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "projection_id",
+    "projection_version",
+    "source_request_id",
+    "redaction_mode",
+    "record_index",
+    "record_id",
+    "sample_kind",
+    "adapter_record_kind",
+    "adapter_record_id"
+  ],
+  "title": "LangGraph State History Projection Eval JSONL Record",
+  "type": "object"
+}

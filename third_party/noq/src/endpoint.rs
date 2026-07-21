@@ -495,7 +495,7 @@ impl Drop for EndpointDriver {
         // Recover from a poisoned mutex rather than panicking in Drop. A prior
         // panic in poll (e.g. active_connections underflow) poisons this lock; a
         // second panic here would abort the whole process (n0-computer/noq#723,
-        // defra-agent#634). Clearing the poison so subsequent Drop impls on the
+        // gents#634). Clearing the poison so subsequent Drop impls on the
         // same Arc (EndpointRef) also see a clean lock.
         let mut endpoint = self.0.state.lock().unwrap_or_else(PoisonError::into_inner);
         endpoint.driver_lost = true;
@@ -651,7 +651,7 @@ impl State {
             };
 
             if event.is_draining() {
-                // Per-connection edge-trigger (n0-computer/noq#743 / defra-agent#634).
+                // Per-connection edge-trigger (n0-computer/noq#743 / gents#634).
                 // A global zero-guard alone is not enough: a duplicate Draining for
                 // one connection while others are still active would still
                 // decrement the shared counter and can notify all_draining early.
@@ -938,7 +938,7 @@ impl Drop for EndpointRef {
 
         // Same poison-recovery as EndpointDriver::drop: if the driver panicked
         // while holding this lock, unwrapping here during unwind aborts the
-        // process (n0-computer/noq#723, defra-agent#634).
+        // process (n0-computer/noq#723, gents#634).
         let endpoint = &mut *self
             .0
             .state

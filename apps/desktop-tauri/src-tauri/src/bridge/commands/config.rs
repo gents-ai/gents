@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Result};
 use defra_agent_desktop_core::client::ClientCore;
-use defra_agent_protocol::row::{
+use gents_protocol::row::{
     AgentBehaviorRow, AgentPrincipalRow, InferenceBackendRow, InferenceProfileRow, SkillRow,
     ToolSelectionRow,
 };

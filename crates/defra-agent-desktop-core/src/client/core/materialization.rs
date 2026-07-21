@@ -3,10 +3,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
-use defra_agent_protocol::client_protocol::ClientTurnState;
-use defra_agent_protocol::schemas::{AGENT_MESSAGE_NAME, AGENT_RESPONSE_NAME};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
+use gents_protocol::client_protocol::ClientTurnState;
+use gents_protocol::schemas::{AGENT_MESSAGE_NAME, AGENT_RESPONSE_NAME};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
@@ -285,7 +285,7 @@ fn streaming_materialization_candidates(store: &ClientStore) -> Vec<Materializat
     candidates
 }
 
-fn tool_call_is_completed(row: &defra_agent_protocol::row::AgentToolCallRow) -> bool {
+fn tool_call_is_completed(row: &gents_protocol::row::AgentToolCallRow) -> bool {
     row.completed_at
         .as_deref()
         .is_some_and(|value| !value.trim().is_empty())
@@ -338,12 +338,12 @@ mod tests {
     use std::sync::RwLock as StdRwLock;
 
     use async_trait::async_trait;
-    use defra_agent_protocol::row::{AgentConversationRow, AgentRequestRow, AgentResponseRow};
     use defra_node::NodeBuilder;
     use defra_p2p_adapter::{
         ExplicitReplayCapabilityInput, P2PResult, P2pDocumentInfo, P2pDocumentRequest,
         ReplicationFilter, ReplicatorInfo,
     };
+    use gents_protocol::row::{AgentConversationRow, AgentRequestRow, AgentResponseRow};
 
     use super::*;
     use crate::client::schema::ensure_runtime_schemas;

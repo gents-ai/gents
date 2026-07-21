@@ -273,5 +273,5 @@ level = "warn"
 priority = 0
 check-cfg = ["cfg(fuzzing)"]
 
-# Standalone package under parent repo; do not join defra-agent workspace.
+# Standalone package under parent repo; do not join gents workspace.
 [workspace]
