@@ -89,10 +89,10 @@ RELEASE_ARTIFACT := gents-$(TARGET_TRIPLE)
 
 .PHONY: release-cli release-cli-headless dist-cli
 release-cli:
-	$(CARGO) build -p gents-cli --release $(CARGO_TARGET_FLAG)
+	$(CARGO) build -p gents-cli --release --locked $(CARGO_TARGET_FLAG)
 
 release-cli-headless:
-	$(CARGO) build -p gents-cli --release --no-default-features $(CARGO_TARGET_FLAG)
+	$(CARGO) build -p gents-cli --release --locked --no-default-features $(CARGO_TARGET_FLAG)
 
 dist-cli: release-cli
 	@rm -rf "$(DIST_DIR)/$(RELEASE_ARTIFACT)"

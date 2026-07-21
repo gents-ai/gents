@@ -6,6 +6,11 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
+      release_version:
+        description: Release version without the v prefix; must match workspace.package.version.
+        required: true
+        type: string
+        default: "0.8.0"
       codesign_timestamp:
         description: Timestamp mode for codesign. Signed releases notarize, so timestamping must succeed unless dry_run_unsigned is true.
         required: true
@@ -39,18 +44,57 @@ env:
   SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '60G' }}
   SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
   MACOS_CODESIGN_IDENTIFIER: com.source-inc.gents.cli
+  MACOS_KEYCHAIN_ACCESS_GROUP_BASE: com.source-inc.gents
   TARGET_TRIPLE: aarch64-apple-darwin
 
 jobs:
   build-sign-package:
     name: Build, sign, and package macOS CLI
     runs-on: [self-hosted, macOS, ARM64, studio]
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Validate release version
+        env:
+          RELEASE_VERSION_INPUT: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+
+          workspace_version="$(awk '
+            /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+            /^\[/ { in_workspace_package = 0 }
+            in_workspace_package && $1 == "version" {
+              gsub(/"/, "", $3)
+              print $3
+              exit
+            }
+          ' Cargo.toml)"
+          if [[ -z "${workspace_version}" ]]; then
+            echo "::error::Could not read workspace.package.version from Cargo.toml."
+            exit 1
+          fi
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            expected_tag="v${workspace_version}"
+            if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
+              echo "::error::Release tag ${GITHUB_REF_NAME} does not match workspace version ${expected_tag}."
+              exit 1
+            fi
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            if [[ "${RELEASE_VERSION_INPUT}" != "${workspace_version}" ]]; then
+              echo "::error::Requested release version ${RELEASE_VERSION_INPUT} does not match workspace version ${workspace_version}."
+              exit 1
+            fi
+          else
+            echo "::error::Unsupported release trigger ${GITHUB_EVENT_NAME}."
+            exit 1
+          fi
+
+          echo "RELEASE_VERSION=${workspace_version}" >> "${GITHUB_ENV}"
 
       - name: Rewrite Git SSH dependencies to HTTPS
         env:
@@ -66,6 +110,8 @@ jobs:
           git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       - name: Install protobuf compiler
         run: |
@@ -266,7 +312,7 @@ jobs:
             echo "::error::Expected ${TARGET_TRIPLE} macOS runner, got ${host_triple}."
             exit 1
           fi
-          cargo build -p gents-cli --release
+          cargo build -p gents-cli --release --locked
           file target/release/gents
 
       - name: Generate dSYM and strip release binary
@@ -302,6 +348,7 @@ jobs:
             echo "::error::Could not extract Apple Team ID from SIGNING_IDENTITY_NAME '${signing_identity}'."
             exit 1
           fi
+          echo "APPLE_TEAM_ID=${apple_team_id}" >> "${GITHUB_ENV}"
 
           # The release/entitlements.plist requests `keychain-access-groups`, a
           # RESTRICTED entitlement. On a Developer-ID, hardened-runtime binary
@@ -421,6 +468,10 @@ jobs:
 
             signature_details="$(codesign -d -vv "${binary_path}" 2>&1)"
             printf '%s\n' "${signature_details}"
+            if ! grep -Fxq "Identifier=${MACOS_CODESIGN_IDENTIFIER}" <<< "${signature_details}"; then
+              echo "::error::Signed release artifact does not have identifier ${MACOS_CODESIGN_IDENTIFIER}."
+              exit 1
+            fi
             if ! grep -q '^Authority=' <<< "${signature_details}"; then
               echo "::error::Signed release artifact has no signing authority. This usually means it is still ad-hoc signed."
               exit 1
@@ -440,8 +491,9 @@ jobs:
             # restricted entitlement with no provisioning profile it makes AMFI
             # kill the binary at launch. See the signing step's comment.
             if [[ "${MACOS_APPLY_SE_ENTITLEMENTS:-false}" == "true" ]]; then
-              if ! grep -q 'keychain-access-groups' <<< "${entitlements_output}"; then
-                echo "::error::MACOS_APPLY_SE_ENTITLEMENTS=true but signed artifact is missing keychain-access-groups entitlement."
+              expected_access_group="${APPLE_TEAM_ID}.${MACOS_KEYCHAIN_ACCESS_GROUP_BASE}"
+              if ! grep -Fq "<string>${expected_access_group}</string>" <<< "${entitlements_output}"; then
+                echo "::error::Signed artifact is missing exact keychain access group ${expected_access_group}."
                 exit 1
               fi
             elif grep -q 'keychain-access-groups' <<< "${entitlements_output}"; then
@@ -458,8 +510,9 @@ jobs:
 
           version_output="$("${binary_path}" version)"
           printf '%s\n' "${version_output}"
-          if [[ -z "${version_output}" ]]; then
-            echo "::error::gents version produced no output."
+          expected_prefix="gents ${RELEASE_VERSION} ("
+          if [[ "${version_output}" != "${expected_prefix}"* ]]; then
+            echo "::error::gents version output does not start with '${expected_prefix}'."
             exit 1
           fi
 
@@ -505,6 +558,76 @@ jobs:
           echo "artifact_basename=${artifact_basename}" >> "${GITHUB_OUTPUT}"
           ls -lh "${dist_dir}"
 
+      - name: Verify packaged artifact
+        env:
+          ARTIFACT_BASENAME: ${{ steps.package.outputs.artifact_basename }}
+          CHECKSUM_FILE: ${{ steps.package.outputs.checksum_file }}
+          DSYM_CHECKSUM_FILE: ${{ steps.package.outputs.dsym_checksum_file }}
+          DSYM_TARBALL: ${{ steps.package.outputs.dsym_tarball }}
+          TARBALL: ${{ steps.package.outputs.tarball }}
+        run: |
+          set -euo pipefail
+
+          dist_dir="$(dirname "${TARBALL}")"
+          (
+            cd "${dist_dir}"
+            shasum -a 256 -c "$(basename "${CHECKSUM_FILE}")"
+            shasum -a 256 -c "$(basename "${DSYM_CHECKSUM_FILE}")"
+          )
+
+          archive_files="$(tar -tzf "${TARBALL}" | sed '/\/$/d')"
+          expected_binary="${ARTIFACT_BASENAME}/gents"
+          if [[ "${archive_files}" != "${expected_binary}" ]]; then
+            echo "::error::Release archive must contain exactly ${expected_binary}; found:"
+            printf '%s\n' "${archive_files}"
+            exit 1
+          fi
+          if tar -tzf "${DSYM_TARBALL}" | grep -Ev '^gents\.dSYM(/|$)' >/dev/null; then
+            echo "::error::Symbol archive contains an entry outside gents.dSYM."
+            tar -tzf "${DSYM_TARBALL}"
+            exit 1
+          fi
+
+          verify_root="$(mktemp -d "${RUNNER_TEMP}/gents-macos-release-verify.XXXXXX")"
+          trap 'rm -rf "${verify_root}"' EXIT
+          binary_root="${verify_root}/binary"
+          symbols_root="${verify_root}/symbols"
+          mkdir -p "${binary_root}" "${symbols_root}"
+          tar -xzf "${TARBALL}" -C "${binary_root}"
+          tar -xzf "${DSYM_TARBALL}" -C "${symbols_root}"
+
+          packaged_binary="${binary_root}/${expected_binary}"
+          packaged_dsym="${symbols_root}/gents.dSYM"
+          packaged_dwarf="${packaged_dsym}/Contents/Resources/DWARF/gents"
+          if [[ ! -x "${packaged_binary}" || ! -s "${packaged_dwarf}" ]]; then
+            echo "::error::Packaged Gents binary or gents.dSYM DWARF payload is missing."
+            exit 1
+          fi
+
+          version_output="$("${packaged_binary}" version)"
+          printf '%s\n' "${version_output}"
+          expected_prefix="gents ${RELEASE_VERSION} ("
+          if [[ "${version_output}" != "${expected_prefix}"* ]]; then
+            echo "::error::Packaged gents version output does not start with '${expected_prefix}'."
+            exit 1
+          fi
+
+          binary_uuid="$(xcrun dwarfdump --uuid "${packaged_binary}" | awk '{ print $2, $3 }')"
+          dsym_uuid="$(xcrun dwarfdump --uuid "${packaged_dsym}" | awk '{ print $2, $3 }')"
+          if [[ -z "${binary_uuid}" || "${binary_uuid}" != "${dsym_uuid}" ]]; then
+            echo "::error::Packaged binary/dSYM UUID mismatch: binary='${binary_uuid}' dSYM='${dsym_uuid}'."
+            exit 1
+          fi
+
+          if [[ "${SIGNING_ENABLED}" == "true" ]]; then
+            codesign --verify --strict --verbose=2 "${packaged_binary}"
+            signature_details="$(codesign -d -vv "${packaged_binary}" 2>&1)"
+            if ! grep -Fxq "Identifier=${MACOS_CODESIGN_IDENTIFIER}" <<< "${signature_details}"; then
+              echo "::error::Packaged release artifact does not have identifier ${MACOS_CODESIGN_IDENTIFIER}."
+              exit 1
+            fi
+          fi
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
@@ -532,8 +655,13 @@ jobs:
             exit 1
           fi
 
-          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
-            gh release create "${GITHUB_REF_NAME}" --verify-tag --title "${GITHUB_REF_NAME}" --notes "Signed gents macOS release artifact."
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --verify-tag \
+              --title "${GITHUB_REF_NAME}" \
+              --notes "Signed gents macOS release artifact." \
+              || gh release view "${GITHUB_REF_NAME}" >/dev/null
+          fi
           gh release upload "${GITHUB_REF_NAME}" \
             "${TARBALL}" \
             "${CHECKSUM_FILE}" \

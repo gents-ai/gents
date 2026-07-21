@@ -26,12 +26,13 @@ trap 'rm -f "${symbols_file}" "${lookup_file}" "${dsymutil_log}"' EXIT
 # dsymutil needs the linker's local symbol table to resolve the debug map back
 # to object-file DWARF. Refuse a Cargo configuration that stripped too early.
 nm "${binary_path}" > "${symbols_file}"
-if ! grep -Eq 'gents(_cli)?' "${symbols_file}"; then
+gents_rust_symbol_regex='(_ZN(5gents|9gents_cli)|_R[A-Za-z0-9_.$]*_(5gents|9gents_cli))'
+if ! grep -Eq "${gents_rust_symbol_regex}" "${symbols_file}"; then
   echo "::error::${binary_path} has no gents Rust symbols; build with CARGO_PROFILE_RELEASE_STRIP=false before running dsymutil" >&2
   exit 1
 fi
-probe_addresses="$(awk '
-  /gents(_cli)?/ && $2 ~ /^[tT]$/ {
+probe_addresses="$(awk -v symbol_regex="${gents_rust_symbol_regex}" '
+  $0 ~ symbol_regex && $2 ~ /^[tT]$/ {
     print $1
     count++
     if (count == 64) exit
@@ -88,7 +89,7 @@ while IFS= read -r candidate_address; do
   candidate_symbol="$(
     xcrun atos -o "${dwarf_path}" -arch "${binary_arch}" "${candidate_address}" 2>&1 || true
   )"
-  if [[ "${candidate_symbol}" == *gents* && "${candidate_symbol}" != *"<deduplicated_symbol>"* ]]; then
+  if [[ ( "${candidate_symbol}" == *"gents::"* || "${candidate_symbol}" == *"gents_cli::"* ) && "${candidate_symbol}" != *"<deduplicated_symbol>"* ]]; then
     probe_address="${candidate_address}"
     resolved_symbol="${candidate_symbol}"
     break
@@ -100,7 +101,7 @@ if [[ -z "${probe_address}" ]]; then
 fi
 
 nm "${binary_path}" > "${symbols_file}"
-if grep -Eq 'gents(_cli)?' "${symbols_file}"; then
+if grep -Eq "${gents_rust_symbol_regex}" "${symbols_file}"; then
   echo "::error::${binary_path} still contains local gents Rust symbols after strip" >&2
   exit 1
 fi

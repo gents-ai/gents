@@ -5,6 +5,12 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: Release version without the v prefix; must match workspace.package.version.
+        required: true
+        type: string
+        default: "0.8.0"
 
 concurrency:
   group: release-linux-${{ github.ref }}
@@ -81,6 +87,44 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Validate release version
+        env:
+          RELEASE_VERSION_INPUT: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+
+          workspace_version="$(awk '
+            /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+            /^\[/ { in_workspace_package = 0 }
+            in_workspace_package && $1 == "version" {
+              gsub(/"/, "", $3)
+              print $3
+              exit
+            }
+          ' Cargo.toml)"
+          if [[ -z "${workspace_version}" ]]; then
+            echo "::error::Could not read workspace.package.version from Cargo.toml."
+            exit 1
+          fi
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            expected_tag="v${workspace_version}"
+            if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
+              echo "::error::Release tag ${GITHUB_REF_NAME} does not match workspace version ${expected_tag}."
+              exit 1
+            fi
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            if [[ "${RELEASE_VERSION_INPUT}" != "${workspace_version}" ]]; then
+              echo "::error::Requested release version ${RELEASE_VERSION_INPUT} does not match workspace version ${workspace_version}."
+              exit 1
+            fi
+          else
+            echo "::error::Unsupported release trigger ${GITHUB_EVENT_NAME}."
+            exit 1
+          fi
+
+          echo "RELEASE_VERSION=${workspace_version}" >> "${GITHUB_ENV}"
+
       - name: Rewrite Git SSH dependencies to HTTPS
         env:
           PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
@@ -135,8 +179,9 @@ jobs:
           binary_path="target/release/gents"
           version_output="$("${binary_path}" version)"
           printf '%s\n' "${version_output}"
-          if [[ -z "${version_output}" ]]; then
-            echo "::error::gents version produced no output."
+          expected_prefix="gents ${RELEASE_VERSION} ("
+          if [[ "${version_output}" != "${expected_prefix}"* ]]; then
+            echo "::error::gents version output does not start with '${expected_prefix}'."
             exit 1
           fi
 
@@ -172,6 +217,45 @@ jobs:
           echo "checksum_file=${checksum_file}" >> "${GITHUB_OUTPUT}"
           echo "artifact_basename=${artifact_basename}" >> "${GITHUB_OUTPUT}"
           ls -lh "${dist_dir}"
+
+      - name: Verify packaged artifact
+        env:
+          ARTIFACT_BASENAME: ${{ steps.package.outputs.artifact_basename }}
+          CHECKSUM_FILE: ${{ steps.package.outputs.checksum_file }}
+          TARBALL: ${{ steps.package.outputs.tarball }}
+        run: |
+          set -euo pipefail
+
+          dist_dir="$(dirname "${TARBALL}")"
+          (
+            cd "${dist_dir}"
+            sha256sum -c "$(basename "${CHECKSUM_FILE}")"
+          )
+
+          archive_files="$(tar -tzf "${TARBALL}" | sed '/\/$/d')"
+          expected_binary="${ARTIFACT_BASENAME}/gents"
+          if [[ "${archive_files}" != "${expected_binary}" ]]; then
+            echo "::error::Release archive must contain exactly ${expected_binary}; found:"
+            printf '%s\n' "${archive_files}"
+            exit 1
+          fi
+
+          verify_root="$(mktemp -d "${RUNNER_TEMP}/gents-linux-release-verify.XXXXXX")"
+          trap 'rm -rf "${verify_root}"' EXIT
+          tar -xzf "${TARBALL}" -C "${verify_root}"
+          packaged_binary="${verify_root}/${expected_binary}"
+          if [[ ! -x "${packaged_binary}" ]]; then
+            echo "::error::Packaged Gents binary is missing or not executable."
+            exit 1
+          fi
+
+          version_output="$("${packaged_binary}" version)"
+          printf '%s\n' "${version_output}"
+          expected_prefix="gents ${RELEASE_VERSION} ("
+          if [[ "${version_output}" != "${expected_prefix}"* ]]; then
+            echo "::error::Packaged gents version output does not start with '${expected_prefix}'."
+            exit 1
+          fi
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4

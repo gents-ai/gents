@@ -81,6 +81,7 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
     let status = Command::new("cargo")
         .args([
             "build",
+            "--locked",
             "-p",
             pkg,
             "--target",
