@@ -89,7 +89,18 @@ while IFS= read -r candidate_address; do
   candidate_symbol="$(
     xcrun atos -o "${dwarf_path}" -arch "${binary_arch}" "${candidate_address}" 2>&1 || true
   )"
-  if [[ ( "${candidate_symbol}" == *"gents::"* || "${candidate_symbol}" == *"gents_cli::"* ) && "${candidate_symbol}" != *"<deduplicated_symbol>"* ]]; then
+  # `atos` demangles legacy Rust symbols but may preserve current Rust-v0
+  # `_R..._5gents` / `_R..._9gents_cli` names. A Rust source location proves
+  # that the dSYM resolved the frame rather than merely echoing a symbol-table
+  # entry; the name markers keep the probe specific to Gents monomorphizations.
+  if [[ "${candidate_symbol}" != *"<deduplicated_symbol>"* &&
+        "${candidate_symbol}" == *".rs:"* &&
+        ( "${candidate_symbol}" == *"gents::"* ||
+          "${candidate_symbol}" == *"gents_cli::"* ||
+          "${candidate_symbol}" == *"_5gents"* ||
+          "${candidate_symbol}" == *"_9gents_cli"* ||
+          "${candidate_symbol}" == *"_ZN5gents"* ||
+          "${candidate_symbol}" == *"_ZN9gents_cli"* ) ]]; then
     probe_address="${candidate_address}"
     resolved_symbol="${candidate_symbol}"
     break
