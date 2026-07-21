@@ -232,3 +232,26 @@ export type WorkspaceListingView = {
   entries: WorkspaceEntryView[];
   truncated: boolean;
 };
+
+export type HeldToolCallView = {
+  toolCallId: string;
+  requestId: string | null;
+  sessionId: string | null;
+  agentDid: string | null;
+  toolName: string | null;
+  args: string | null;
+  deadlineAt: string | null;
+};
+
+export type DesktopResolveHoldRequest = {
+  agentDid: string;
+  toolCallId: string;
+  approve: boolean;
+  reason?: string | null;
+};
+
+export type ResolveHoldResult = {
+  approvalId: string;
+  toolCallId: string;
+  decision: string;
+};

@@ -21,6 +21,10 @@ import type {
   TaskRunResult,
   ToolServiceTestResult,
 } from "../../src/lib/types";
+import type {
+  HeldToolCallView,
+  ResolveHoldResult,
+} from "../../src/lib/types/operations";
 
 const AGENT_DID = "did:key:z6MkBombadilAgent";
 const DEFAULT_BEHAVIOR_ID = "default";
@@ -57,6 +61,22 @@ export function createDesktopUiHarness(
   options: DesktopUiHarnessOptions = {},
 ): DesktopUiHarness {
   const scenario = normalizeScenario(options.scenario);
+  // Held-approval fixtures: only the operations-rich scenario starts with a
+  // parked call, so default-scenario visual baselines stay hold-free.
+  let heldToolCalls: HeldToolCallView[] =
+    scenario === "operations-rich"
+      ? [
+          {
+            toolCallId: "held-call-1",
+            requestId: "req-held-1",
+            sessionId: "session-ops",
+            agentDid: AGENT_DID,
+            toolName: "bash_unrestricted",
+            args: '{"command":"cargo publish"}',
+            deadlineAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+          },
+        ]
+      : [];
   const listeners = new Set<DesktopClientUpdatedHandler>();
   const sessions = new Map<string, DesktopSessionSnapshot>();
   const sessionLineage = new Map<
@@ -1329,6 +1349,24 @@ export function createDesktopUiHarness(
         alreadyInterrupted: false,
         stalePreview: false,
         preview: null,
+      };
+      return result;
+    },
+    async listToolCallHolds() {
+      return heldToolCalls;
+    },
+    async resolveToolCallHold(request) {
+      const held = heldToolCalls.find((hold) => hold.toolCallId === request.toolCallId);
+      if (!held) {
+        throw new Error(`tool call ${request.toolCallId} is not awaiting approval`);
+      }
+      heldToolCalls = heldToolCalls.filter(
+        (hold) => hold.toolCallId !== request.toolCallId,
+      );
+      const result: ResolveHoldResult = {
+        approvalId: `approval-${request.toolCallId}-harness`,
+        toolCallId: request.toolCallId,
+        decision: request.approve ? "approved" : "denied",
       };
       return result;
     },

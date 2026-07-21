@@ -353,6 +353,22 @@ pub(crate) struct DesktopPreviewInterruptCascadeRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopListHoldsRequest {
+    pub agent_did: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopResolveHoldRequest {
+    pub agent_did: String,
+    pub tool_call_id: String,
+    pub approve: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopInterruptRequest {
     pub request_id: String,
     /// Currently always `"userCancelled"` per spec line 907. Kept as a String

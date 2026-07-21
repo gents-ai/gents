@@ -8,7 +8,9 @@ use gents::{
 };
 use serde_json::{json, Value};
 
-use crate::cli::args::{ToolCeilingArg, ToolExplainArgs, ToolsCommand};
+use crate::cli::args::{
+    ToolCeilingArg, ToolExplainArgs, ToolsApproveArgs, ToolsCommand, ToolsHoldsArgs,
+};
 use crate::shared::{ConfigExportBundle, StoredInitConfig};
 use crate::{
     build_config_export_bundle, format_tool_ceiling, print_json, read_init_config,
@@ -18,7 +20,85 @@ use crate::{
 pub(crate) async fn dispatch(command: ToolsCommand) -> Result<()> {
     match command {
         ToolsCommand::Explain(args) => explain(args).await,
+        ToolsCommand::Holds(args) => holds(args).await,
+        ToolsCommand::Approve(args) => approve(args).await,
     }
+}
+
+async fn holds(args: ToolsHoldsArgs) -> Result<()> {
+    let (access, _home_dir) =
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let agent_did = if args.all {
+        None
+    } else {
+        match args.agent_did.as_deref() {
+            Some(did) => Some(did.to_string()),
+            // Scope to the home agent when one resolves; otherwise list all.
+            None => resolve_agent_did(args.home.as_deref(), None).ok(),
+        }
+    };
+    let held = gents::config_client::list_held_tool_calls(&access, agent_did.as_deref())
+        .await
+        .context("listing held tool calls")?;
+    print_json(&json!({
+        "count": held.len(),
+        "agent_did": agent_did,
+        "held": held,
+    }))
+}
+
+async fn approve(args: ToolsApproveArgs) -> Result<()> {
+    let (access, _home_dir) =
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let scope_did = match args.agent_did.as_deref() {
+        Some(did) => Some(did.to_string()),
+        None => resolve_agent_did(args.home.as_deref(), None).ok(),
+    };
+    let held = gents::config_client::list_held_tool_calls(&access, scope_did.as_deref())
+        .await
+        .context("listing held tool calls")?;
+    let target = held
+        .iter()
+        .find(|call| call.tool_call_id == args.tool_call_id)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "tool call {:?} is not awaiting approval ({} call(s) currently held{})",
+                args.tool_call_id,
+                held.len(),
+                scope_did
+                    .as_deref()
+                    .map(|did| format!(" for {did}"))
+                    .unwrap_or_default()
+            )
+        })?;
+    let agent_did = target
+        .agent_did
+        .clone()
+        .or(scope_did)
+        .ok_or_else(|| anyhow::anyhow!("held row is missing agent_did; pass --agent-did"))?;
+    let approver_did = match args.approver_did.as_deref() {
+        Some(did) => did.to_string(),
+        None => resolve_agent_did(args.home.as_deref(), None)
+            .context("no --approver-did given and no home agent identity to default to")?,
+    };
+    let verdict = gents::config_client::ToolApprovalVerdict {
+        tool_call_id: args.tool_call_id.clone(),
+        agent_did: agent_did.clone(),
+        request_id: target.request_id.clone(),
+        approve: !args.deny,
+        approver_did,
+        reason: args.reason.clone(),
+    };
+    let approval_id = gents::config_client::write_tool_approval(&access, &verdict)
+        .await
+        .context("writing AgentToolApproval decision")?;
+    print_json(&json!({
+        "approval_id": approval_id,
+        "tool_call_id": args.tool_call_id,
+        "agent_did": agent_did,
+        "decision": if args.deny { "denied" } else { "approved" },
+        "reason": args.reason,
+    }))
 }
 
 async fn explain(args: ToolExplainArgs) -> Result<()> {

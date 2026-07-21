@@ -69,4 +69,26 @@ test.describe("desktop operations drawer rich states", () => {
     );
     await expectNoPageHorizontalOverflow(page);
   });
+
+  test("holds tab lists a parked call, badges the count, and resolves it", async ({
+    page,
+  }) => {
+    await gotoHarness(page, "operations-rich");
+    await openChat(page);
+    await page.getByRole("button", { name: /open operations drawer/i }).click();
+
+    const holdsTab = page.getByRole("tab", { name: /Holds/ });
+    await expect(holdsTab).toContainText("1");
+    await holdsTab.click();
+
+    await expect(page.getByTestId("holds-panel")).toBeVisible();
+    const row = page.getByTestId("hold-row-held-call-1");
+    await expect(row).toBeVisible();
+    await expect(row).toContainText("bash_unrestricted");
+    await expect(row).toContainText("cargo publish");
+
+    await page.getByTestId("hold-approve-held-call-1").click();
+    await expect(page.getByTestId("holds-empty")).toBeVisible();
+    await expectNoPageHorizontalOverflow(page);
+  });
 });

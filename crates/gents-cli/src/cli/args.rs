@@ -1266,6 +1266,55 @@ pub(crate) enum ToolsCommand {
         about = "Explain final model-callable tools per behavior"
     )]
     Explain(ToolExplainArgs),
+    #[command(name = "holds", about = "List tool calls held awaiting approval")]
+    Holds(ToolsHoldsArgs),
+    #[command(
+        name = "approve",
+        about = "Approve (or deny) a held tool call by writing the decision document"
+    )]
+    Approve(ToolsApproveArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ToolsHoldsArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Scope to one agent DID. Defaults to the home agent")]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, help = "List holds across every agent")]
+    pub(crate) all: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ToolsApproveArgs {
+    #[arg(value_name = "TOOL_CALL_ID")]
+    pub(crate) tool_call_id: String,
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "GraphQL endpoint to write through instead of local home state"
+    )]
+    pub(crate) graphql: Option<String>,
+    #[arg(
+        long,
+        help = "Agent DID the held call belongs to. Defaults to the home agent"
+    )]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, help = "Record a denial instead of an approval")]
+    pub(crate) deny: bool,
+    #[arg(
+        long,
+        help = "Reason recorded on the decision (shown to the model on deny)"
+    )]
+    pub(crate) reason: Option<String>,
+    #[arg(
+        long,
+        help = "Approver DID recorded on the decision. Defaults to the home agent DID"
+    )]
+    pub(crate) approver_did: Option<String>,
 }
 
 #[derive(clap::Args)]
