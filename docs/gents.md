@@ -2,7 +2,7 @@
 
 **Recursive self-improvement for organizational AI.**
 
-*v1 — 2026-07-20. Supersedes the Agentic Governance doc series (v4); the governance material survives here as Part 3. Gents is the platform; its runtime currently ships as defra-agent.*
+*v1 — 2026-07-20. Supersedes the Agentic Governance doc series (v4); the governance material survives here as Part 3. Gents is the platform; its runtime ships as `gents`.*
 
 ---
 
