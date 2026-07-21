@@ -1229,7 +1229,7 @@ self_test() (
   # substitutions to desktop/release consumers. Branding remains untouched.
   cd "$fixture_slice"
   owner_checksum=$(cksum docs/gents.md)
-  apple_checksum=$(cksum apps/desktop-tauri/src-tauri/gen/apple/project.yml)
+  apple_checksum=$(cksum <apps/desktop-tauri/src-tauri/gen/apple/project.yml)
   lock_checksum=$(cksum Cargo.lock)
   first_checksum=$(cksum crates/defra-agent-desktop/branding.txt)
   apply_for_slice core >/dev/null
@@ -1255,7 +1255,7 @@ self_test() (
   second_checksum=$(cksum crates/defra-agent-desktop/branding.txt)
   [[ "$first_checksum" == "$second_checksum" ]]
   [[ "$owner_checksum" == "$(cksum docs/gents.md)" ]]
-  [[ "$apple_checksum" == "$(cksum apps/desktop-tauri/src-tauri/gen/apple/project.yml)" ]]
+  [[ "$apple_checksum" == "$(cksum <apps/desktop-tauri/src-tauri/gen/apple/project.yml)" ]]
   grep -Fq 'service=com.source-inc.gents.identity' crates/gents/runtime.txt
   grep -Fq 'test_did=did:defra-agent:test' crates/gents/runtime.txt
   if guard_output=$(run_guard core 2>&1); then
@@ -1291,22 +1291,22 @@ self_test() (
   # Explicit slice execution and `apply all` must materialize the same tree.
   cd "$fixture_sequential"
   owner_checksum=$(cksum docs/gents.md)
-  apple_checksum=$(cksum apps/desktop-tauri/src-tauri/gen/apple/project.yml)
+  apple_checksum=$(cksum <apps/desktop-tauri/src-tauri/gen/apple/project.yml)
   for owned_slice in "${SLICE_ORDER[@]}"; do
     apply_for_slice "$owned_slice" >/dev/null
   done
   sequential_tree=$(git write-tree)
   [[ "$owner_checksum" == "$(cksum docs/gents.md)" ]]
-  [[ "$apple_checksum" == "$(cksum apps/gents-desktop/src-tauri/gen/apple/project.yml)" ]]
+  [[ "$apple_checksum" == "$(cksum <apps/gents-desktop/src-tauri/gen/apple/project.yml)" ]]
 
   cd "$fixture_all"
   owner_checksum=$(cksum docs/gents.md)
-  apple_checksum=$(cksum apps/desktop-tauri/src-tauri/gen/apple/project.yml)
+  apple_checksum=$(cksum <apps/desktop-tauri/src-tauri/gen/apple/project.yml)
   apply_for_slice all >/dev/null
   all_tree=$(git write-tree)
   [[ "$sequential_tree" == "$all_tree" ]]
   [[ "$owner_checksum" == "$(cksum docs/gents.md)" ]]
-  [[ "$apple_checksum" == "$(cksum apps/gents-desktop/src-tauri/gen/apple/project.yml)" ]]
+  [[ "$apple_checksum" == "$(cksum <apps/gents-desktop/src-tauri/gen/apple/project.yml)" ]]
   grep -Fq 'service=com.source-inc.gents.identity' crates/gents/runtime.txt
   grep -Fxq '__APPLE_TEAM_ID__.com.source-inc.gents' release/entitlements.plist
   grep -Fq 'adapter docs retain gents until the docs slice' \
