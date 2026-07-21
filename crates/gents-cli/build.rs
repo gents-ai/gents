@@ -3,9 +3,9 @@ use std::path::Path;
 use std::process::Command;
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=DEFRA_AGENT_BUILD_GIT_SHA");
-    println!("cargo:rerun-if-env-changed=DEFRA_AGENT_BUILD_GIT_REF");
-    println!("cargo:rerun-if-env-changed=DEFRA_AGENT_BUILD_GIT_TAG");
+    println!("cargo:rerun-if-env-changed=GENTS_BUILD_GIT_SHA");
+    println!("cargo:rerun-if-env-changed=GENTS_BUILD_GIT_REF");
+    println!("cargo:rerun-if-env-changed=GENTS_BUILD_GIT_TAG");
 
     if let Some(head_path) = git_path("HEAD") {
         println!("cargo:rerun-if-changed={head_path}");
@@ -21,45 +21,45 @@ fn main() {
         }
     }
 
-    if let Some(value) = env::var("DEFRA_AGENT_BUILD_GIT_SHA")
+    if let Some(value) = env::var("GENTS_BUILD_GIT_SHA")
         .ok()
         .filter(|value| !value.is_empty())
         .or_else(|| git_output(&["rev-parse", "HEAD"]))
     {
-        println!("cargo:rustc-env=DEFRA_AGENT_BUILD_GIT_SHA={value}");
+        println!("cargo:rustc-env=GENTS_BUILD_GIT_SHA={value}");
     }
 
-    if let Some(value) = env::var("DEFRA_AGENT_BUILD_GIT_REF")
+    if let Some(value) = env::var("GENTS_BUILD_GIT_REF")
         .ok()
         .filter(|value| !value.is_empty())
         .or_else(|| git_output(&["rev-parse", "--abbrev-ref", "HEAD"]))
     {
-        println!("cargo:rustc-env=DEFRA_AGENT_BUILD_GIT_REF={value}");
+        println!("cargo:rustc-env=GENTS_BUILD_GIT_REF={value}");
     }
 
-    if let Some(value) = env::var("DEFRA_AGENT_BUILD_GIT_TAG")
+    if let Some(value) = env::var("GENTS_BUILD_GIT_TAG")
         .ok()
         .filter(|value| !value.is_empty())
         .or_else(|| git_output(&["describe", "--tags", "--exact-match", "HEAD"]))
     {
-        println!("cargo:rustc-env=DEFRA_AGENT_BUILD_GIT_TAG={value}");
+        println!("cargo:rustc-env=GENTS_BUILD_GIT_TAG={value}");
     }
 
     if let Some(value) = git_output(&["status", "--porcelain", "--untracked-files=no"]) {
         println!(
-            "cargo:rustc-env=DEFRA_AGENT_BUILD_GIT_DIRTY={}",
+            "cargo:rustc-env=GENTS_BUILD_GIT_DIRTY={}",
             !value.is_empty()
         );
     }
 
     if let Ok(target) = env::var("TARGET") {
-        println!("cargo:rustc-env=DEFRA_AGENT_BUILD_TARGET={target}");
+        println!("cargo:rustc-env=GENTS_BUILD_TARGET={target}");
     }
     if let Ok(profile) = env::var("PROFILE") {
-        println!("cargo:rustc-env=DEFRA_AGENT_BUILD_PROFILE={profile}");
+        println!("cargo:rustc-env=GENTS_BUILD_PROFILE={profile}");
     }
     if let Some(rustc) = command_output(Command::new("rustc").arg("--version")) {
-        println!("cargo:rustc-env=DEFRA_AGENT_BUILD_RUSTC={rustc}");
+        println!("cargo:rustc-env=GENTS_BUILD_RUSTC={rustc}");
     }
 }
 

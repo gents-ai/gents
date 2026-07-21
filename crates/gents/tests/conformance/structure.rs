@@ -71,7 +71,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         // fences the derivation/ownership properties AND the membership half of
         // the join gate (`signedByMember`/`isMember`) via the real
         // `decide_join_admission` engine fn. The signature half (`sigValid`) is
-        // fenced separately by defra-agent-protocol::pairing_token verify/tamper
+        // fenced separately by gents-protocol::pairing_token verify/tamper
         // tests; identity-binding of the admitted entry is intentionally out of
         // scope (trusted-fleet TOFU — see Transition.join docstring).
         //
@@ -141,7 +141,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
 }
 
 fn proofs_models(root: &Path) -> Vec<String> {
-    let proofs = root.join("crates/defra-agent/proofs/Proofs");
+    let proofs = root.join("crates/gents/proofs/Proofs");
     let mut models = Vec::new();
     for entry in std::fs::read_dir(&proofs).expect("read Proofs/").flatten() {
         let path = entry.path();
@@ -182,7 +182,7 @@ fn every_lean_model_has_a_declared_conformance_home() {
                 match home {
                     Home::Module(path) => {
                         assert!(
-                            root.join("crates/defra-agent/tests").join(path).exists(),
+                            root.join("crates/gents/tests").join(path).exists(),
                             "{model}: declared conformance module {path} does not exist"
                         );
                     }

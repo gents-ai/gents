@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::{
+use gents::defra_node::EmbeddedNode;
+use gents::{
     default_behavior_id_for_agent, load_agent_behavior, load_agent_principal,
     load_inference_profile, AgentBehaviorDocument, DEFAULT_CONTEXT_WINDOW,
 };
@@ -54,14 +54,14 @@ pub(super) async fn load_bound_inference_profile_id(
             anyhow!(
                 "Codex shim is bound to behavior {behavior_id:?}, but no AgentBehavior \
                  document with that behavior_id exists. Create or fix the behavior with \
-                 `defra-agent config behavior set --behavior-id {behavior_id} ...`."
+                 `gents config behavior set --behavior-id {behavior_id} ...`."
             )
         })?;
     let profile_id = behavior.inference_profile_id.ok_or_else(|| {
         anyhow!(
             "Codex shim is bound to behavior {behavior_id:?}, but that behavior has no \
              inference_profile_id set. Run \
-             `defra-agent config behavior set --behavior-id {behavior_id} \
+             `gents config behavior set --behavior-id {behavior_id} \
              --inference-profile-id <profile>` to attach one."
         )
     })?;
@@ -75,7 +75,7 @@ pub(super) async fn load_bound_inference_profile_id(
 }
 
 /// Resolve the exact context window the runtime derives for a behavior. This
-/// mirrors `defra_agent::agent::load_document_agent`: invalid or absent profile
+/// mirrors `gents::agent::load_document_agent`: invalid or absent profile
 /// values fall back to the runtime default.
 pub(super) async fn load_bound_context_window(
     node: &EmbeddedNode,

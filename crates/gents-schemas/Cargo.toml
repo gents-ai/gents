@@ -1,9 +1,9 @@
 [package]
-name = "defra-agent-schemas"
+name = "gents-schemas"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Dependency-free GraphQL schema bundle for defra-agent agent collections"
+description = "Dependency-free GraphQL schema bundle for gents agent collections"
 
 [dependencies]

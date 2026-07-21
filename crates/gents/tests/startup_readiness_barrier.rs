@@ -3,11 +3,11 @@ mod support;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::startup_readiness::StartupReadinessOptions;
-use defra_agent::{
-    ensure_runtime_schemas, AgentIdentity, DefraAgent, DocumentRuntimeOptions,
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::startup_readiness::StartupReadinessOptions;
+use gents::{
+    ensure_runtime_schemas, AgentIdentity, Gents, DocumentRuntimeOptions,
     ProcessLifecycleObserver, ProcessLifecycleState, ToolCeiling,
 };
 use serde_json::Value;
@@ -64,25 +64,25 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
         r#"mutation {{
             update_InferenceBackend(
                 filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                input: {{ api_key_env_var: "DEFRA_AGENT_TEST_559_UNSET_KEY" }}
+                input: {{ api_key_env_var: "GENTS_TEST_559_UNSET_KEY" }}
             ) {{ _docID }}
         }}"#
     );
     let response = node.execute(&mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     assert!(
-        std::env::var_os("DEFRA_AGENT_TEST_559_UNSET_KEY").is_none(),
+        std::env::var_os("GENTS_TEST_559_UNSET_KEY").is_none(),
         "the poison env var must not be set for this test to be honest"
     );
 
     let observer = Arc::new(RecordingObserver::default());
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
             tool_ceiling: ToolCeiling::meta_only(),
             process_state_observer: Some(observer.clone()),
-            retry_policy: defra_agent::retry::RetryPolicy {
+            retry_policy: gents::retry::RetryPolicy {
                 max_retries: 3,
                 base_delay_ms: 1,
                 max_delay_ms: 5,
@@ -178,7 +178,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
             }
         }
     }
-    const VAR: &str = "DEFRA_AGENT_TEST_559_LATE_KEY";
+    const VAR: &str = "GENTS_TEST_559_LATE_KEY";
     let _restore = RestoreEnv(VAR, std::env::var_os(VAR));
     unsafe {
         std::env::remove_var(VAR);
@@ -207,12 +207,12 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
     let response = node.execute(&mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
             tool_ceiling: ToolCeiling::meta_only(),
-            retry_policy: defra_agent::retry::RetryPolicy {
+            retry_policy: gents::retry::RetryPolicy {
                 max_retries: 3,
                 base_delay_ms: 50,
                 max_delay_ms: 100,

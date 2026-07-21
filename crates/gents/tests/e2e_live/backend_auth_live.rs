@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::{ensure_runtime_schemas, BackendProviderKind};
+use gents::defra_node::EmbeddedNode;
+use gents::{ensure_runtime_schemas, BackendProviderKind};
 
 use crate::support::fixtures::test_behavior;
 
@@ -11,7 +11,7 @@ use crate::support::fixtures::test_behavior;
 async fn live_openrouter_oneshot_succeeds() -> Result<()> {
     let api_key = std::env::var("OPENROUTER_API_KEY")
         .context("set OPENROUTER_API_KEY to run the live OpenRouter smoke test")?;
-    let model_name = std::env::var("DEFRA_AGENT_TEST_OPENROUTER_MODEL")
+    let model_name = std::env::var("GENTS_TEST_OPENROUTER_MODEL")
         .unwrap_or_else(|_| "openai/gpt-4o-mini".to_string());
 
     let node = Arc::new(EmbeddedNode::builder().build().await?);
@@ -22,7 +22,7 @@ async fn live_openrouter_oneshot_succeeds() -> Result<()> {
     behavior.backend_api_key = Some(api_key);
     behavior.model_name = model_name;
 
-    let result = defra_agent::run_openai_oneshot(
+    let result = gents::run_openai_oneshot(
         node,
         &behavior,
         "Reply with exactly the word READY and nothing else.",

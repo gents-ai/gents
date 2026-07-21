@@ -19,7 +19,7 @@ const PROJECTION_RUNTIME_RESOURCES: &[&str] = &[
 fn projection_policy_yaml() -> String {
     let mut yaml = String::from(
         r#"name: projection_adapter_read_policy
-description: Policy fixture for Defra Agent projection adapter exports.
+description: Policy fixture for Gents projection adapter exports.
 resources:
 "#,
     );

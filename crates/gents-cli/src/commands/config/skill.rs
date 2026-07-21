@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_agent::graphql::escape_graphql_string;
+use gents::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 use crate::cli::*;

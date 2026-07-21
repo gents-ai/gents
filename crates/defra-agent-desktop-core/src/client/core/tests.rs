@@ -338,7 +338,7 @@ async fn remove_peer_retains_saved_deployment_when_p2p_cleanup_fails() {
         .last_mutation_error()
         .as_deref()
         .is_some_and(|error| error.contains("saved deployment retained")));
-    let peer_id = defra_agent_protocol::graphql::escape_graphql_string(&record.peer_id);
+    let peer_id = gents_protocol::graphql::escape_graphql_string(&record.peer_id);
     let response = core
         .node()
         .execute(&format!(

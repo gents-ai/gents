@@ -15,7 +15,7 @@ use tracing::Instrument;
 use super::context::{RuntimeContext, StartupBarrier};
 use crate::admission::{AdmissionRegistry, BackendAdmissionConfig, InferenceCall};
 use crate::agent::reconcile::GenerationSupervisor;
-use crate::agent::{DefraAgent, DocumentResolveContext, ProcessLifecycleState};
+use crate::agent::{Gents, DocumentResolveContext, ProcessLifecycleState};
 use crate::backend_registry;
 use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
 use crate::lifecycle::RequestLifecycle;
@@ -99,7 +99,7 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
 }
 
 pub(in crate::agent) async fn run_agent(
-    agent: DefraAgent,
+    agent: Gents,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     let cancel = CancellationToken::new();
@@ -287,8 +287,8 @@ pub(in crate::agent) async fn run_agent(
     let trigger_engine_startup_barrier = startup_barrier.clone();
     // Construct the `ManualSource` up-front so the `ManualTriggerHandle` can
     // be published to in-process callers (via the `OnceCell` on
-    // `DefraAgent`) before `run()` awaits shutdown. Deferring construction
-    // into the spawned task would race the callers that cloned `DefraAgent`
+    // `Gents`) before `run()` awaits shutdown. Deferring construction
+    // into the spawned task would race the callers that cloned `Gents`
     // and are polling for the handle.
     let (manual_source, manual_trigger_handle) =
         crate::trigger_engine::manual_source::ManualSource::new(trigger_engine_cancel.clone());
@@ -396,7 +396,7 @@ pub(in crate::agent) async fn run_agent(
             tracing::info!(
                 runnable_behaviors = ready_behavior_count,
                 unavailable_behaviors = ready_unavailable_count,
-                "defra-agent ready"
+                "gents ready"
             );
         } else {
             let mut demoted_ids: Vec<&String> = demoted.keys().collect();
@@ -405,7 +405,7 @@ pub(in crate::agent) async fn run_agent(
                 runnable_behaviors = ready_behavior_count.saturating_sub(demoted.len()),
                 unavailable_behaviors = ready_unavailable_count + demoted.len(),
                 demoted_behaviors = ?demoted_ids,
-                "defra-agent ready (degraded: startup build failures demoted behaviors)"
+                "gents ready (degraded: startup build failures demoted behaviors)"
             );
         }
     });
@@ -527,7 +527,7 @@ pub(in crate::agent) async fn run_agent(
 
     // Discovery reconciler: materializes registry-owned PeerPairingDesired rows
     // from PeerRegistry. Idles unless `discovery_auto_pair` is enabled (default
-    // OFF, gated by DEFRA_AGENT_DISCOVERY_AUTO_PAIR) — the registry still
+    // OFF, gated by GENTS_DISCOVERY_AUTO_PAIR) — the registry still
     // replicates either way, but no auto-pairing happens when off.
     let discovery_node = agent.node.clone();
     let discovery_cancel = cancel.child_token();
@@ -807,7 +807,7 @@ fn is_degraded_startup_unavailable_reason(reason: &str) -> bool {
 }
 
 async fn validate_startup_snapshot(
-    agent: &DefraAgent,
+    agent: &Gents,
     tool_runtime: &ToolRuntimeContext,
     snapshot: &ResolvedRuntimeSnapshot,
 ) -> Result<()> {
@@ -868,7 +868,7 @@ async fn resolve_tool_surfaces(
     Ok(tool_surfaces)
 }
 
-async fn resolve_startup_snapshot(agent: &DefraAgent) -> Result<ResolvedRuntimeSnapshot> {
+async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapshot> {
     match agent.document_runtime_context() {
         Some(resolve_context) => {
             resolve_document_snapshot_with_tools(agent.node.as_ref(), resolve_context).await

@@ -69,8 +69,8 @@ struct BackgroundTheoremChildRequestRow {
 }
 
 impl BackgroundTheoremChildRequestRow {
-    fn into_agent_request(self) -> defra_agent::watcher::AgentRequest {
-        defra_agent::watcher::AgentRequest {
+    fn into_agent_request(self) -> gents::watcher::AgentRequest {
+        gents::watcher::AgentRequest {
             doc_id: self.doc_id,
             request_id: self.request_id,
             agent_did: self.agent_did,
@@ -176,7 +176,7 @@ async fn setup_background_spawn_fixture(
                 targets
                     .into_iter()
                     .map(|behavior_id| {
-                        defra_agent::subagent_target_entry(
+                        gents::subagent_target_entry(
                             behavior_id,
                             AGENT_DID,
                             behavior_id,
@@ -1017,7 +1017,7 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
             terminal_payload,
         } => {
             assert_eq!(tool_call_id, "r4c-w4-tool-call");
-            // Shipped behavior (defra-agent#403): no live ring buffer was built,
+            // Shipped behavior (gents#403): no live ring buffer was built,
             // so a running read has no live source and returns empty output; the
             // persisted completion is the only non-empty source, served at
             // terminal. This mirrors `background_tools.rs` and is independently
@@ -1084,7 +1084,7 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
             assert_eq!(bridge_lifecycle_state, "running");
             assert_eq!(
                 listed_status,
-                defra_agent::__test_internals::AWAITING_CHILD_MATERIALIZATION,
+                gents::__test_internals::AWAITING_CHILD_MATERIALIZATION,
                 "Lean witness and runtime must agree on the projected status string"
             );
             assert_eq!(read_lifecycle_state, listed_status);

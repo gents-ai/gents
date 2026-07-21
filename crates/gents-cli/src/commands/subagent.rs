@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLifecycle};
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLifecycle};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -174,7 +174,7 @@ async fn interrupt_request_graphql(graphql: &str, request_id: &str) -> Result<()
 
     // TODO: Route this through a server-side interrupt endpoint once one
     // exists, so idempotency and queue-drain behavior stay centralized with
-    // defra_agent::interrupt_request.
+    // gents::interrupt_request.
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
@@ -332,7 +332,7 @@ async fn interrupt_request_local(
     seen_requests: &mut BTreeSet<String>,
     request_id: &str,
 ) -> Result<()> {
-    defra_agent::interrupt_request(node, request_id).await?;
+    gents::interrupt_request(node, request_id).await?;
     push_unique(affected, seen_requests, request_id.to_string());
     Ok(())
 }

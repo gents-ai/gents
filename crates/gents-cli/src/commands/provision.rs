@@ -145,7 +145,7 @@ async fn ensure_home_identity(
 
     if !bootstrap_file_identity && !bootstrap_macos_keychain && !bootstrap_macos_secure_enclave {
         anyhow::bail!(
-            "initialized home identity is required before provisioning {}; run `defra-agent init --identity-only --home {}` for file-key development, or bootstrap the host identity backend first",
+            "initialized home identity is required before provisioning {}; run `gents init --identity-only --home {}` for file-key development, or bootstrap the host identity backend first",
             home_dir.display(),
             home_dir.display()
         );
@@ -192,9 +192,9 @@ fn report_from_initialized_identity(summary: IdentityOnlyHomeSummary) -> Provisi
 
 fn next_steps(home_dir: &Path, root: &Path) -> Vec<String> {
     vec![
-        format!("defra-agent server --home {}", home_dir.display()),
+        format!("gents server --home {}", home_dir.display()),
         format!(
-            "defra-agent config diff --root {} --home {} --bind-agent-did home",
+            "gents config diff --root {} --home {} --bind-agent-did home",
             root.display(),
             home_dir.display()
         ),

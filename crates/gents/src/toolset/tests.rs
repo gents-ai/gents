@@ -36,7 +36,7 @@ fn toolset_presets_have_expected_counts() {
 
 #[tokio::test]
 async fn native_tool_definitions_include_model_facing_defaults_and_constraints() {
-    let root = temp_root("defra-agent-tool-definitions");
+    let root = temp_root("gents-tool-definitions");
     let context = ToolContext::new(root.clone(), false).unwrap();
 
     let list_tool = ListFilesTool::new(context.clone(), DEFAULT_MAX_LIST_ENTRIES);
@@ -334,7 +334,7 @@ async fn fan_out_and_synthesize_validate_rejects_bad_args() {
 
 #[test]
 fn native_tool_backgroundable_capability_is_explicit() {
-    let root = temp_root("defra-agent-backgroundable-capability");
+    let root = temp_root("gents-backgroundable-capability");
     let tools = ToolSet::readwrite(root);
     let backgroundable = tools.backgroundable_tool_names();
 
@@ -472,30 +472,30 @@ fn ensure_native_fs_runner_for_test() {
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(2)
-            .expect("defra-agent manifest should be under workspace crates/")
+            .expect("gents manifest should be under workspace crates/")
             .to_path_buf();
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
         let status = std::process::Command::new(cargo)
-            .args(["build", "-p", "defra-native-fs-runner"])
+            .args(["build", "-p", "gents-fs-runner"])
             .current_dir(repo_root)
             .status()
-            .expect("building defra-native-fs-runner test binary");
+            .expect("building gents-fs-runner test binary");
         assert!(
             status.success(),
-            "defra-native-fs-runner test binary must build before native filesystem tool tests"
+            "gents-fs-runner test binary must build before native filesystem tool tests"
         );
         assert!(
             native_fs_runner_binary_for_current_test().is_some(),
-            "defra-native-fs-runner test binary must be adjacent to test binary after build"
+            "gents-fs-runner test binary must be adjacent to test binary after build"
         );
     });
 }
 
 fn native_fs_runner_binary_for_current_test() -> Option<PathBuf> {
     let exe_name = if cfg!(windows) {
-        "defra-native-fs-runner.exe"
+        "gents-fs-runner.exe"
     } else {
-        "defra-native-fs-runner"
+        "gents-fs-runner"
     };
 
     let current = std::env::current_exe().ok()?;
@@ -547,7 +547,7 @@ impl Drop for EnvVarGuard {
 #[tokio::test]
 async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue() {
     ensure_native_fs_runner_for_test();
-    let root = temp_root("defra-agent-native-boundary");
+    let root = temp_root("gents-native-boundary");
     std::fs::write(root.join("first.txt"), "first request\n").unwrap();
     std::fs::write(root.join("second.txt"), "second request\n").unwrap();
     let context = ToolContext::new(root.clone(), false).unwrap();
@@ -638,7 +638,7 @@ fn generated_native_filesystem_boundary_cases_match_preemptible_boundary_contrac
 
 #[tokio::test]
 async fn read_file_returns_compact_numbered_contents() {
-    let root = temp_root("defra-agent-read-file");
+    let root = temp_root("gents-read-file");
     let file = root.join("notes.txt");
     std::fs::write(&file, "alpha\nbeta\ngamma\n").unwrap();
     let tool = ReadFileTool::new(
@@ -673,7 +673,7 @@ async fn read_file_returns_compact_numbered_contents() {
 
 #[tokio::test]
 async fn read_file_reports_truncation_in_compact_metadata() {
-    let root = temp_root("defra-agent-read-file-truncate");
+    let root = temp_root("gents-read-file-truncate");
     std::fs::write(root.join("notes.txt"), "alpha\nbeta\ngamma\n").unwrap();
     let tool = ReadFileTool::new(ToolContext::new(root, false).unwrap(), 12);
 
@@ -702,7 +702,7 @@ async fn read_file_reports_truncation_in_compact_metadata() {
 
 #[tokio::test]
 async fn read_file_rejects_paths_outside_root() {
-    let root = temp_root("defra-agent-read-file-rooted");
+    let root = temp_root("gents-read-file-rooted");
     std::fs::create_dir_all(root.join("workspace")).unwrap();
     std::fs::write(root.join("outside.txt"), "nope").unwrap();
     std::fs::write(root.join("workspace").join("notes.txt"), "alpha\n").unwrap();
@@ -732,7 +732,7 @@ async fn read_file_rejects_paths_outside_root() {
 
 #[tokio::test]
 async fn write_and_edit_file_work_under_root() {
-    let root = temp_root("defra-agent-write-edit");
+    let root = temp_root("gents-write-edit");
     let context = ToolContext::new(root.clone(), true).unwrap();
     let writer = WriteFileTool::new(context.clone());
     let editor = EditFileTool::new(context);
@@ -784,7 +784,7 @@ async fn write_and_edit_file_work_under_root() {
 #[tokio::test]
 async fn raw_json_escape_hatch_returns_structured_output() {
     ensure_native_fs_runner_for_test();
-    let root = temp_root("defra-agent-raw-json");
+    let root = temp_root("gents-raw-json");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("src/lib.rs"), "pub fn hi() {}\n").unwrap();
     let tool = ListFilesTool::new(ToolContext::new(root.clone(), false).unwrap(), 100);
@@ -819,7 +819,7 @@ async fn list_files_skips_permission_denied_subtrees() {
     use std::os::unix::fs::PermissionsExt;
 
     ensure_native_fs_runner_for_test();
-    let root = temp_root("defra-agent-list-files-perms");
+    let root = temp_root("gents-list-files-perms");
     std::fs::write(root.join("visible.txt"), "ok").unwrap();
     let restricted = root.join("restricted");
     std::fs::create_dir_all(restricted.join("nested")).unwrap();
@@ -852,7 +852,7 @@ async fn list_files_skips_permission_denied_subtrees() {
 #[tokio::test]
 async fn list_files_ignores_common_generated_directories_by_default() {
     ensure_native_fs_runner_for_test();
-    let root = temp_root("defra-agent-list-files-ignored");
+    let root = temp_root("gents-list-files-ignored");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::create_dir_all(root.join("target/debug")).unwrap();
     std::fs::write(root.join("src/lib.rs"), "pub fn hi() {}\n").unwrap();
@@ -884,7 +884,7 @@ async fn list_files_ignores_common_generated_directories_by_default() {
 #[tokio::test]
 async fn glob_returns_compact_matches() {
     ensure_native_fs_runner_for_test();
-    let root = temp_root("defra-agent-glob");
+    let root = temp_root("gents-glob");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::create_dir_all(root.join("target/debug")).unwrap();
     std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
@@ -915,7 +915,7 @@ async fn glob_returns_compact_matches() {
 #[tokio::test]
 async fn grep_returns_compact_line_numbered_matches() {
     ensure_native_fs_runner_for_test();
-    let root = temp_root("defra-agent-grep");
+    let root = temp_root("gents-grep");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(
         root.join("src/main.rs"),
@@ -950,7 +950,7 @@ async fn grep_returns_compact_line_numbered_matches() {
 #[tokio::test]
 async fn compact_list_output_is_smaller_than_representative_pretty_json() {
     ensure_native_fs_runner_for_test();
-    let root = temp_root("defra-agent-list-files-smaller");
+    let root = temp_root("gents-list-files-smaller");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("README.md"), "hello\n").unwrap();
     std::fs::write(root.join("src/lib.rs"), "pub fn hi() {}\n").unwrap();
@@ -1128,7 +1128,7 @@ fn read_only_policy_allows_operator_configured_diagnostic_prefix() {
             String::from("--assess"),
             String::from("--type"),
             String::from("execute"),
-            String::from("/Applications/Defra Agent.app"),
+            String::from("/Applications/Gents.app"),
         ],
         &policy,
     )
@@ -1190,7 +1190,7 @@ fn read_only_allowlist_knobs_match_operator_docs() {
             String::from("--assess"),
             String::from("--type"),
             String::from("execute"),
-            String::from("/Applications/Defra Agent.app"),
+            String::from("/Applications/Gents.app"),
         ],
         &prefix_only,
     )
@@ -1216,7 +1216,7 @@ fn read_only_policy_forbidden_prefix_overrides_configured_diagnostic_prefix() {
         &[
             String::from("--assess"),
             String::from("--raw"),
-            String::from("/Applications/Defra Agent.app"),
+            String::from("/Applications/Gents.app"),
         ],
         &policy,
     )
@@ -1341,11 +1341,11 @@ fn generated_command_policy_cases_cover_read_only_safety_matrix() {
         ),
         (
             "read_only_git_output_flag_denies",
-            "--output=/tmp/defra-agent-diff.txt",
+            "--output=/tmp/gents-diff.txt",
         ),
         (
             "read_only_git_exec_flag_denies",
-            "--exec=touch /tmp/defra-agent-nope",
+            "--exec=touch /tmp/gents-nope",
         ),
         ("read_only_git_branch_delete_denies", "-D"),
         ("read_only_sed_in_place_short_denies", "-i"),
@@ -1551,7 +1551,7 @@ fn managed_write_policy_spelling_is_workspace_write_alias() {
 #[cfg(unix)]
 #[tokio::test]
 async fn unrestricted_bash_runs_shell_command_strings() {
-    let root = temp_root("defra-agent-unrestricted-shell");
+    let root = temp_root("gents-unrestricted-shell");
     let tool = UnrestrictedBashTool::new(
         ToolContext::new(root, false).unwrap(),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
@@ -1583,7 +1583,7 @@ async fn unrestricted_bash_runs_shell_command_strings() {
 
 #[tokio::test]
 async fn command_policy_explicit_unrestricted_reports_unsandboxed_metadata() {
-    let root = temp_root("defra-agent-unrestricted-policy");
+    let root = temp_root("gents-unrestricted-policy");
     let policy =
         CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted);
     let tool = UnrestrictedBashTool::with_policy(
@@ -1614,7 +1614,7 @@ async fn command_policy_explicit_unrestricted_reports_unsandboxed_metadata() {
 
 #[tokio::test]
 async fn bash_output_supports_raw_json_escape_hatch() {
-    let root = temp_root("defra-agent-bash-raw-json");
+    let root = temp_root("gents-bash-raw-json");
     let tool = ReadOnlyBashTool::new(
         ToolContext::new(root, false).unwrap(),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
@@ -1643,7 +1643,7 @@ async fn bash_output_supports_raw_json_escape_hatch() {
 
 #[tokio::test]
 async fn bash_timeout_reports_metadata_instead_of_error() {
-    let root = temp_root("defra-agent-bash-timeout");
+    let root = temp_root("gents-bash-timeout");
     let tool = ReadOnlyBashTool::new(
         ToolContext::new(root, false).unwrap(),
         Duration::from_secs(1),
@@ -1677,9 +1677,9 @@ async fn workspace_write_bash_contains_writes_to_tool_root() {
         return;
     }
 
-    let root = temp_root("defra-agent-bash-seatbelt");
+    let root = temp_root("gents-bash-seatbelt");
     let outside = std::env::temp_dir().join(format!(
-        "defra-agent-bash-seatbelt-outside-{}",
+        "gents-bash-seatbelt-outside-{}",
         uuid::Uuid::new_v4()
     ));
     let tool = UnrestrictedBashTool::new(
@@ -1799,7 +1799,7 @@ fn edit_args(path: &str, old: &str, new: &str) -> EditFileArgs {
 
 #[tokio::test]
 async fn read_file_reports_raw_content_hash() {
-    let root = temp_root("defra-agent-read-hash");
+    let root = temp_root("gents-read-hash");
     std::fs::write(root.join("config.json"), "{\"max_turns\": 20}\n").unwrap();
     let tool = ReadFileTool::new(
         ToolContext::new(root, false).unwrap(),
@@ -1825,7 +1825,7 @@ async fn read_file_reports_raw_content_hash() {
 
 #[tokio::test]
 async fn edit_file_dry_run_previews_diff_without_writing() {
-    let root = temp_root("defra-agent-edit-dry-run");
+    let root = temp_root("gents-edit-dry-run");
     let file = root.join("config.json");
     std::fs::write(&file, "{\n  \"max_turns\": 20\n}\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
@@ -1847,7 +1847,7 @@ async fn edit_file_dry_run_previews_diff_without_writing() {
 
 #[tokio::test]
 async fn edit_file_stale_hash_rejects_before_matching_and_reports_current() {
-    let root = temp_root("defra-agent-edit-stale");
+    let root = temp_root("gents-edit-stale");
     let file = root.join("a.txt");
     // Pattern is ambiguous — but the stale gate must fire FIRST (Lean E6).
     std::fs::write(&file, "dup\ndup\n").unwrap();
@@ -1870,7 +1870,7 @@ async fn edit_file_stale_hash_rejects_before_matching_and_reports_current() {
 
 #[tokio::test]
 async fn edit_file_success_reports_strategy_hashes_and_diff() {
-    let root = temp_root("defra-agent-edit-success");
+    let root = temp_root("gents-edit-success");
     let file = root.join("profile.json");
     std::fs::write(&file, "{\n  \"max_turns\": 20\n}\n").unwrap();
     let pre_hash = {
@@ -1902,7 +1902,7 @@ async fn edit_file_success_reports_strategy_hashes_and_diff() {
 
 #[tokio::test]
 async fn edit_file_not_found_error_carries_closest_match() {
-    let root = temp_root("defra-agent-edit-closest");
+    let root = temp_root("gents-edit-closest");
     std::fs::write(root.join("a.yaml"), "max_turns: 20\nmodel: d4f\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
     let err = crate::llm::tool::Tool::call(
@@ -1919,7 +1919,7 @@ async fn edit_file_not_found_error_carries_closest_match() {
 
 #[tokio::test]
 async fn edit_file_ambiguous_error_lists_occurrences() {
-    let root = temp_root("defra-agent-edit-ambiguous");
+    let root = temp_root("gents-edit-ambiguous");
     std::fs::write(root.join("a.txt"), "x = 1\ny\nx = 1\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
     let err = crate::llm::tool::Tool::call(&tool, edit_args("a.txt", "x = 1", "x = 2"))
@@ -1934,7 +1934,7 @@ async fn edit_file_ambiguous_error_lists_occurrences() {
 
 #[tokio::test]
 async fn edit_file_crlf_file_round_trips() {
-    let root = temp_root("defra-agent-edit-crlf");
+    let root = temp_root("gents-edit-crlf");
     let file = root.join("w.ini");
     std::fs::write(&file, "a=1\r\nmax_turns=20\r\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
@@ -1948,7 +1948,7 @@ async fn edit_file_crlf_file_round_trips() {
 
 #[tokio::test]
 async fn edit_file_regex_mode_and_insert_after_operation() {
-    let root = temp_root("defra-agent-edit-regex-ops");
+    let root = temp_root("gents-edit-regex-ops");
     let file = root.join("c.toml");
     std::fs::write(&file, "timeout = 1800\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root.clone(), false).unwrap());
@@ -1972,7 +1972,7 @@ async fn edit_file_regex_mode_and_insert_after_operation() {
 // Review finding 2: non-UTF-8 files are rejected, never lossy-rewritten.
 #[tokio::test]
 async fn edit_file_rejects_non_utf8_instead_of_corrupting() {
-    let root = temp_root("defra-agent-edit-non-utf8");
+    let root = temp_root("gents-edit-non-utf8");
     let file = root.join("latin1.txt");
     std::fs::write(&file, b"caf\xe9 target\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
@@ -1989,7 +1989,7 @@ async fn edit_file_rejects_non_utf8_instead_of_corrupting() {
 // both read, both write full content, one edit vanishes.)
 #[tokio::test(flavor = "multi_thread")]
 async fn edit_file_concurrent_edits_do_not_lose_updates() {
-    let root = temp_root("defra-agent-edit-concurrent");
+    let root = temp_root("gents-edit-concurrent");
     let file = root.join("both.txt");
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
     for round in 0..20 {
@@ -2013,7 +2013,7 @@ async fn edit_file_concurrent_edits_do_not_lose_updates() {
 // before the write, lands after it, resurrecting overwritten content).
 #[tokio::test(flavor = "multi_thread")]
 async fn write_file_and_edit_file_serialize_on_the_same_lock() {
-    let root = temp_root("defra-agent-write-edit-serialize");
+    let root = temp_root("gents-write-edit-serialize");
     let file = root.join("both.txt");
     let context = ToolContext::new(root, false).unwrap();
     let editor = EditFileTool::new(context.clone());
@@ -2045,7 +2045,7 @@ async fn write_file_and_edit_file_serialize_on_the_same_lock() {
 #[cfg(unix)]
 #[test]
 fn mutation_lock_keys_resolve_symlinked_parents_for_new_files() {
-    let root = temp_root("defra-agent-lock-alias");
+    let root = temp_root("gents-lock-alias");
     std::fs::create_dir_all(root.join("real")).unwrap();
     std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
     let via_alias = super::file_tools::file_mutation_lock_for(&root.join("alias/new.txt"));

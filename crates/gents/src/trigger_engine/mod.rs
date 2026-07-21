@@ -500,7 +500,7 @@ impl TriggerEngine {
 }
 
 /// Run a standalone `SubagentSource` driven by a `TriggerEngine` against
-/// `node` until `cancel` fires, without booting the full `DefraAgent` request
+/// `node` until `cancel` fires, without booting the full `Gents` request
 /// daemon. Used by integration tests (`r4_subagent_tools`) that drive the
 /// `DefraSessionHook` directly but need the same `SubagentSource` that
 /// production runs to materialize child `AgentRequest`s from `AgentToolCall`

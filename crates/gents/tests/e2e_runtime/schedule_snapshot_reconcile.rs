@@ -16,7 +16,7 @@
 //!
 //! # What this test actually asserts
 //!
-//! Integration tests live outside the `defra-agent` crate, so they cannot
+//! Integration tests live outside the `gents` crate, so they cannot
 //! observe `ActiveRuntimeSnapshot::active_schedules()` directly (that
 //! accessor is `pub(crate)`). The public observable is the `AgentRuntime`
 //! doc's `active_generation` field, which bumps 1:1 with every activated
@@ -29,9 +29,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_agent::{
+use gents::{
     ensure_agent_principal, graphql::escape_graphql_string, load_agent_behavior,
-    upsert_agent_behavior, AgentIdentity, DefraAgent, DocumentRuntimeOptions, KeyIdentity,
+    upsert_agent_behavior, AgentIdentity, Gents, DocumentRuntimeOptions, KeyIdentity,
     ToolCeiling,
 };
 
@@ -48,7 +48,7 @@ fn test_identity(name: &str) -> KeyIdentity {
 }
 
 async fn bind_default_behavior_backend(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
     backend_id: &str,
     endpoint: &str,
@@ -97,7 +97,7 @@ async fn bind_default_behavior_backend(
 }
 
 async fn create_task(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     task_id: &str,
     behavior_id: &str,
     prompt_template: &str,
@@ -125,7 +125,7 @@ async fn create_task(
 }
 
 async fn create_schedule(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     schedule_id: &str,
     task_id: &str,
 ) {
@@ -151,7 +151,7 @@ async fn create_schedule(
 }
 
 async fn create_event_trigger(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     trigger_id: &str,
     task_id: &str,
     source_collection: &str,
@@ -183,7 +183,7 @@ async fn create_event_trigger(
 }
 
 async fn wait_for_runtime_snapshot<F>(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
     predicate: F,
 ) -> RuntimeSnapshot
@@ -220,7 +220,7 @@ async fn schedule_insert_bumps_active_generation() {
         UNUSED_BACKEND_ENDPOINT,
     )
     .await;
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -311,7 +311,7 @@ async fn event_trigger_insert_bumps_active_generation() {
         UNUSED_BACKEND_ENDPOINT,
     )
     .await;
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {

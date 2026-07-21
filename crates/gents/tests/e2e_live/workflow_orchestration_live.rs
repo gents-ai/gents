@@ -1,7 +1,7 @@
 //! Single-node live e2e for `fan_out_and_synthesize` (issue #378, cut 1).
 //!
 //! Normal test runs skip this (`#[ignore]` + env gate). When explicitly run
-//! with `DEFRA_AGENT_LIVE_WORKFLOW=1`, it boots one document-driven agent,
+//! with `GENTS_LIVE_WORKFLOW=1`, it boots one document-driven agent,
 //! configures an orchestrator plus researcher/synthesizer subagent behaviors,
 //! drives one workflow tool call, and asserts the durable barrier projection
 //! over `AgentToolCall.workflow_group_id` / `workflow_role`.
@@ -11,12 +11,12 @@ use std::time::Duration;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, upsert_tool_selection,
-    AgentBehaviorDocument, AgentIdentity, DefraAgent, DocumentRuntimeOptions, SubagentTarget,
+    AgentBehaviorDocument, AgentIdentity, Gents, DocumentRuntimeOptions, SubagentTarget,
     ToolCeiling, ToolSelectionDocument,
 };
 use serde::Deserialize;
@@ -35,16 +35,16 @@ const RESEARCHER_TARGET_NAME: &str = "researcher";
 const SYNTHESIZER_TARGET_NAME: &str = "synthesizer";
 
 fn live_enabled() -> bool {
-    std::env::var("DEFRA_AGENT_LIVE_WORKFLOW").as_deref() == Ok("1")
+    std::env::var("GENTS_LIVE_WORKFLOW").as_deref() == Ok("1")
 }
 
 fn live_endpoint() -> String {
-    std::env::var("DEFRA_AGENT_LIVE_WORKFLOW_ENDPOINT")
+    std::env::var("GENTS_LIVE_WORKFLOW_ENDPOINT")
         .unwrap_or_else(|_| DEFAULT_LIVE_ENDPOINT.to_string())
 }
 
 fn live_model() -> String {
-    std::env::var("DEFRA_AGENT_LIVE_WORKFLOW_MODEL")
+    std::env::var("GENTS_LIVE_WORKFLOW_MODEL")
         .unwrap_or_else(|_| DEFAULT_LIVE_MODEL.to_string())
 }
 
@@ -61,10 +61,10 @@ struct WorkflowToolCallRow {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live: set DEFRA_AGENT_LIVE_WORKFLOW=1 and pass --ignored"]
+#[ignore = "live: set GENTS_LIVE_WORKFLOW=1 and pass --ignored"]
 async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
     if !live_enabled() {
-        eprintln!("DEFRA_AGENT_LIVE_WORKFLOW != 1; skipping workflow orchestration e2e");
+        eprintln!("GENTS_LIVE_WORKFLOW != 1; skipping workflow orchestration e2e");
         return Ok(());
     }
 
@@ -554,7 +554,7 @@ async fn assert_endpoint_reachable(endpoint: &str) {
 }
 
 async fn boot_document_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Result<BootedAgent> {
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -770,7 +770,7 @@ async fn dump_session_diagnostics(node: &EmbeddedNode, session_id: &str) {
     );
 }
 
-fn rows<T>(resp: &defra_agent::defra_node::QueryResponse, collection: &str) -> Vec<T>
+fn rows<T>(resp: &gents::defra_node::QueryResponse, collection: &str) -> Vec<T>
 where
     T: for<'de> Deserialize<'de>,
 {

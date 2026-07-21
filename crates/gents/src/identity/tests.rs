@@ -44,7 +44,7 @@ async fn registered_identity_uses_defradb_local_signing_config() {
     );
 
     let identity = RegisteredIdentity::from_registered_did(&did, None).unwrap();
-    let payload = b"defra-agent registered local signing";
+    let payload = b"gents registered local signing";
     let signature = identity.sign(payload).await.unwrap();
 
     assert_eq!(identity.did(), did);
@@ -70,7 +70,7 @@ async fn registered_identity_delegates_to_defradb_remote_signer() {
     );
 
     let identity = RegisteredIdentity::from_registered_did(&did, None).unwrap();
-    let payload = b"defra-agent registered remote signing";
+    let payload = b"gents registered remote signing";
     let signature = identity.sign(payload).await.unwrap();
 
     assert_eq!(identity.did(), did);

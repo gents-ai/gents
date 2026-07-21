@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
-use defra_agent::{default_behavior_id_for_agent, default_inference_profile_id_for_behavior};
+use gents::{default_behavior_id_for_agent, default_inference_profile_id_for_behavior};
 use serde_json::Value;
 
 use super::graphql::escape_graphql_string;
@@ -328,7 +328,7 @@ pub fn read_runtime_state_json(home_dir: &Path) -> Result<Value> {
     let path = if home_dir.join("runtime.json").exists() {
         home_dir.join("runtime.json")
     } else {
-        home_dir.join(".defra-agent").join("runtime.json")
+        home_dir.join(".gents").join("runtime.json")
     };
     let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
     serde_json::from_slice(&bytes).with_context(|| format!("decoding {}", path.display()))

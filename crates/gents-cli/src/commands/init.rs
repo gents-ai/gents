@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_agent::config::{
+use gents::config::{
     DEFAULT_CONTEXT_WINDOW, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS,
     DEFAULT_MAX_TURNS, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
-use defra_agent::{
+use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     default_tool_selection_id_for_behavior, ensure_config_bootstrap_schemas, load_agent_behavior,
     load_agent_principal, load_or_create_macos_keychain_identity,
@@ -119,8 +119,8 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
                 "permission_boundary": "This DID and key identify the permission boundary for every action the agent runtime performs."
             },
             "next_steps": [
-                "defra-agent config apply --root <manifest-root> --home <home> --bind-agent-did home",
-                "defra-agent server"
+                "gents config apply --root <manifest-root> --home <home> --bind-agent-did home",
+                "gents server"
             ],
             "init": null
         });
@@ -138,7 +138,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
     })?;
     initialized_identity
         .identity
-        .sign(b"defra-agent init identity")
+        .sign(b"gents init identity")
         .await
         .context("creating or loading agent identity key")?;
 
@@ -158,7 +158,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
     // #377, or before the conversation scope key), bootstrap schema-adds silently
     // skip patching existing collections; without the full migration set,
     // re-running init against such a DB crashes with "unknown field" errors.
-    defra_agent::migration::ensure_all_runtime_migrations(node_arc.clone()).await?;
+    gents::migration::ensure_all_runtime_migrations(node_arc.clone()).await?;
     let node = std::sync::Arc::try_unwrap(node_arc).unwrap_or_else(|_| {
         unreachable!("node_arc had exactly one strong reference at this point")
     });
@@ -288,7 +288,7 @@ pub(crate) async fn write_identity_only_home_metadata(
     })?;
     initialized_identity
         .identity
-        .sign(b"defra-agent init identity")
+        .sign(b"gents init identity")
         .await
         .context("creating or loading agent identity key")?;
 
@@ -818,10 +818,10 @@ fn init_next_steps(summary: &InitSummary) -> Vec<String> {
     } else if is_probably_llama_server_endpoint(&summary.endpoint) {
         steps.push(format!("llama-server -hf {}", summary.model_name));
     }
-    steps.push("defra-agent server".to_string());
-    steps.push("defra-agent codex".to_string());
+    steps.push("gents server".to_string());
+    steps.push("gents codex".to_string());
     steps.push(format!(
-        "defra-agent config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id {} --name {} --endpoint <URL> --max-concurrent {}",
+        "gents config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id {} --name {} --endpoint <URL> --max-concurrent {}",
         summary.backend_id, summary.backend_name, summary.max_concurrent
     ));
     steps

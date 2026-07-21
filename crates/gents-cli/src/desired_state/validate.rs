@@ -1,12 +1,12 @@
 use std::collections::{BTreeSet, HashSet};
 
 use anyhow::Result;
-use defra_agent::template::{
+use gents::template::{
     catalog::{default_catalog, Site},
     reads::validate_system_template,
     validate_request_context_template,
 };
-use defra_agent::{
+use gents::{
     is_reserved_builtin_tool_name, parse_template_for_validation,
     schedule_cron::validate_cron_schedule, CommandExecutionMode, CommandNetworkMode,
     SubagentTarget, VariableRef, WriteToolDecl,
@@ -62,7 +62,7 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 "peer pairing {peer_did:?} must contain a non-empty template"
             ));
         } else {
-            use defra_agent::agent::p2p_reconcile::templates::{
+            use gents::agent::p2p_reconcile::templates::{
                 builtin_templates, resolve_template, APP_COLLECTIONS_TEMPLATE,
             };
             if template == APP_COLLECTIONS_TEMPLATE {
@@ -1568,8 +1568,8 @@ mod tests {
 #[cfg(test)]
 mod live_tests {
     use anyhow::Result;
-    use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
-    use defra_agent::ensure_runtime_schemas;
+    use gents::defra_node::{EmbeddedNode, StorageBackend};
+    use gents::ensure_runtime_schemas;
 
     use super::*;
     use crate::config_writes::ConfigAccess;
@@ -1718,7 +1718,7 @@ mod live_tests {
         use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
         use crate::config_import::apply_desired_state_changes;
         use crate::desired_state::{diff_manifests, export_bundle_from_manifest};
-        use defra_agent::graphql::escape_graphql_string;
+        use gents::graphql::escape_graphql_string;
 
         let tempdir = tempfile::tempdir()?;
         let node = EmbeddedNode::builder()
@@ -1824,11 +1824,11 @@ mod live_tests {
         use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
         use crate::config_import::apply_desired_state_changes;
         use crate::desired_state::{diff_manifests, export_bundle_from_manifest};
-        use defra_agent::agent::p2p_reconcile::{
+        use gents::agent::p2p_reconcile::{
             reconcile_peer_tick, GraphqlPairingStateStore, PairingFilters, PairingStateStore,
             RemoteP2pAdmin, RemoteP2pAdminResult, RemoteReplicator,
         };
-        use defra_agent::KeyIdentity;
+        use gents::KeyIdentity;
 
         let tempdir = tempfile::tempdir()?;
         let data_path = tempdir.path().join("data");
@@ -2115,7 +2115,7 @@ mod live_tests {
         // Seed a minimal AgentPrincipal so build_desired_state_live_bundle can
         // find the agent on the second (post-apply) read.
         {
-            use defra_agent::graphql::escape_graphql_string;
+            use gents::graphql::escape_graphql_string;
             let did = escape_graphql_string("did:key:test-subagent-idempotency");
             access
                 .execute(&format!(
@@ -2326,7 +2326,7 @@ mod live_tests {
         // Seed a minimal AgentPrincipal so build_desired_state_live_bundle can
         // find the agent on the second (post-apply) read.
         {
-            use defra_agent::graphql::escape_graphql_string;
+            use gents::graphql::escape_graphql_string;
             let did = escape_graphql_string("did:key:test-behavior-desc-idempotency");
             access
                 .execute(&format!(

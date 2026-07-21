@@ -20,5 +20,5 @@ Below row granularity, `Proofs/PromptAssembly/ToolArgs.lean` (issues
 `arguments` are normalized to a JSON object at both rig-converter seams
 (N1 soundness, N2 object fixpoint, N3 idempotence, N4 salvage).
 
-Rust conformance: `crates/defra-agent/tests/conformance/prompt_assembly.rs`.
+Rust conformance: `crates/gents/tests/conformance/prompt_assembly.rs`.
 -/

@@ -35,7 +35,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         "http://127.0.0.1:8111/v1",
     )
     .await;
-    let agent = crate::DefraAgent::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_behavior_documents(
         node.clone(),
         identity,
         crate::agent::DocumentRuntimeOptions {
@@ -117,7 +117,7 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
         "http://127.0.0.1:8113/v1",
     )
     .await;
-    let agent = crate::DefraAgent::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_behavior_documents(
         node.clone(),
         identity,
         crate::agent::DocumentRuntimeOptions {
@@ -229,7 +229,7 @@ async fn control_watcher_recovers_after_resolve_error() {
         "http://127.0.0.1:8112/v1",
     )
     .await;
-    let agent = crate::DefraAgent::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_behavior_documents(
         node.clone(),
         identity,
         crate::agent::DocumentRuntimeOptions {
@@ -298,7 +298,7 @@ async fn control_watcher_resolves_tool_selection_into_reconciled_tool_surface() 
         "http://127.0.0.1:8113/v1",
     )
     .await;
-    let agent = crate::DefraAgent::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_behavior_documents(
         node.clone(),
         identity,
         crate::agent::DocumentRuntimeOptions {

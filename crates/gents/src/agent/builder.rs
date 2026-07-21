@@ -10,7 +10,7 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 
 use super::{
-    assemble_principal_and_behaviors, runtime, BehaviorBuildError, DefraAgent,
+    assemble_principal_and_behaviors, runtime, BehaviorBuildError, Gents,
     ProcessLifecycleObserver,
 };
 use crate::admission::BackendAdmissionConfig;
@@ -36,7 +36,7 @@ use crate::tool_surface::{
 const TEST_DEFAULT_BACKEND_ENDPOINT: &str = "http://localhost:8000/v1";
 
 #[derive(Default)]
-pub struct DefraAgentBuilder {
+pub struct GentsBuilder {
     node: Option<Arc<EmbeddedNode>>,
     identity: Option<Arc<dyn AgentIdentity>>,
     default_behavior_id: Option<String>,
@@ -53,7 +53,7 @@ pub struct DefraAgentBuilder {
     behaviors: Vec<PendingAgentBehavior>,
 }
 
-impl DefraAgentBuilder {
+impl GentsBuilder {
     pub fn new() -> Self {
         Self::default()
     }
@@ -128,15 +128,15 @@ impl DefraAgentBuilder {
         }
     }
 
-    pub async fn build(self) -> Result<DefraAgent> {
+    pub async fn build(self) -> Result<Gents> {
         let node = self
             .node
-            .ok_or_else(|| anyhow!("DefraAgent builder is missing node"))?;
+            .ok_or_else(|| anyhow!("Gents builder is missing node"))?;
         let identity = self
             .identity
-            .ok_or_else(|| anyhow!("DefraAgent builder is missing identity"))?;
+            .ok_or_else(|| anyhow!("Gents builder is missing identity"))?;
         if self.behaviors.is_empty() {
-            anyhow::bail!("DefraAgent builder requires at least one behavior");
+            anyhow::bail!("Gents builder requires at least one behavior");
         }
 
         let default_behavior_id = self
@@ -211,7 +211,7 @@ impl DefraAgentBuilder {
                 .then_with(|| left.behavior_id.cmp(&right.behavior_id))
         });
 
-        Ok(DefraAgent {
+        Ok(Gents {
             node,
             principal,
             behaviors,
@@ -238,7 +238,7 @@ impl DefraAgentBuilder {
 }
 
 pub struct BehaviorBuilder {
-    agent: DefraAgentBuilder,
+    agent: GentsBuilder,
     behavior: PendingAgentBehavior,
 }
 
@@ -403,7 +403,7 @@ impl BehaviorBuilder {
         self
     }
 
-    pub fn done(mut self) -> DefraAgentBuilder {
+    pub fn done(mut self) -> GentsBuilder {
         self.agent.behaviors.push(self.behavior);
         self.agent
     }
@@ -470,7 +470,7 @@ impl PendingAgentBehavior {
     /// factory closure that accepts `Arc<AgentPrincipal>` and produces
     /// the fully-built `AgentBehavior`.
     ///
-    /// This split lets `DefraAgentBuilder::build` collect all factory
+    /// This split lets `GentsBuilder::build` collect all factory
     /// closures before calling `assemble_principal_and_behaviors`, so
     /// that the single `Arc::new(AgentPrincipal { ... })` lives
     /// exclusively in the helper (the load-bearing site fenced by the

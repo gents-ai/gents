@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use defra_agent::graphql::escape_graphql_string;
+use gents::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
@@ -63,7 +63,7 @@ pub(super) async fn clear_stream_control_if_current(
 pub(super) fn cancel_abandoned_steering_request(state: &ShimState, request_id: String) {
     let node = state.node.clone();
     tokio::spawn(async move {
-        if let Err(error) = defra_agent::interrupt_request(node.as_ref(), &request_id).await {
+        if let Err(error) = gents::interrupt_request(node.as_ref(), &request_id).await {
             tracing::warn!(
                 %error,
                 request_id,
@@ -189,7 +189,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
         }),
     );
     let request_id = active.interrupt_request_id.clone();
-    if let Err(error) = defra_agent::interrupt_request(state.node.as_ref(), &request_id).await {
+    if let Err(error) = gents::interrupt_request(state.node.as_ref(), &request_id).await {
         trace::shim_event_fields(
             &state.trace_path,
             "turn_interrupt_latch_failed",
@@ -230,7 +230,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
     );
     for request_id in cleanup_request_ids {
         connection.take_steering_input(&request_id).await;
-        if let Err(error) = defra_agent::interrupt_request(state.node.as_ref(), &request_id).await {
+        if let Err(error) = gents::interrupt_request(state.node.as_ref(), &request_id).await {
             trace::shim_event_fields(
                 &state.trace_path,
                 "turn_interrupt_cleanup_latch_failed",

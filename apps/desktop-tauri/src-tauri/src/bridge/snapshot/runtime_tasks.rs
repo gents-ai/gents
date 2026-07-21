@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use defra_agent_desktop_core::client::{ClientStore, TaskRecentRuns};
-use defra_agent_protocol::row::AgentRequestRow;
+use gents_protocol::row::AgentRequestRow;
 
 use super::super::types::{
     normalize_optional, turn_state_label, ConversationSummary, EventTriggerView, ScheduleView,

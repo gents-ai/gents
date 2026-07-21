@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use defra_agent::{
+use gents::{
     AgentBehaviorDocument, BehaviorToolConfig, ToolCeiling, ToolPolicyVersion, ToolSelection,
     ToolSelectionDocument,
 };

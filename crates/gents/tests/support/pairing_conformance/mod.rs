@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-pub use defra_agent::agent::p2p_reconcile::{PairingApplied, PairingDesired};
+pub use gents::agent::p2p_reconcile::{PairingApplied, PairingDesired};
 
 pub mod invariants;
 pub mod runner;

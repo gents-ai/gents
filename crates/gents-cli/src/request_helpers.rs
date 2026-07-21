@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_agent::{graphql::escape_graphql_string, skills::prompt_slash_skill_selection};
-use defra_agent_protocol::transcript::present_persisted_message;
+use gents::{graphql::escape_graphql_string, skills::prompt_slash_skill_selection};
+use gents_protocol::transcript::present_persisted_message;
 use serde_json::Value;
 
 use crate::{optional_f64_field, optional_i64_field, post_graphql, require_non_empty};
@@ -602,7 +602,7 @@ pub(crate) async fn wait_for_terminal_response(
 
 pub(crate) fn request_diagnostic_hint(request_id: &str) -> String {
     format!(
-        "Next:\n  1. Run `defra-agent request show {request_id}`\n  2. Run `defra-agent response show {request_id}`\n  3. Inspect the runtime with `defra-agent status`"
+        "Next:\n  1. Run `gents request show {request_id}`\n  2. Run `gents response show {request_id}`\n  3. Inspect the runtime with `gents status`"
     )
 }
 

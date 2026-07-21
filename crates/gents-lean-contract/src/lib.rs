@@ -118,7 +118,7 @@ pub fn proofs_dir() -> Result<PathBuf> {
     }
 
     for ancestor in manifest_dir.ancestors() {
-        let candidate = ancestor.join("crates/defra-agent/proofs");
+        let candidate = ancestor.join("crates/gents/proofs");
         if candidate.join("lakefile.lean").exists() {
             return Ok(candidate);
         }
@@ -126,7 +126,7 @@ pub fn proofs_dir() -> Result<PathBuf> {
 
     let sibling = manifest_dir
         .parent()
-        .map(|parent| parent.join("defra-agent/proofs"));
+        .map(|parent| parent.join("gents/proofs"));
     if let Some(candidate) = sibling {
         if candidate.join("lakefile.lean").exists() {
             return Ok(candidate);
@@ -134,7 +134,7 @@ pub fn proofs_dir() -> Result<PathBuf> {
     }
 
     Err(anyhow!(
-        "could not locate crates/defra-agent/proofs from {}",
+        "could not locate crates/gents/proofs from {}",
         manifest_dir.display()
     ))
 }

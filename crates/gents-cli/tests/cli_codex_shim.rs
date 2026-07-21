@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use codex_app_server_protocol as codex;
-use defra_agent::subagent_target_entry;
+use gents::subagent_target_entry;
 use futures_util::{SinkExt, StreamExt};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -319,7 +319,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
             request_id: request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-test".to_string(),
+                    name: "gents-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -330,7 +330,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     .await?;
     let initialize: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
     assert!(
-        initialize.user_agent.starts_with("defra-agent-codex-shim/"),
+        initialize.user_agent.starts_with("gents-codex-shim/"),
         "unexpected initialize response: {initialize:?}"
     );
 
@@ -734,7 +734,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     );
     assert_eq!(
         turn_usage.model_context_window,
-        Some(defra_agent::DEFAULT_CONTEXT_WINDOW as i64),
+        Some(gents::DEFAULT_CONTEXT_WINDOW as i64),
         "context capacity should come from the bound DEFRA inference profile"
     );
 
@@ -1032,7 +1032,7 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
             request_id: request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-test".to_string(),
+                    name: "gents-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -1152,7 +1152,7 @@ async fn codex_shim_derives_git_info_and_persists_early_rename() -> Result<()> {
             request_id: request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-test".to_string(),
+                    name: "gents-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -1364,7 +1364,7 @@ async fn codex_shim_thread_list_excludes_non_codex_sessions() -> Result<()> {
             request_id: request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-test".to_string(),
+                    name: "gents-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -3459,7 +3459,7 @@ async fn codex_shim_live_three_prompt_regression_writes_codex_home_trace() -> Re
         (
             "repo overview",
             "hey codex! tell mea bout this repo",
-            &["defra-agent"],
+            &["gents"],
             "read_file",
         ),
         (
@@ -3617,10 +3617,10 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
     wait_for_port(shim_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    let expected_shim_home = home_dir.join(".defra-agent").join("codex-ui");
+    let expected_shim_home = home_dir.join(".gents").join("codex-ui");
     let (_stdout, stderr) = serve.captured_output()?;
     assert!(
-        stderr.contains("Chat from another terminal with: defra-agent codex"),
+        stderr.contains("Chat from another terminal with: gents codex"),
         "server guidance should point at the embedded codex subcommand; stderr:\n{stderr}"
     );
     assert!(
@@ -3649,7 +3649,7 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
             request_id: request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-test".to_string(),
+                    name: "gents-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -3930,9 +3930,9 @@ async fn start_live_codex_shim_with_write_tools(
     let graphql = graphql_url(server_port);
     let agent_name = format!("cli-codex-live-{}", Uuid::new_v4().simple());
     let tool_root_string = tool_root.map(|root| root.to_string_lossy().to_string());
-    let model_endpoint = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT")
+    let model_endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model_name = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME")
+    let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     let mut init_args = vec![
         "--agent-name",
@@ -3942,9 +3942,9 @@ async fn start_live_codex_shim_with_write_tools(
         "--inference-url",
         model_endpoint.as_str(),
     ];
-    if std::env::var_os("DEFRA_AGENT_CLI_E2E_API_KEY").is_some() {
+    if std::env::var_os("GENTS_CLI_E2E_API_KEY").is_some() {
         init_args.push("--api-key-env-var");
-        init_args.push("DEFRA_AGENT_CLI_E2E_API_KEY");
+        init_args.push("GENTS_CLI_E2E_API_KEY");
     }
     if write_tools {
         init_args.push("--write-tools");
@@ -3962,7 +3962,7 @@ async fn start_live_codex_shim_with_write_tools(
     let model_name = init_output_string(&init, "model_name")?;
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
-    let codex_home = home_dir.join(".defra-agent").join("codex-ui");
+    let codex_home = home_dir.join(".gents").join("codex-ui");
     let shim_trace = codex_home.join("log").join("codex-shim-events.jsonl");
     let mut server = spawn_server_with_env(
         &home_dir,
@@ -3978,7 +3978,7 @@ async fn start_live_codex_shim_with_write_tools(
         ],
         &[(
             "RUST_LOG",
-            "error,defra_agent_cli::commands::codex_shim=info",
+            "error,gents_cli::commands::codex_shim=info",
         )],
     )?;
     wait_for_port(server_port, &mut server)?;
@@ -4388,7 +4388,7 @@ async fn initialize_config_and_thread(
             request_id: request_id(101),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-live-test".to_string(),
+                    name: "gents-live-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -6243,7 +6243,7 @@ async fn codex_shim_model_list_enumerates_backend_models() -> Result<()> {
             request_id: request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-test".to_string(),
+                    name: "gents-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -6374,7 +6374,7 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
             request_id: request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-test".to_string(),
+                    name: "gents-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -6475,7 +6475,7 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
             request_id: request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-test".to_string(),
+                    name: "gents-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -6595,7 +6595,7 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
             request_id: request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-test".to_string(),
+                    name: "gents-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -6734,7 +6734,7 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
             request_id: request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-test".to_string(),
+                    name: "gents-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -6856,7 +6856,7 @@ async fn codex_shim_rejects_resume_with_mismatched_behavior() -> Result<()> {
             request_id: request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-test".to_string(),
+                    name: "gents-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -6978,7 +6978,7 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
             request_id: request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-test".to_string(),
+                    name: "gents-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -7140,7 +7140,7 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
             request_id: request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-test".to_string(),
+                    name: "gents-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -7285,7 +7285,7 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
             request_id: request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-test".to_string(),
+                    name: "gents-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -7429,7 +7429,7 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
             request_id: request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-test".to_string(),
+                    name: "gents-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -7582,7 +7582,7 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
             request_id: request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-test".to_string(),
+                    name: "gents-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },

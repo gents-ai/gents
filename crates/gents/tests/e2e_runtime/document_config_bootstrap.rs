@@ -1,5 +1,5 @@
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{
+use gents::graphql::escape_graphql_string;
+use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     ensure_agent_principal, list_agent_behaviors, load_agent_behavior, load_inference_profile,
     upsert_agent_behavior, upsert_inference_profile, AgentBehaviorDocument, InferenceProfile,
@@ -146,7 +146,7 @@ async fn profile_sampling_knobs_reach_the_behavior_and_provider_body() {
         .expect("load succeeds")
         .expect("profile exists");
 
-    let sampling = defra_agent::SamplingConfig {
+    let sampling = gents::SamplingConfig {
         temperature: profile.temperature,
         top_p: profile.top_p,
         top_k: profile.top_k,
@@ -271,7 +271,7 @@ async fn tool_service_registry_schema_does_not_expose_broken_tools_relation() {
 }
 
 async fn insert_principal(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
     default_behavior_id: &str,
 ) {
@@ -293,7 +293,7 @@ async fn insert_principal(
     assert!(!resp.has_errors(), "{:?}", resp.errors);
 }
 
-async fn insert_inference_profile(node: &defra_agent::defra_node::EmbeddedNode, profile_id: &str) {
+async fn insert_inference_profile(node: &gents::defra_node::EmbeddedNode, profile_id: &str) {
     let escaped_profile_id = escape_graphql_string(profile_id);
     let mutation = format!(
         r#"mutation {{

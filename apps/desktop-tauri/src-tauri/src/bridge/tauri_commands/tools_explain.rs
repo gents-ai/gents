@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use defra_agent::{BehaviorToolConfig, ToolCeiling, ToolPolicyVersion, ToolSelection};
+use gents::{BehaviorToolConfig, ToolCeiling, ToolPolicyVersion, ToolSelection};
 use defra_agent_desktop_core::local_runtime::default_agent_home;
 use serde_json::{json, Value};
 use tauri::State;
@@ -67,7 +67,7 @@ pub(crate) fn desktop_tool_surface_explain(
                     .iter()
                     .find(|row| row.selection_id == selection_id)
                     .ok_or_else(|| format!("referenced ToolSelection {selection_id} is missing"))?;
-                let document: defra_agent::ToolSelectionDocument = serde_json::to_value(row)
+                let document: gents::ToolSelectionDocument = serde_json::to_value(row)
                     .and_then(serde_json::from_value)
                     .map_err(|error| format!("decoding ToolSelection {selection_id}: {error}"))?;
                 let config = BehaviorToolConfig::from_tool_selection_document(

@@ -1,8 +1,8 @@
 //! PromptAssembly.Template conformance (issue #497).
 
-use defra_agent::template::catalog::{default_catalog, Volatility};
-use defra_agent::template::reads::{collect_system_reads, validate_system_template};
-use defra_agent::template::{render_template, TemplateScope};
+use gents::template::catalog::{default_catalog, Volatility};
+use gents::template::reads::{collect_system_reads, validate_system_template};
+use gents::template::{render_template, TemplateScope};
 
 fn scope(now: &str) -> TemplateScope {
     TemplateScope {

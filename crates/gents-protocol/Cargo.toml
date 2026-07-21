@@ -1,16 +1,16 @@
 [package]
-name = "defra-agent-protocol"
+name = "gents-protocol"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Shared schemas, client turn-observation protocol, and collection row mirrors for defra-agent"
+description = "Shared schemas, client turn-observation protocol, and collection row mirrors for gents"
 
 [dependencies]
 anyhow = { workspace = true }
 bs58 = "0.5"
 chrono = { workspace = true }
 ciborium = "0.2"
-defra-agent-schemas = { workspace = true }
+gents-schemas = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

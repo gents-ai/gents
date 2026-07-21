@@ -165,7 +165,7 @@ pub fn encode_pointer(p: &NetworkPointer) -> Result<String> {
 
 /// Decode a `NETWORK_POINTER_PREFIX`-prefixed pointer string.
 ///
-/// Returns an error (mentioning "re-issue with a newer defra-agent") for any
+/// Returns an error (mentioning "re-issue with a newer gents") for any
 /// pointer whose `v` field is not [`NETWORK_POINTER_VERSION`].
 pub fn decode_pointer(raw: &str) -> Result<NetworkPointer> {
     let encoded = raw
@@ -181,7 +181,7 @@ pub fn decode_pointer(raw: &str) -> Result<NetworkPointer> {
         NETWORK_POINTER_VERSION => Ok(p),
         v => anyhow::bail!(
             "network pointer version {v} is not supported; \
-             re-issue with a newer defra-agent"
+             re-issue with a newer gents"
         ),
     }
 }

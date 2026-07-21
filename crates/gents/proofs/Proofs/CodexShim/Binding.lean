@@ -10,7 +10,7 @@ exactly this kind of enablement on every published generation — that is the
 `dispatchers = runnable` clause of `ActiveRuntimeSnapshot.wellFormed`, which
 `RuntimeReconcile` re-establishes at each `publish`.
 
-The shim is a *second* consumer of that same conclusion, and defra-agent#699 is
+The shim is a *second* consumer of that same conclusion, and gents#699 is
 what happens when a subsystem is gated on `runnable` but never consumes it: the
 shim sampled the control documents once, at boot, on an empty store. The bound
 behavior did not exist yet, so the shim disabled itself permanently. A later

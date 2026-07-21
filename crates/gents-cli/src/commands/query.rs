@@ -1,13 +1,13 @@
-//! `defra-agent query` — a read-only structured query against a DefraDB
+//! `gents query` — a read-only structured query against a DefraDB
 //! collection, reusing the agent's `defra_query` core (filter rendering, the
 //! always-on secret-field guard, and collection scoping). Talks to a running
-//! node over GraphQL-over-HTTP, so it works while `defra-agent server` is up.
+//! node over GraphQL-over-HTTP, so it works while `gents server` is up.
 //!
 //! The shared [`run_defra_query`] helper also backs the MCP `defra_query` tool,
 //! so the CLI and MCP surfaces are guaranteed to behave identically.
 
 use anyhow::{Context, Result};
-use defra_agent::defra_query::{
+use gents::defra_query::{
     build_query, diagnose_failed_query, discovery_payload, introspection_query,
     parse_collection_schema, unknown_collection_message, CollectionSchema, CollectionScope,
     DefraQueryParams,

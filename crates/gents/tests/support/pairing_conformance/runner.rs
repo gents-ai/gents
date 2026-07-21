@@ -2,20 +2,20 @@
 //!
 //! Desired state is written through real embedded DefraDB nodes. The production
 //! supervisor and HTTP remote-admin implementation are covered in
-//! `defra-agent-desktop-core`; this harness keeps the TLA-style scenario IR
-//! executable from `defra-agent` without introducing a workspace dependency
+//! `gents-desktop-core`; this harness keeps the TLA-style scenario IR
+//! executable from `gents` without introducing a workspace dependency
 //! cycle back to desktop-core.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
 
 use anyhow::{bail, Result};
-use defra_agent::agent::p2p_reconcile::templates::{FilterPredicate, PairingFilters};
-use defra_agent::agent::p2p_reconcile::{
+use gents::agent::p2p_reconcile::templates::{FilterPredicate, PairingFilters};
+use gents::agent::p2p_reconcile::{
     compute_owned_pairing_diff, update_applied_after_success, DiffOp,
     PairingActual as RuntimePairingActual,
 };
-use defra_agent::graphql::escape_graphql_string;
+use gents::graphql::escape_graphql_string;
 use serde::Deserialize;
 
 use crate::support::{first_optional_row, test_db, TestDb};

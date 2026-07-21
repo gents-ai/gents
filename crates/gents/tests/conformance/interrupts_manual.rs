@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn fork_does_not_transition_parent_lifecycle_state() {
-    use defra_agent::session::{fork, ForkParams};
+    use gents::session::{fork, ForkParams};
     use support::{
         create_agent_behavior, create_agent_conversation, create_agent_message,
         create_agent_session,
@@ -499,10 +499,10 @@ async fn interrupt_request_is_idempotent() {
     let created_at = chrono::Utc::now().to_rfc3339();
     let _doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
 
-    defra_agent::interrupt_request(&db.node, &request_id)
+    gents::interrupt_request(&db.node, &request_id)
         .await
         .expect("first interrupt should succeed");
-    let after_first = defra_agent::fetch_interrupt_requested_at(&db.node, &request_id)
+    let after_first = gents::fetch_interrupt_requested_at(&db.node, &request_id)
         .await
         .expect("fetch after first interrupt");
     assert!(
@@ -513,10 +513,10 @@ async fn interrupt_request_is_idempotent() {
     // Sleep long enough that, without the idempotent latch, a second write
     // would produce a strictly later RFC3339 timestamp.
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    defra_agent::interrupt_request(&db.node, &request_id)
+    gents::interrupt_request(&db.node, &request_id)
         .await
         .expect("second interrupt should be a no-op");
-    let after_second = defra_agent::fetch_interrupt_requested_at(&db.node, &request_id)
+    let after_second = gents::fetch_interrupt_requested_at(&db.node, &request_id)
         .await
         .expect("fetch after second interrupt");
     assert_eq!(
@@ -534,7 +534,7 @@ async fn interrupt_request_errors_on_unknown_request_id() {
     // matched zero rows and return `Ok(())`, tricking the caller into
     // thinking a bogus id had been successfully latched.
     let db = test_db("interrupt-unknown").await;
-    let err = defra_agent::interrupt_request(&db.node, "bogus-id-that-does-not-exist").await;
+    let err = gents::interrupt_request(&db.node, "bogus-id-that-does-not-exist").await;
     assert!(
         err.is_err(),
         "interrupting unknown request_id must error, got Ok"
@@ -645,7 +645,7 @@ async fn valid_until_cached_at_claim_ignores_post_claim_extension() {
 #[tokio::test]
 async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
     // Per S7 (`interrupt_monotonicity`) in
-    // `crates/defra-agent/proofs/Proofs/Properties/Safety.lean`: once
+    // `crates/gents/proofs/Proofs/Properties/Safety.lean`: once
     // `interruptRequestedAt.isSome`, no `RequestContext.Transition` rewrites
     // it. The Rust mutations must preserve this latch across every lifecycle
     // transition that touches the row.
@@ -746,7 +746,7 @@ async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
 #[tokio::test]
 async fn s8_valid_until_never_rewritten_by_transitions() {
     // Per S8 (`valid_until_monotonicity`) in
-    // `crates/defra-agent/proofs/Proofs/Properties/Safety.lean`: no
+    // `crates/gents/proofs/Proofs/Properties/Safety.lean`: no
     // `RequestContext.Transition` rewrites `validUntil` (unconditional). Run a
     // full claim + begin_execution + transition_to_interrupted sequence and
     // assert `valid_until` is unchanged after each persisted transition.
@@ -809,7 +809,7 @@ async fn s8_valid_until_never_rewritten_by_transitions() {
 #[tokio::test]
 async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
     // Per S1 (`terminal_irreversibility`) in
-    // `crates/defra-agent/proofs/Proofs/Properties/Safety.lean`: no transition
+    // `crates/gents/proofs/Proofs/Properties/Safety.lean`: no transition
     // leaves `.interrupted` for a non-terminal state. Transition a claimed
     // request to interrupted, then attempt subsequent transitions and assert
     // the DB row stays `interrupted` regardless of whether the Rust method
@@ -957,12 +957,12 @@ async fn ordering_response_interrupted_at_before_request_lifecycle_flip() {
 
 #[test]
 fn conformance_mapping_all_9_lifecycle_states_round_trip() {
-    // Per `Proofs/Conformance/DefraAgent.lean::toIdeal`, every
+    // Per `Proofs/Conformance/Gents.lean::toIdeal`, every
     // `DefraLifecycleState` maps to a specific `RequestState`. The Rust
-    // `RequestLifecycleState` enum in `defra-agent-protocol::client_protocol`
+    // `RequestLifecycleState` enum in `gents-protocol::client_protocol`
     // mirrors the Lean-generated RequestState vocabulary. Assert every Lean
     // string form parses and round-trips, and that unknown strings reject.
-    use defra_agent_protocol::client_protocol::RequestLifecycleState;
+    use gents_protocol::client_protocol::RequestLifecycleState;
 
     let lean_states = lean_vocabulary_values("RequestState");
     assert_eq!(
@@ -999,7 +999,7 @@ fn conformance_interrupted_lifecycle_maps_to_interrupted_client_turn() {
     // the Rust projection in sync with `Proofs/Client.lean::deriveAttempt`,
     // which now maps `.interrupted => .interrupted` rather than conflating
     // it with `.failed`.
-    use defra_agent_protocol::client_protocol::{
+    use gents_protocol::client_protocol::{
         derive_attempt, AttemptView, ClientTurnState, RequestLifecycleState, RequestSnapshot,
     };
 

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use anyhow::{anyhow, Result};
-use defra_agent_protocol::schemas::{
+use gents_protocol::schemas::{
     ALL_COLLECTION_NAMES, INFERENCE_CALL_NAME, RUNTIME_COLLECTION_NAMES,
 };
 use defra_node::EmbeddedNode;
@@ -68,7 +68,7 @@ impl CollectionResolver {
 mod tests {
     use super::*;
     use crate::client::schema::ensure_runtime_schemas;
-    use defra_agent_protocol::schemas::{
+    use gents_protocol::schemas::{
         AGENT_MESSAGE_NAME, INFERENCE_BACKEND_NAME, INFERENCE_CALL_NAME,
     };
     use defra_node::NodeBuilder;

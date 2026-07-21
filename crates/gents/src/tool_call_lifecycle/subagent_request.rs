@@ -2,7 +2,7 @@
 //!
 //! Public API surface consumed by R3's `SubagentSource` and by Bucket 3
 //! conformance fixtures (Task 26). Mirrors R1's existing AgentRequest
-//! creation flow in `crates/defra-agent/src/lifecycle/materialize.rs`,
+//! creation flow in `crates/gents/src/lifecycle/materialize.rs`,
 //! with the addition of subagent parent-linkage fields and the depth
 //! cap enforced by Lean's `Subagent.maxSubagentDepth`.
 
@@ -19,7 +19,7 @@ use super::IllegalToolCallTransition;
 
 /// The configured cap on subagent recursion depth. Matches Lean's
 /// `Subagent.maxSubagentDepth = 3` (see
-/// `crates/defra-agent/proofs/Proofs/Background/State.lean`). Exposed as
+/// `crates/gents/proofs/Proofs/Background/State.lean`). Exposed as
 /// part of R2's public API surface so R3's apply-time spawn-flow
 /// validation can reference the same value as the Lean spec.
 pub const MAX_SUBAGENT_DEPTH: u32 = 3;

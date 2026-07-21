@@ -22,7 +22,7 @@ use crate::http::self_view::{load_self_view, ContextBudget, SelfBehavior};
 use crate::http::sessions::{load_session_history_snapshot, SessionHistoryParams};
 use crate::http::version::version_response;
 use crate::shared::P2pAdmissionState;
-use defra_agent::defra_query::CollectionScope;
+use gents::defra_query::CollectionScope;
 
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 /// Hard budget for the multi-hop P2P self-fetch on the scrape path. Must stay
@@ -41,7 +41,7 @@ pub(crate) struct RuntimeHttpState {
     /// command shares the same handle the prober writes, so the metrics
     /// endpoint reports measurement, not the stored document constant.
     /// `None` when the HTTP surface runs without an in-process runtime.
-    pub(crate) backend_health: Option<defra_agent::BackendHealthMap>,
+    pub(crate) backend_health: Option<gents::BackendHealthMap>,
     /// P2P admission knobs resolved at serve start (`None` when P2P disabled).
     pub(crate) p2p_admission: Option<P2pAdmissionState>,
     /// Last successful live P2P snapshot for non-blocking `/metrics` scrapes.
@@ -64,7 +64,7 @@ pub(crate) fn runtime_contract_router(
     // `None` leaves it off. It is opt-in because it is an unauthenticated read
     // surface (same listener exposure as the GraphQL endpoint).
     defra_query_mcp_scope: Option<CollectionScope>,
-    backend_health: Option<defra_agent::BackendHealthMap>,
+    backend_health: Option<gents::BackendHealthMap>,
     p2p_admission: Option<P2pAdmissionState>,
     codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
 ) -> Router {
@@ -247,8 +247,8 @@ fn p2p_metrics_from_status(
         .get("p2p_sync_status")
         .filter(|value| !value.is_null())
         .and_then(|value| {
-            use defra_agent::P2pSyncStatusAdapter;
-            defra_agent::JsonP2pSyncStatusAdapter.adapt(value).ok()
+            use gents::P2pSyncStatusAdapter;
+            gents::JsonP2pSyncStatusAdapter.adapt(value).ok()
         });
     P2pMetricsSnapshot {
         enabled,
@@ -279,7 +279,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             json!({
                 "status": health.get("status").cloned().unwrap_or(Value::String("unknown".to_string())),
                 "ok": health.get("ok").cloned().unwrap_or(Value::Bool(false)),
-                "service": "defra-agent",
+                "service": "gents",
                 "version": version_response().version,
                 "started_at": state.started_at,
                 "uptime_seconds": state.started_instant.elapsed().as_secs(),
@@ -296,7 +296,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
         Err(error) => json!({
             "status": "unhealthy",
             "ok": false,
-            "service": "defra-agent",
+            "service": "gents",
             "version": version_response().version,
             "started_at": state.started_at,
             "uptime_seconds": state.started_instant.elapsed().as_secs(),
@@ -374,7 +374,7 @@ async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
             let mut body = json!({
                 "status": "unhealthy",
                 "ok": false,
-                "service": "defra-agent",
+                "service": "gents",
                 "version": version_response().version,
                 "started_at": state.started_at,
                 "uptime_seconds": state.started_instant.elapsed().as_secs(),
@@ -435,7 +435,7 @@ fn render_self_payload(
     json!({
         "status": health.get("status").cloned().unwrap_or(Value::String("unknown".to_string())),
         "ok": health.get("ok").cloned().unwrap_or(Value::Bool(false)),
-        "service": "defra-agent",
+        "service": "gents",
         "version": version_response().version,
         "started_at": &state.started_at,
         "uptime_seconds": state.started_instant.elapsed().as_secs(),

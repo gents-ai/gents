@@ -16,15 +16,15 @@ fn top_level_help_shows_quickstart_workflow() -> Result<()> {
         "expected quick start section in help output, got:\n{output}"
     );
     assert!(
-        output.contains("defra-agent init"),
+        output.contains("gents init"),
         "expected init example in help output, got:\n{output}"
     );
     assert!(
-        output.contains("defra-agent server"),
+        output.contains("gents server"),
         "expected server example in help output, got:\n{output}"
     );
     assert!(
-        output.contains("defra-agent chat"),
+        output.contains("gents chat"),
         "expected chat example in help output, got:\n{output}"
     );
 
@@ -41,15 +41,15 @@ fn status_without_runtime_suggests_init_and_server() -> Result<()> {
 
     let stderr = run_cli_failure_stderr(&home_dir, &["status", "--graphql", &graphql])?;
     assert!(
-        stderr.contains("defra-agent init"),
+        stderr.contains("gents init"),
         "expected init suggestion in stderr, got:\n{stderr}"
     );
     assert!(
-        stderr.contains("defra-agent server"),
+        stderr.contains("gents server"),
         "expected server suggestion in stderr, got:\n{stderr}"
     );
     assert!(
-        stderr.contains("defra-agent status"),
+        stderr.contains("gents status"),
         "expected status suggestion in stderr, got:\n{stderr}"
     );
 

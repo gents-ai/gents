@@ -23,10 +23,10 @@
 //! Normal test runs compile this file but skip the live test. To run:
 //!
 //! ```bash
-//! DEFRA_AGENT_LIVE_OPENAI=1 \
-//! DEFRA_AGENT_LIVE_OPENAI_ENDPOINT="http://host:8000/v1" \
-//! DEFRA_AGENT_LIVE_OPENAI_MODEL="model-name" \
-//!   cargo test -p defra-agent-cli --test cli_fleet_delegation_live -- --ignored --nocapture
+//! GENTS_LIVE_OPENAI=1 \
+//! GENTS_LIVE_OPENAI_ENDPOINT="http://host:8000/v1" \
+//! GENTS_LIVE_OPENAI_MODEL="model-name" \
+//!   cargo test -p gents-cli --test cli_fleet_delegation_live -- --ignored --nocapture
 //! ```
 //!
 //! The release acceptance composes the same primitives into a 19-fresh-store
@@ -37,10 +37,10 @@
 //! intentionally expensive:
 //!
 //! ```bash
-//! DEFRA_AGENT_RELEASE_ACCEPTANCE=1 \
-//! DEFRA_AGENT_LIVE_OPENAI_ENDPOINT="http://host:8000/v1" \
-//! DEFRA_AGENT_LIVE_OPENAI_MODEL="model-name" \
-//!   cargo test -p defra-agent-cli --test cli_fleet_delegation_live \
+//! GENTS_RELEASE_ACCEPTANCE=1 \
+//! GENTS_LIVE_OPENAI_ENDPOINT="http://host:8000/v1" \
+//! GENTS_LIVE_OPENAI_MODEL="model-name" \
+//!   cargo test -p gents-cli --test cli_fleet_delegation_live \
 //!     nineteen_process_release_acceptance_live -- --ignored --nocapture
 //! ```
 //!
@@ -59,13 +59,13 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use codex_app_server_protocol as codex;
-use defra_agent::{
+use gents::{
     subagent_target_entry, JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter, P2pSyncStatusSnapshot,
 };
-use defra_agent_protocol::message::{
+use gents_protocol::message::{
     AssistantContent, Message as ProtocolMessage, ToolResultContent, UserContent,
 };
-use defra_agent_protocol::transcript::decode_persisted_message;
+use gents_protocol::transcript::decode_persisted_message;
 use futures_util::{SinkExt, StreamExt};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -88,14 +88,14 @@ const P2P_LOOPBACK_ARGS: &[&str] = &[
 ];
 
 const FAST_RECONCILE_ENVS: &[(&str, &str)] = &[
-    ("DEFRA_AGENT_REGISTRY_HEARTBEAT_MS", "1000"),
-    ("DEFRA_AGENT_PAIRING_SWEEP_MS", "1000"),
-    ("DEFRA_AGENT_REGISTRY_STALE_MS", "300000"),
-    ("DEFRA_AGENT_ENDPOINT_HEARTBEAT_MS", "1000"),
+    ("GENTS_REGISTRY_HEARTBEAT_MS", "1000"),
+    ("GENTS_PAIRING_SWEEP_MS", "1000"),
+    ("GENTS_REGISTRY_STALE_MS", "300000"),
+    ("GENTS_ENDPOINT_HEARTBEAT_MS", "1000"),
     // Reconcile-level tracing aids triage when dump_fleet_logs fires on a
     // convergence timeout, without transport noise (the daemon mutes iroh/p2p to
     // warn regardless via with_default_transport_noise_filters).
-    ("RUST_LOG", "warn,defra_agent::agent::p2p_reconcile=debug"),
+    ("RUST_LOG", "warn,gents::agent::p2p_reconcile=debug"),
 ];
 
 const CONVERSATION_COLLECTIONS: &[&str] = &[
@@ -215,30 +215,30 @@ struct TranscriptToolExchange {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "live: set DEFRA_AGENT_LIVE_OPENAI=1 and pass --ignored"]
+#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
 async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
-    if std::env::var("DEFRA_AGENT_LIVE_OPENAI").as_deref() != Ok("1") {
-        tracing::info!("DEFRA_AGENT_LIVE_OPENAI != 1; skipping fleet live e2e");
+    if std::env::var("GENTS_LIVE_OPENAI").as_deref() != Ok("1") {
+        tracing::info!("GENTS_LIVE_OPENAI != 1; skipping fleet live e2e");
         return Ok(());
     }
 
-    let endpoint = std::env::var("DEFRA_AGENT_LIVE_OPENAI_ENDPOINT")
-        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT"))
+    let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
+        .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT"))
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model = std::env::var("DEFRA_AGENT_LIVE_OPENAI_MODEL")
-        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME"))
+    let model = std::env::var("GENTS_LIVE_OPENAI_MODEL")
+        .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_NAME"))
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     assert_endpoint_reachable(&endpoint).await?;
 
     // Fleet size is env-overridable for substrate diagnostics (default 5 = the
-    // full delegation fleet). DEFRA_AGENT_FLEET_SUBSTRATE_ONLY=1 returns right
+    // full delegation fleet). GENTS_FLEET_SUBSTRATE_ONLY=1 returns right
     // after the pairing convergence checkpoint, skipping inference — used to
     // bisect the reconciler/transport substrate independent of the model.
-    let fleet_size: usize = std::env::var("DEFRA_AGENT_FLEET_SIZE")
+    let fleet_size: usize = std::env::var("GENTS_FLEET_SIZE")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(5);
-    let substrate_only = std::env::var("DEFRA_AGENT_FLEET_SUBSTRATE_ONLY").as_deref() == Ok("1");
+    let substrate_only = std::env::var("GENTS_FLEET_SUBSTRATE_ONLY").as_deref() == Ok("1");
 
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let fleet = bring_up_fleet(tempdir.path(), fleet_size, &endpoint, &model, true).await?;
@@ -283,7 +283,7 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
         tracing::info!(
             fleet_size,
             "reconciler-driven pairing converged on all edges; \
-             DEFRA_AGENT_FLEET_SUBSTRATE_ONLY=1 set, skipping delegation"
+             GENTS_FLEET_SUBSTRATE_ONLY=1 set, skipping delegation"
         );
         drop(fleet);
         return Ok(());
@@ -392,18 +392,18 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "known failing: fresh-store 19-node mesh storm tracked in #798"]
 async fn nineteen_process_release_acceptance_live() -> Result<()> {
-    if std::env::var("DEFRA_AGENT_RELEASE_ACCEPTANCE").as_deref() != Ok("1") {
+    if std::env::var("GENTS_RELEASE_ACCEPTANCE").as_deref() != Ok("1") {
         tracing::info!(
-            "DEFRA_AGENT_RELEASE_ACCEPTANCE != 1; skipping 19-process release acceptance"
+            "GENTS_RELEASE_ACCEPTANCE != 1; skipping 19-process release acceptance"
         );
         return Ok(());
     }
 
-    let endpoint = std::env::var("DEFRA_AGENT_LIVE_OPENAI_ENDPOINT")
-        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT"))
+    let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
+        .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT"))
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model = std::env::var("DEFRA_AGENT_LIVE_OPENAI_MODEL")
-        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME"))
+    let model = std::env::var("GENTS_LIVE_OPENAI_MODEL")
+        .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_NAME"))
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     assert_endpoint_reachable(&endpoint).await?;
 
@@ -1313,7 +1313,7 @@ async fn fetch_transcript_tool_exchanges(
 
 fn transcript_tool_result_matches(
     exchange: &TranscriptToolExchange,
-    result: &defra_agent_protocol::message::ToolResult,
+    result: &gents_protocol::message::ToolResult,
 ) -> bool {
     exchange.id == result.id
         || exchange.call_id.as_deref() == Some(result.id.as_str())
@@ -1374,7 +1374,7 @@ async fn fleet_connect_and_initialize_codex(port: u16) -> Result<FleetShimWebSoc
             request_id: fleet_request_id(1),
             params: codex::InitializeParams {
                 client_info: codex::ClientInfo {
-                    name: "defra-agent-fleet-live-test".to_string(),
+                    name: "gents-fleet-live-test".to_string(),
                     title: None,
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
@@ -1910,7 +1910,7 @@ fn fleet_server_notification(
 // A PASS also depends on the configured LLM emitting one fan_out_and_synthesize
 // call with four distinct-target tasks + substantive answers; off-shape output
 // fails FAST (not a 360s hang) but a model swap can require prompt re-tuning.
-// Validated against DeepSeek-V4-Flash (DEFRA_AGENT_LIVE_OPENAI_MODEL=d4f).
+// Validated against DeepSeek-V4-Flash (GENTS_LIVE_OPENAI_MODEL=d4f).
 
 const WORKFLOW_COORDINATOR_PROMPT: &str = r#"You are a fleet workflow orchestrator. You have a workflow tool named `fan_out_and_synthesize` and five subagent targets: four remote researchers (researcher-1, researcher-2, researcher-3, researcher-4) and one local target named `synthesizer`. For any fleet request you MUST make exactly one call to `fan_out_and_synthesize` and call no other tool and do not answer directly. Set the top-level `target` to "researcher-1". Provide exactly four tasks and set each task's `target` to researcher-1, researcher-2, researcher-3, and researcher-4 respectively (one task per researcher). Set `synthesis_target` to "synthesizer". Set `synthesis_prompt` to an instruction asking the synthesizer to combine the four researchers' findings into one short paragraph."#;
 
@@ -1960,17 +1960,17 @@ fn is_workflow_terminal(state: Option<&str>) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "live: set DEFRA_AGENT_LIVE_OPENAI=1 and pass --ignored"]
+#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
 async fn five_process_workflow_orchestration_live() -> Result<()> {
-    if std::env::var("DEFRA_AGENT_LIVE_OPENAI").as_deref() != Ok("1") {
-        tracing::info!("DEFRA_AGENT_LIVE_OPENAI != 1; skipping fleet workflow e2e");
+    if std::env::var("GENTS_LIVE_OPENAI").as_deref() != Ok("1") {
+        tracing::info!("GENTS_LIVE_OPENAI != 1; skipping fleet workflow e2e");
         return Ok(());
     }
-    let endpoint = std::env::var("DEFRA_AGENT_LIVE_OPENAI_ENDPOINT")
-        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT"))
+    let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
+        .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT"))
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model = std::env::var("DEFRA_AGENT_LIVE_OPENAI_MODEL")
-        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME"))
+    let model = std::env::var("GENTS_LIVE_OPENAI_MODEL")
+        .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_NAME"))
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     assert_endpoint_reachable(&endpoint).await?;
 
@@ -2708,17 +2708,17 @@ async fn assert_child_materialized_nowhere(
 // researcher (synthesize over the survivors, parent still completes).
 // ---------------------------------------------------------------------------
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "live: set DEFRA_AGENT_LIVE_OPENAI=1 and pass --ignored"]
+#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
 async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
-    if std::env::var("DEFRA_AGENT_LIVE_OPENAI").as_deref() != Ok("1") {
-        tracing::info!("DEFRA_AGENT_LIVE_OPENAI != 1; skipping fleet workflow D10 e2e");
+    if std::env::var("GENTS_LIVE_OPENAI").as_deref() != Ok("1") {
+        tracing::info!("GENTS_LIVE_OPENAI != 1; skipping fleet workflow D10 e2e");
         return Ok(());
     }
-    let endpoint = std::env::var("DEFRA_AGENT_LIVE_OPENAI_ENDPOINT")
-        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT"))
+    let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
+        .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT"))
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model = std::env::var("DEFRA_AGENT_LIVE_OPENAI_MODEL")
-        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME"))
+    let model = std::env::var("GENTS_LIVE_OPENAI_MODEL")
+        .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_NAME"))
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     assert_endpoint_reachable(&endpoint).await?;
 
@@ -2940,19 +2940,19 @@ async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
 // bridge_failure), distinct from the unclaimed-dead path above.
 // ---------------------------------------------------------------------------
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "live: set DEFRA_AGENT_LIVE_OPENAI=1 and pass --ignored"]
+#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
 async fn five_process_workflow_d10_materialized_failure_live() -> Result<()> {
-    if std::env::var("DEFRA_AGENT_LIVE_OPENAI").as_deref() != Ok("1") {
+    if std::env::var("GENTS_LIVE_OPENAI").as_deref() != Ok("1") {
         tracing::info!(
-            "DEFRA_AGENT_LIVE_OPENAI != 1; skipping fleet workflow D10 materialized e2e"
+            "GENTS_LIVE_OPENAI != 1; skipping fleet workflow D10 materialized e2e"
         );
         return Ok(());
     }
-    let endpoint = std::env::var("DEFRA_AGENT_LIVE_OPENAI_ENDPOINT")
-        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT"))
+    let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
+        .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT"))
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model = std::env::var("DEFRA_AGENT_LIVE_OPENAI_MODEL")
-        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME"))
+    let model = std::env::var("GENTS_LIVE_OPENAI_MODEL")
+        .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_NAME"))
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     assert_endpoint_reachable(&endpoint).await?;
 
@@ -3170,17 +3170,17 @@ async fn five_process_workflow_d10_materialized_failure_live() -> Result<()> {
 // failure class (not the generic `external`).
 // ---------------------------------------------------------------------------
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "live: set DEFRA_AGENT_LIVE_OPENAI=1 and pass --ignored"]
+#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
 async fn five_process_workflow_synthesizer_deleted_midrun_live() -> Result<()> {
-    if std::env::var("DEFRA_AGENT_LIVE_OPENAI").as_deref() != Ok("1") {
-        tracing::info!("DEFRA_AGENT_LIVE_OPENAI != 1; skipping fleet workflow mid-run-delete e2e");
+    if std::env::var("GENTS_LIVE_OPENAI").as_deref() != Ok("1") {
+        tracing::info!("GENTS_LIVE_OPENAI != 1; skipping fleet workflow mid-run-delete e2e");
         return Ok(());
     }
-    let endpoint = std::env::var("DEFRA_AGENT_LIVE_OPENAI_ENDPOINT")
-        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT"))
+    let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
+        .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT"))
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model = std::env::var("DEFRA_AGENT_LIVE_OPENAI_MODEL")
-        .or_else(|_| std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME"))
+    let model = std::env::var("GENTS_LIVE_OPENAI_MODEL")
+        .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_NAME"))
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     assert_endpoint_reachable(&endpoint).await?;
 

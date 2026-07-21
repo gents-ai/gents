@@ -47,7 +47,7 @@ fn tool_call_transitions_match_lean_contract() {
 
 #[test]
 pub(super) fn lean_emits_await_mode_vocabulary() {
-    use defra_agent::tool_call_lifecycle::AwaitMode;
+    use gents::tool_call_lifecycle::AwaitMode;
 
     let machine = lean_state_machine_contract("AwaitMode");
     let mut rust_vocab: Vec<String> = AwaitMode::ALL
@@ -65,7 +65,7 @@ pub(super) fn lean_emits_await_mode_vocabulary() {
 
 #[test]
 pub(super) fn lean_emits_cancel_policy_vocabulary() {
-    use defra_agent::tool_call_lifecycle::CancelPolicy;
+    use gents::tool_call_lifecycle::CancelPolicy;
 
     let machine = lean_state_machine_contract("CancelPolicy");
     let mut rust_vocab: Vec<String> = CancelPolicy::ALL
@@ -83,7 +83,7 @@ pub(super) fn lean_emits_cancel_policy_vocabulary() {
 
 #[test]
 pub(super) fn lean_emits_child_terminal_vocabulary_and_projections() {
-    use defra_agent::tool_call_lifecycle::ChildTerminal;
+    use gents::tool_call_lifecycle::ChildTerminal;
 
     let machine = lean_state_machine_contract("ChildTerminal");
 
@@ -108,7 +108,7 @@ pub(super) fn lean_emits_child_terminal_vocabulary_and_projections() {
     // `tool_call_lifecycle.rs`; here we lock in that the *Lean* contract
     // emits exactly that table. (We can't call `projected_state` from this
     // integration test because its return type `ToolCallState` is
-    // `pub(crate)` to defra-agent.)
+    // `pub(crate)` to gents.)
     for t in &machine.named_transitions {
         let expected = match t.from.as_str() {
             "interrupted" => "cancelled",

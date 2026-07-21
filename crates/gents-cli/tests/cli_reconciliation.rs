@@ -29,7 +29,7 @@ async fn runtime_state_reset_is_explicit() -> Result<()> {
         ],
     )?;
 
-    let runtime_home = home_dir.join(".defra-agent");
+    let runtime_home = home_dir.join(".gents");
     let runtime_state = runtime_home.join("runtime.json");
     fs::write(&runtime_state, r#"{"status":"stale"}"#).context("writing stale runtime state")?;
 

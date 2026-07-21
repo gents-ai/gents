@@ -111,7 +111,7 @@ pub use adapter_projection::{
 pub use admission::BackendAdmissionConfig;
 pub use admission::{InferenceCall, InferenceCallRecoveryReport};
 pub use agent::{
-    BehaviorBuilder, DefraAgent, DefraAgentBuilder, DocumentRuntimeOptions,
+    BehaviorBuilder, Gents, GentsBuilder, DocumentRuntimeOptions,
     ProcessLifecycleObserver, ProcessLifecycleState, RuntimeSnapshotObserver,
 };
 pub use backend_health::{
@@ -126,7 +126,7 @@ pub use config::{
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
     DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
-pub use defra_agent_protocol::client_protocol;
+pub use gents_protocol::client_protocol;
 pub use defra_node;
 pub use desired_fields::{DesiredFields, LiveFields};
 pub use document_config::{

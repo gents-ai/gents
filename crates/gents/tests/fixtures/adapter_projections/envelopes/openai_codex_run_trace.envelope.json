@@ -28,7 +28,7 @@
           "child_run_id": "req-codex-child-1",
           "id": "call-shell-1",
           "name": "shell",
-          "output": "crates/defra-agent/src/adapter_projection.rs",
+          "output": "crates/gents/src/adapter_projection.rs",
           "request_id": "req-codex-1",
           "started_at": "2026-06-05T17:00:02Z",
           "status": "completed",
@@ -52,7 +52,7 @@
   "projection_version": "v1",
   "provenance": {
     "actor_did": "did:defra-agent:fixture-reader",
-    "runtime": "defra-agent",
+    "runtime": "gents",
     "source_projection_id": "run_timeline",
     "source_projection_version": "v1"
   },

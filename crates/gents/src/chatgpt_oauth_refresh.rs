@@ -111,7 +111,7 @@ pub async fn refresh_chatgpt_token(
 /// The signature is NOT verified: trust derives from the TLS-protected token endpoint these tokens
 /// arrive from, per OIDC §3.1.3.7's allowance for tokens received directly over a secure channel.
 /// The claims are used only to populate request headers sent back to OpenAI and to estimate expiry;
-/// they are not an authorization boundary inside defra-agent. If a claim ever gates a security
+/// they are not an authorization boundary inside gents. If a claim ever gates a security
 /// decision, verify the signature against OpenAI's JWKS first.
 pub fn decode_id_token_claims(id_token: &str) -> IdTokenClaims {
     let Some(payload) = jwt_payload(id_token) else {

@@ -1,7 +1,7 @@
 //! Typed discriminator for the set of operator-controlled collections.
 //!
 //! Mirrors the Lean inductive `ApplyReconcile.Collection` in
-//! `crates/defra-agent/proofs/Proofs/ApplyReconcile.lean`. Any change
+//! `crates/gents/proofs/Proofs/ApplyReconcile.lean`. Any change
 //! to the set of variants, their GraphQL names, or their apply-order
 //! ranks must be reflected in the Lean module.
 
@@ -204,7 +204,7 @@ mod tests {
         // This list is the Rust side of the parity contract. The Lean
         // inductive `ApplyReconcile.Collection` and the
         // `ApplyReconcile.Collection.applyOrder` function in
-        // crates/defra-agent/proofs/Proofs/ApplyReconcile.lean must
+        // crates/gents/proofs/Proofs/ApplyReconcile.lean must
         // match this sequence exactly. When you add a variant here, you
         // MUST also:
         //

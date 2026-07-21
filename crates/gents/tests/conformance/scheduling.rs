@@ -9,7 +9,7 @@
 //! in-crate test `trigger_engine_materializes_agent_request_for_due_schedule_e2e`
 //! in `src/trigger_engine/tests.rs`, which can drive the engine directly
 //! because the engine types are `pub(crate)`. From outside the crate we
-//! would need to spin up a full `DefraAgent::run` to exercise the engine
+//! would need to spin up a full `Gents::run` to exercise the engine
 //! loop, which significantly slows the conformance suite without adding
 //! signal; instead, the tests here pin the **persistence-layer contract**
 //! that the engine ultimately produces:
@@ -54,7 +54,7 @@
 //! parallel bypass of in-flight gates without relying on the control watcher's
 //! debounce or the schedule source tick as the only correctness oracle.
 //!
-//! This file still boots `DefraAgent::run` only where the observable under
+//! This file still boots `Gents::run` only where the observable under
 //! test is operational reconfiguration (`active_generation` bumps). The other
 //! cases pin the persistence-layer contract the engine delegates to: DefraDB
 //! materialization lineage, active runtime gating queries, supersede mutations,
@@ -64,9 +64,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
-use defra_agent::{AgentIdentity, DefraAgent, DocumentRuntimeOptions, KeyIdentity, ToolCeiling};
+use gents::graphql::escape_graphql_string;
+use gents::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
+use gents::{AgentIdentity, Gents, DocumentRuntimeOptions, KeyIdentity, ToolCeiling};
 use serde_json::Value;
 
 use crate::support::fixtures::bind_default_behavior_backend;
@@ -84,7 +84,7 @@ fn test_identity(name: &str) -> KeyIdentity {
 // -----------------------------------------------------------------------------
 
 async fn create_task(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     task_id: &str,
     behavior_id: &str,
     prompt_template: &str,
@@ -110,7 +110,7 @@ async fn create_task(
 
 #[allow(clippy::too_many_arguments)]
 async fn create_schedule(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     schedule_id: &str,
     task_id: &str,
     interval_secs: i64,
@@ -145,7 +145,7 @@ async fn create_schedule(
 }
 
 async fn set_schedule_enabled(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     schedule_id: &str,
     enabled: bool,
 ) {
@@ -172,7 +172,7 @@ async fn set_schedule_enabled(
 /// 1. Apply-owned fields (`enabled`, `interval_secs`, `task_id`,
 ///    `concurrency`) must NOT be touched.
 async fn schedule_writeback_fired(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     schedule_id: &str,
     advanced_next_run_at: &str,
     last_attempt_at: &str,
@@ -205,7 +205,7 @@ async fn schedule_writeback_fired(
 /// Mirrors the runtime writeback path on `Skipped`: advance `next_run_at`,
 /// set `last_status = "skipped"`, do NOT bump `fire_count`.
 async fn schedule_writeback_skipped(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     schedule_id: &str,
     advanced_next_run_at: &str,
     last_attempt_at: &str,
@@ -246,7 +246,7 @@ async fn schedule_writeback_skipped(
 /// Fired/Skipped, leave alone on Errored — is still pinned because we pass
 /// the same `next_run_at` value the Schedule already has.
 async fn schedule_writeback_errored(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     schedule_id: &str,
     preserved_next_run_at: &str,
     last_attempt_at: &str,
@@ -290,7 +290,7 @@ struct ScheduleRow {
 }
 
 async fn fetch_schedule_row(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     schedule_id: &str,
 ) -> Option<ScheduleRow> {
     let escaped_schedule_id = escape_graphql_string(schedule_id);
@@ -360,7 +360,7 @@ async fn fetch_schedule_row(
 /// rule: claimed/processing rows whose persisted claim `deadline` is more than
 /// the grace past are terminal-in-effect and do not gate (#605).
 async fn has_active_runtime_request_for_trigger(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
     trigger_id: &str,
     trigger_kind: &str,
@@ -425,7 +425,7 @@ fn row_gates_serial_fire(row: &Value, now: DateTime<Utc>) -> bool {
 /// to `lifecycle_state = superseded` / `status = superseded`. Returns the
 /// number of documents updated.
 async fn supersede_active_runtime_requests_for_trigger(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
     trigger_id: &str,
     trigger_kind: &str,
@@ -464,7 +464,7 @@ async fn supersede_active_runtime_requests_for_trigger(
 }
 
 async fn count_agent_requests_for_trigger(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     trigger_id: &str,
     trigger_kind: &str,
 ) -> usize {
@@ -498,7 +498,7 @@ async fn count_agent_requests_for_trigger(
 /// `request_id`. Used by the supersede test to confirm the specific seeded
 /// request transitioned to `superseded`.
 async fn fetch_request_state(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     request_id: &str,
 ) -> Option<(String, String)> {
     let escaped_request_id = escape_graphql_string(request_id);
@@ -579,7 +579,7 @@ async fn boot_agent(db: &crate::support::TestDb, test_name: &str, backend_id: &s
         mock_endpoint.endpoint(),
     )
     .await;
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {

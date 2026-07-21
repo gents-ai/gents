@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use codex_app_server_protocol as codex;
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::CancelBackgroundToolCallOutcome;
-use defra_agent::UpdateSubscriptionSource;
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::CancelBackgroundToolCallOutcome;
+use gents::UpdateSubscriptionSource;
 use serde_json::Value;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -222,7 +222,7 @@ pub(super) async fn cancel_projected_background_tool_key(
     let Some((session_id, tool_call_id)) = tool_call_key.split_once(':') else {
         anyhow::bail!("Codex process id `{tool_call_key}` is not a DEFRA background tool key");
     };
-    let outcome = defra_agent::cancel_background_tool_call(
+    let outcome = gents::cancel_background_tool_call(
         state.node.clone(),
         &state.background_execution_registry,
         state.agent_did.as_ref(),
@@ -303,7 +303,7 @@ mod tests {
                 .await
                 .expect("embedded node"),
         );
-        defra_agent::schema::ensure_runtime_schemas(&node)
+        gents::schema::ensure_runtime_schemas(&node)
             .await
             .expect("runtime schemas");
 
@@ -352,7 +352,7 @@ mod tests {
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             fs_root: None,
             node,
-            background_execution_registry: defra_agent::BackgroundExecutionRegistry::default(),
+            background_execution_registry: gents::BackgroundExecutionRegistry::default(),
             graphql: Arc::from("http://127.0.0.1/graphql"),
             agent_did: Arc::from("did:defra-agent:background-disconnect-test"),
             behavior_id: Arc::from("did:defra-agent:background-disconnect-test:default"),

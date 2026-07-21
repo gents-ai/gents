@@ -27,7 +27,7 @@ pub const DEFAULT_NETWORK_ID: &str = "default";
 /// Environment variable overriding [`DEFAULT_NETWORK_ID`]. A seam so multiple
 /// discovery networks can coexist without a code change until network id becomes
 /// a first-class config field.
-pub const NETWORK_ID_ENV: &str = "DEFRA_AGENT_NETWORK_ID";
+pub const NETWORK_ID_ENV: &str = "GENTS_NETWORK_ID";
 
 /// Resolve the discovery network id from [`NETWORK_ID_ENV`], falling back to
 /// [`DEFAULT_NETWORK_ID`].

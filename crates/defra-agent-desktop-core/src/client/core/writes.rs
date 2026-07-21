@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use defra_agent_protocol::row::{
+use gents_protocol::row::{
     AgentBehaviorRow, AgentPrincipalRow, AgentRequestRow, EventTriggerRow, InferenceBackendRow,
     InferenceProfileRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
@@ -335,18 +335,18 @@ impl ClientCore {
         source_session_id: &str,
         at_user_turn: u32,
         target_behavior_id: Option<&str>,
-    ) -> Result<defra_agent::ForkOutcome> {
+    ) -> Result<gents::ForkOutcome> {
         let agent_did = normalize_required("agent_did", agent_did)?;
         let source_session_id = normalize_required("source_session_id", source_session_id)?;
-        let params = defra_agent::ForkParams {
+        let params = gents::ForkParams {
             source_session_id,
             fork_at_user_turn: at_user_turn,
             caller_agent_did: agent_did,
             target_behavior_id,
         };
         let result = match self.graphql_for_agent(agent_did).await {
-            Some(graphql) => defra_agent::fork_via_http(&graphql, params).await,
-            None => defra_agent::fork(self.node(), params).await,
+            Some(graphql) => gents::fork_via_http(&graphql, params).await,
+            None => gents::fork(self.node(), params).await,
         };
         match result {
             Ok(outcome) => {
@@ -375,16 +375,16 @@ impl ClientCore {
         &self,
         agent_did: &str,
         request_id: &str,
-    ) -> Result<defra_agent::run_timeline::RunTimeline> {
+    ) -> Result<gents::run_timeline::RunTimeline> {
         let agent_did = normalize_required("agent_did", agent_did)?;
         let request_id = normalize_required("request_id", request_id)?;
         let access = match self.graphql_for_agent(agent_did).await {
-            Some(graphql) => defra_agent::config_client::ConfigAccess::Graphql(graphql),
-            None => defra_agent::config_client::ConfigAccess::Local(self.node_arc()),
+            Some(graphql) => gents::config_client::ConfigAccess::Graphql(graphql),
+            None => gents::config_client::ConfigAccess::Local(self.node_arc()),
         };
         let timeline = tokio::time::timeout(
             std::time::Duration::from_secs(15),
-            defra_agent::run_timeline_fetch::load_run_timeline(&access, request_id),
+            gents::run_timeline_fetch::load_run_timeline(&access, request_id),
         )
         .await
         .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))?
@@ -2010,7 +2010,7 @@ async fn delete_peer_pairing_desired(
     node: &defra_node::EmbeddedNode,
     peer_id: &str,
 ) -> Result<bool> {
-    use defra_agent_protocol::graphql::escape_graphql_string;
+    use gents_protocol::graphql::escape_graphql_string;
 
     let peer_id = escape_graphql_string(peer_id);
     let mutation = format!(

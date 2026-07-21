@@ -3,7 +3,7 @@ use crate::ToolSelectionDocument;
 use anyhow::Result;
 
 use super::{mint_recreate_identity_timestamp, ConfigAccess};
-use defra_agent_protocol::graphql::{
+use gents_protocol::graphql::{
     optional_bool_field, optional_string_field, string_list_field,
 };
 
@@ -54,7 +54,7 @@ pub async fn write_tool_selection_document_with_clear_fields(
         update_fields = update_fields,
     );
     let response = access.execute(&mutation).await?;
-    defra_agent_protocol::graphql::extract_mutation_doc_id(&response, "ToolSelection")
+    gents_protocol::graphql::extract_mutation_doc_id(&response, "ToolSelection")
 }
 
 #[cfg(test)]

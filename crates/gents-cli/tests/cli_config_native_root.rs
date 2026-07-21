@@ -8,12 +8,12 @@ use anyhow::Result;
 use serde_json::Value;
 use tempfile::tempdir;
 
-fn defra_agent() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_defra-agent"))
+fn gents() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_gents"))
 }
 
 fn run_validate(root: &std::path::Path) -> Result<Value> {
-    let output = defra_agent()
+    let output = gents()
         .args(["config", "validate", "--root"])
         .arg(root)
         .output()?;

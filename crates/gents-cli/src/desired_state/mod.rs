@@ -22,12 +22,12 @@ pub(crate) use write::write_manifest_root;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use defra_agent::{BackendProviderKind, Collection};
+use gents::{BackendProviderKind, Collection};
 
 pub(crate) const DEFAULT_TOOL_SERVICE_MCP_PATH: &str = "/mcp";
 pub(crate) const TOOL_SERVICE_ADDRESS_FIELDS: &[&str] = &["hostname", "tailscale_ip", "lan_ip"];
 pub(crate) const PEER_PAIRING_MANIFEST_SOURCE_PREFIX: &str =
-    defra_agent::agent::p2p_reconcile::SOURCE_MANIFEST_PREFIX;
+    gents::agent::p2p_reconcile::SOURCE_MANIFEST_PREFIX;
 
 pub(crate) fn peer_pairing_manifest_source(owner_agent_did: &str) -> String {
     format!(
@@ -233,7 +233,7 @@ fn deserialize_write_tools_storage<'de, D>(deserializer: D) -> Result<Vec<String
 where
     D: Deserializer<'de>,
 {
-    use defra_agent::WriteToolDecl;
+    use gents::WriteToolDecl;
     use serde_json::Value;
 
     let value = Option::<Value>::deserialize(deserializer)?;
@@ -290,7 +290,7 @@ pub(crate) struct DesiredInferenceBackend {
     #[serde(default)]
     pub(crate) provider_kind: BackendProviderKind,
     #[serde(default)]
-    pub(crate) openai_wire_api: Option<defra_agent::OpenAiWireApi>,
+    pub(crate) openai_wire_api: Option<gents::OpenAiWireApi>,
     pub(crate) endpoint: String,
     pub(crate) api_key: Option<String>,
     pub(crate) api_key_env_var: Option<String>,
@@ -315,7 +315,7 @@ impl<'de> Deserialize<'de> for DesiredInferenceBackend {
             #[serde(default)]
             provider_kind: BackendProviderKind,
             #[serde(default)]
-            openai_wire_api: Option<defra_agent::OpenAiWireApi>,
+            openai_wire_api: Option<gents::OpenAiWireApi>,
             endpoint: String,
             api_key: Option<String>,
             api_key_env_var: Option<String>,
@@ -610,7 +610,7 @@ impl DesiredStateDiffCollections {
     /// Record proven-safe prune deletes: move each pruned id from its
     /// collection's `live_only` into `delete`. The deletes come from
     /// `prune::prune_safe_deletes`, i.e. `apply_model::diff_prune`.
-    pub(crate) fn record_prune_deletes(&mut self, deletes: &[defra_agent::apply_model::DocRef]) {
+    pub(crate) fn record_prune_deletes(&mut self, deletes: &[gents::apply_model::DocRef]) {
         for doc in deletes {
             let diff = self.get_mut(doc.collection);
             diff.live_only.retain(|id| id != &doc.id);
@@ -755,7 +755,7 @@ impl DesiredStateValidationReport {
     }
 }
 
-use defra_agent::DesiredFields;
+use gents::DesiredFields;
 
 impl DesiredFields for DesiredAgentPrincipal {
     fn collection_tag(&self) -> &'static str {
@@ -887,7 +887,7 @@ impl HasUniqueId for DesiredEventTrigger {
 #[cfg(test)]
 mod desired_fields_tests {
     use super::*;
-    use defra_agent::DesiredFields;
+    use gents::DesiredFields;
 
     #[test]
     fn desired_structs_report_their_collection_tags() {

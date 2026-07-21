@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use defra_agent::{cli_tool, BackendProviderKind, OpenAiWireApi};
+use gents::{cli_tool, BackendProviderKind, OpenAiWireApi};
 
 use crate::cli::args::{BackendPresetArg, OpenAiWireApiArg, ToolCeilingArg, ToolPackageArg};
 use crate::shared::ResolvedBackendConfig;
@@ -77,7 +77,7 @@ fn resolve_backend_endpoint(
         })
         .ok_or_else(|| match mode {
             BackendResolutionMode::Init => anyhow::anyhow!(
-                "an inference endpoint is required\nNext:\n  1. Pass it explicitly: `defra-agent init --inference-url http://HOST:PORT/v1 --model-name MODEL`\n  2. Or choose a preset with a default endpoint: `defra-agent init --backend-preset openrouter --model-name MODEL`\n  3. Or set INFERENCE_ENDPOINT before running `defra-agent init`"
+                "an inference endpoint is required\nNext:\n  1. Pass it explicitly: `gents init --inference-url http://HOST:PORT/v1 --model-name MODEL`\n  2. Or choose a preset with a default endpoint: `gents init --backend-preset openrouter --model-name MODEL`\n  3. Or set INFERENCE_ENDPOINT before running `gents init`"
             ),
             BackendResolutionMode::ConfigWrite => anyhow::anyhow!(
                 "an inference endpoint is required\nNext:\n  1. Pass --inference-url explicitly\n  2. Or choose a preset with a default endpoint, such as --backend-preset openrouter"
@@ -112,7 +112,7 @@ fn resolve_backend_api_key_env_var(
     })
 }
 
-pub(crate) fn parse_cli_tool_arg(value: &str) -> Result<defra_agent::CliToolConfig> {
+pub(crate) fn parse_cli_tool_arg(value: &str) -> Result<gents::CliToolConfig> {
     let (name, path) = value
         .split_once('=')
         .ok_or_else(|| anyhow::anyhow!("--cli-tool must be NAME=/absolute/path"))?;

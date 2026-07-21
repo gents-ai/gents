@@ -6,9 +6,9 @@ pub use conversation::{create_conversation, rename_conversation, CreatedConversa
 // Re-export the shared interrupt helper from `defra-agent` so the desktop
 // client and the runtime share a single GraphQL implementation. Keeping this
 // behind the `chat::` module path preserves the existing public surface.
-// `fetch_interrupt_requested_at` is reachable directly via `defra_agent::` for
+// `fetch_interrupt_requested_at` is reachable directly via `gents::` for
 // the conformance test; desktop code only uses `interrupt_request`.
-pub use defra_agent::interrupt_request;
+pub use gents::interrupt_request;
 pub use request::{
     resend_request, retry_request, submit_request, submit_request_to_graphql, SubmitRequestOptions,
     SubmittedRequest,

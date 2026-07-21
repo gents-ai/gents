@@ -60,11 +60,11 @@ fn behavior_config_prefers_backend_specific_api_key_env_var() {
     let behavior = test_behavior(
         "behavior-a",
         "backend-a",
-        Some("DEFRA_AGENT_TEST_BACKEND_KEY"),
+        Some("GENTS_TEST_BACKEND_KEY"),
     );
 
-    let mut env = TestEnvGuard::new(&["DEFRA_AGENT_TEST_BACKEND_KEY"]);
-    env.set("DEFRA_AGENT_TEST_BACKEND_KEY", "backend-key");
+    let mut env = TestEnvGuard::new(&["GENTS_TEST_BACKEND_KEY"]);
+    env.set("GENTS_TEST_BACKEND_KEY", "backend-key");
     let resolved = behavior.resolve_backend_api_key().expect("resolve api key");
 
     assert_eq!(resolved.as_deref(), Some("backend-key"));

@@ -8,10 +8,10 @@
 
 use std::sync::Arc;
 
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::lifecycle::{ClaimOutcome, ExecutionOrigin};
-use defra_agent::{interrupt_request, AgentIdentity, DefraAgent, RequestLifecycle, ToolCeiling};
-use defra_agent_protocol::transcript::present_persisted_message;
+use gents::graphql::escape_graphql_string;
+use gents::lifecycle::{ClaimOutcome, ExecutionOrigin};
+use gents::{interrupt_request, AgentIdentity, Gents, RequestLifecycle, ToolCeiling};
+use gents_protocol::transcript::present_persisted_message;
 
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::{
@@ -106,7 +106,7 @@ async fn offline_replay_of_stale_requests_does_not_call_backend() {
 /// relies on to render the root-level grouping of retry attempts.
 ///
 /// We exercise this against the DB directly rather than calling
-/// `resend_request` (which lives in `defra-agent-desktop` and would
+/// `resend_request` (which lives in `gents-desktop` and would
 /// introduce a dev-dep cycle). The `create_retry_request` helper mirrors
 /// exactly the fields that the `resend_request` helper writes.
 #[tokio::test]
@@ -424,7 +424,7 @@ async fn boot_streaming_agent(
     )
     .await;
 
-    let mut builder = DefraAgent::builder()
+    let mut builder = Gents::builder()
         .node(db.node.clone())
         .identity(identity.clone())
         .default_behavior_id(behavior_ids[0])
@@ -448,7 +448,7 @@ async fn boot_streaming_agent(
 }
 
 async fn upsert_streaming_backend(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     backend_id: &str,
     endpoint: &str,
     max_concurrent: i64,
@@ -494,7 +494,7 @@ async fn upsert_streaming_backend(
 }
 
 async fn insert_inference_call(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     request_id: &str,
     call_seq: i64,
     call_state: &str,

@@ -3,17 +3,17 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::interrupt::{fetch_interrupt_requested_at, interrupt_request};
-use defra_agent::tool_call_lifecycle::{
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::interrupt::{fetch_interrupt_requested_at, interrupt_request};
+use gents::tool_call_lifecycle::{
     create_subagent_request_with_request_id,
     create_subagent_request_with_trusted_parent_request_id, AwaitMode, CancelPolicy,
     IllegalToolCallTransition, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
-use defra_agent::{
+use gents::{
     default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior,
-    upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DefraAgent,
+    upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, Gents,
     DocumentRuntimeOptions, ToolCeiling, ToolSelectionDocument,
 };
 use serde::Deserialize;
@@ -68,7 +68,7 @@ async fn boot_agent_with_policy(
         background_enabled,
     )
     .await;
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -105,7 +105,7 @@ async fn ensure_parent_subagent_authorization(
     let target_entries = subagent_targets
         .into_iter()
         .map(|target_behavior_id| {
-            defra_agent::subagent_target_entry(
+            gents::subagent_target_entry(
                 target_behavior_id.clone(),
                 agent_did,
                 target_behavior_id,
@@ -970,7 +970,7 @@ async fn subagent_source_skips_child_when_resolved_did_is_remote() {
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: agent_did.clone(),
-            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+            subagent_targets: Some(vec![gents::subagent_target_entry(
                 "remote-target",
                 remote_did,
                 "remote-behavior",
@@ -1014,7 +1014,7 @@ async fn subagent_source_skips_child_when_resolved_did_is_remote() {
         .await
         .unwrap();
 
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -1414,7 +1414,7 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: crate::support::AGENT_DID.to_string(),
-            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+            subagent_targets: Some(vec![gents::subagent_target_entry(
                 "remote-recovery-target",
                 remote_target_did,
                 "remote-recovery-behavior",
@@ -2083,7 +2083,7 @@ async fn upsert_target_behavior_with_cross_deployment(
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: agent_did.to_string(),
-            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+            subagent_targets: Some(vec![gents::subagent_target_entry(
                 target_behavior_id,
                 agent_did,
                 target_behavior_id,

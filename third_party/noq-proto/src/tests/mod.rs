@@ -230,7 +230,7 @@ fn server_stateless_reset() {
     );
 }
 
-/// Regression for n0-computer/noq#743 / defra-agent#634.
+/// Regression for n0-computer/noq#743 / gents#634.
 ///
 /// A connection that is already `Drained` and then processes a second
 /// stateless-reset datagram must not push another `EndpointEvent::Draining`.

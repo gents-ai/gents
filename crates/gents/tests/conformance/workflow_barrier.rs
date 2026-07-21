@@ -6,11 +6,11 @@
 //! drives the *exact* engine surface — `load_workflow_group_bridges` +
 //! `fan_out_barrier_satisfied` — so a regression that deleted the durable re-read,
 //! inverted the role filter, or dropped a NULL-state row is caught under the
-//! default `cargo test -p defra-agent` gate (not only the env-gated live e2e).
+//! default `cargo test -p gents` gate (not only the env-gated live e2e).
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::workflow::{fan_out_barrier_satisfied, load_workflow_group_bridges};
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::workflow::{fan_out_barrier_satisfied, load_workflow_group_bridges};
 
 use crate::support::test_db;
 

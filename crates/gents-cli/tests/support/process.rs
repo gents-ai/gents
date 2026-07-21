@@ -54,15 +54,15 @@ impl ServeProcess {
 }
 
 pub fn cli_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_defra-agent")
+    env!("CARGO_BIN_EXE_gents")
 }
 
 pub fn desktop_bin() -> Result<PathBuf> {
     let cli_path = Path::new(cli_bin());
-    let binary_name = format!("defra-agent-desktop{}", std::env::consts::EXE_SUFFIX);
+    let binary_name = format!("gents-desktop{}", std::env::consts::EXE_SUFFIX);
     let desktop_path = cli_path
         .parent()
-        .ok_or_else(|| anyhow!("unable to resolve defra-agent binary directory"))?
+        .ok_or_else(|| anyhow!("unable to resolve gents binary directory"))?
         .join(binary_name);
 
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -74,14 +74,14 @@ pub fn desktop_bin() -> Result<PathBuf> {
         .args([
             "build",
             "-p",
-            "defra-agent-desktop",
+            "gents-desktop",
             "--bin",
-            "defra-agent-desktop",
+            "gents-desktop",
         ])
         .status()
-        .context("building defra-agent-desktop binary for demo e2e")?;
+        .context("building gents-desktop binary for demo e2e")?;
     if !status.success() {
-        bail!("cargo build -p defra-agent-desktop --bin defra-agent-desktop failed");
+        bail!("cargo build -p gents-desktop --bin gents-desktop failed");
     }
     Ok(desktop_path)
 }
@@ -98,16 +98,16 @@ pub fn run_desktop_init_json(agent_home: &Path, desktop_home: &Path, label: &str
         .arg(label)
         .arg("--json")
         .output()
-        .context("running defra-agent-desktop init")?;
+        .context("running gents-desktop init")?;
     if !output.status.success() {
         bail!(
-            "defra-agent-desktop init failed\nstdout:\n{}\nstderr:\n{}",
+            "gents-desktop init failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
     }
 
-    serde_json::from_slice(&output.stdout).context("parsing JSON from defra-agent-desktop init")
+    serde_json::from_slice(&output.stdout).context("parsing JSON from gents-desktop init")
 }
 
 pub fn run_init_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
@@ -147,14 +147,14 @@ pub fn spawn_server_with_ready_json(
     // arrives long after readiness. We then poll the stdout log for readiness:
     // the daemon prints the readiness JSON with Rust's `println!`, which is
     // line-buffered even when redirected to a file, so the line lands promptly.
-    let stdout_log = tempfile::NamedTempFile::new().context("creating defra-agent stdout log")?;
-    let stderr_log = tempfile::NamedTempFile::new().context("creating defra-agent stderr log")?;
+    let stdout_log = tempfile::NamedTempFile::new().context("creating gents stdout log")?;
+    let stderr_log = tempfile::NamedTempFile::new().context("creating gents stderr log")?;
     let stdout = stdout_log
         .reopen()
-        .context("opening defra-agent stdout log")?;
+        .context("opening gents stdout log")?;
     let stderr = stderr_log
         .reopen()
-        .context("opening defra-agent stderr log")?;
+        .context("opening gents stderr log")?;
     let mut command = Command::new(cli_bin());
     command
         .env("HOME", home_dir)
@@ -170,7 +170,7 @@ pub fn spawn_server_with_ready_json(
     for (name, value) in envs {
         command.env(name, value);
     }
-    let child = command.spawn().context("spawning defra-agent server")?;
+    let child = command.spawn().context("spawning gents server")?;
     let mut serve = ServeProcess::with_logs(child, stdout_log, stderr_log);
 
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -196,7 +196,7 @@ pub fn spawn_server_with_ready_json(
         if Instant::now() >= deadline {
             let (stdout, stderr) = serve.captured_output()?;
             bail!(
-                "timed out waiting for defra-agent server readiness JSON\nstdout:\n{}\nstderr:\n{}",
+                "timed out waiting for gents server readiness JSON\nstdout:\n{}\nstderr:\n{}",
                 stdout,
                 stderr
             );
@@ -224,14 +224,14 @@ pub fn spawn_server_with_env(
     extra_args: &[&str],
     envs: &[(&str, &str)],
 ) -> Result<ServeProcess> {
-    let stdout_log = tempfile::NamedTempFile::new().context("creating defra-agent stdout log")?;
-    let stderr_log = tempfile::NamedTempFile::new().context("creating defra-agent stderr log")?;
+    let stdout_log = tempfile::NamedTempFile::new().context("creating gents stdout log")?;
+    let stderr_log = tempfile::NamedTempFile::new().context("creating gents stderr log")?;
     let stdout = stdout_log
         .reopen()
-        .context("opening defra-agent stdout log")?;
+        .context("opening gents stdout log")?;
     let stderr = stderr_log
         .reopen()
-        .context("opening defra-agent stderr log")?;
+        .context("opening gents stderr log")?;
     let mut command = Command::new(cli_bin());
     command
         .env("HOME", home_dir)
@@ -247,7 +247,7 @@ pub fn spawn_server_with_env(
     for (name, value) in envs {
         command.env(name, value);
     }
-    let child = command.spawn().context("spawning defra-agent server")?;
+    let child = command.spawn().context("spawning gents server")?;
     Ok(ServeProcess::with_logs(child, stdout_log, stderr_log))
 }
 
@@ -272,7 +272,7 @@ pub fn wait_for_port(port: u16, serve: &mut ServeProcess) -> Result<()> {
         if Instant::now() >= deadline {
             let (stdout, stderr) = serve.captured_output()?;
             bail!(
-                "timed out waiting for defra-agent server on port {port}\nstdout:\n{}\nstderr:\n{}",
+                "timed out waiting for gents server on port {port}\nstdout:\n{}\nstderr:\n{}",
                 stdout,
                 stderr
             );
@@ -290,7 +290,7 @@ pub fn spawn_cli(home_dir: &Path, args: &[&str]) -> Result<Child> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("spawning defra-agent {}", args.join(" ")))
+        .with_context(|| format!("spawning gents {}", args.join(" ")))
 }
 
 pub fn run_cli_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
@@ -300,10 +300,10 @@ pub fn run_cli_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
         .current_dir(home_dir)
         .args(args)
         .output()
-        .with_context(|| format!("running defra-agent {}", args.join(" ")))?;
+        .with_context(|| format!("running gents {}", args.join(" ")))?;
     if !output.status.success() {
         bail!(
-            "defra-agent {} failed\nstdout:\n{}\nstderr:\n{}",
+            "gents {} failed\nstdout:\n{}\nstderr:\n{}",
             args.join(" "),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
@@ -311,7 +311,7 @@ pub fn run_cli_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
     }
 
     serde_json::from_slice(&output.stdout)
-        .with_context(|| format!("parsing JSON from defra-agent {}", args.join(" ")))
+        .with_context(|| format!("parsing JSON from gents {}", args.join(" ")))
 }
 
 pub fn run_cli_text(home_dir: &Path, args: &[&str]) -> Result<String> {
@@ -320,10 +320,10 @@ pub fn run_cli_text(home_dir: &Path, args: &[&str]) -> Result<String> {
         .env("RUST_LOG", "error")
         .args(args)
         .output()
-        .with_context(|| format!("running defra-agent {}", args.join(" ")))?;
+        .with_context(|| format!("running gents {}", args.join(" ")))?;
     if !output.status.success() {
         bail!(
-            "defra-agent {} failed\nstdout:\n{}\nstderr:\n{}",
+            "gents {} failed\nstdout:\n{}\nstderr:\n{}",
             args.join(" "),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
@@ -331,7 +331,7 @@ pub fn run_cli_text(home_dir: &Path, args: &[&str]) -> Result<String> {
     }
 
     String::from_utf8(output.stdout)
-        .with_context(|| format!("parsing stdout from defra-agent {}", args.join(" ")))
+        .with_context(|| format!("parsing stdout from gents {}", args.join(" ")))
 }
 
 pub fn run_cli_failure_stderr(home_dir: &Path, args: &[&str]) -> Result<String> {
@@ -340,10 +340,10 @@ pub fn run_cli_failure_stderr(home_dir: &Path, args: &[&str]) -> Result<String> 
         .env("RUST_LOG", "error")
         .args(args)
         .output()
-        .with_context(|| format!("running defra-agent {}", args.join(" ")))?;
+        .with_context(|| format!("running gents {}", args.join(" ")))?;
     if output.status.success() {
         bail!(
-            "expected defra-agent {} to fail\nstdout:\n{}\nstderr:\n{}",
+            "expected gents {} to fail\nstdout:\n{}\nstderr:\n{}",
             args.join(" "),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
@@ -351,7 +351,7 @@ pub fn run_cli_failure_stderr(home_dir: &Path, args: &[&str]) -> Result<String> 
     }
 
     String::from_utf8(output.stderr)
-        .with_context(|| format!("parsing stderr from defra-agent {}", args.join(" ")))
+        .with_context(|| format!("parsing stderr from gents {}", args.join(" ")))
 }
 
 pub fn run_cli_failure_stdout_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
@@ -361,10 +361,10 @@ pub fn run_cli_failure_stdout_json(home_dir: &Path, args: &[&str]) -> Result<Val
         .current_dir(home_dir)
         .args(args)
         .output()
-        .with_context(|| format!("running defra-agent {}", args.join(" ")))?;
+        .with_context(|| format!("running gents {}", args.join(" ")))?;
     if output.status.success() {
         bail!(
-            "expected defra-agent {} to fail\nstdout:\n{}\nstderr:\n{}",
+            "expected gents {} to fail\nstdout:\n{}\nstderr:\n{}",
             args.join(" "),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
@@ -373,7 +373,7 @@ pub fn run_cli_failure_stdout_json(home_dir: &Path, args: &[&str]) -> Result<Val
 
     serde_json::from_slice(&output.stdout).with_context(|| {
         format!(
-            "parsing failure JSON from defra-agent {}\nstdout:\n{}\nstderr:\n{}",
+            "parsing failure JSON from gents {}\nstdout:\n{}\nstderr:\n{}",
             args.join(" "),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)

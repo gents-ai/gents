@@ -84,7 +84,7 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
                 "backend_id": "default-backend",
                 "name": "default-backend",
                 "endpoint": "http://127.0.0.1:8000/v1",
-                "api_key_env_var": "DEFRA_AGENT_TEST_MANIFEST_API_KEY",
+                "api_key_env_var": "GENTS_TEST_MANIFEST_API_KEY",
                 "max_concurrent": 2,
                 "max_queue_depth": 100,
                 "enabled": true,
@@ -392,7 +392,7 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
                 "backend_id": "default-backend",
                 "name": "default-backend",
                 "endpoint": "http://127.0.0.1:8000/v1",
-                "api_key_env_var": "DEFRA_AGENT_TEST_MANIFEST_API_KEY",
+                "api_key_env_var": "GENTS_TEST_MANIFEST_API_KEY",
                 "max_concurrent": 2,
                 "max_queue_depth": 100,
                 "enabled": true,
@@ -534,7 +534,7 @@ async fn config_validate_bind_home_accepts_placeholder_agent_did() -> Result<()>
         &["--identity-only", "--agent-name", "mini-1-steward"],
     )?;
     let agent_did = agent_did_from_init(&init)?;
-    let explicit_home = home_dir.join(".defra-agent");
+    let explicit_home = home_dir.join(".gents");
     write_json_file(
         &explicit_home.join("runtime.json"),
         &serde_json::json!({
@@ -589,7 +589,7 @@ async fn config_validate_bind_home_rejects_concrete_manifest_did_without_force()
         &home_dir,
         &["--identity-only", "--agent-name", "mini-1-steward"],
     )?;
-    let explicit_home = home_dir.join(".defra-agent");
+    let explicit_home = home_dir.join(".gents");
     write_rebindable_manifest_root(&root, &format!("did:key:z{}", Uuid::new_v4().simple()))?;
 
     let stderr = run_cli_failure_stderr(
@@ -677,7 +677,7 @@ fn write_rebindable_manifest_root(root: &std::path::Path, agent_did: &str) -> Re
             "backend_id": "default-backend",
             "name": "default-backend",
             "endpoint": "http://127.0.0.1:8000/v1",
-            "api_key_env_var": "DEFRA_AGENT_TEST_MANIFEST_API_KEY",
+            "api_key_env_var": "GENTS_TEST_MANIFEST_API_KEY",
             "max_concurrent": 2,
             "max_queue_depth": 100,
             "enabled": true,

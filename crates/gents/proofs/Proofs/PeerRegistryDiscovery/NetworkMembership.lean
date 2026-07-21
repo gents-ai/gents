@@ -16,7 +16,7 @@ against.
 Signatures are modeled **abstractly as booleans** (design spec §9): a
 `*SigValid` field is `true` exactly when the corresponding `*_sig` verifies
 against the signing DID. The crypto itself is fenced separately
-(`defra-agent-protocol` verify/tamper tests + the canonical CBOR payloads).
+(`gents-protocol` verify/tamper tests + the canonical CBOR payloads).
 
 ## The §9 obligations, each a theorem below (non-vacuous, with witnesses)
 

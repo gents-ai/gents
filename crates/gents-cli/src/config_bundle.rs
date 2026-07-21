@@ -2,7 +2,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::Result;
-use defra_agent::graphql::escape_graphql_string;
+use gents::graphql::escape_graphql_string;
 use serde_json::Value;
 
 use crate::config_writes::ConfigAccess;

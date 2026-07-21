@@ -3,7 +3,7 @@
 //! This test exercises the complete vertical from DefraDB event bus all the
 //! way to a materialized `AgentRequest` row. It:
 //!
-//!   1. Boots a real `DefraAgent` against an embedded DefraDB node with a
+//!   1. Boots a real `Gents` against an embedded DefraDB node with a
 //!      `MockModelEndpoint` so the backend probes healthy without reaching
 //!      a live LLM.
 //!   2. Registers a custom `WebhookEvent` schema *before* seeding the
@@ -32,9 +32,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{AgentIdentity, DefraAgent, DocumentRuntimeOptions, ToolCeiling};
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::{AgentIdentity, Gents, DocumentRuntimeOptions, ToolCeiling};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -312,7 +312,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     )
     .await;
 
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {

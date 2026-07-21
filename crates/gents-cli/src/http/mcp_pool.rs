@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_agent_protocol::graphql::escape_graphql_string;
-use defra_agent_protocol::row::{ToolServiceHealthStateRow, ToolServiceRegistryRow};
+use gents_protocol::graphql::escape_graphql_string;
+use gents_protocol::row::{ToolServiceHealthStateRow, ToolServiceRegistryRow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_agent::{ActiveRuntimeSnapshot, EventSource, UpdateSubscriptionSource};
+use gents::{ActiveRuntimeSnapshot, EventSource, UpdateSubscriptionSource};
 use events::EventName;
 use tokio::sync::watch;
 use tokio::time::timeout;

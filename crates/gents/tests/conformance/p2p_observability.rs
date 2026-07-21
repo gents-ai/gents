@@ -1,4 +1,4 @@
-use defra_agent::{JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter};
+use gents::{JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter};
 use p2p::sync::{CidRetrySnapshot, PeerBacklogSnapshot, PushBacklogSnapshot, SyncStatus};
 
 /// Compile-time + wire-shape fence for the pinned DefraDB diagnostics API.

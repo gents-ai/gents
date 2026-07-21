@@ -1,10 +1,10 @@
 //! Integration tests for R4c list_subagents.
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::llm::ToolCallHookAction;
-use defra_agent::tool_call_lifecycle::ToolCallLifecycle;
-use defra_agent::{
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::llm::ToolCallHookAction;
+use gents::tool_call_lifecycle::ToolCallLifecycle;
+use gents::{
     upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook,
     FailurePolicy, ToolSelectionDocument,
 };
@@ -29,7 +29,7 @@ async fn setup_db(
         &ToolSelectionDocument {
             selection_id: "r4c-parent-tools".to_string(),
             agent_did: AGENT_DID.to_string(),
-            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+            subagent_targets: Some(vec![gents::subagent_target_entry(
                 CHILD_BEHAVIOR_ID,
                 AGENT_DID,
                 CHILD_BEHAVIOR_ID,

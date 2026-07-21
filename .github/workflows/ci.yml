@@ -209,7 +209,7 @@ jobs:
         run: .github/scripts/setup-rust-build-cache.sh
 
       - name: Build proofs
-        working-directory: crates/defra-agent/proofs
+        working-directory: crates/gents/proofs
         run: lake build
 
       - name: Run proof conformance tests

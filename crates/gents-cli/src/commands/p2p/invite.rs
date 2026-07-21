@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
-use defra_agent::{graphql::escape_graphql_string, AgentIdentity, KeyIdentity};
-use defra_agent_protocol::bearer_token::{
+use gents::{graphql::escape_graphql_string, AgentIdentity, KeyIdentity};
+use gents_protocol::bearer_token::{
     bearer_signing_payload, encode_bearer, BearerInviteToken, BEARER_TOKEN_VERSION,
 };
-use defra_agent_protocol::network_token::{MembershipRecord, NetworkRecord};
-use defra_agent_protocol::pairing_token::{encode as encode_invite, signing_payload, InviteToken};
+use gents_protocol::network_token::{MembershipRecord, NetworkRecord};
+use gents_protocol::pairing_token::{encode as encode_invite, signing_payload, InviteToken};
 use serde_json::json;
 
 use crate::cli::args::P2pInviteArgs;
@@ -79,7 +79,7 @@ pub(super) async fn p2p_invite(args: P2pInviteArgs) -> Result<()> {
         "network_id": token.network_id,
         "template": token.template,
         "ticket": token.ticket,
-        "join_command": format!("defra-agent p2p pairings join {encoded}"),
+        "join_command": format!("gents p2p pairings join {encoded}"),
     }))?;
     Ok(())
 }
@@ -151,7 +151,7 @@ async fn p2p_invite_bearer(args: P2pInviteArgs) -> Result<()> {
         "ticket": token.ticket,
         "expires_in": "5m",
         "note": "single-use; the issuer daemon must be running to process the claim — if it is down past the 5m window, mint a fresh invite",
-        "claim_command": format!("defra-agent p2p pairings claim {encoded}"),
+        "claim_command": format!("gents p2p pairings claim {encoded}"),
     }))?;
     Ok(())
 }
@@ -449,7 +449,7 @@ pub(super) fn resolve_home_identity(home: Option<&Path>) -> Result<Arc<dyn Agent
     let home_dir = resolve_home_dir(home);
     let Some(config) = read_init_config(&home_dir)? else {
         anyhow::bail!(
-            "no init config found in {}; run `defra-agent init` first",
+            "no init config found in {}; run `gents init` first",
             home_dir.display()
         )
     };
@@ -476,15 +476,15 @@ pub(super) fn resolve_home_identity(home: Option<&Path>) -> Result<Arc<dyn Agent
         }
         other => anyhow::bail!(
             "identity backend {other:?} is not supported for offline invite signing; \
-             start `defra-agent server` and use `--graphql` to connect"
+             start `gents server` and use `--graphql` to connect"
         ),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use defra_agent_protocol::network_token::{MembershipRecord, NetworkRecord};
-    use defra_agent_protocol::pairing_token::{decode, encode, TOKEN_PREFIX};
+    use gents_protocol::network_token::{MembershipRecord, NetworkRecord};
+    use gents_protocol::pairing_token::{decode, encode, TOKEN_PREFIX};
 
     use super::*;
 

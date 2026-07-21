@@ -418,7 +418,7 @@ pub async fn reconcile_discovery_tick(store: &dyn DiscoveryStore) -> Result<Disc
 /// and NOT signature-bound to their claimed `agent_did`. It is therefore a
 /// trusted-fleet / TOFU switch: turn it on only when every node that can write
 /// the replicated registry is trusted (see #490 review H4).
-pub const DISCOVERY_AUTO_PAIR_ENV: &str = "DEFRA_AGENT_DISCOVERY_AUTO_PAIR";
+pub const DISCOVERY_AUTO_PAIR_ENV: &str = "GENTS_DISCOVERY_AUTO_PAIR";
 
 /// Whether `discovery_auto_pair` is enabled. Read from
 /// [`DISCOVERY_AUTO_PAIR_ENV`]; truthy = `1`/`true`/`yes`/`on` (case-insensitive).

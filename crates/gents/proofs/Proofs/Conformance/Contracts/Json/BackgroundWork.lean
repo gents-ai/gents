@@ -144,7 +144,7 @@ def r4cReadTranscriptHidesBridgeRows :
   , renderedTranscript := "[assistant seq=2]\nplain assistant message\n"
   }
 
--- Realigned to shipped behavior (see defra-agent#403): the R4c design specced
+-- Realigned to shipped behavior (see gents#403): the R4c design specced
 -- an in-memory live ring buffer for running reads, but it was never built. The
 -- runtime returns EMPTY output for a running tool and serves the persisted
 -- result only once terminal (`background_tools.rs` running branch returns "",

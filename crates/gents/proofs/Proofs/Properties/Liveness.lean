@@ -28,7 +28,7 @@ is enforced by the Rust runtime (deadlines, idle timeouts, recovery sweeps).
 
 Naming note: historical `*_eventually_*` names are kept for continuity; new
 work should prefer `*_reachable` when the theorem is purely existential.
-See `crates/defra-agent/proofs/README.md` § Liveness taxonomy.
+See `crates/gents/proofs/README.md` § Liveness taxonomy.
 -/
 
 /-- Termination measure: maximum remaining steps to terminal state. -/

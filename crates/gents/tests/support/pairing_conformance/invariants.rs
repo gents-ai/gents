@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use defra_agent::agent::p2p_reconcile::{
+use gents::agent::p2p_reconcile::{
     compute_owned_pairing_diff, PairingActual as RuntimePairingActual,
 };
 
@@ -106,7 +106,7 @@ pub fn check_safety(history: &[ObservedSnapshot]) -> Result<(), SafetyViolation>
 
 fn pending_owned_ops(
     snapshot: &ObservedSnapshot,
-) -> Vec<defra_agent::agent::p2p_reconcile::DiffOp> {
+) -> Vec<gents::agent::p2p_reconcile::DiffOp> {
     compute_owned_pairing_diff(
         &snapshot.desired,
         &RuntimePairingActual {

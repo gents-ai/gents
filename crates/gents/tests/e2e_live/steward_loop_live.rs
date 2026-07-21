@@ -10,7 +10,7 @@
 //!   * `bind_d4f_backend` — writes an `InferenceBackend` doc pointing at the live
 //!     d4f endpoint with `models: ["d4f"]` and points the agent's default behavior
 //!     at it (`backend_id` + `model_name = "d4f"`). Reusable by 2a-2 / 2a-3.
-//!   * `boot_d4f_agent` — boots a full `DefraAgent` from those behavior documents
+//!   * `boot_d4f_agent` — boots a full `Gents` from those behavior documents
 //!     and waits for `process_state == "ready"`. Reusable.
 //!   * `wait_for_request_terminal` / `wait_for_assistant_answer` — drive + AWAIT a
 //!     full real-backend agent run (not just a materialized row). Reusable.
@@ -21,7 +21,7 @@
 //! ## Live-run mechanism (modeled on `tests/subagent_delegation_live.rs`)
 //!
 //! The full-run pattern is lifted directly from `live_local_subagent_delegation`:
-//! boot a full agent (`DefraAgent::from_default_behavior_documents` + `.run()`),
+//! boot a full agent (`Gents::from_default_behavior_documents` + `.run()`),
 //! submit work by creating a `pending` `AgentRequest` via
 //! `crate::support::interrupt::create_runtime_request`, then WAIT for the request's
 //! `lifecycle_state` to terminalize and read the assistant answer back from
@@ -31,11 +31,11 @@
 //!
 //! ## Running
 //!
-//! Gated on `DEFRA_AGENT_D4F_LIVE=1`. Without it every test early-returns and
+//! Gated on `GENTS_D4F_LIVE=1`. Without it every test early-returns and
 //! passes as a no-op, so offline/CI runs skip cleanly.
 //!
 //! ```bash
-//! DEFRA_AGENT_D4F_LIVE=1 cargo test --test steward_loop_live \
+//! GENTS_D4F_LIVE=1 cargo test --test steward_loop_live \
 //!   --features defra-node/http,defra-node/p2p,rocksdb \
 //!   -- --test-threads=1 d4f_backend_probes_healthy_and_completes --nocapture
 //! ```
@@ -44,11 +44,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity, DefraAgent,
+    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity, Gents,
     DocumentRuntimeOptions, ToolCeiling,
 };
 use serde::Deserialize;
@@ -64,7 +64,7 @@ use crate::support::{first_optional_row, test_db, TestDb};
 /// Every test in this file early-returns unless this is set, so offline/CI runs
 /// skip cleanly.
 fn d4f_enabled() -> bool {
-    std::env::var("DEFRA_AGENT_D4F_LIVE").as_deref() == Ok("1")
+    std::env::var("GENTS_D4F_LIVE").as_deref() == Ok("1")
 }
 
 const D4F_ENDPOINT: &str = "http://100.73.235.38:8000/v1";
@@ -162,11 +162,11 @@ async fn upsert_d4f_backend(node: &EmbeddedNode) {
     );
 }
 
-/// Boot a full `DefraAgent` from the behavior documents owned by `identity`'s
+/// Boot a full `Gents` from the behavior documents owned by `identity`'s
 /// DID and wait for it to reach `ready`. Returns a `BootedAgent` whose
 /// `.shutdown()` cleanly stops the daemon. Reusable by 2a-2 / 2a-3.
 pub async fn boot_d4f_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Result<BootedAgent> {
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -330,7 +330,7 @@ pub async fn wait_for_assistant_answer(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn d4f_backend_probes_healthy_and_completes() {
     if !d4f_enabled() {
-        eprintln!("DEFRA_AGENT_D4F_LIVE is not 1; skipping d4f live smoke test");
+        eprintln!("GENTS_D4F_LIVE is not 1; skipping d4f live smoke test");
         return;
     }
 

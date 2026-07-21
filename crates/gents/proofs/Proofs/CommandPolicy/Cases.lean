@@ -180,7 +180,7 @@ def commandPolicyOrderingCases : List CommandPolicyCase :=
       (commandRequest
         "spctl"
         "spctl"
-        ["--assess", "--type", "execute", "/Applications/Defra Agent.app"])
+        ["--assess", "--type", "execute", "/Applications/Gents.app"])
   , validationCase
       "forbidden_prefix_overrides_configured_read_only_diagnostic"
       "read_only_configured_prefix"
@@ -193,7 +193,7 @@ def commandPolicyOrderingCases : List CommandPolicyCase :=
       (commandRequest
         "spctl"
         "spctl"
-        ["--assess", "--raw", "/Applications/Defra Agent.app"])
+        ["--assess", "--raw", "/Applications/Gents.app"])
   , validationCase
       "read_only_allowlisted_lookup_basename_allows"
       "read_only_allowlist"
@@ -296,12 +296,12 @@ def readOnlySafetyCases : List CommandPolicyCase :=
       "read_only_git_output_flag_denies"
       "git"
       "git"
-      ["diff", "--output=/tmp/defra-agent-diff.txt"]
+      ["diff", "--output=/tmp/gents-diff.txt"]
   , readOnlySafetyCase
       "read_only_git_exec_flag_denies"
       "git"
       "git"
-      ["log", "--exec=touch /tmp/defra-agent-nope"]
+      ["log", "--exec=touch /tmp/gents-nope"]
   , readOnlySafetyCase
       "read_only_git_commit_subcommand_denies"
       "git"
@@ -346,7 +346,7 @@ def readOnlySafetyCases : List CommandPolicyCase :=
       "read_only_rg_pre_denies"
       "rg"
       "rg"
-      ["--pre", "touch /tmp/defra-agent-nope", "needle"]
+      ["--pre", "touch /tmp/gents-nope", "needle"]
   , readOnlySafetyCase
       "read_only_rg_search_zip_denies"
       "rg"
@@ -366,7 +366,7 @@ def readOnlySafetyCases : List CommandPolicyCase :=
       "read_only_curl_output_denies"
       "curl"
       "curl"
-      ["-o", "/tmp/defra-agent-out", "https://example.com/metrics"]
+      ["-o", "/tmp/gents-out", "https://example.com/metrics"]
   , readOnlySafetyCase
       "read_only_curl_upload_denies"
       "curl"
@@ -406,7 +406,7 @@ def readOnlySafetyCases : List CommandPolicyCase :=
       "read_only_sudo_rm_denies"
       "sudo"
       "sudo"
-      ["rm", "-rf", "/tmp/defra-agent-nope"]
+      ["rm", "-rf", "/tmp/gents-nope"]
   , readOnlySafetyCase
       "read_only_sudo_missing_command_denies"
       "sudo"

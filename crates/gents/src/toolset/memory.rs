@@ -309,7 +309,7 @@ mod tests {
             MemoryParams {
                 action: MemoryAction::Write,
                 key: "project".to_string(),
-                value: Some("defra-agent".to_string()),
+                value: Some("gents".to_string()),
             },
         )
         .await
@@ -328,7 +328,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&output).unwrap();
 
         assert_eq!(parsed["found"], true);
-        assert_eq!(parsed["value"], "defra-agent");
+        assert_eq!(parsed["value"], "gents");
     }
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-use defra_agent::{
+use gents::{
     fetch_interrupt_requested_at,
     lifecycle::{ClaimOutcome, ExecutionOrigin},
     tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle},
@@ -30,7 +30,7 @@ struct ConversationRow {
     status: String,
 }
 
-async fn mark_request_interrupted(node: &defra_agent::defra_node::EmbeddedNode, doc_id: &str) {
+async fn mark_request_interrupted(node: &gents::defra_node::EmbeddedNode, doc_id: &str) {
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(

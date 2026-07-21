@@ -3,8 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
-use defra_native_fs_runner::execute_request_with_base;
-use defra_native_fs_runner::protocol::{GlobArgs, GrepArgs, NativeFsRunnerRequest};
+use gents_fs_runner::execute_request_with_base;
+use gents_fs_runner::protocol::{GlobArgs, GrepArgs, NativeFsRunnerRequest};
 use serde_json::Value;
 
 /// Fresh, empty temp directory unique to this test (and safe under the

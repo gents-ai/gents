@@ -1,8 +1,8 @@
 //! Reference implementation of the apply model mirroring
-//! `crates/defra-agent/proofs/Proofs/ApplyReconcile.lean`.
+//! `crates/gents/proofs/Proofs/ApplyReconcile.lean`.
 //!
 //! This is test-only scaffolding: property tests and conformance tests
-//! exercise it, but production apply lives in `defra-agent-cli`.
+//! exercise it, but production apply lives in `gents-cli`.
 //! Conformance cases (`tests/apply_conformance.rs`) anchor the production
 //! code to the semantics pinned here; property tests (`tests/apply_property.rs`)
 //! exercise `diff`, `apply_one`, `apply_prefix`, `retry_after_prefix`, and
@@ -10,7 +10,7 @@
 //!
 //! Variants, apply-order ranks, and `diff` ordering MUST agree with
 //! both the Lean `ApplyReconcile` module and the Rust
-//! `defra_agent::Collection` enum.
+//! `gents::Collection` enum.
 
 use std::collections::{BTreeMap, BTreeSet};
 

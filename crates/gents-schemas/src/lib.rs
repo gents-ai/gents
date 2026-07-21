@@ -1,4 +1,4 @@
-//! Static GraphQL schema strings for defra-agent agent collections.
+//! Static GraphQL schema strings for gents agent collections.
 //!
 //! This crate is intentionally dependency-free so external document-peer
 //! consumers can depend on the agent collection contract without also pulling

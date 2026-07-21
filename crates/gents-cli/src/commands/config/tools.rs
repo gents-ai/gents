@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_agent::{CommandExecutionMode, CommandNetworkMode, ToolSelectionDocument};
+use gents::{CommandExecutionMode, CommandNetworkMode, ToolSelectionDocument};
 use serde_json::json;
 
 use crate::cli::*;
@@ -11,7 +11,7 @@ use crate::print_json;
 /// it to stdout, so it composes as `--subagent-target "$(... subagent-target-entry ...)"`
 /// with real flag validation instead of a hand-typed JSON parse error.
 pub(super) fn subagent_target_entry_command(args: SubagentTargetEntryArgs) -> Result<()> {
-    let entry = defra_agent::subagent_target_entry(
+    let entry = gents::subagent_target_entry(
         args.name,
         args.agent_did,
         args.behavior_id,
@@ -231,7 +231,7 @@ fn file_tools_update(
     let Some(enabled) = args.enable_file_tools else {
         let mode = normalize_optional_string(args.file_tools_mode.as_deref());
         if let Some(mode) = mode.as_deref() {
-            defra_agent::FileToolMode::parse(mode)?;
+            gents::FileToolMode::parse(mode)?;
         }
         return Ok((None, mode));
     };
@@ -242,7 +242,7 @@ fn file_tools_update(
     } else {
         "Off".to_string()
     };
-    defra_agent::FileToolMode::parse(&mode)?;
+    gents::FileToolMode::parse(&mode)?;
     Ok((Some(enabled), Some(mode)))
 }
 
@@ -261,7 +261,7 @@ fn bash_update(
     let Some(enabled) = args.enable_bash else {
         let mode = normalize_optional_string(args.bash_mode.as_deref());
         if let Some(mode) = mode.as_deref() {
-            defra_agent::BashMode::parse(mode)?;
+            gents::BashMode::parse(mode)?;
         }
         return Ok((None, mode));
     };
@@ -272,7 +272,7 @@ fn bash_update(
     } else {
         "Off".to_string()
     };
-    defra_agent::BashMode::parse(&mode)?;
+    gents::BashMode::parse(&mode)?;
     Ok((Some(enabled), Some(mode)))
 }
 
@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn subagent_flags_build_tool_selection_document() {
-        let target = defra_agent::subagent_target_entry(
+        let target = gents::subagent_target_entry(
             "worker",
             "did:key:z-test",
             "worker",
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn invalid_subagent_combinations_are_rejected() {
-        let target = defra_agent::subagent_target_entry(
+        let target = gents::subagent_target_entry(
             "worker",
             "did:key:z-test",
             "worker",
@@ -649,13 +649,13 @@ mod tests {
         // subagent_target_entry_command only prints; exercise the same
         // construction it delegates to and confirm it round-trips through
         // SubagentTarget::parse (the same parser used at write time).
-        let entry = defra_agent::subagent_target_entry(
+        let entry = gents::subagent_target_entry(
             args.name.clone(),
             args.agent_did.clone(),
             args.behavior_id.clone(),
             args.description.clone(),
         );
-        let parsed = defra_agent::SubagentTarget::parse(&entry).unwrap();
+        let parsed = gents::SubagentTarget::parse(&entry).unwrap();
         assert_eq!(parsed.name, "researcher");
         assert_eq!(parsed.agent_did, "did:key:z-test");
         assert_eq!(parsed.behavior_id, "did:key:z-test:default");
@@ -676,7 +676,7 @@ mod tests {
         let contents = r#"{"name":"worker","agent_did":"did:key:z-test","behavior_id":"worker"}"#;
         let entries = parse_subagent_target_contents(contents, "@irrelevant").unwrap();
         assert_eq!(entries.len(), 1);
-        let parsed = defra_agent::SubagentTarget::parse(&entries[0]).unwrap();
+        let parsed = gents::SubagentTarget::parse(&entries[0]).unwrap();
         assert_eq!(parsed.name, "worker");
     }
 
@@ -690,7 +690,7 @@ mod tests {
         assert_eq!(entries.len(), 2);
         let names: Vec<String> = entries
             .iter()
-            .map(|entry| defra_agent::SubagentTarget::parse(entry).unwrap().name)
+            .map(|entry| gents::SubagentTarget::parse(entry).unwrap().name)
             .collect();
         assert_eq!(names, vec!["worker-a".to_string(), "worker-b".to_string()]);
     }
@@ -714,7 +714,7 @@ mod tests {
         let entries = expand_subagent_target_value(&raw).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(
-            defra_agent::SubagentTarget::parse(&entries[0])
+            gents::SubagentTarget::parse(&entries[0])
                 .unwrap()
                 .name,
             "worker"

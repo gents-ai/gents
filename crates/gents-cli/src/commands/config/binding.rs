@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use defra_agent::{AgentIdentity, KeyIdentity};
+use gents::{AgentIdentity, KeyIdentity};
 use serde_json::Value;
 
 use crate::cli::ManifestAgentDidBindingArg;
@@ -237,7 +237,7 @@ fn resolve_home_binding_agent_did(home: Option<&Path>) -> Result<String> {
     let home_dir = crate::resolve_home_dir(home);
     let init_config = crate::read_init_config(&home_dir)?.ok_or_else(|| {
         anyhow::anyhow!(
-            "initialized home metadata is required for --bind-agent-did home; run `defra-agent init --identity-only --home {}` first",
+            "initialized home metadata is required for --bind-agent-did home; run `gents init --identity-only --home {}` first",
             home_dir.display()
         )
     })?;
@@ -247,7 +247,7 @@ fn resolve_home_binding_agent_did(home: Option<&Path>) -> Result<String> {
         if let Some(key_did) = load_init_key_did(init_config.key_path.as_deref(), &home_dir)? {
             if key_did != init_did {
                 anyhow::bail!(
-                    "initialized home {} has agent DID {init_did}, but identity key resolves to {key_did}; rerun `defra-agent init --identity-only` or repair the home identity metadata",
+                    "initialized home {} has agent DID {init_did}, but identity key resolves to {key_did}; rerun `gents init --identity-only` or repair the home identity metadata",
                     home_dir.display()
                 );
             }
@@ -257,7 +257,7 @@ fn resolve_home_binding_agent_did(home: Option<&Path>) -> Result<String> {
 
     load_init_key_did(init_config.key_path.as_deref(), &home_dir)?.ok_or_else(|| {
         anyhow::anyhow!(
-            "initialized home {} does not contain a real agent DID or identity key path; rerun `defra-agent init --identity-only`",
+            "initialized home {} does not contain a real agent DID or identity key path; rerun `gents init --identity-only`",
             home_dir.display()
         )
     })
@@ -273,7 +273,7 @@ fn load_init_key_did(key_path: Option<&str>, home_dir: &Path) -> Result<Option<S
     };
     if !key_path.exists() {
         anyhow::bail!(
-            "initialized home {} points to missing identity key {}; rerun `defra-agent init --identity-only`",
+            "initialized home {} points to missing identity key {}; rerun `gents init --identity-only`",
             home_dir.display(),
             key_path.display()
         );

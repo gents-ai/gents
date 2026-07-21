@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use crate::llm::message::{AssistantContent, Message, Text, UserContent};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
-use defra_agent_protocol::transcript::{decode_persisted_message, present_persisted_message};
+use gents_protocol::transcript::{decode_persisted_message, present_persisted_message};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 use serde_json::{json, Value};

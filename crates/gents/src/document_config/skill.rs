@@ -7,7 +7,7 @@ use crate::graphql::escape_graphql_string;
 use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
 
 /// Document-layer view of a `Skill` row (decision D1). Mirrors
-/// `crates/defra-agent-protocol/schemas/agent/skill.graphql`.
+/// `crates/gents-protocol/schemas/agent/skill.graphql`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SkillDocument {
     pub skill_id: String,

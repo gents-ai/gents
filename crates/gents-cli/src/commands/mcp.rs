@@ -2,8 +2,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{
+use gents::graphql::escape_graphql_string;
+use gents::{
     health_checker::HealthCheckerOptions, run_health_check_cycle, HealthStatus,
     McpHealthCheckService, McpPool, ServiceHealthMap,
 };

@@ -2,17 +2,17 @@
 //!
 //! Unlike `event_trigger_p2p_e2e` (manual `install_one_way_replicator`), this
 //! drives replication through `DataPlanePairingDesired` + the pairing
-//! reconciler. Both nodes run `DefraAgent::run`.
+//! reconciler. Both nodes run `Gents::run`.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use defra_agent::agent::p2p_reconcile::{GraphqlNetworkStore, NetworkStore};
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::retry::execute_graphql_with_conflict_retry;
-use defra_agent::{AgentIdentity, DefraAgent, DocumentRuntimeOptions, ToolCeiling};
-use defra_agent_protocol::network_token::{
+use gents::agent::p2p_reconcile::{GraphqlNetworkStore, NetworkStore};
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::retry::execute_graphql_with_conflict_retry;
+use gents::{AgentIdentity, Gents, DocumentRuntimeOptions, ToolCeiling};
+use gents_protocol::network_token::{
     derive_membership_key, EndpointRecord, MembershipRecord, NetworkRecord,
 };
 use serde::Deserialize;
@@ -651,7 +651,7 @@ async fn seed_makes_peer_materializable() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     // Compress pairing sweeps for this process (read once at daemon start).
-    std::env::set_var("DEFRA_AGENT_PAIRING_SWEEP_MS", "1000");
+    std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
 
     let db_a = test_p2p_db("app-collection-pairing-a").await;
     let db_b = test_p2p_db("app-collection-pairing-b").await;
@@ -681,7 +681,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     )
     .await;
 
-    let agent_a = DefraAgent::from_default_behavior_documents(
+    let agent_a = Gents::from_default_behavior_documents(
         db_a.node.clone(),
         identity_a.clone(),
         DocumentRuntimeOptions {
@@ -691,7 +691,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     )
     .await
     .unwrap();
-    let agent_b = DefraAgent::from_default_behavior_documents(
+    let agent_b = Gents::from_default_behavior_documents(
         db_b.node.clone(),
         identity_b.clone(),
         DocumentRuntimeOptions {
@@ -915,7 +915,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn empty_app_collection_row_does_not_stall_control_pairing() {
-    std::env::set_var("DEFRA_AGENT_PAIRING_SWEEP_MS", "1000");
+    std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
 
     let db_a = test_p2p_db("app-collection-soft-skip-a").await;
     let db_b = test_p2p_db("app-collection-soft-skip-b").await;
@@ -943,7 +943,7 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     )
     .await;
 
-    let agent_a = DefraAgent::from_default_behavior_documents(
+    let agent_a = Gents::from_default_behavior_documents(
         db_a.node.clone(),
         identity_a.clone(),
         DocumentRuntimeOptions {
@@ -953,7 +953,7 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     )
     .await
     .unwrap();
-    let agent_b = DefraAgent::from_default_behavior_documents(
+    let agent_b = Gents::from_default_behavior_documents(
         db_b.node.clone(),
         identity_b.clone(),
         DocumentRuntimeOptions {

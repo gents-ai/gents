@@ -51,7 +51,7 @@
 //! the engine delegates to at runtime, but they are no longer the only
 //! correctness oracle for serial/latest-only trigger behavior.
 //!
-//! Cases 1, 2, 3, 4, 5, 9 boot a real `DefraAgent` so the EventSource loop
+//! Cases 1, 2, 3, 4, 5, 9 boot a real `Gents` so the EventSource loop
 //! actually observes DefraDB events; these are the tests where the
 //! externally-observable behavior *only* exists if the live subscription +
 //! filter + materialize chain runs end to end.
@@ -59,10 +59,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
-use defra_agent::{AgentIdentity, DefraAgent, DocumentRuntimeOptions, ToolCeiling};
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
+use gents::{AgentIdentity, Gents, DocumentRuntimeOptions, ToolCeiling};
 use serde_json::Value;
 
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
@@ -546,7 +546,7 @@ async fn boot_agent(db: &crate::support::TestDb, test_name: &str, backend_id: &s
         mock_endpoint.endpoint(),
     )
     .await;
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {

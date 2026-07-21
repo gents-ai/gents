@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_agent::Collection;
+use gents::Collection;
 use std::path::Path;
 
 use crate::cli::*;

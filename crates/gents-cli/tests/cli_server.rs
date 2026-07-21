@@ -6,7 +6,7 @@ use std::fs;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use defra_agent::{default_behavior_id_for_agent, default_tool_selection_id_for_behavior};
+use gents::{default_behavior_id_for_agent, default_tool_selection_id_for_behavior};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -173,15 +173,15 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .context("reading /version body")?;
     assert_eq!(
         version.get("service").and_then(Value::as_str),
-        Some("defra-agent")
+        Some("gents")
     );
     assert_eq!(
         version.get("binary").and_then(Value::as_str),
-        Some("defra-agent")
+        Some("gents")
     );
     assert_eq!(
         version.get("package").and_then(Value::as_str),
-        Some("defra-agent-cli")
+        Some("gents-cli")
     );
     assert_eq!(
         version.get("version").and_then(Value::as_str),
@@ -209,7 +209,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     assert_eq!(health.get("status").and_then(Value::as_str), Some("ok"));
     assert_eq!(
         health.get("service").and_then(Value::as_str),
-        Some("defra-agent")
+        Some("gents")
     );
     assert_eq!(
         health
@@ -537,27 +537,27 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     );
     let body = response.text().await.context("reading /metrics body")?;
     assert!(
-        body.contains("# HELP defra_agent_up"),
-        "expected defra_agent_up help text in metrics body:\n{body}"
+        body.contains("# HELP gents_up"),
+        "expected gents_up help text in metrics body:\n{body}"
     );
     assert!(
-        body.contains(r#"defra_agent_up 1"#),
-        "expected defra_agent_up sample in metrics body:\n{body}"
+        body.contains(r#"gents_up 1"#),
+        "expected gents_up sample in metrics body:\n{body}"
     );
     assert!(
         body.contains(&format!(
-            r#"defra_agent_runtime_process_state{{agent_did="{agent_did}",state="ready"}} 1"#
+            r#"gents_runtime_process_state{{agent_did="{agent_did}",state="ready"}} 1"#
         )),
         "expected ready process-state metric in metrics body:\n{body}"
     );
     assert!(
         body.contains(&format!(
-            r#"defra_agent_runtime_active_generation{{agent_did="{agent_did}"}}"#
+            r#"gents_runtime_active_generation{{agent_did="{agent_did}"}}"#
         )),
         "expected active-generation metric in metrics body:\n{body}"
     );
     assert!(
-        body.contains("defra_agent_backend_enabled"),
+        body.contains("gents_backend_enabled"),
         "expected backend metrics in metrics body:\n{body}"
     );
 
@@ -776,7 +776,7 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
 async fn server_rejects_real_initialized_did_without_key_path() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_env = tempdir.path().join("home-env");
-    let agent_home = home_env.join(".defra-agent");
+    let agent_home = home_env.join(".gents");
     fs::create_dir_all(&agent_home)?;
 
     let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
@@ -819,7 +819,7 @@ async fn server_rejects_real_initialized_did_without_key_path() -> Result<()> {
 async fn server_rejects_macos_keychain_identity_without_label() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_env = tempdir.path().join("home-env");
-    let agent_home = home_env.join(".defra-agent");
+    let agent_home = home_env.join(".gents");
     fs::create_dir_all(&agent_home)?;
 
     let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
@@ -864,7 +864,7 @@ async fn server_rejects_real_initialized_did_with_missing_key_file_without_creat
 ) -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_env = tempdir.path().join("home-env");
-    let agent_home = home_env.join(".defra-agent");
+    let agent_home = home_env.join(".gents");
     let key_path = agent_home.join("keys").join("missing.key");
     fs::create_dir_all(&agent_home)?;
 
@@ -1247,14 +1247,14 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
             "--model-name",
             &model_name,
             "--api-key-env-var",
-            "DEFRA_AGENT_TEST_CLI_BACKEND_KEY",
+            "GENTS_TEST_CLI_BACKEND_KEY",
             mock_endpoint.endpoint(),
         ],
     )?;
     assert_eq!(
         init.pointer("/init/api_key_env_var")
             .and_then(Value::as_str),
-        Some("DEFRA_AGENT_TEST_CLI_BACKEND_KEY")
+        Some("GENTS_TEST_CLI_BACKEND_KEY")
     );
     let agent_did = agent_did_from_init(&init)?;
     let backend_id = generated_backend_id_for_agent(&agent_did);
@@ -1264,7 +1264,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         &home_dir,
         port,
         &[],
-        &[("DEFRA_AGENT_TEST_CLI_BACKEND_KEY", "backend-key")],
+        &[("GENTS_TEST_CLI_BACKEND_KEY", "backend-key")],
     )?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
@@ -1276,7 +1276,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         mock_endpoint.endpoint(),
         "OpenAiCompatible",
         None,
-        Some("DEFRA_AGENT_TEST_CLI_BACKEND_KEY"),
+        Some("GENTS_TEST_CLI_BACKEND_KEY"),
         &model_name,
         &tool_selection_id,
         "ReadOnly",
@@ -1300,7 +1300,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
     Ok(())
 }
 
-/// Proves the `defra-agent query` command can reconstruct a full agent trace
+/// Proves the `gents query` command can reconstruct a full agent trace
 /// (AgentRequest + AgentResponse + AgentMessage + AgentToolCall, stitched by
 /// request_id / session_id) purely from structured query output — i.e. it can
 /// retire Amygdala's hand-rolled GraphQL client / escaping / polling /
@@ -1357,7 +1357,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
         );
     }
 
-    // Reconstruct each collection via `defra-agent query`.
+    // Reconstruct each collection via `gents query`.
     let request = run_cli_json(
         &home_dir,
         &[

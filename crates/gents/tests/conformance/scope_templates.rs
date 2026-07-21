@@ -5,7 +5,7 @@
 //! mirrors and calls the REAL `resolve_template` / `scope_filter` (never a
 //! reimpl), so the resolution the reconciler uses is fenced against the spec.
 
-use defra_agent::agent::p2p_reconcile::templates::{
+use gents::agent::p2p_reconcile::templates::{
     builtin_templates, resolve_template, scope_filter, Delivery, FilterPredicate, Scope,
 };
 

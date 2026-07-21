@@ -7,13 +7,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_agent::__test_internals::{handle_list_subagents, ListSubagentsArgs};
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle};
-use defra_agent::{
+use gents::__test_internals::{handle_list_subagents, ListSubagentsArgs};
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle};
+use gents::{
     default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior,
-    upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DefraAgent,
+    upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, Gents,
     DocumentRuntimeOptions, ToolCeiling, ToolSelectionDocument,
 };
 use serde::Deserialize;
@@ -54,7 +54,7 @@ async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> 
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: agent_did.clone(),
-            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+            subagent_targets: Some(vec![gents::subagent_target_entry(
                 behavior_id.clone(),
                 &agent_did,
                 behavior_id.clone(),
@@ -98,7 +98,7 @@ async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> 
         .await
         .unwrap();
 
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {

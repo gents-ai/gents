@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_agent::{default_behavior_id_for_agent, AgentBehaviorDocument as AgentBehavior};
+use gents::{default_behavior_id_for_agent, AgentBehaviorDocument as AgentBehavior};
 use serde_json::json;
 
 use crate::cli::*;

@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 fn repo_root() -> PathBuf {
-    // crates/defra-agent -> repo root
+    // crates/gents -> repo root
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
@@ -108,7 +108,7 @@ fn markdown_links_resolve() {
 #[test]
 fn proofs_contain_no_sorrys() {
     let root = repo_root();
-    let proofs = root.join("crates/defra-agent/proofs/Proofs");
+    let proofs = root.join("crates/gents/proofs/Proofs");
     let mut offenders = Vec::new();
     visit_lean(&proofs, &mut offenders);
     assert!(
@@ -152,22 +152,22 @@ fn rig_vocabulary_confined_to_the_seam() {
     let root = repo_root();
     let allowed: BTreeSet<&str> = [
         // The seam itself.
-        "crates/defra-agent/src/llm/rig_compat.rs",
+        "crates/gents/src/llm/rig_compat.rs",
         // This fence (the marker strings below would self-match).
-        "crates/defra-agent/tests/conformance/docs.rs",
+        "crates/gents/tests/conformance/docs.rs",
         // Stream consumers: yield/accept rig items by design (D3).
-        "crates/defra-agent/src/agent/loop_stream.rs",
-        "crates/defra-agent/src/agent/stream_processor.rs",
+        "crates/gents/src/agent/loop_stream.rs",
+        "crates/gents/src/agent/stream_processor.rs",
         // Tests that construct rig items to feed the seam, and the golden
         // byte-compat suite (rig is a dev-dependency there until Layer A).
-        "crates/defra-agent/src/agent/loop_stream/tests.rs",
-        "crates/defra-agent/src/agent/stream_processor/tests.rs",
-        "crates/defra-agent/src/compaction/tests.rs",
+        "crates/gents/src/agent/loop_stream/tests.rs",
+        "crates/gents/src/agent/stream_processor/tests.rs",
+        "crates/gents/src/compaction/tests.rs",
         // Constructs a rig `Message` to drive the real OpenAI request-body
         // conversion and assert the default additional_params (reasoning effort /
         // enable_thinking) serialize correctly — feeds the seam like the tests above.
-        "crates/defra-agent/src/completion_factory/tests.rs",
-        "crates/defra-agent-protocol/src/message.rs",
+        "crates/gents/src/completion_factory/tests.rs",
+        "crates/gents-protocol/src/message.rs",
     ]
     .into_iter()
     .collect();
@@ -259,7 +259,7 @@ fn visit_rust(
 #[test]
 fn protocol_crate_runtime_is_rig_free() {
     let root = repo_root();
-    let manifest = read(&root.join("crates/defra-agent-protocol/Cargo.toml"));
+    let manifest = read(&root.join("crates/gents-protocol/Cargo.toml"));
     let dependencies = manifest
         .split("[dev-dependencies]")
         .next()
@@ -270,7 +270,7 @@ fn protocol_crate_runtime_is_rig_free() {
         .any(|line| line.trim_start().starts_with("rig-core"));
     assert!(
         !has_runtime_rig,
-        "defra-agent-protocol gained a runtime rig-core dependency; \
+        "gents-protocol gained a runtime rig-core dependency; \
          the persisted vocabulary must stay rig-free (CLAUDE.md claim)"
     );
 }

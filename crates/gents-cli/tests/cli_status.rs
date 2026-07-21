@@ -172,19 +172,19 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
         .await
         .context("/metrics body")?;
     assert!(
-        metrics.contains("defra_agent_p2p_enabled 1"),
+        metrics.contains("gents_p2p_enabled 1"),
         "metrics missing p2p_enabled: {metrics}"
     );
     assert!(
         metrics.contains(&format!(
-            "defra_agent_p2p_admission_max_pending_dags {}",
+            "gents_p2p_admission_max_pending_dags {}",
             p2p::sync::DEFAULT_MAX_PENDING_DAGS
         )),
         "metrics missing pending-dag admission: {metrics}"
     );
     assert!(
         metrics.contains(&format!(
-            "defra_agent_p2p_admission_max_concurrent_push_tasks {}",
+            "gents_p2p_admission_max_concurrent_push_tasks {}",
             p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS
         )),
         "metrics missing push-task admission: {metrics}"
@@ -308,11 +308,11 @@ async fn status_and_metrics_surface_overridden_p2p_admission_knobs() -> Result<(
         .await
         .context("/metrics body")?;
     for needle in [
-        "defra_agent_p2p_admission_max_pending_dags 17",
-        "defra_agent_p2p_admission_max_concurrent_push_tasks 3",
-        "defra_agent_p2p_admission_max_concurrent_dag_fetches 5",
-        "defra_agent_p2p_admission_rate_limit_burst 111",
-        "defra_agent_p2p_admission_rate_limit_rate 22.5",
+        "gents_p2p_admission_max_pending_dags 17",
+        "gents_p2p_admission_max_concurrent_push_tasks 3",
+        "gents_p2p_admission_max_concurrent_dag_fetches 5",
+        "gents_p2p_admission_rate_limit_burst 111",
+        "gents_p2p_admission_rate_limit_rate 22.5",
     ] {
         assert!(
             metrics.contains(needle),

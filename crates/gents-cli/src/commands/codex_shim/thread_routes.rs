@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::session::{fork, ForkError, ForkParams};
+use gents::graphql::escape_graphql_string;
+use gents::session::{fork, ForkError, ForkParams};
 use serde_json::{json, Value};
 
 use super::bound_behavior::load_bound_model_selection_id_for_state;

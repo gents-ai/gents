@@ -3,8 +3,8 @@
 //! generated junk filtered before it consumes walk budget), while dotfiles
 //! stay visible — agents rely on `.github/...` patterns and dotfile listings.
 
-use defra_native_fs_runner::execute_request_with_base;
-use defra_native_fs_runner::protocol::{GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
+use gents_fs_runner::execute_request_with_base;
+use gents_fs_runner::protocol::{GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
 use serde_json::Value;
 
 mod support;

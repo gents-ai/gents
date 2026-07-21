@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
-use defra_agent::agent::p2p_reconcile::network::{decide_v5_admission, V5AdmissionClaim};
-use defra_agent::agent::p2p_reconcile::resolve_template;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::AgentIdentity;
-use defra_agent_protocol::network_token::{derive_network_id, MembershipRecord};
-use defra_agent_protocol::pairing_token::{
+use gents::agent::p2p_reconcile::network::{decide_v5_admission, V5AdmissionClaim};
+use gents::agent::p2p_reconcile::resolve_template;
+use gents::graphql::escape_graphql_string;
+use gents::AgentIdentity;
+use gents_protocol::network_token::{derive_network_id, MembershipRecord};
+use gents_protocol::pairing_token::{
     check_freshness, decode, signing_payload, InviteToken, DEFAULT_INVITE_MAX_AGE,
 };
 use serde_json::json;

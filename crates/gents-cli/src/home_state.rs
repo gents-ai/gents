@@ -17,7 +17,7 @@ fn default_home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".defra-agent")
+        .join(".gents")
 }
 
 pub(crate) fn default_data_dir(home_dir: &Path) -> PathBuf {
@@ -122,7 +122,7 @@ pub(crate) fn resolve_agent_did(home: Option<&Path>, explicit: Option<&str>) -> 
     }
 
     anyhow::bail!(
-        "agent DID is required; run `defra-agent init`, start `defra-agent server`, then retry `defra-agent status`, or pass --agent-did explicitly"
+        "agent DID is required; run `gents init`, start `gents server`, then retry `gents status`, or pass --agent-did explicitly"
     )
 }
 

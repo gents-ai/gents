@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
-use defra_agent::tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle};
-use defra_agent::{ensure_runtime_schemas, load_tool_selection, upsert_tool_selection};
+use gents::defra_node::{EmbeddedNode, StorageBackend};
+use gents::tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle};
+use gents::{ensure_runtime_schemas, load_tool_selection, upsert_tool_selection};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -161,8 +161,8 @@ async fn subagent_cancel_local_cascades_bridge_lifecycle_dispatch() -> Result<()
     {
         let node = open_local_node(&home_dir).await?;
         ensure_runtime_schemas(node.as_ref()).await?;
-        defra_agent::migration::ensure_tool_call_migrations(node.clone()).await?;
-        defra_agent::migration::ensure_subagent_extensions_migrations(node.clone()).await?;
+        gents::migration::ensure_tool_call_migrations(node.clone()).await?;
+        gents::migration::ensure_subagent_extensions_migrations(node.clone()).await?;
 
         create_local_processing_request(
             node.as_ref(),
@@ -296,7 +296,7 @@ async fn enable_default_subagents_before_server(
     selection_id: &str,
     target_behavior_id: &str,
 ) -> Result<()> {
-    let data_dir = home_dir.join(".defra-agent").join("data");
+    let data_dir = home_dir.join(".gents").join("data");
     let node = EmbeddedNode::builder()
         .data_path(&data_dir)
         .with_storage_backend(StorageBackend::RocksDb)
@@ -306,7 +306,7 @@ async fn enable_default_subagents_before_server(
     let mut selection = load_tool_selection(&node, selection_id)
         .await?
         .ok_or_else(|| anyhow!("ToolSelection {selection_id} not found"))?;
-    selection.subagent_targets = Some(vec![defra_agent::subagent_target_entry(
+    selection.subagent_targets = Some(vec![gents::subagent_target_entry(
         target_behavior_id,
         &selection.agent_did,
         target_behavior_id,
@@ -321,7 +321,7 @@ async fn enable_default_subagents_before_server(
 }
 
 async fn open_local_node(home_dir: &std::path::Path) -> Result<Arc<EmbeddedNode>> {
-    let data_dir = home_dir.join(".defra-agent").join("data");
+    let data_dir = home_dir.join(".gents").join("data");
     Ok(Arc::new(
         EmbeddedNode::builder()
             .data_path(&data_dir)

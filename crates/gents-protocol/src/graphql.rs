@@ -251,7 +251,7 @@ pub async fn execute_graphql_async(
 }
 
 /// Like `execute_graphql_async` but adds an `x-defradb-tx` header when
-/// `txn_id` is `Some`. Used by `defra-agent-cli` to drive DefraDB HTTP
+/// `txn_id` is `Some`. Used by `gents-cli` to drive DefraDB HTTP
 /// transactions during `config apply`.
 pub async fn execute_graphql_async_with_tx(
     graphql: &str,

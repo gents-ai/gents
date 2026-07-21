@@ -796,7 +796,7 @@ mod tests {
 
     async fn test_db(name: &str) -> TestDb {
         let tempdir = tempfile::Builder::new()
-            .prefix(&format!("defra-agent-queue-{name}-"))
+            .prefix(&format!("gents-queue-{name}-"))
             .tempdir()
             .expect("tempdir");
         let node = EmbeddedNode::builder()

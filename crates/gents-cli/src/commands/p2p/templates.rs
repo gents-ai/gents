@@ -1,13 +1,13 @@
 //! `p2p templates` subcommands: list.
 //!
 //! The handler reads directly from the static catalog in
-//! `defra_agent::agent::p2p_reconcile::templates` — no node or GraphQL
+//! `gents::agent::p2p_reconcile::templates` — no node or GraphQL
 //! connection required.
 
 use std::io::{self, Write};
 
 use anyhow::{Context, Result};
-use defra_agent::agent::p2p_reconcile::templates::{builtin_templates, Delivery, Scope};
+use gents::agent::p2p_reconcile::templates::{builtin_templates, Delivery, Scope};
 use serde::Serialize;
 use serde_json::json;
 
@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn p2p_templates_list_json_parses() {
         let cli = Cli::try_parse_from([
-            "defra-agent",
+            "gents",
             "p2p",
             "templates",
             "list",
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn p2p_templates_list_default_output_is_table() {
-        let cli = Cli::try_parse_from(["defra-agent", "p2p", "templates", "list"])
+        let cli = Cli::try_parse_from(["gents", "p2p", "templates", "list"])
             .expect("p2p templates list should parse");
         match cli.command {
             crate::cli::args::Command::P2p {

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::Collection;
+use gents::graphql::escape_graphql_string;
+use gents::Collection;
 use serde_json::{json, Value};
 
 use crate::cli::output_format::OutputFormat;

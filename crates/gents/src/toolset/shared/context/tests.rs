@@ -2,15 +2,15 @@ use super::{resolve_default_read_root, ToolContext};
 
 #[test]
 fn default_read_root_prefers_current_dir() {
-    let cwd = std::env::temp_dir().join("defra-agent-cwd-root");
-    let home = std::env::temp_dir().join("defra-agent-home-root");
+    let cwd = std::env::temp_dir().join("gents-cwd-root");
+    let home = std::env::temp_dir().join("gents-home-root");
     let resolved = resolve_default_read_root(Some(cwd.clone()), Some(home)).unwrap();
     assert_eq!(resolved, cwd);
 }
 
 #[test]
 fn default_read_root_falls_back_to_home() {
-    let home = std::env::temp_dir().join("defra-agent-home-root");
+    let home = std::env::temp_dir().join("gents-home-root");
     let resolved = resolve_default_read_root(None, Some(home.clone())).unwrap();
     assert_eq!(resolved, home);
 }
@@ -23,7 +23,7 @@ fn default_read_root_errors_when_unavailable() {
 #[test]
 fn relative_paths_resolve_from_base_inside_root() {
     let root = std::env::temp_dir().join(format!(
-        "defra-agent-tool-context-root-{}",
+        "gents-tool-context-root-{}",
         uuid::Uuid::new_v4()
     ));
     let base = root.join("workspace");
@@ -45,11 +45,11 @@ fn relative_paths_resolve_from_base_inside_root() {
 #[test]
 fn base_outside_root_falls_back_to_root() {
     let root = std::env::temp_dir().join(format!(
-        "defra-agent-tool-context-root-{}",
+        "gents-tool-context-root-{}",
         uuid::Uuid::new_v4()
     ));
     let outside = std::env::temp_dir().join(format!(
-        "defra-agent-tool-context-outside-{}",
+        "gents-tool-context-outside-{}",
         uuid::Uuid::new_v4()
     ));
     std::fs::create_dir_all(&root).unwrap();
@@ -71,7 +71,7 @@ fn base_outside_root_falls_back_to_root() {
 #[tokio::test]
 async fn request_runtime_workspace_overrides_static_base() {
     let root = std::env::temp_dir().join(format!(
-        "defra-agent-tool-context-root-{}",
+        "gents-tool-context-root-{}",
         uuid::Uuid::new_v4()
     ));
     let workspace = root.join("repo");

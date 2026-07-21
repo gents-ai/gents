@@ -1,6 +1,6 @@
 //! R6 background-tool recovery tests.
 
-use defra_agent::tool_call_lifecycle::ToolCallLifecycle;
+use gents::tool_call_lifecycle::ToolCallLifecycle;
 use serde::Deserialize;
 
 use crate::support::{create_request, first_row, test_db, AGENT_DID};
@@ -23,10 +23,10 @@ struct WakeRequestRow {
 }
 
 async fn load_tool_call(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     tool_call_id: &str,
 ) -> ToolCallRow {
-    let tool_call_id = defra_agent::graphql::escape_graphql_string(tool_call_id);
+    let tool_call_id = gents::graphql::escape_graphql_string(tool_call_id);
     let query = format!(
         r#"{{
             AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }}, limit: 1) {{
@@ -40,10 +40,10 @@ async fn load_tool_call(
 }
 
 async fn load_messages(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     session_id: &str,
 ) -> Vec<MessageRow> {
-    let session_id = defra_agent::graphql::escape_graphql_string(session_id);
+    let session_id = gents::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentMessage(
@@ -67,10 +67,10 @@ async fn load_messages(
 }
 
 async fn load_wakes(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     session_id: &str,
 ) -> Vec<WakeRequestRow> {
-    let session_id = defra_agent::graphql::escape_graphql_string(session_id);
+    let session_id = gents::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentRequest(

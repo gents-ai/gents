@@ -11,13 +11,13 @@
 //!     single push worker must serialize fan-out across peers without
 //!     stranding either peer
 //!
-//! Gated: `#[ignore]` + `DEFRA_AGENT_LIVE_P2P_ADMISSION=1`.
+//! Gated: `#[ignore]` + `GENTS_LIVE_P2P_ADMISSION=1`.
 //!
 //! ```bash
-//! DEFRA_AGENT_LIVE_P2P_ADMISSION=1 \
-//!   DEFRA_AGENT_LIVE_P2P_ADMISSION_ENDPOINT=http://workstation-1:8000/v1 \
-//!   DEFRA_AGENT_LIVE_P2P_ADMISSION_MODEL=d4f \
-//!   cargo test -p defra-agent --test e2e_live \
+//! GENTS_LIVE_P2P_ADMISSION=1 \
+//!   GENTS_LIVE_P2P_ADMISSION_ENDPOINT=http://workstation-1:8000/v1 \
+//!   GENTS_LIVE_P2P_ADMISSION_MODEL=d4f \
+//!   cargo test -p gents --test e2e_live \
 //!     concurrent_multiwave_single_push_worker_converges_with_live_d4f \
 //!     -- --ignored --nocapture --test-threads=1
 //! ```
@@ -28,11 +28,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity, DefraAgent,
+    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity, Gents,
     DocumentRuntimeOptions, ToolCeiling,
 };
 use serde::Deserialize;
@@ -50,16 +50,16 @@ const CONCURRENT_WAVES: usize = 4;
 const REPLICATED: &[&str] = &["AgentRequest", "AgentResponse", "AgentMessage"];
 
 fn live_enabled() -> bool {
-    std::env::var("DEFRA_AGENT_LIVE_P2P_ADMISSION").as_deref() == Ok("1")
+    std::env::var("GENTS_LIVE_P2P_ADMISSION").as_deref() == Ok("1")
 }
 
 fn live_endpoint() -> String {
-    std::env::var("DEFRA_AGENT_LIVE_P2P_ADMISSION_ENDPOINT")
+    std::env::var("GENTS_LIVE_P2P_ADMISSION_ENDPOINT")
         .unwrap_or_else(|_| DEFAULT_LIVE_ENDPOINT.to_string())
 }
 
 fn live_model() -> String {
-    std::env::var("DEFRA_AGENT_LIVE_P2P_ADMISSION_MODEL")
+    std::env::var("GENTS_LIVE_P2P_ADMISSION_MODEL")
         .unwrap_or_else(|_| DEFAULT_LIVE_MODEL.to_string())
 }
 
@@ -245,7 +245,7 @@ async fn bind_live_backend(
 }
 
 async fn boot_live_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Result<BootedAgent> {
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -447,11 +447,11 @@ impl Drop for LiveTopologyGuard {
 /// converge to two healthy peers. This is the load-bearing regression fence
 /// the sequential unit e2e cannot provide: bound=1 is actually contended.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live: set DEFRA_AGENT_LIVE_P2P_ADMISSION=1 and pass --ignored"]
+#[ignore = "live: set GENTS_LIVE_P2P_ADMISSION=1 and pass --ignored"]
 async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Result<()> {
     if !live_enabled() {
         eprintln!(
-            "DEFRA_AGENT_LIVE_P2P_ADMISSION is not 1; skipping concurrent multi-wave live e2e"
+            "GENTS_LIVE_P2P_ADMISSION is not 1; skipping concurrent multi-wave live e2e"
         );
         return Ok(());
     }

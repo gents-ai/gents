@@ -8,7 +8,7 @@ fn temp_root(name: &str) -> PathBuf {
 
 #[test]
 fn selection_file_tool_root_clamps_within_operator_root() {
-    let operator_root = temp_root("defra-agent-operator-root");
+    let operator_root = temp_root("gents-operator-root");
     let scoped_root = operator_root.join("bench").join("results");
     std::fs::create_dir_all(&scoped_root).unwrap();
 
@@ -75,8 +75,8 @@ fn selection_file_tool_root_clamps_within_operator_root() {
 
 #[test]
 fn selection_file_tool_root_rejects_escape_outside_operator_root() {
-    let operator_root = temp_root("defra-agent-operator-root");
-    let outside_root = temp_root("defra-agent-outside-root");
+    let operator_root = temp_root("gents-operator-root");
+    let outside_root = temp_root("gents-outside-root");
 
     let error = BehaviorToolConfig::from_selection(
         "ops",
@@ -115,8 +115,8 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
 
 #[test]
 fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
-    let operator_root = temp_root("defra-agent-operator-root");
-    let outside_root = temp_root("defra-agent-outside-root");
+    let operator_root = temp_root("gents-operator-root");
+    let outside_root = temp_root("gents-outside-root");
 
     let error = BehaviorToolConfig::from_selection(
         "ops",
@@ -156,7 +156,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
 #[test]
 fn downgraded_off_selection_ignores_stale_file_tool_root() {
     let stale_root =
-        std::env::temp_dir().join(format!("defra-agent-stale-root-{}", uuid::Uuid::new_v4()));
+        std::env::temp_dir().join(format!("gents-stale-root-{}", uuid::Uuid::new_v4()));
 
     let config = BehaviorToolConfig::from_selection(
         "ops",
@@ -230,7 +230,7 @@ fn readonly_ceiling_clamps_unrestricted_bash_policy() {
 
 #[test]
 fn selection_without_root_inherits_operator_root() {
-    let operator_root = temp_root("defra-agent-operator-root");
+    let operator_root = temp_root("gents-operator-root");
 
     let config = BehaviorToolConfig::from_selection(
         "ops",
@@ -279,7 +279,7 @@ fn selection_without_root_inherits_operator_root() {
 
 #[test]
 fn selection_cli_tools_require_ceiling_entries() {
-    let operator_root = temp_root("defra-agent-operator-root");
+    let operator_root = temp_root("gents-operator-root");
 
     let config = BehaviorToolConfig::from_selection(
         "ops",
@@ -320,7 +320,7 @@ fn selection_cli_tools_require_ceiling_entries() {
 
 #[test]
 fn selection_cli_tools_expose_only_ceiling_entries() {
-    let operator_root = temp_root("defra-agent-operator-root");
+    let operator_root = temp_root("gents-operator-root");
     let ceiling = ToolCeiling::readwrite(operator_root).with_cli_tool(cli_tool(
         "rg",
         "/usr/bin/rg",
@@ -490,8 +490,8 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
 #[cfg(unix)]
 #[test]
 fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
-    let operator_root = temp_root("defra-agent-operator-root");
-    let outside_root = temp_root("defra-agent-outside-root");
+    let operator_root = temp_root("gents-operator-root");
+    let outside_root = temp_root("gents-outside-root");
     let symlink_path = operator_root.join("link-out");
     std::os::unix::fs::symlink(&outside_root, &symlink_path).unwrap();
 
@@ -959,8 +959,8 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
         host_ceiling_warning: bool,
     }
 
-    let readonly_root = temp_root("defra-agent-readonly-package-root");
-    let write_root = temp_root("defra-agent-write-package-root");
+    let readonly_root = temp_root("gents-readonly-package-root");
+    let write_root = temp_root("gents-write-package-root");
     let cases = vec![
         Case {
             name: "minimal",
@@ -1218,7 +1218,7 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
         self_config_no_lockout: None,
         self_config_dry_run: None,
     };
-    let ceiling = ToolCeiling::readonly_at(temp_root("defra-agent-complex-package-root"));
+    let ceiling = ToolCeiling::readonly_at(temp_root("gents-complex-package-root"));
     let config = BehaviorToolConfig::from_tool_selection_document(
         "complex",
         &selection,

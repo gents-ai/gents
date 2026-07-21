@@ -1,13 +1,13 @@
 //! EditMatch conformance home (`proofs/Proofs/EditMatch/`, #738/#724).
 //!
-//! Fences the runtime matcher (`defra_agent::toolset::edit_match`) against
+//! Fences the runtime matcher (`gents::toolset::edit_match`) against
 //! the Lean obligations E1–E8. E6's write-side gate ordering (stale hash
 //! rejects before matching, file untouched) is additionally fenced against
 //! the real `edit_file` tool by
 //! `toolset::tests::edit_file_stale_hash_rejects_before_matching_and_reports_current`
 //! — the decision-level pieces live here.
 
-use defra_agent::toolset::edit_match::{
+use gents::toolset::edit_match::{
     decide, EditOutcome, EditRequest, MatchMode, Operation, Strategy,
 };
 

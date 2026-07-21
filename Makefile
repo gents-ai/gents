@@ -5,7 +5,7 @@ LAKE ?= lake
 NPM ?= npm
 
 DESKTOP_DIR := apps/desktop-tauri
-PROOFS_DIR := crates/defra-agent/proofs
+PROOFS_DIR := crates/gents/proofs
 FUZZ_TIME ?= 30s
 
 .DEFAULT_GOAL := help

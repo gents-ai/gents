@@ -1,7 +1,7 @@
 //! Client turn observation protocol.
 //!
 //! Pure-function projection from agent document snapshots to client-visible
-//! turn states. Source of truth: `crates/defra-agent/proofs/Proofs/Client.lean`.
+//! turn states. Source of truth: `crates/gents/proofs/Proofs/Client.lean`.
 //!
 //! The derivation checks server terminal states first, then falls through to
 //! response status for non-terminal request states. This ordering prevents

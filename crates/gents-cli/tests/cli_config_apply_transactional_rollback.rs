@@ -87,13 +87,13 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
     let mut cli = std::process::Command::new(support::cli_bin())
         .env("HOME", &home_dir)
         .env("RUST_LOG", "error")
-        .env("DEFRA_AGENT_CONFIG_APPLY_SLEEP_MS", PER_COLLECTION_SLEEP_MS)
+        .env("GENTS_CONFIG_APPLY_SLEEP_MS", PER_COLLECTION_SLEEP_MS)
         .current_dir(&home_dir)
         .args(["config", "apply", "--root", root_str, "--graphql", &graphql])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .context("spawning defra-agent config apply with apply-sleep env")?;
+        .context("spawning gents config apply with apply-sleep env")?;
 
     // With per-collection sleep = 200 ms and CONFIG_APPLY_ORDER having 9
     // collections, full apply takes at least 1.8 s. Sleep 400 ms — past

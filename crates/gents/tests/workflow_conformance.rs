@@ -10,7 +10,7 @@ fn barrier_cases_match_projection() {
     );
 
     for case in cases {
-        let actual = defra_agent::workflow::workflow_barrier_projection_legal(
+        let actual = gents::workflow::workflow_barrier_projection_legal(
             case.group_terminal_states.iter().map(String::as_str),
             case.synthesis_present,
         );

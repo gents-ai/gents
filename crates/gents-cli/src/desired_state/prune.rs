@@ -42,8 +42,8 @@
 
 use std::collections::BTreeMap;
 
-use defra_agent::apply_model::{self, DesiredFields, DocRef, LiveState, Manifest};
-use defra_agent::Collection;
+use gents::apply_model::{self, DesiredFields, DocRef, LiveState, Manifest};
+use gents::Collection;
 
 use super::DesiredStateManifest;
 

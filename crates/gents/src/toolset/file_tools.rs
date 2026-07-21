@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
 use anyhow::{anyhow, Context as _, Result};
-use defra_native_fs_runner::protocol::{
+use gents_fs_runner::protocol::{
     GlobArgs as NativeGlobArgs, GrepArgs as NativeGrepArgs, ListFilesArgs as NativeListFilesArgs,
     NativeFsRunnerRequest,
 };

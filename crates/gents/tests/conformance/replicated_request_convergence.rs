@@ -17,10 +17,10 @@
 
 use super::*;
 
-use defra_agent::__test_internals::{
+use gents::__test_internals::{
     drain_automated_wakeups, reconcile_coalesced_pending_request, QueueSource,
 };
-use defra_agent::{DefraWatcher, Watcher, TERMINAL_REDRIVE_CAP};
+use gents::{DefraWatcher, Watcher, TERMINAL_REDRIVE_CAP};
 
 const CONVERGENCE_CREATED_AT: &str = "2026-03-23T00:00:00Z";
 const OWNER_DID: &str = AGENT_DID;
@@ -165,7 +165,7 @@ async fn create_owned_request_with_times_and_requester(
                 {terminal_fields}
             }}) {{ _docID }}
         }}"#,
-        max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = node.execute(&mutation).await;
     assert!(
@@ -241,7 +241,7 @@ async fn create_queue_request(
                 max_retries: {max_retries}
             }}) {{ _docID }}
         }}"#,
-        max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = node.execute(&mutation).await;
     assert!(

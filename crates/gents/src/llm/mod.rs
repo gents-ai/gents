@@ -1,6 +1,6 @@
 //! Defra-native LLM type vocabulary.
 //!
-//! These types mirror the rig types defra-agent used to depend on, so that the
+//! These types mirror the rig types gents used to depend on, so that the
 //! runtime, hook, persistence, and tool surfaces speak Defra-owned types rather
 //! than rig's. rig is being confined to the provider/streaming-parsing layer
 //! ("Layer A"); the [`rig_compat`] module converts between these native types
@@ -10,10 +10,10 @@
 //! be simplified once rig is gone. See
 //! `docs/design/native-llm-types-shed-rig.md` (removed from the tree; see git history).
 
-/// Native message family — lives in `defra-agent-protocol` (the persisted
+/// Native message family — lives in `gents-protocol` (the persisted
 /// format is protocol vocabulary shared by every peer); re-exported here so
 /// crate paths read `crate::llm::message::Message`.
-pub use defra_agent_protocol::message;
+pub use gents_protocol::message;
 pub(crate) mod responses_normalize;
 pub mod rig_compat;
 pub mod tool;

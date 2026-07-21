@@ -16,7 +16,7 @@ pub struct ServiceAccount {
 
 /// Deployment-level principal record.
 ///
-/// Represents the DID-backed principal for a defra-agent deployment.
+/// Represents the DID-backed principal for a gents deployment.
 /// The runtime constructs a single instance per deployment and shares
 /// it as `Arc<AgentPrincipal>` across all behaviors; the type itself
 /// does not enforce this constraint — the single-principal invariant
@@ -31,7 +31,7 @@ pub struct ServiceAccount {
 /// dangling agent_did).
 ///
 /// Extends the Lean `Identity.Principal` record in
-/// `crates/defra-agent/proofs/Proofs/Identity/State.lean`
+/// `crates/gents/proofs/Proofs/Identity/State.lean`
 /// (`Identity.Principal`) with the live signing handle (`identity`)
 /// and the routing shortcut (`default_behavior_id`).
 #[derive(Clone)]
@@ -135,7 +135,7 @@ impl AgentIdentity for KeyIdentity {
 /// DefraDB's identity registry is process-local. This adapter is for embedded
 /// hosts that have already registered a local key or remote signer before
 /// constructing the agent runtime; it is not a persistent identity loader for a
-/// fresh `defra-agent server` process.
+/// fresh `gents server` process.
 pub struct RegisteredIdentity {
     did: String,
     service_account: Option<ServiceAccount>,
@@ -364,7 +364,7 @@ fn load_or_create_macos_keychain_raw_identity(
 }
 
 #[cfg(target_os = "macos")]
-const MACOS_KEYCHAIN_SERVICE: &str = "defra-agent.identity";
+const MACOS_KEYCHAIN_SERVICE: &str = "com.source-inc.gents.identity";
 
 #[cfg(target_os = "macos")]
 #[derive(Debug)]
@@ -605,10 +605,10 @@ fn signing_key_type_to_crypto_key_type(key_type: SigningKeyType) -> Result<crypt
         SigningKeyType::Secp256k1 => Ok(crypto::KeyType::Secp256k1),
         SigningKeyType::Secp256r1 => Ok(crypto::KeyType::Secp256r1),
         SigningKeyType::Bls => anyhow::bail!(
-            "BLS registered identities cannot be used as defra-agent runtime identities"
+            "BLS registered identities cannot be used as gents runtime identities"
         ),
         other => anyhow::bail!(
-            "registered identity key type {other} cannot be used as a defra-agent runtime identity"
+            "registered identity key type {other} cannot be used as a gents runtime identity"
         ),
     }
 }

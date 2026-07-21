@@ -535,7 +535,7 @@ mod tests {
         let tool = test_tool(
             "bash_unrestricted",
             "running",
-            r#"{"command":"cargo test -p defra-agent-cli","timeout_secs":600}"#,
+            r#"{"command":"cargo test -p gents-cli","timeout_secs":600}"#,
         );
 
         assert_eq!(
@@ -558,7 +558,7 @@ mod tests {
         else {
             panic!("expected command execution item");
         };
-        assert_eq!(command, "cargo test -p defra-agent-cli");
+        assert_eq!(command, "cargo test -p gents-cli");
         assert_eq!(process_id, None);
         assert_eq!(source, codex::CommandExecutionSource::Agent);
         assert_eq!(status, codex::CommandExecutionStatus::InProgress);
@@ -594,7 +594,7 @@ mod tests {
         let tool = test_tool(
             "read_file",
             "completed",
-            r#"{"path":"crates/defra-agent/proofs/Proofs/Process.lean"}"#,
+            r#"{"path":"crates/gents/proofs/Proofs/Process.lean"}"#,
         );
 
         assert_eq!(
@@ -622,7 +622,7 @@ mod tests {
         assert_eq!(name, "Process.lean");
         assert_eq!(
             path.as_path(),
-            Path::new("/repo/crates/defra-agent/proofs/Proofs/Process.lean")
+            Path::new("/repo/crates/gents/proofs/Proofs/Process.lean")
         );
     }
 
@@ -648,7 +648,7 @@ mod tests {
         let grep = test_tool(
             "grep",
             "completed",
-            r#"{"pattern":"RequestState","path":"crates/defra-agent/proofs"}"#,
+            r#"{"pattern":"RequestState","path":"crates/gents/proofs"}"#,
         );
         let grep_item = command_execution_item(
             Path::new("/repo"),
@@ -664,7 +664,7 @@ mod tests {
         assert!(matches!(
             command_actions.as_slice(),
             [codex::CommandAction::Search { query: Some(query), path: Some(path), .. }]
-                if query == "RequestState" && path == "crates/defra-agent/proofs"
+                if query == "RequestState" && path == "crates/gents/proofs"
         ));
     }
 

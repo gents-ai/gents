@@ -1,9 +1,9 @@
 use super::*;
 
-#[path = "../../../../../../../crates/defra-agent/src/lean_vocab_test.rs"]
+#[path = "../../../../../../../crates/gents/src/lean_vocab_test.rs"]
 mod lean_vocab_test;
 
-use defra_agent::llm::message::{
+use gents::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
@@ -992,7 +992,7 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
             reasoning: None,
             timestamp: Some("2026-05-20T10:30:00Z".to_string()),
         }],
-        tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {
+        tool_calls: vec![gents_protocol::row::AgentToolCallRow {
             partial_output_tail: None,
             partial_output_seq: None,
             tool_call_key: "tool-1".to_string(),
@@ -1159,7 +1159,7 @@ fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_pol
             reasoning: None,
             timestamp: Some("2026-05-20T10:30:00Z".to_string()),
         }],
-        tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {
+        tool_calls: vec![gents_protocol::row::AgentToolCallRow {
             partial_output_tail: None,
             partial_output_seq: None,
             tool_call_key: "tool-cascade-1".to_string(),
@@ -1370,11 +1370,11 @@ fn transcript_contract_request_content(case: &LeanTranscriptCase) -> Option<Stri
 
 fn transcript_contract_tool_calls(
     case: &LeanTranscriptCase,
-) -> Vec<defra_agent_protocol::row::AgentToolCallRow> {
+) -> Vec<gents_protocol::row::AgentToolCallRow> {
     let lifecycle_state = transcript_contract_tool_lifecycle(case);
     let result_ids = transcript_contract_result_ids(case);
     (0..case.post_tool_call_count)
-        .map(|index| defra_agent_protocol::row::AgentToolCallRow {
+        .map(|index| gents_protocol::row::AgentToolCallRow {
             partial_output_tail: None,
             partial_output_seq: None,
             tool_call_key: format!("tool-{}-{index}", case.name),

@@ -3,12 +3,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_agent::defra_node::{EmbeddedNode, HttpConfig};
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{
+use gents::defra_node::{EmbeddedNode, HttpConfig};
+use gents::graphql::escape_graphql_string;
+use gents::{
     ensure_agent_principal, ensure_runtime_schemas, upsert_agent_behavior,
     upsert_inference_profile, upsert_tool_selection, AgentBehaviorDocument, AgentIdentity,
-    DefraAgent, DocumentRuntimeOptions, InferenceProfile, KeyIdentity, McpPool, ToolCeiling,
+    Gents, DocumentRuntimeOptions, InferenceProfile, KeyIdentity, McpPool, ToolCeiling,
     ToolSelectionDocument,
 };
 use tokio::sync::watch;
@@ -33,15 +33,15 @@ fn env_or_u64(name: &str, default: u64) -> u64 {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let data_dir = PathBuf::from(env_or("DEFRA_AGENT_DATA_DIR", "./var/defradb"));
-    let http_port = env_or_u16("DEFRA_AGENT_HTTP_PORT", 9191);
-    let agent_name = env_or("DEFRA_AGENT_NAME", "demo");
-    let backend_id = env_or("DEFRA_AGENT_BACKEND_ID", "demo-backend");
-    let model_endpoint = env_or("DEFRA_AGENT_MODEL_ENDPOINT", "http://127.0.0.1:8000/v1");
-    let model_name = env_or("DEFRA_AGENT_MODEL_NAME", "default");
-    let system_prompt = std::env::var("DEFRA_AGENT_SYSTEM_PROMPT").unwrap_or_default();
-    let deadline_secs = env_or_u64("DEFRA_AGENT_DEADLINE_SECS", 900);
-    let key_path = std::env::var("DEFRA_AGENT_KEY_PATH")
+    let data_dir = PathBuf::from(env_or("GENTS_DATA_DIR", "./var/defradb"));
+    let http_port = env_or_u16("GENTS_HTTP_PORT", 9191);
+    let agent_name = env_or("GENTS_NAME", "demo");
+    let backend_id = env_or("GENTS_BACKEND_ID", "demo-backend");
+    let model_endpoint = env_or("GENTS_MODEL_ENDPOINT", "http://127.0.0.1:8000/v1");
+    let model_name = env_or("GENTS_MODEL_NAME", "default");
+    let system_prompt = std::env::var("GENTS_SYSTEM_PROMPT").unwrap_or_default();
+    let deadline_secs = env_or_u64("GENTS_DEADLINE_SECS", 900);
+    let key_path = std::env::var("GENTS_KEY_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| data_dir.join("keys").join(format!("{agent_name}.key")));
 
@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         node,
         identity.clone(),
         DocumentRuntimeOptions {

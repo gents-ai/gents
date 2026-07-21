@@ -17,7 +17,7 @@ async fn from_default_behavior_documents_marks_unbound_default_behavior_unavaila
     let did = identity.did().to_string();
     let default_behavior_id = default_behavior_id_for_agent(&did);
 
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         node,
         identity.clone(),
         DocumentRuntimeOptions {
@@ -70,7 +70,7 @@ async fn from_default_behavior_documents_composes_behavior_and_inference_profile
     )
     .await;
 
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         node,
         identity.clone(),
         DocumentRuntimeOptions {
@@ -226,7 +226,7 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
     .await
     .unwrap();
 
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         node,
         identity,
         DocumentRuntimeOptions {
@@ -442,7 +442,7 @@ async fn from_default_behavior_documents_rejects_unresolved_subagent_target() {
     .await
     .unwrap();
 
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         node,
         identity,
         DocumentRuntimeOptions {
@@ -585,7 +585,7 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
     .await
     .unwrap();
 
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         node,
         identity,
         DocumentRuntimeOptions {

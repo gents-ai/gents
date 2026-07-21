@@ -149,9 +149,9 @@ async fn set_replicator_with_retry(
 }
 
 fn subscribed_collection_names_for_runner() -> Vec<String> {
-    defra_agent_protocol::schemas::RUNTIME_COLLECTION_NAMES
+    gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()
-        .chain(defra_agent_protocol::schemas::ALL_COLLECTION_NAMES.iter())
+        .chain(gents_protocol::schemas::ALL_COLLECTION_NAMES.iter())
         .map(|name| (*name).to_string())
         .collect()
 }

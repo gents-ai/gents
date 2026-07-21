@@ -1,7 +1,7 @@
 use super::retry::execute_query_timed;
 use super::rows::AgentMessageRow;
 use super::*;
-use defra_agent_protocol::transcript::decode_persisted_message;
+use gents_protocol::transcript::decode_persisted_message;
 
 pub async fn load_history(node: &EmbeddedNode, session_id: &str) -> Result<Vec<Message>> {
     let escaped_session_id = escape_graphql_string(session_id);

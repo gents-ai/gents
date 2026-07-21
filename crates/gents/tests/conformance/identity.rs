@@ -11,7 +11,7 @@ use acp::{
     RelationTuple, READER_RELATION,
 };
 
-use defra_agent::{AgentBehavior, AgentIdentity, AgentPrincipal};
+use gents::{AgentBehavior, AgentIdentity, AgentPrincipal};
 use identity::Did;
 
 #[path = "../support/identity_stubs.rs"]
@@ -76,30 +76,30 @@ fn build_agent_behavior_for_routing_test(
         behavior_id,
         principal,
         backend_id: None,
-        backend_provider_kind: defra_agent::BackendProviderKind::default(),
-        openai_wire_api: defra_agent::OpenAiWireApi::ChatCompletions,
+        backend_provider_kind: gents::BackendProviderKind::default(),
+        openai_wire_api: gents::OpenAiWireApi::ChatCompletions,
         backend_endpoint: String::new(),
         backend_api_key: None,
         backend_api_key_env_var: None,
-        model_name: defra_agent::DEFAULT_MODEL_NAME.to_string(),
-        context_window: defra_agent::DEFAULT_CONTEXT_WINDOW,
-        max_output_tokens: defra_agent::DEFAULT_MAX_OUTPUT_TOKENS,
-        max_turns: defra_agent::DEFAULT_MAX_TURNS,
+        model_name: gents::DEFAULT_MODEL_NAME.to_string(),
+        context_window: gents::DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: gents::DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: gents::DEFAULT_MAX_TURNS,
         system_prompt: String::new(),
         request_context_template: None,
-        tools: defra_agent::BehaviorToolConfig::default(),
-        compaction_threshold: defra_agent::DEFAULT_COMPACTION_THRESHOLD,
-        compaction_strategy: defra_agent::CompactionStrategy::StripThenSummarize,
-        stream_batch_ms: defra_agent::DEFAULT_STREAM_BATCH_MS,
+        tools: gents::BehaviorToolConfig::default(),
+        compaction_threshold: gents::DEFAULT_COMPACTION_THRESHOLD,
+        compaction_strategy: gents::CompactionStrategy::StripThenSummarize,
+        stream_batch_ms: gents::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: std::time::Duration::from_secs(
-            defra_agent::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+            gents::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: std::time::Duration::from_secs(
-            defra_agent::DEFAULT_DEADLINE_DURATION_SECS,
+            gents::DEFAULT_DEADLINE_DURATION_SECS,
         ),
         completion_retry:
-            defra_agent::agent::completion_retry::CompletionRetryProfileFields::default(),
-        sampling: defra_agent::SamplingConfig::default(),
+            gents::agent::completion_retry::CompletionRetryProfileFields::default(),
+        sampling: gents::SamplingConfig::default(),
     }
 }
 

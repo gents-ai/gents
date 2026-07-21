@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
-use defra_agent_protocol::network_token::EndpointRecord;
+use gents_protocol::network_token::EndpointRecord;
 use defra_node::{EmbeddedNode, EventName, QueryResponse};
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
@@ -606,7 +606,7 @@ struct DataPlaneSourceRow {
 mod tests {
     use std::sync::Mutex;
 
-    use defra_agent_protocol::network_token::{MembershipRecord, NetworkRecord};
+    use gents_protocol::network_token::{MembershipRecord, NetworkRecord};
 
     use super::*;
     use crate::identity::KeyIdentity;

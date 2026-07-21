@@ -16,7 +16,7 @@ use crate::run_timeline::{
     TimelineInferenceCallRow, TimelineMessageRow, TimelineRequestRow, TimelineResponseRow,
     TimelineSessionRow, TimelineToolCallRow,
 };
-use defra_agent_protocol::graphql::graphql_rows_from_response;
+use gents_protocol::graphql::graphql_rows_from_response;
 
 pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Result<RunTimeline> {
     Ok(build_run_timeline(

@@ -1,6 +1,6 @@
-use defra_agent::llm::message::{Message, Text, UserContent};
+use gents::llm::message::{Message, Text, UserContent};
 use defra_agent_desktop_core::client::{ClientStore, ClientStoreRows};
-use defra_agent_protocol::row::{
+use gents_protocol::row::{
     AgentConversationRow, AgentMessageRow, AgentRequestRow, AgentResponseRow, AgentSessionRow,
     GoalRow,
 };

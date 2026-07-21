@@ -1,9 +1,9 @@
 [package]
-name = "defra-native-fs-runner"
+name = "gents-fs-runner"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Out-of-process native filesystem runner for defra-agent"
+description = "Out-of-process native filesystem runner for gents"
 
 [dependencies]
 anyhow.workspace = true

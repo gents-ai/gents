@@ -42,7 +42,7 @@ def recoverySweepCases : List RecoverySweepCase :=
       "request_processing_terminal_response_recovery_to_completed"
       "processing"
       "completed"
-      "defra-agent-664-durable-terminal-repair"
+      "gents-664-durable-terminal-repair"
   , recoveryCase
       requestRecoverySweep
       "request_processing_recovery_to_failed"
@@ -54,7 +54,7 @@ def recoverySweepCases : List RecoverySweepCase :=
       "request_processing_interrupted_response_recovery_to_interrupted"
       "processing"
       "interrupted"
-      "defra-agent-664-durable-terminal-repair"
+      "gents-664-durable-terminal-repair"
   , recoveryCase
       responseRecoverySweep
       "response_streaming_recovery_to_error"
@@ -144,25 +144,25 @@ def recoverySweepCases : List RecoverySweepCase :=
       "tool_running_child_dead_to_failed"
       "running"
       "failed"
-      "defra-agent-465-subagent-liveness"
+      "gents-465-subagent-liveness"
   , recoveryCase
       expiredSubagentChildSweep
       "expired_processing_child_to_dead"
       "processing"
       "dead"
-      "defra-agent-465-subagent-liveness"
+      "gents-465-subagent-liveness"
   , recoveryCase
       expiredSubagentChildSweep
       "expired_claimed_child_to_dead"
       "claimed"
       "dead"
-      "defra-agent-465-subagent-liveness"
+      "gents-465-subagent-liveness"
   , recoveryCase
       queuedDescendantSweep
       "queued_descendant_terminal_parent_to_interrupted"
       "pending"
       "interrupted"
-      "defra-agent-465-subagent-liveness"
+      "gents-465-subagent-liveness"
   , recoveryCase
       inferenceCallRecoverySweep
       "inference_queued_stale_to_cancelled"
@@ -186,19 +186,19 @@ def recoverySweepCases : List RecoverySweepCase :=
       "conversation_processing_completed_parent_to_completed"
       "processing"
       "completed"
-      "defra-agent-693-conversation-recovery"
+      "gents-693-conversation-recovery"
   , recoveryCase
       conversationRecoverySweep
       "conversation_processing_unfinished_parent_to_active"
       "processing"
       "active"
-      "defra-agent-693-conversation-recovery"
+      "gents-693-conversation-recovery"
   , recoveryCase
       conversationRecoverySweep
       "conversation_error_unfinished_parent_to_active"
       "error"
       "active"
-      "defra-agent-693-conversation-recovery"
+      "gents-693-conversation-recovery"
   ]
 
 /-! ## Outcome witnesses (#693)

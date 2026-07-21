@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use defra_agent_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
+use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use defra_node::EmbeddedNode;
 use serde_json::Value;
 

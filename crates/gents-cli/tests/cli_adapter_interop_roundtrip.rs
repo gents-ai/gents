@@ -5,8 +5,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
-use defra_agent::{
+use gents::defra_node::{EmbeddedNode, StorageBackend};
+use gents::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_json_schema,
     adapter_projection_jsonl_record_schema, ensure_runtime_schemas,
     import_external_adapter_capture_to_timeline_rows, validate_adapter_projection_contract,
@@ -16,12 +16,12 @@ use defra_agent::{
 };
 use serde_json::{json, Value};
 
-const FIXTURE_ROOT_ENV: &str = "DEFRA_AGENT_ADAPTER_INTEROP_ROUNDTRIP_FIXTURES";
-const LEGACY_FIXTURE_ROOT_ENV: &str = "DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES";
-const EXPORT_ROOT_ENV: &str = "DEFRA_AGENT_ADAPTER_INTEROP_EXPORTS";
+const FIXTURE_ROOT_ENV: &str = "GENTS_ADAPTER_INTEROP_ROUNDTRIP_FIXTURES";
+const LEGACY_FIXTURE_ROOT_ENV: &str = "GENTS_ADAPTER_INTEROP_FIXTURES";
+const EXPORT_ROOT_ENV: &str = "GENTS_ADAPTER_INTEROP_EXPORTS";
 
 #[tokio::test]
-#[ignore = "external interop: set DEFRA_AGENT_ADAPTER_INTEROP_ROUNDTRIP_FIXTURES and pass --ignored"]
+#[ignore = "external interop: set GENTS_ADAPTER_INTEROP_ROUNDTRIP_FIXTURES and pass --ignored"]
 async fn external_adapter_native_captures_roundtrip_through_defra_binary() -> Result<()> {
     let Some(root) = fixture_root() else {
         eprintln!(
@@ -398,7 +398,7 @@ fn langgraph_envelope_value() -> Value {
         "source_request_id": "req-root",
         "redaction_mode": "full",
         "provenance": {
-            "runtime": "defra-agent",
+            "runtime": "gents",
             "source_projection_id": "run_timeline",
             "source_projection_version": "v1"
         },

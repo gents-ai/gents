@@ -1,9 +1,9 @@
 [package]
-name = "defra-agent-cli"
+name = "gents-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Consumer CLI for the defra-agent library"
+description = "Consumer CLI for the gents library"
 autobins = false
 
 [features]
@@ -11,7 +11,7 @@ default = ["codex-tui"]
 codex-tui = ["dep:codex-arg0", "dep:codex-config", "dep:codex-tui"]
 
 [[bin]]
-name = "defra-agent"
+name = "gents"
 path = "src/main.rs"
 
 [dependencies]
@@ -30,9 +30,9 @@ codex-model-provider-info.workspace = true
 codex-protocol.workspace = true
 codex-tui = { workspace = true, optional = true }
 codex-utils-absolute-path.workspace = true
-defra-agent = { path = "../defra-agent" }
-defra-native-fs-runner = { path = "../defra-native-fs-runner" }
-defra-agent-protocol.workspace = true
+gents = { path = "../gents" }
+gents-fs-runner = { path = "../gents-fs-runner" }
+gents-protocol.workspace = true
 defra-node.workspace = true
 defra-p2p-adapter.workspace = true
 futures-util = "0.3"
@@ -66,7 +66,7 @@ uuid.workspace = true
 [dev-dependencies]
 acp.workspace = true
 async-trait = "0.1"
-defra-agent-lean-contract.workspace = true
+gents-lean-contract.workspace = true
 identity.workspace = true
 jsonschema = { version = "0.46.5", default-features = false }
 regex = "1"

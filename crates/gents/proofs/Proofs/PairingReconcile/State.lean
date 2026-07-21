@@ -5,7 +5,7 @@ import Mathlib.Data.Finset.Card
 /-!
 # Pairing Reconcile State
 
-Per-peer pairing reconcile state for the defra-agent supervisor. Each tick
+Per-peer pairing reconcile state for the gents supervisor. Each tick
 reads desired and actual state from a peer, computes a diff, and emits remote
 admin calls until actual state matches desired state.
 -/

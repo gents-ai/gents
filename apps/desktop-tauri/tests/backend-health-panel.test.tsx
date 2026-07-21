@@ -13,7 +13,7 @@ import type {
 
 /**
  * One row per Lean BackendHealthAdmissionCase
- * (`crates/defra-agent/proofs/Proofs/Conformance/ContractCases/BoundaryRuntime.lean:214`).
+ * (`crates/gents/proofs/Proofs/Conformance/ContractCases/BoundaryRuntime.lean:214`).
  * The Rust-side consumer test
  * (`backend_registry::tests::display_state_matches_every_lean_backend_health_admission_case`)
  * drives the same inputs through `derive_display_state`; this enumeration

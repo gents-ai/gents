@@ -316,8 +316,8 @@ fn pairing_apply_bundle_stamps_owner_provenance_and_omits_disabled_rows() {
 }
 
 fn deletes_contain(
-    deletes: &[defra_agent::apply_model::DocRef],
-    collection: defra_agent::Collection,
+    deletes: &[gents::apply_model::DocRef],
+    collection: gents::Collection,
     id: &str,
 ) -> bool {
     deletes
@@ -334,7 +334,7 @@ fn prune_deletes_unreferenced_orphan_backend() {
     let deletes = super::prune::prune_safe_deletes(&desired, &live);
     assert!(deletes_contain(
         &deletes,
-        defra_agent::Collection::InferenceBackend,
+        gents::Collection::InferenceBackend,
         "k-orphan"
     ));
 }
@@ -351,11 +351,11 @@ fn prune_blocks_backend_referenced_by_behavior() {
     // The referrer (behavior) is deletable; the referenced backend is NOT.
     assert!(deletes_contain(
         &deletes,
-        defra_agent::Collection::AgentBehavior,
+        gents::Collection::AgentBehavior,
         "b1"
     ));
     assert!(
-        !deletes_contain(&deletes, defra_agent::Collection::InferenceBackend, "k1"),
+        !deletes_contain(&deletes, gents::Collection::InferenceBackend, "k1"),
         "backend referenced by a live behavior must not be pruned"
     );
 }
@@ -372,11 +372,11 @@ fn prune_blocks_behavior_referenced_by_task() {
     let deletes = super::prune::prune_safe_deletes(&desired, &live);
     assert!(deletes_contain(
         &deletes,
-        defra_agent::Collection::Task,
+        gents::Collection::Task,
         "t1"
     ));
     assert!(
-        !deletes_contain(&deletes, defra_agent::Collection::AgentBehavior, "b1"),
+        !deletes_contain(&deletes, gents::Collection::AgentBehavior, "b1"),
         "behavior referenced by a live task must not be pruned"
     );
 }
@@ -397,16 +397,16 @@ fn prune_blocks_task_referenced_by_schedule_and_trigger() {
     // schedule + trigger reference the task; task must be protected.
     assert!(deletes_contain(
         &deletes,
-        defra_agent::Collection::Schedule,
+        gents::Collection::Schedule,
         "s1"
     ));
     assert!(deletes_contain(
         &deletes,
-        defra_agent::Collection::EventTrigger,
+        gents::Collection::EventTrigger,
         "e1"
     ));
     assert!(
-        !deletes_contain(&deletes, defra_agent::Collection::Task, "t1"),
+        !deletes_contain(&deletes, gents::Collection::Task, "t1"),
         "task referenced by a live schedule/trigger must not be pruned"
     );
 }
@@ -1547,7 +1547,7 @@ fn validate_accepts_subagent_spawn_enabled_with_targets() {
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
     sel.subagent_spawn_enabled = true;
-    sel.subagent_targets = vec![defra_agent::subagent_target_entry(
+    sel.subagent_targets = vec![gents::subagent_target_entry(
         "researcher",
         "did:defra-agent:test",
         "amy-research",
@@ -1571,8 +1571,8 @@ fn validate_rejects_duplicate_subagent_target_name() {
     sel.agent_did = "did:defra-agent:test".to_string();
     sel.subagent_spawn_enabled = true;
     sel.subagent_targets = vec![
-        defra_agent::subagent_target_entry("dup", "did:defra-agent:test", "amy-research", None),
-        defra_agent::subagent_target_entry("dup", "did:defra-agent:test", "amy-code", None),
+        gents::subagent_target_entry("dup", "did:defra-agent:test", "amy-research", None),
+        gents::subagent_target_entry("dup", "did:defra-agent:test", "amy-code", None),
     ];
     manifest.tool_selections.push(sel);
 
@@ -1595,7 +1595,7 @@ fn validate_rejects_remote_did_target_when_cross_deployment_off() {
     sel.subagent_spawn_enabled = true;
     // Flag defaults to false: cross-deployment is OFF.
     sel.subagent_allow_cross_deployment = false;
-    sel.subagent_targets = vec![defra_agent::subagent_target_entry(
+    sel.subagent_targets = vec![gents::subagent_target_entry(
         "remote-researcher",
         "did:defra-agent:OTHER-deployment",
         "amy-research",
@@ -1621,7 +1621,7 @@ fn validate_accepts_remote_did_target_when_cross_deployment_on() {
     sel.agent_did = "did:defra-agent:test".to_string();
     sel.subagent_spawn_enabled = true;
     sel.subagent_allow_cross_deployment = true;
-    sel.subagent_targets = vec![defra_agent::subagent_target_entry(
+    sel.subagent_targets = vec![gents::subagent_target_entry(
         "remote-researcher",
         "did:defra-agent:OTHER-deployment",
         "amy-research",
@@ -1646,7 +1646,7 @@ fn validate_accepts_local_did_target_when_cross_deployment_off() {
     sel.subagent_spawn_enabled = true;
     sel.subagent_allow_cross_deployment = false;
     // Same DID as the selection -> local target, allowed even with flag off.
-    sel.subagent_targets = vec![defra_agent::subagent_target_entry(
+    sel.subagent_targets = vec![gents::subagent_target_entry(
         "local-researcher",
         "did:defra-agent:test",
         "amy-research",
@@ -1713,13 +1713,13 @@ fn write_tools_deserializer_converges_object_and_string_shapes() {
 
 /// Encode a `WriteToolDecl` into the `[String]` storage form the manifest
 /// carries (one canonical-JSON string per decl).
-fn write_tool_storage_entry(decl: &defra_agent::WriteToolDecl) -> String {
+fn write_tool_storage_entry(decl: &gents::WriteToolDecl) -> String {
     serde_json::to_string(decl).expect("WriteToolDecl serializes to JSON")
 }
 
 #[test]
 fn validate_rejects_write_tool_with_empty_collection() {
-    use defra_agent::WriteToolDecl;
+    use gents::WriteToolDecl;
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
@@ -1742,7 +1742,7 @@ fn validate_rejects_write_tool_with_empty_collection() {
 
 #[test]
 fn validate_rejects_write_tool_with_empty_field_name() {
-    use defra_agent::{WriteToolDecl, WriteToolField};
+    use gents::{WriteToolDecl, WriteToolField};
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
@@ -1768,7 +1768,7 @@ fn validate_rejects_write_tool_with_empty_field_name() {
 
 #[test]
 fn validate_rejects_duplicate_write_tool_name() {
-    use defra_agent::WriteToolDecl;
+    use gents::WriteToolDecl;
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
@@ -1798,7 +1798,7 @@ fn validate_rejects_duplicate_write_tool_name() {
 
 #[test]
 fn validate_accepts_well_formed_write_tools() {
-    use defra_agent::{WriteToolDecl, WriteToolField};
+    use gents::{WriteToolDecl, WriteToolField};
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
@@ -1828,7 +1828,7 @@ fn validate_accepts_well_formed_write_tools() {
 
 #[test]
 fn validate_rejects_write_tool_name_colliding_with_builtin() {
-    use defra_agent::{WriteToolDecl, WriteToolField};
+    use gents::{WriteToolDecl, WriteToolField};
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
@@ -1854,7 +1854,7 @@ fn validate_rejects_write_tool_name_colliding_with_builtin() {
 
 #[test]
 fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
-    use defra_agent::WriteToolDecl;
+    use gents::WriteToolDecl;
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
@@ -1878,7 +1878,7 @@ fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
 
 #[test]
 fn validate_rejects_duplicate_write_tool_field_name() {
-    use defra_agent::{WriteToolDecl, WriteToolField};
+    use gents::{WriteToolDecl, WriteToolField};
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:defra-agent:test".to_string();
@@ -2498,7 +2498,7 @@ fn hydrate_sidecar_is_noop_on_none() {
 mod load_per_doc_collection {
     use crate::desired_state::load::load_per_doc_collection;
     use crate::desired_state::{DesiredAgentBehavior, HasUniqueId};
-    use defra_agent::Collection;
+    use gents::Collection;
     use std::fs;
     use tempfile::tempdir;
 

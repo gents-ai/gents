@@ -26,12 +26,12 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use defra_agent::agent::p2p_reconcile::{
+use gents::agent::p2p_reconcile::{
     EmbeddedRemoteP2pAdmin, FilterPredicate, PairingFilters, RemoteP2pAdmin,
 };
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{RequestLifecycle, TERMINAL_REDRIVE_CAP};
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::{RequestLifecycle, TERMINAL_REDRIVE_CAP};
 use serde::Deserialize;
 
 use crate::support::test_p2p_db;

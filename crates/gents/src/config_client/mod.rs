@@ -2,7 +2,7 @@
 //!
 //! One proven write path for config collections, shared by two consumers:
 //! the CLI `config apply`/imperative commands (which historically owned these
-//! writers under `defra-agent-cli/src/config_writes`) and the runtime
+//! writers under `gents-cli/src/config_writes`) and the runtime
 //! self-configuration tools (`crate::self_config`).
 //!
 //! The client is DID-parameterized: [`ConfigApplyTxn::begin_local`] accepts an
@@ -48,7 +48,7 @@ mod tool_selection;
 use std::sync::Arc;
 
 use anyhow::Result;
-use defra_agent_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
+use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use defra_node::EmbeddedNode;
 use serde_json::{json, Value};
 
@@ -119,7 +119,7 @@ fn is_probably_local_graphql_endpoint(graphql: &str) -> bool {
 /// through the embedded node).
 pub(crate) fn graphql_diagnostic_hint(graphql: &str) -> String {
     if is_probably_local_graphql_endpoint(graphql) {
-        "Next:\n  1. If this home is not initialized, run `defra-agent init`\n  2. Start the runtime with `defra-agent server`\n  3. Inspect it with `defra-agent status`".to_string()
+        "Next:\n  1. If this home is not initialized, run `gents init`\n  2. Start the runtime with `gents server`\n  3. Inspect it with `gents status`".to_string()
     } else {
         format!(
             "Next:\n  1. Verify the GraphQL endpoint {graphql}\n  2. Retry with `--graphql {graphql}` or point the command at the correct runtime"

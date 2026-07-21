@@ -1,5 +1,5 @@
 //! Rust decision mirror of the Lean `CompletionRetry` executable model
-//! (`crates/defra-agent/proofs/Proofs/CompletionRetry/{State,Transition,Executable}.lean`,
+//! (`crates/gents/proofs/Proofs/CompletionRetry/{State,Transition,Executable}.lean`,
 //! issue #631).
 //!
 //! This module makes the same decisions as the Lean `step?` function for the

@@ -18,16 +18,16 @@ use tokio_util::sync::CancellationToken;
 
 use crate::background_tools::LiveToolOutputWriter;
 
-const MARKER_PREFIX: &str = "__defra_agent_tool_lifecycle__:";
-const TIMEOUT_MARKER: &str = "__defra_agent_tool_lifecycle__:timedOut";
-const CANCELLED_MARKER: &str = "__defra_agent_tool_lifecycle__:cancelled";
+const MARKER_PREFIX: &str = "__gents_tool_lifecycle__:";
+const TIMEOUT_MARKER: &str = "__gents_tool_lifecycle__:timedOut";
+const CANCELLED_MARKER: &str = "__gents_tool_lifecycle__:cancelled";
 /// Internal sentinel for an unparseable-arguments tool result. Like the managed
 /// terminals it uses the collision-free `MARKER_PREFIX`, so ordinary tool output
 /// (including MCP/subagent relays whose text could begin with a human-readable
 /// token like `JsonError:`) can never be mistaken for it. The model-facing notice
 /// follows after a `:` separator; the hook strips the marker before persisting or
 /// threading, so the model only ever sees the clean notice.
-const UNPARSEABLE_ARGS_MARKER: &str = "__defra_agent_tool_lifecycle__:unparseableArgs";
+const UNPARSEABLE_ARGS_MARKER: &str = "__gents_tool_lifecycle__:unparseableArgs";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ManagedToolTerminal {

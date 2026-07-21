@@ -10,7 +10,7 @@ impl DefraSessionHook {
         // offline harvest) can recover it even though the live
         // `AgentResponse.reasoning` tail is cleared on finalize (#64). Only
         // assistant messages carry reasoning; users/tool-results yield `None`.
-        let reasoning = defra_agent_protocol::transcript::extract_message_reasoning(message);
+        let reasoning = gents_protocol::transcript::extract_message_reasoning(message);
         let reasoning = reasoning.as_deref();
         let (
             session_id,

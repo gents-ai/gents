@@ -12,7 +12,7 @@
 /// `next_run_at`, `last_probe`, `probe_status`, `run_count`, etc.
 pub trait DesiredFields {
     /// Stable collection tag (snake_case). Mirrors the Rust
-    /// `defra_agent_cli::collection::Collection::Display` variant names
+    /// `gents_cli::collection::Collection::Display` variant names
     /// and the Lean `ApplyReconcile.Collection` constructors.
     fn collection_tag(&self) -> &'static str;
 }

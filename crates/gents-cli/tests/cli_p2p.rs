@@ -1010,7 +1010,7 @@ async fn p2p_invite_join_round_trips_pairing_rows() -> Result<()> {
 
     // The v5 invite seeds the narrow network-control substrate only. The
     // full conversation data-plane flow (DataPlanePairingDesired rows and
-    // AgentRequest replication) is driven by the `defra-agent demo` `pair`
+    // AgentRequest replication) is driven by the `gents demo` `pair`
     // command.
     let applied_b =
         wait_for_pairing_applied(&graphql_b, peer_id_a, Duration::from_secs(90)).await?;

@@ -3,10 +3,10 @@ mod support;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{
-    ensure_runtime_schemas, AgentIdentity, DefraAgent, DocumentRuntimeOptions,
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::{
+    ensure_runtime_schemas, AgentIdentity, Gents, DocumentRuntimeOptions,
     ProcessLifecycleObserver, ProcessLifecycleState, ToolCeiling,
 };
 use serde_json::Value;
@@ -87,17 +87,17 @@ async fn run_agent_uses_backend_specific_api_key_env_var_for_startup_probe() -> 
         r#"mutation {{
             update_InferenceBackend(
                 filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                input: {{ api_key_env_var: "DEFRA_AGENT_TEST_RUNTIME_BACKEND_KEY" }}
+                input: {{ api_key_env_var: "GENTS_TEST_RUNTIME_BACKEND_KEY" }}
             ) {{ _docID }}
         }}"#
     );
     let response = node.execute(&mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let mut env = TestEnvGuard::new(&["DEFRA_AGENT_TEST_RUNTIME_BACKEND_KEY"]);
-    env.set("DEFRA_AGENT_TEST_RUNTIME_BACKEND_KEY", "backend-key");
+    let mut env = TestEnvGuard::new(&["GENTS_TEST_RUNTIME_BACKEND_KEY"]);
+    env.set("GENTS_TEST_RUNTIME_BACKEND_KEY", "backend-key");
     let observer = Arc::new(RecordingObserver::default());
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
@@ -134,7 +134,7 @@ async fn run_agent_uses_backend_specific_api_key_env_var_for_startup_probe() -> 
 
 #[tokio::test]
 async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
-    use defra_agent::BackendProviderKind;
+    use gents::BackendProviderKind;
 
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     ensure_runtime_schemas(node.as_ref()).await?;
@@ -149,7 +149,7 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
     behavior.model_name = "openai/gpt-4o-mini".to_string();
 
     let result =
-        defra_agent::run_openai_oneshot(node, &behavior, "Say hello in one sentence.").await?;
+        gents::run_openai_oneshot(node, &behavior, "Say hello in one sentence.").await?;
     assert_eq!(result.response_text, "mock response");
 
     let completion_request = mock_endpoint

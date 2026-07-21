@@ -13,7 +13,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use codex_app_server_protocol as codex;
-use defra_agent::defra_node::EmbeddedNode;
+use gents::defra_node::EmbeddedNode;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch, Mutex};
@@ -50,7 +50,7 @@ struct ShimState {
     cwd: PathBuf,
     fs_root: Option<PathBuf>,
     node: Arc<EmbeddedNode>,
-    background_execution_registry: defra_agent::BackgroundExecutionRegistry,
+    background_execution_registry: gents::BackgroundExecutionRegistry,
     graphql: Arc<str>,
     agent_did: Arc<str>,
     behavior_id: Arc<str>,
@@ -116,7 +116,7 @@ pub(crate) struct CodexShimBindArgs {
     pub(crate) home: PathBuf,
     pub(crate) fs_root: Option<PathBuf>,
     pub(crate) node: Arc<EmbeddedNode>,
-    pub(crate) background_execution_registry: defra_agent::BackgroundExecutionRegistry,
+    pub(crate) background_execution_registry: gents::BackgroundExecutionRegistry,
     pub(crate) graphql: String,
     pub(crate) agent_did: String,
     pub(crate) behavior_id: Option<String>,

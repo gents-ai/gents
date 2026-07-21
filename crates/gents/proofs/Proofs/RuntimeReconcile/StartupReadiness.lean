@@ -9,7 +9,7 @@ pending today in exactly one way: its daemon starts (`mark_behavior_ready`),
 which happens only **after** its completion client builds. A behavior that is
 runnable at snapshot time but persistently fails to *build* therefore never
 leaves pending — the slot hot-restarts forever, `wait_ready()` never returns,
-and the process never reports `Ready` (defra-agent#559). The blast radius is
+and the process never reports `Ready` (gents#559). The blast radius is
 worse than a wrong status: the trigger engine is also gated on the barrier, so
 one un-buildable behavior silently disables all schedules and event triggers.
 

@@ -2,11 +2,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_agent::__test_internals::run_subagent_source_for_test;
-use defra_agent::compaction::CompactionStrategy;
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{
+use gents::__test_internals::run_subagent_source_for_test;
+use gents::compaction::CompactionStrategy;
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::{
     ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, ActiveRuntimeSnapshot,
     AgentBehavior, AgentIdentity, AgentPrincipal, BackendProviderKind, BehaviorToolConfig,
     KeyIdentity,
@@ -117,7 +117,7 @@ pub fn test_identity(name: &str) -> KeyIdentity {
 }
 
 pub fn test_principal_for(
-    identity: Arc<dyn defra_agent::AgentIdentity>,
+    identity: Arc<dyn gents::AgentIdentity>,
     default_behavior_id: impl Into<String>,
 ) -> Arc<AgentPrincipal> {
     Arc::new(AgentPrincipal {
@@ -134,7 +134,7 @@ pub fn test_behavior(
     backend_id: &str,
     backend_api_key_env_var: Option<&str>,
 ) -> AgentBehavior {
-    let identity: Arc<dyn defra_agent::AgentIdentity> = Arc::new(test_identity(name));
+    let identity: Arc<dyn gents::AgentIdentity> = Arc::new(test_identity(name));
     let principal = test_principal_for(identity, name);
     AgentBehavior {
         skills: Vec::new(),
@@ -142,27 +142,27 @@ pub fn test_behavior(
         principal,
         backend_id: Some(backend_id.to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: defra_agent::OpenAiWireApi::ChatCompletions,
+        openai_wire_api: gents::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://localhost:8000/v1".to_string(),
         backend_api_key: None,
         backend_api_key_env_var: backend_api_key_env_var.map(ToOwned::to_owned),
-        model_name: defra_agent::config::DEFAULT_MODEL_NAME.to_string(),
-        context_window: defra_agent::config::DEFAULT_CONTEXT_WINDOW,
-        max_output_tokens: defra_agent::config::DEFAULT_MAX_OUTPUT_TOKENS,
-        max_turns: defra_agent::config::DEFAULT_MAX_TURNS,
+        model_name: gents::config::DEFAULT_MODEL_NAME.to_string(),
+        context_window: gents::config::DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: gents::config::DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: gents::config::DEFAULT_MAX_TURNS,
         system_prompt: String::new(),
         request_context_template: None,
         tools: BehaviorToolConfig::default(),
-        compaction_threshold: defra_agent::config::DEFAULT_COMPACTION_THRESHOLD,
+        compaction_threshold: gents::config::DEFAULT_COMPACTION_THRESHOLD,
         compaction_strategy: CompactionStrategy::StripThenSummarize,
-        stream_batch_ms: defra_agent::config::DEFAULT_STREAM_BATCH_MS,
+        stream_batch_ms: gents::config::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
-            defra_agent::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+            gents::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
-        deadline_duration: Duration::from_secs(defra_agent::config::DEFAULT_DEADLINE_DURATION_SECS),
+        deadline_duration: Duration::from_secs(gents::config::DEFAULT_DEADLINE_DURATION_SECS),
         completion_retry:
-            defra_agent::agent::completion_retry::CompletionRetryProfileFields::default(),
-        sampling: defra_agent::config::SamplingConfig::default(),
+            gents::agent::completion_retry::CompletionRetryProfileFields::default(),
+        sampling: gents::config::SamplingConfig::default(),
     }
 }
 
@@ -182,27 +182,27 @@ pub fn test_behavior_for_principal(
         principal,
         backend_id: None,
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: defra_agent::OpenAiWireApi::ChatCompletions,
+        openai_wire_api: gents::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://localhost:8000/v1".to_string(),
         backend_api_key: None,
         backend_api_key_env_var: None,
-        model_name: defra_agent::config::DEFAULT_MODEL_NAME.to_string(),
-        context_window: defra_agent::config::DEFAULT_CONTEXT_WINDOW,
-        max_output_tokens: defra_agent::config::DEFAULT_MAX_OUTPUT_TOKENS,
-        max_turns: defra_agent::config::DEFAULT_MAX_TURNS,
+        model_name: gents::config::DEFAULT_MODEL_NAME.to_string(),
+        context_window: gents::config::DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: gents::config::DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: gents::config::DEFAULT_MAX_TURNS,
         system_prompt: String::new(),
         request_context_template: None,
         tools: BehaviorToolConfig::default(),
-        compaction_threshold: defra_agent::config::DEFAULT_COMPACTION_THRESHOLD,
+        compaction_threshold: gents::config::DEFAULT_COMPACTION_THRESHOLD,
         compaction_strategy: CompactionStrategy::StripThenSummarize,
-        stream_batch_ms: defra_agent::config::DEFAULT_STREAM_BATCH_MS,
+        stream_batch_ms: gents::config::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
-            defra_agent::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+            gents::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
-        deadline_duration: Duration::from_secs(defra_agent::config::DEFAULT_DEADLINE_DURATION_SECS),
+        deadline_duration: Duration::from_secs(gents::config::DEFAULT_DEADLINE_DURATION_SECS),
         completion_retry:
-            defra_agent::agent::completion_retry::CompletionRetryProfileFields::default(),
-        sampling: defra_agent::config::SamplingConfig::default(),
+            gents::agent::completion_retry::CompletionRetryProfileFields::default(),
+        sampling: gents::config::SamplingConfig::default(),
     }
 }
 

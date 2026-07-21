@@ -3,7 +3,7 @@ use crate::shared::ConfigExportBundle;
 /// A [`ConfigExportBundle`] whose contents are guaranteed to have been
 /// produced from a typed [`crate::desired_state::DesiredStateManifest`] —
 /// i.e. every field-carrying value in the bundle originated from a type
-/// implementing [`defra_agent::DesiredFields`].
+/// implementing [`gents::DesiredFields`].
 ///
 /// The only constructor lives in
 /// [`crate::desired_state::export_bundle_from_manifest`], inside the

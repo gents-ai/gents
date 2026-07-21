@@ -165,7 +165,7 @@ pub(crate) struct P2pMetricsSnapshot {
     pub(crate) replicators: usize,
     pub(crate) admission: Option<crate::shared::P2pAdmissionState>,
     /// Typed live state from DefraDB's `/p2p/sync/status` contract.
-    pub(crate) sync_status: Option<defra_agent::P2pSyncStatusSnapshot>,
+    pub(crate) sync_status: Option<gents::P2pSyncStatusSnapshot>,
     /// True when live P2P data is held from a prior successful refresh (or an
     /// admission-only bootstrap) because the self-fetch timed out or failed.
     /// Prevents false zeroes during hub saturation when `/metrics` must not
@@ -176,7 +176,7 @@ pub(crate) struct P2pMetricsSnapshot {
 pub(crate) async fn render_prometheus_metrics(
     graphql: &str,
     local_agent_did: &str,
-    measured_backend_health: &HashMap<String, defra_agent::BackendHealthSnapshot>,
+    measured_backend_health: &HashMap<String, gents::BackendHealthSnapshot>,
     p2p: Option<&P2pMetricsSnapshot>,
 ) -> Result<String> {
     let data = load_metrics_query_data(graphql, local_agent_did).await?;
@@ -186,49 +186,49 @@ pub(crate) async fn render_prometheus_metrics(
     let mut lines = Vec::new();
     push_metric_prelude(
         &mut lines,
-        "defra_agent_up",
-        "Whether the defra-agent process is serving.",
+        "gents_up",
+        "Whether the gents process is serving.",
     );
-    push_metric_sample(&mut lines, "defra_agent_up", &[], 1);
+    push_metric_sample(&mut lines, "gents_up", &[], 1);
 
     push_metric_prelude(
         &mut lines,
-        "defra_agent_runtime_process_state",
+        "gents_runtime_process_state",
         "One-hot process lifecycle state for each agent runtime.",
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_runtime_reconcile_phase",
+        "gents_runtime_reconcile_phase",
         "One-hot reconcile phase for each agent runtime.",
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_runtime_last_reconcile_result",
+        "gents_runtime_last_reconcile_result",
         "One-hot last reconcile result for each agent runtime.",
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_runtime_active_generation",
+        "gents_runtime_active_generation",
         "Current active runtime generation.",
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_runtime_router_generation",
+        "gents_runtime_router_generation",
         "Current router-observed runtime generation.",
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_runtime_runnable_behaviors",
+        "gents_runtime_runnable_behaviors",
         "Number of runnable behaviors in the active runtime snapshot.",
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_runtime_unavailable_behaviors",
+        "gents_runtime_unavailable_behaviors",
         "Number of unavailable behaviors in the active runtime snapshot.",
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_runtime_last_reconcile_completed_at_seconds",
+        "gents_runtime_last_reconcile_completed_at_seconds",
         "Unix timestamp of the last completed reconcile.",
     );
 
@@ -243,7 +243,7 @@ pub(crate) async fn render_prometheus_metrics(
         ] {
             push_metric_sample(
                 &mut lines,
-                "defra_agent_runtime_process_state",
+                "gents_runtime_process_state",
                 &[
                     ("agent_did", agent_did.clone()),
                     ("state", state.to_string()),
@@ -254,7 +254,7 @@ pub(crate) async fn render_prometheus_metrics(
         for phase in ["idle", "debouncing", "resolving", "diffing", "applying"] {
             push_metric_sample(
                 &mut lines,
-                "defra_agent_runtime_reconcile_phase",
+                "gents_runtime_reconcile_phase",
                 &[
                     ("agent_did", agent_did.clone()),
                     ("phase", phase.to_string()),
@@ -265,7 +265,7 @@ pub(crate) async fn render_prometheus_metrics(
         for result in ["startup", "noop", "applied", "error"] {
             push_metric_sample(
                 &mut lines,
-                "defra_agent_runtime_last_reconcile_result",
+                "gents_runtime_last_reconcile_result",
                 &[
                     ("agent_did", agent_did.clone()),
                     ("result", result.to_string()),
@@ -275,32 +275,32 @@ pub(crate) async fn render_prometheus_metrics(
         }
         push_metric_sample(
             &mut lines,
-            "defra_agent_runtime_active_generation",
+            "gents_runtime_active_generation",
             &[("agent_did", agent_did.clone())],
             runtime.active_generation,
         );
         push_metric_sample(
             &mut lines,
-            "defra_agent_runtime_router_generation",
+            "gents_runtime_router_generation",
             &[("agent_did", agent_did.clone())],
             runtime.router_generation,
         );
         push_metric_sample(
             &mut lines,
-            "defra_agent_runtime_runnable_behaviors",
+            "gents_runtime_runnable_behaviors",
             &[("agent_did", agent_did.clone())],
             runtime.runnable_behavior_count,
         );
         push_metric_sample(
             &mut lines,
-            "defra_agent_runtime_unavailable_behaviors",
+            "gents_runtime_unavailable_behaviors",
             &[("agent_did", agent_did.clone())],
             runtime.unavailable_behavior_count,
         );
         if let Some(timestamp) = rfc3339_timestamp_seconds(&runtime.last_reconcile_completed_at) {
             push_metric_sample(
                 &mut lines,
-                "defra_agent_runtime_last_reconcile_completed_at_seconds",
+                "gents_runtime_last_reconcile_completed_at_seconds",
                 &[("agent_did", agent_did)],
                 timestamp,
             );
@@ -309,27 +309,27 @@ pub(crate) async fn render_prometheus_metrics(
 
     push_metric_prelude(
         &mut lines,
-        "defra_agent_backend_enabled",
+        "gents_backend_enabled",
         "Whether an inference backend is enabled.",
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_backend_max_concurrent",
+        "gents_backend_max_concurrent",
         "Configured maximum concurrency for an inference backend.",
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_backend_max_queue_depth",
+        "gents_backend_max_queue_depth",
         "Configured admission queue depth for an inference backend.",
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_backend_probe_status",
+        "gents_backend_probe_status",
         "Current probe status for an inference backend.",
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_backend_last_probe_seconds",
+        "gents_backend_last_probe_seconds",
         "Unix timestamp of the last backend probe.",
     );
 
@@ -341,78 +341,78 @@ pub(crate) async fn render_prometheus_metrics(
 
     push_metric_prelude(
         &mut lines,
-        "defra_agent_active_requests",
+        "gents_active_requests",
         "Number of AgentRequest rows currently in processing.",
     );
     push_metric_sample(
         &mut lines,
-        "defra_agent_active_requests",
+        "gents_active_requests",
         &[],
         data.liveness.active_request_ids.len() as i64,
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_active_tool_calls",
+        "gents_active_tool_calls",
         "Number of AgentToolCall rows currently running.",
     );
     push_metric_sample(
         &mut lines,
-        "defra_agent_active_tool_calls",
+        "gents_active_tool_calls",
         &[],
         data.liveness.active_tool_calls.len() as i64,
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_expired_processing_count",
+        "gents_expired_processing_count",
         "Number of processing AgentRequest rows whose deadline has already passed. Zero is healthy.",
     );
     push_metric_sample(
         &mut lines,
-        "defra_agent_expired_processing_count",
+        "gents_expired_processing_count",
         &[],
         data.liveness.expired_processing_count,
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_ignored_foreign_processing_requests",
+        "gents_ignored_foreign_processing_requests",
         "Number of processing AgentRequest rows ignored because they belong to a different agent DID.",
     );
     push_metric_sample(
         &mut lines,
-        "defra_agent_ignored_foreign_processing_requests",
+        "gents_ignored_foreign_processing_requests",
         &[],
         data.liveness.ignored_foreign_processing_count,
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_ignored_foreign_running_tool_calls",
+        "gents_ignored_foreign_running_tool_calls",
         "Number of running AgentToolCall rows ignored because they belong to a different agent DID.",
     );
     push_metric_sample(
         &mut lines,
-        "defra_agent_ignored_foreign_running_tool_calls",
+        "gents_ignored_foreign_running_tool_calls",
         &[],
         data.liveness.ignored_foreign_tool_call_count,
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_active_native_executors",
+        "gents_active_native_executors",
         "Number of active managed native executor processes visible in this HTTP server process.",
     );
     push_metric_sample(
         &mut lines,
-        "defra_agent_active_native_executors",
+        "gents_active_native_executors",
         &[],
         data.liveness.active_native_executors.len() as i64,
     );
     push_metric_prelude(
         &mut lines,
-        "defra_agent_active_native_executors_available",
+        "gents_active_native_executors_available",
         "Per-instance gauge set to 1 when active native executor process snapshots were collected from this HTTP server process; aggregate with min/max rather than average.",
     );
     push_metric_sample(
         &mut lines,
-        "defra_agent_active_native_executors_available",
+        "gents_active_native_executors_available",
         &[],
         if data.liveness.active_native_executors_available {
             1
@@ -433,48 +433,48 @@ fn render_p2p_metrics(lines: &mut Vec<String>, p2p: Option<&P2pMetricsSnapshot>)
 
     push_metric_prelude(
         lines,
-        "defra_agent_p2p_enabled",
+        "gents_p2p_enabled",
         "1 when this process has P2P transport enabled.",
     );
     push_metric_sample(
         lines,
-        "defra_agent_p2p_enabled",
+        "gents_p2p_enabled",
         &[],
         if snapshot.enabled { 1 } else { 0 },
     );
 
     push_metric_prelude(
         lines,
-        "defra_agent_p2p_status_stale",
+        "gents_p2p_status_stale",
         "1 when live P2P state is last-known or admission-only because the self-fetch timed out or failed.",
     );
     push_metric_sample(
         lines,
-        "defra_agent_p2p_status_stale",
+        "gents_p2p_status_stale",
         &[],
         if snapshot.stale { 1 } else { 0 },
     );
 
     push_metric_prelude(
         lines,
-        "defra_agent_p2p_connected_peers",
+        "gents_p2p_connected_peers",
         "Connected P2P peers (last successful live fetch; held when status_stale=1).",
     );
     push_metric_sample(
         lines,
-        "defra_agent_p2p_connected_peers",
+        "gents_p2p_connected_peers",
         &[],
         snapshot.connected_peers as i64,
     );
 
     push_metric_prelude(
         lines,
-        "defra_agent_p2p_replicators",
+        "gents_p2p_replicators",
         "Configured P2P replicators (last successful live fetch; held when status_stale=1).",
     );
     push_metric_sample(
         lines,
-        "defra_agent_p2p_replicators",
+        "gents_p2p_replicators",
         &[],
         snapshot.replicators as i64,
     );
@@ -485,68 +485,68 @@ fn render_p2p_metrics(lines: &mut Vec<String>, p2p: Option<&P2pMetricsSnapshot>)
     // effective upstream floors (e.g. rate may be clamped to MIN_REQUEST_REFILL_RATE).
     push_metric_prelude(
         lines,
-        "defra_agent_p2p_admission_max_pending_dags",
+        "gents_p2p_admission_max_pending_dags",
         "Requested max pending-DAG registrations at serve start (not the effective post-clamp bound).",
     );
     push_metric_prelude(
         lines,
-        "defra_agent_p2p_admission_max_concurrent_push_tasks",
+        "gents_p2p_admission_max_concurrent_push_tasks",
         "Requested max concurrent outbound PushLog worker slots at serve start.",
     );
     push_metric_prelude(
         lines,
-        "defra_agent_p2p_admission_max_concurrent_dag_fetches",
+        "gents_p2p_admission_max_concurrent_dag_fetches",
         "Requested max concurrent Bitswap DAG fetches at serve start.",
     );
     push_metric_prelude(
         lines,
-        "defra_agent_p2p_admission_rate_limit_burst",
+        "gents_p2p_admission_rate_limit_burst",
         "Requested per-peer P2P rate-limit burst at serve start.",
     );
     push_metric_prelude(
         lines,
-        "defra_agent_p2p_admission_rate_limit_rate",
+        "gents_p2p_admission_rate_limit_rate",
         "Requested per-peer P2P rate-limit refill rate (tokens/s) at serve start; upstream may floor below 1.0.",
     );
 
     if let Some(admission) = snapshot.admission.as_ref() {
         push_metric_sample(
             lines,
-            "defra_agent_p2p_admission_max_pending_dags",
+            "gents_p2p_admission_max_pending_dags",
             &[],
             admission.max_pending_dags as i64,
         );
         push_metric_sample(
             lines,
-            "defra_agent_p2p_admission_max_concurrent_push_tasks",
+            "gents_p2p_admission_max_concurrent_push_tasks",
             &[],
             admission.max_concurrent_push_tasks as i64,
         );
         push_metric_sample(
             lines,
-            "defra_agent_p2p_admission_max_concurrent_dag_fetches",
+            "gents_p2p_admission_max_concurrent_dag_fetches",
             &[],
             admission.max_concurrent_dag_fetches as i64,
         );
         push_metric_sample(
             lines,
-            "defra_agent_p2p_admission_rate_limit_burst",
+            "gents_p2p_admission_rate_limit_burst",
             &[],
             admission.rate_limit_burst as i64,
         );
         push_metric_sample(
             lines,
-            "defra_agent_p2p_admission_rate_limit_rate",
+            "gents_p2p_admission_rate_limit_rate",
             &[],
             admission.rate_limit_rate,
         );
     } else {
         for name in [
-            "defra_agent_p2p_admission_max_pending_dags",
-            "defra_agent_p2p_admission_max_concurrent_push_tasks",
-            "defra_agent_p2p_admission_max_concurrent_dag_fetches",
-            "defra_agent_p2p_admission_rate_limit_burst",
-            "defra_agent_p2p_admission_rate_limit_rate",
+            "gents_p2p_admission_max_pending_dags",
+            "gents_p2p_admission_max_concurrent_push_tasks",
+            "gents_p2p_admission_max_concurrent_dag_fetches",
+            "gents_p2p_admission_rate_limit_burst",
+            "gents_p2p_admission_rate_limit_rate",
         ] {
             push_metric_sample(lines, name, &[], 0);
         }
@@ -555,16 +555,16 @@ fn render_p2p_metrics(lines: &mut Vec<String>, p2p: Option<&P2pMetricsSnapshot>)
 
 fn render_p2p_sync_metrics(
     lines: &mut Vec<String>,
-    status: Option<&defra_agent::P2pSyncStatusSnapshot>,
+    status: Option<&gents::P2pSyncStatusSnapshot>,
 ) {
     push_metric_prelude(
         lines,
-        "defra_agent_p2p_sync_status_available",
+        "gents_p2p_sync_status_available",
         "1 when the pinned DefraDB live sync diagnostics snapshot was fetched and decoded.",
     );
     push_metric_sample(
         lines,
-        "defra_agent_p2p_sync_status_available",
+        "gents_p2p_sync_status_available",
         &[],
         i64::from(status.is_some()),
     );
@@ -573,72 +573,72 @@ fn render_p2p_sync_metrics(
     let backlog = &status.push_backlog;
     for (name, help, value) in [
         (
-            "defra_agent_p2p_push_queue_items",
+            "gents_p2p_push_queue_items",
             "Live outbound push jobs waiting in the bounded DefraDB queue.",
             backlog.queued_items,
         ),
         (
-            "defra_agent_p2p_push_queue_item_capacity",
+            "gents_p2p_push_queue_item_capacity",
             "Effective outbound push queue item capacity in DefraDB.",
             backlog.queue_item_capacity,
         ),
         (
-            "defra_agent_p2p_push_queue_bytes",
+            "gents_p2p_push_queue_bytes",
             "Accounted bytes held by live outbound push jobs waiting in DefraDB.",
             backlog.queued_bytes,
         ),
         (
-            "defra_agent_p2p_push_queue_byte_capacity",
+            "gents_p2p_push_queue_byte_capacity",
             "Effective outbound push queue byte capacity in DefraDB.",
             backlog.queue_byte_capacity,
         ),
         (
-            "defra_agent_p2p_push_active_jobs",
+            "gents_p2p_push_active_jobs",
             "Outbound push jobs currently owned by DefraDB workers.",
             backlog.active_jobs,
         ),
         (
-            "defra_agent_p2p_push_worker_count",
+            "gents_p2p_push_worker_count",
             "Fixed outbound push worker count in DefraDB.",
             backlog.worker_count,
         ),
         (
-            "defra_agent_p2p_push_per_peer_active_cap",
+            "gents_p2p_push_per_peer_active_cap",
             "Effective maximum active outbound push jobs for one peer.",
             backlog.per_peer_active_cap,
         ),
         (
-            "defra_agent_p2p_push_encode_cache_entries",
+            "gents_p2p_push_encode_cache_entries",
             "Encoded DAG payloads currently retained by DefraDB push coalescing.",
             status.encode_cache_entries,
         ),
         (
-            "defra_agent_p2p_pending_dags",
+            "gents_p2p_pending_dags",
             "Live in-memory pending DAG registrations.",
             status.pending_dags,
         ),
         (
-            "defra_agent_p2p_pending_dag_capacity",
+            "gents_p2p_pending_dag_capacity",
             "Effective in-memory pending DAG capacity.",
             status.pending_dag_capacity,
         ),
         (
-            "defra_agent_p2p_persisted_pending_dags",
+            "gents_p2p_persisted_pending_dags",
             "Durable pending DAG registrations awaiting merge or retirement.",
             status.persisted_pending_dags,
         ),
         (
-            "defra_agent_p2p_persisted_pending_dag_capacity",
+            "gents_p2p_persisted_pending_dag_capacity",
             "Effective durable pending DAG registration capacity.",
             status.persisted_pending_dag_capacity,
         ),
         (
-            "defra_agent_p2p_quarantined_pending_dags",
+            "gents_p2p_quarantined_pending_dags",
             "Pending DAG roots quarantined after a terminal merge rejection.",
             status.quarantined_pending_dags,
         ),
         (
-            "defra_agent_p2p_retained_background_tasks",
+            "gents_p2p_retained_background_tasks",
             "DefraDB P2P background task handles retained for shutdown.",
             status.retained_background_tasks,
         ),
@@ -649,109 +649,109 @@ fn render_p2p_sync_metrics(
 
     push_metric_prelude(
         lines,
-        "defra_agent_p2p_pending_resync_in_flight",
+        "gents_p2p_pending_resync_in_flight",
         "1 when DefraDB is reconciling durable pending DAG registrations.",
     );
     push_metric_sample(
         lines,
-        "defra_agent_p2p_pending_resync_in_flight",
+        "gents_p2p_pending_resync_in_flight",
         &[],
         i64::from(status.pending_resync_in_flight),
     );
 
     for (name, help, value) in [
         (
-            "defra_agent_p2p_push_enqueued_total",
+            "gents_p2p_push_enqueued_total",
             "Outbound push jobs admitted by the bounded DefraDB queue.",
             backlog.enqueued_total,
         ),
         (
-            "defra_agent_p2p_push_coalesced_total",
+            "gents_p2p_push_coalesced_total",
             "Duplicate outbound push jobs coalesced by DefraDB.",
             backlog.coalesced_total,
         ),
         (
-            "defra_agent_p2p_push_rejected_items_total",
+            "gents_p2p_push_rejected_items_total",
             "Outbound push admissions rejected at the item cap.",
             backlog.rejected_items_total,
         ),
         (
-            "defra_agent_p2p_push_rejected_bytes_total",
+            "gents_p2p_push_rejected_bytes_total",
             "Outbound push admissions rejected at the byte cap.",
             backlog.rejected_bytes_total,
         ),
         (
-            "defra_agent_p2p_push_completed_total",
+            "gents_p2p_push_completed_total",
             "Outbound push jobs completed by DefraDB workers.",
             backlog.completed_total,
         ),
         (
-            "defra_agent_p2p_push_failed_total",
+            "gents_p2p_push_failed_total",
             "Outbound push jobs failed by DefraDB workers.",
             backlog.failed_total,
         ),
         (
-            "defra_agent_p2p_push_stale_head_retirements_total",
+            "gents_p2p_push_stale_head_retirements_total",
             "Stale outbound CID heads retired by DefraDB push coalescing.",
             backlog.stale_head_retirements_total,
         ),
         (
-            "defra_agent_p2p_push_peer_capacity_parks_total",
+            "gents_p2p_push_peer_capacity_parks_total",
             "Times a peer was parked because its receiver reported saturation.",
             backlog.peer_capacity_parks_total,
         ),
         (
-            "defra_agent_p2p_push_encode_cache_hits_total",
+            "gents_p2p_push_encode_cache_hits_total",
             "Outbound pushes that reused a cached encoded DAG payload.",
             status.encode_cache_hits_total,
         ),
         (
-            "defra_agent_p2p_broadcast_coalesced_total",
+            "gents_p2p_broadcast_coalesced_total",
             "Redundant DefraDB broadcast updates coalesced before outbound push.",
             status.broadcast_coalesced_total,
         ),
         (
-            "defra_agent_p2p_push_updates_coalesced_total",
+            "gents_p2p_push_updates_coalesced_total",
             "Outbound push updates retired in favor of a newer CID head.",
             status.push_updates_coalesced_total,
         ),
         (
-            "defra_agent_p2p_missing_link_retries_total",
+            "gents_p2p_missing_link_retries_total",
             "Missing-link retry attempts recorded by DefraDB sync.",
             status.missing_link_retries,
         ),
         (
-            "defra_agent_p2p_pending_dag_resolved_total",
+            "gents_p2p_pending_dag_resolved_total",
             "Pending DAG registrations resolved by DefraDB sync.",
             status.pending_dag_resolved,
         ),
         (
-            "defra_agent_p2p_pending_dag_expired_total",
+            "gents_p2p_pending_dag_expired_total",
             "Pending DAG registrations expired by DefraDB sync.",
             status.pending_dag_expired,
         ),
         (
-            "defra_agent_p2p_gossip_direction_filtered_total",
+            "gents_p2p_gossip_direction_filtered_total",
             "Inbound gossip dropped by the replication-direction filter.",
             status.gossip_direction_filtered_total,
         ),
         (
-            "defra_agent_p2p_pending_dag_capacity_shed_total",
+            "gents_p2p_pending_dag_capacity_shed_total",
             "Inbound roots shed because the pending-DAG registry was at capacity.",
             status.pending_dag_capacity_shed,
         ),
         (
-            "defra_agent_p2p_single_flight_suppressed_total",
+            "gents_p2p_single_flight_suppressed_total",
             "Duplicate concurrent receives of the same CID suppressed by DefraDB sync.",
             status.single_flight_suppressed,
         ),
         (
-            "defra_agent_p2p_already_merged_fast_path_total",
+            "gents_p2p_already_merged_fast_path_total",
             "Receives skipped because the announced CID was already merged.",
             status.already_merged_fast_path,
         ),
         (
-            "defra_agent_p2p_pending_dag_terminal_quarantined_total",
+            "gents_p2p_pending_dag_terminal_quarantined_total",
             "Pending DAG roots quarantined after a deterministic terminal merge rejection.",
             status.pending_dag_terminal_quarantined,
         ),
@@ -762,13 +762,13 @@ fn render_p2p_sync_metrics(
 
     push_metric_prelude(
         lines,
-        "defra_agent_p2p_push_cid_retry_count",
+        "gents_p2p_push_cid_retry_count",
         "Current outbound retry count retained for one CID.",
     );
     for retry in &backlog.per_cid_retry_counts {
         push_metric_sample(
             lines,
-            "defra_agent_p2p_push_cid_retry_count",
+            "gents_p2p_push_cid_retry_count",
             &[("cid", retry.cid.clone())],
             retry.retry_count,
         );
@@ -776,23 +776,23 @@ fn render_p2p_sync_metrics(
 
     for (name, help) in [
         (
-            "defra_agent_p2p_peer_push_queue_items",
+            "gents_p2p_peer_push_queue_items",
             "Live outbound push jobs waiting for one peer.",
         ),
         (
-            "defra_agent_p2p_peer_push_queue_bytes",
+            "gents_p2p_peer_push_queue_bytes",
             "Accounted outbound push queue bytes held for one peer.",
         ),
         (
-            "defra_agent_p2p_peer_push_active_jobs",
+            "gents_p2p_peer_push_active_jobs",
             "Outbound push jobs currently active for one peer.",
         ),
         (
-            "defra_agent_p2p_peer_consecutive_failures",
+            "gents_p2p_peer_consecutive_failures",
             "Consecutive outbound push failures recorded for one peer.",
         ),
         (
-            "defra_agent_p2p_peer_cooldown_remaining_milliseconds",
+            "gents_p2p_peer_cooldown_remaining_milliseconds",
             "Remaining outbound push cooldown for one peer, in milliseconds.",
         ),
     ] {
@@ -802,23 +802,23 @@ fn render_p2p_sync_metrics(
         let labels = &[("peer_id", peer.peer_id.clone())];
         for (name, value) in [
             (
-                "defra_agent_p2p_peer_push_queue_items",
+                "gents_p2p_peer_push_queue_items",
                 peer.queued_items as u64,
             ),
             (
-                "defra_agent_p2p_peer_push_queue_bytes",
+                "gents_p2p_peer_push_queue_bytes",
                 peer.queued_bytes as u64,
             ),
             (
-                "defra_agent_p2p_peer_push_active_jobs",
+                "gents_p2p_peer_push_active_jobs",
                 peer.active_jobs as u64,
             ),
             (
-                "defra_agent_p2p_peer_consecutive_failures",
+                "gents_p2p_peer_consecutive_failures",
                 peer.consecutive_failures as u64,
             ),
             (
-                "defra_agent_p2p_peer_cooldown_remaining_milliseconds",
+                "gents_p2p_peer_cooldown_remaining_milliseconds",
                 peer.cooldown_remaining_ms,
             ),
         ] {
@@ -923,25 +923,25 @@ fn render_inference_metrics(lines: &mut Vec<String>, data: &InferenceMetricsQuer
 
     push_metric_prelude(
         lines,
-        "defra_agent_inference_metrics_window_seconds",
+        "gents_inference_metrics_window_seconds",
         "Trailing scrape window, in seconds, used for inference request and token gauges.",
     );
     push_metric_sample(
         lines,
-        "defra_agent_inference_metrics_window_seconds",
+        "gents_inference_metrics_window_seconds",
         &[],
         data.window_seconds,
     );
 
     push_metric_prelude(
         lines,
-        "defra_agent_inference_requests_window_count",
+        "gents_inference_requests_window_count",
         "Terminal inference calls ended inside the trailing scrape window, grouped by agent, backend, model, and terminal status; this gauge is not cumulative.",
     );
     for (key, total) in families.request_totals {
         push_metric_sample(
             lines,
-            "defra_agent_inference_requests_window_count",
+            "gents_inference_requests_window_count",
             &[
                 ("agent", key.agent),
                 ("agent_did", key.agent_did),
@@ -955,13 +955,13 @@ fn render_inference_metrics(lines: &mut Vec<String>, data: &InferenceMetricsQuer
 
     push_metric_prelude(
         lines,
-        "defra_agent_inference_prompt_tokens_window_sum",
+        "gents_inference_prompt_tokens_window_sum",
         "Prompt tokens reported by terminal inference calls ended inside the trailing scrape window; this gauge is not cumulative.",
     );
     for (key, total) in families.prompt_token_totals {
         push_metric_sample(
             lines,
-            "defra_agent_inference_prompt_tokens_window_sum",
+            "gents_inference_prompt_tokens_window_sum",
             &[
                 ("agent", key.agent),
                 ("agent_did", key.agent_did),
@@ -974,13 +974,13 @@ fn render_inference_metrics(lines: &mut Vec<String>, data: &InferenceMetricsQuer
 
     push_metric_prelude(
         lines,
-        "defra_agent_inference_completion_tokens_window_sum",
+        "gents_inference_completion_tokens_window_sum",
         "Completion tokens reported by terminal inference calls ended inside the trailing scrape window; this gauge is not cumulative.",
     );
     for (key, total) in families.completion_token_totals {
         push_metric_sample(
             lines,
-            "defra_agent_inference_completion_tokens_window_sum",
+            "gents_inference_completion_tokens_window_sum",
             &[
                 ("agent", key.agent),
                 ("agent_did", key.agent_did),
@@ -1174,14 +1174,14 @@ pub(crate) async fn load_metrics_query_data(
 
 pub(crate) fn with_local_native_executors(mut data: MetricsQueryData) -> MetricsQueryData {
     data.liveness =
-        with_active_native_executors(data.liveness, defra_agent::active_native_executors());
+        with_active_native_executors(data.liveness, gents::active_native_executors());
     data
 }
 
 /// Per-backend metric samples with the local runtime's measured probe
 /// health overlaid (#640). When the prober has measured a backend, the
 /// `status` label carries the MEASURED state and the sample value is 1 iff
-/// that state is healthy — so `defra_agent_backend_probe_status` genuinely
+/// that state is healthy — so `gents_backend_probe_status` genuinely
 /// reads 0 for a dead endpoint instead of pinning at the stored document
 /// constant. Backends the prober never measures (ChatGPT-Codex, or an HTTP
 /// surface without an in-process runtime) fall back to the document's
@@ -1189,24 +1189,24 @@ pub(crate) fn with_local_native_executors(mut data: MetricsQueryData) -> Metrics
 pub(crate) fn push_backend_metrics(
     lines: &mut Vec<String>,
     backends: &[MetricsBackendRow],
-    measured: &HashMap<String, defra_agent::BackendHealthSnapshot>,
+    measured: &HashMap<String, gents::BackendHealthSnapshot>,
 ) {
     for backend in backends {
         push_metric_sample(
             lines,
-            "defra_agent_backend_enabled",
+            "gents_backend_enabled",
             &[("backend_id", backend.backend_id.clone())],
             i64::from(backend.enabled),
         );
         push_metric_sample(
             lines,
-            "defra_agent_backend_max_concurrent",
+            "gents_backend_max_concurrent",
             &[("backend_id", backend.backend_id.clone())],
             backend.max_concurrent,
         );
         push_metric_sample(
             lines,
-            "defra_agent_backend_max_queue_depth",
+            "gents_backend_max_queue_depth",
             &[("backend_id", backend.backend_id.clone())],
             backend.max_queue_depth,
         );
@@ -1216,7 +1216,7 @@ pub(crate) fn push_backend_metrics(
             .unwrap_or_else(|| backend.probe_status.clone());
         push_metric_sample(
             lines,
-            "defra_agent_backend_probe_status",
+            "gents_backend_probe_status",
             &[
                 ("backend_id", backend.backend_id.clone()),
                 ("status", status.clone()),
@@ -1234,7 +1234,7 @@ pub(crate) fn push_backend_metrics(
         if let Some(timestamp) = last_probe_seconds {
             push_metric_sample(
                 lines,
-                "defra_agent_backend_last_probe_seconds",
+                "gents_backend_last_probe_seconds",
                 &[("backend_id", backend.backend_id.clone())],
                 timestamp,
             );
@@ -1319,11 +1319,11 @@ mod tests {
         }
         fn measured_entry(
             backend_id: &str,
-            state: defra_agent::BackendHealthState,
+            state: gents::BackendHealthState,
             failure_count: u32,
             last_probe_at: &str,
-        ) -> defra_agent::BackendHealthSnapshot {
-            defra_agent::BackendHealthSnapshot {
+        ) -> gents::BackendHealthSnapshot {
+            gents::BackendHealthSnapshot {
                 backend_id: backend_id.to_string(),
                 state,
                 failure_count,
@@ -1351,7 +1351,7 @@ mod tests {
                 "sparks-cluster".to_string(),
                 measured_entry(
                     "sparks-cluster",
-                    defra_agent::BackendHealthState::Unhealthy,
+                    gents::BackendHealthState::Unhealthy,
                     3,
                     "2026-07-07T12:00:00Z",
                 ),
@@ -1360,7 +1360,7 @@ mod tests {
                 "workstation-1".to_string(),
                 measured_entry(
                     "workstation-1",
-                    defra_agent::BackendHealthState::Healthy,
+                    gents::BackendHealthState::Healthy,
                     0,
                     "2026-07-07T12:00:00Z",
                 ),
@@ -1369,7 +1369,7 @@ mod tests {
                 "spark-2".to_string(),
                 measured_entry(
                     "spark-2",
-                    defra_agent::BackendHealthState::Degraded,
+                    gents::BackendHealthState::Degraded,
                     1,
                     "2026-07-07T12:00:00Z",
                 ),
@@ -1384,36 +1384,36 @@ mod tests {
             .unwrap()
             .timestamp();
         assert!(rendered.contains(
-            r#"defra_agent_backend_probe_status{backend_id="sparks-cluster",status="unhealthy"} 0"#
+            r#"gents_backend_probe_status{backend_id="sparks-cluster",status="unhealthy"} 0"#
         ));
         assert!(rendered.contains(&format!(
-            r#"defra_agent_backend_last_probe_seconds{{backend_id="sparks-cluster"}} {measured_last_probe}"#
+            r#"gents_backend_last_probe_seconds{{backend_id="sparks-cluster"}} {measured_last_probe}"#
         )));
         assert!(rendered.contains(
-            r#"defra_agent_backend_probe_status{backend_id="workstation-1",status="healthy"} 1"#
+            r#"gents_backend_probe_status{backend_id="workstation-1",status="healthy"} 1"#
         ));
         assert!(rendered.contains(&format!(
-            r#"defra_agent_backend_last_probe_seconds{{backend_id="workstation-1"}} {measured_last_probe}"#
+            r#"gents_backend_last_probe_seconds{{backend_id="workstation-1"}} {measured_last_probe}"#
         )));
         assert!(rendered.contains(
-            r#"defra_agent_backend_probe_status{backend_id="spark-2",status="degraded"} 0"#
+            r#"gents_backend_probe_status{backend_id="spark-2",status="degraded"} 0"#
         ));
         // Doc fallback: measured absent.
         assert!(rendered.contains(
-            r#"defra_agent_backend_probe_status{backend_id="codex",status="healthy"} 1"#
+            r#"gents_backend_probe_status{backend_id="codex",status="healthy"} 1"#
         ));
         let doc_last_probe = chrono::DateTime::parse_from_rfc3339("2026-07-06T00:00:00Z")
             .unwrap()
             .timestamp();
         assert!(rendered.contains(&format!(
-            r#"defra_agent_backend_last_probe_seconds{{backend_id="codex"}} {doc_last_probe}"#
+            r#"gents_backend_last_probe_seconds{{backend_id="codex"}} {doc_last_probe}"#
         )));
         assert!(rendered.contains(
-            r#"defra_agent_backend_probe_status{backend_id="unprobed-unknown",status="unknown"} 0"#
+            r#"gents_backend_probe_status{backend_id="unprobed-unknown",status="unknown"} 0"#
         ));
         // No last_probe series at all when neither measurement nor doc has one.
         assert!(!rendered
-            .contains(r#"defra_agent_backend_last_probe_seconds{backend_id="unprobed-unknown"}"#));
+            .contains(r#"gents_backend_last_probe_seconds{backend_id="unprobed-unknown"}"#));
     }
 
     #[test]
@@ -1432,8 +1432,8 @@ mod tests {
                     rate_limit_burst: 500,
                     rate_limit_rate: 50.0,
                 }),
-                sync_status: Some(defra_agent::P2pSyncStatusSnapshot {
-                    push_backlog: defra_agent::P2pPushBacklogSnapshot {
+                sync_status: Some(gents::P2pSyncStatusSnapshot {
+                    push_backlog: gents::P2pPushBacklogSnapshot {
                         queue_item_capacity: 128,
                         queue_byte_capacity: 1_048_576,
                         per_peer_active_cap: 2,
@@ -1449,11 +1449,11 @@ mod tests {
                         failed_total: 4,
                         stale_head_retirements_total: 17,
                         peer_capacity_parks_total: 13,
-                        per_cid_retry_counts: vec![defra_agent::P2pCidRetrySnapshot {
+                        per_cid_retry_counts: vec![gents::P2pCidRetrySnapshot {
                             cid: "bafy-retry".to_string(),
                             retry_count: 19,
                         }],
-                        per_peer: vec![defra_agent::P2pPeerBacklogSnapshot {
+                        per_peer: vec![gents::P2pPeerBacklogSnapshot {
                             peer_id: "peer-a".to_string(),
                             queued_items: 4,
                             queued_bytes: 2_048,
@@ -1489,41 +1489,41 @@ mod tests {
             }),
         );
         let rendered = lines.join("\n");
-        assert!(rendered.contains("defra_agent_p2p_enabled 1"));
-        assert!(rendered.contains("defra_agent_p2p_status_stale 0"));
-        assert!(rendered.contains("defra_agent_p2p_connected_peers 3"));
-        assert!(rendered.contains("defra_agent_p2p_replicators 2"));
-        assert!(rendered.contains("defra_agent_p2p_admission_max_pending_dags 1000"));
-        assert!(rendered.contains("defra_agent_p2p_admission_max_concurrent_push_tasks 8"));
-        assert!(rendered.contains("defra_agent_p2p_admission_max_concurrent_dag_fetches 4"));
-        assert!(rendered.contains("defra_agent_p2p_admission_rate_limit_burst 500"));
-        assert!(rendered.contains("defra_agent_p2p_admission_rate_limit_rate 50"));
-        assert!(rendered.contains("defra_agent_p2p_sync_status_available 1"));
-        assert!(rendered.contains("defra_agent_p2p_push_queue_items 7"));
-        assert!(rendered.contains("defra_agent_p2p_push_queue_bytes 4096"));
-        assert!(rendered.contains("defra_agent_p2p_push_active_jobs 3"));
-        assert!(rendered.contains("defra_agent_p2p_push_encode_cache_entries 5"));
-        assert!(rendered.contains("defra_agent_p2p_pending_dags 13"));
-        assert!(rendered.contains("defra_agent_p2p_persisted_pending_dags 17"));
-        assert!(rendered.contains("defra_agent_p2p_quarantined_pending_dags 79"));
-        assert!(rendered.contains("defra_agent_p2p_push_rejected_items_total 5"));
-        assert!(rendered.contains("defra_agent_p2p_push_stale_head_retirements_total 17"));
-        assert!(rendered.contains("defra_agent_p2p_push_peer_capacity_parks_total 13"));
-        assert!(rendered.contains("defra_agent_p2p_push_encode_cache_hits_total 37"));
-        assert!(rendered.contains("defra_agent_p2p_broadcast_coalesced_total 41"));
-        assert!(rendered.contains("defra_agent_p2p_push_updates_coalesced_total 43"));
-        assert!(rendered.contains("defra_agent_p2p_missing_link_retries_total 23"));
-        assert!(rendered.contains("defra_agent_p2p_gossip_direction_filtered_total 47"));
-        assert!(rendered.contains("defra_agent_p2p_pending_dag_capacity_shed_total 59"));
-        assert!(rendered.contains("defra_agent_p2p_single_flight_suppressed_total 37"));
-        assert!(rendered.contains("defra_agent_p2p_already_merged_fast_path_total 53"));
-        assert!(rendered.contains("defra_agent_p2p_pending_dag_terminal_quarantined_total 73"));
-        assert!(rendered.contains(r#"defra_agent_p2p_push_cid_retry_count{cid="bafy-retry"} 19"#));
+        assert!(rendered.contains("gents_p2p_enabled 1"));
+        assert!(rendered.contains("gents_p2p_status_stale 0"));
+        assert!(rendered.contains("gents_p2p_connected_peers 3"));
+        assert!(rendered.contains("gents_p2p_replicators 2"));
+        assert!(rendered.contains("gents_p2p_admission_max_pending_dags 1000"));
+        assert!(rendered.contains("gents_p2p_admission_max_concurrent_push_tasks 8"));
+        assert!(rendered.contains("gents_p2p_admission_max_concurrent_dag_fetches 4"));
+        assert!(rendered.contains("gents_p2p_admission_rate_limit_burst 500"));
+        assert!(rendered.contains("gents_p2p_admission_rate_limit_rate 50"));
+        assert!(rendered.contains("gents_p2p_sync_status_available 1"));
+        assert!(rendered.contains("gents_p2p_push_queue_items 7"));
+        assert!(rendered.contains("gents_p2p_push_queue_bytes 4096"));
+        assert!(rendered.contains("gents_p2p_push_active_jobs 3"));
+        assert!(rendered.contains("gents_p2p_push_encode_cache_entries 5"));
+        assert!(rendered.contains("gents_p2p_pending_dags 13"));
+        assert!(rendered.contains("gents_p2p_persisted_pending_dags 17"));
+        assert!(rendered.contains("gents_p2p_quarantined_pending_dags 79"));
+        assert!(rendered.contains("gents_p2p_push_rejected_items_total 5"));
+        assert!(rendered.contains("gents_p2p_push_stale_head_retirements_total 17"));
+        assert!(rendered.contains("gents_p2p_push_peer_capacity_parks_total 13"));
+        assert!(rendered.contains("gents_p2p_push_encode_cache_hits_total 37"));
+        assert!(rendered.contains("gents_p2p_broadcast_coalesced_total 41"));
+        assert!(rendered.contains("gents_p2p_push_updates_coalesced_total 43"));
+        assert!(rendered.contains("gents_p2p_missing_link_retries_total 23"));
+        assert!(rendered.contains("gents_p2p_gossip_direction_filtered_total 47"));
+        assert!(rendered.contains("gents_p2p_pending_dag_capacity_shed_total 59"));
+        assert!(rendered.contains("gents_p2p_single_flight_suppressed_total 37"));
+        assert!(rendered.contains("gents_p2p_already_merged_fast_path_total 53"));
+        assert!(rendered.contains("gents_p2p_pending_dag_terminal_quarantined_total 73"));
+        assert!(rendered.contains(r#"gents_p2p_push_cid_retry_count{cid="bafy-retry"} 19"#));
         assert!(
-            rendered.contains(r#"defra_agent_p2p_peer_consecutive_failures{peer_id="peer-a"} 3"#)
+            rendered.contains(r#"gents_p2p_peer_consecutive_failures{peer_id="peer-a"} 3"#)
         );
         assert!(rendered.contains(
-            r#"defra_agent_p2p_peer_cooldown_remaining_milliseconds{peer_id="peer-a"} 750"#
+            r#"gents_p2p_peer_cooldown_remaining_milliseconds{peer_id="peer-a"} 750"#
         ));
     }
 
@@ -1542,10 +1542,10 @@ mod tests {
             }),
         );
         let rendered = lines.join("\n");
-        assert!(rendered.contains("defra_agent_p2p_status_stale 1"));
-        assert!(rendered.contains("defra_agent_p2p_connected_peers 7"));
-        assert!(rendered.contains("defra_agent_p2p_replicators 4"));
-        assert!(rendered.contains("defra_agent_p2p_sync_status_available 0"));
+        assert!(rendered.contains("gents_p2p_status_stale 1"));
+        assert!(rendered.contains("gents_p2p_connected_peers 7"));
+        assert!(rendered.contains("gents_p2p_replicators 4"));
+        assert!(rendered.contains("gents_p2p_sync_status_available 0"));
     }
 
     #[test]
@@ -1722,17 +1722,17 @@ mod tests {
         render_inference_metrics(&mut lines, &data);
         let body = lines.join("\n");
 
-        assert!(body.contains("# TYPE defra_agent_inference_metrics_window_seconds gauge"));
-        assert!(body.contains("defra_agent_inference_metrics_window_seconds 300"));
-        assert!(body.contains("# TYPE defra_agent_inference_requests_window_count gauge"));
+        assert!(body.contains("# TYPE gents_inference_metrics_window_seconds gauge"));
+        assert!(body.contains("gents_inference_metrics_window_seconds 300"));
+        assert!(body.contains("# TYPE gents_inference_requests_window_count gauge"));
         assert!(body.contains(
-            "defra_agent_inference_requests_window_count{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\",status=\"completed\"} 1"
+            "gents_inference_requests_window_count{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\",status=\"completed\"} 1"
         ));
         assert!(body.contains(
-            "defra_agent_inference_prompt_tokens_window_sum{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\"} 10"
+            "gents_inference_prompt_tokens_window_sum{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\"} 10"
         ));
         assert!(body.contains(
-            "defra_agent_inference_completion_tokens_window_sum{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\"} 3"
+            "gents_inference_completion_tokens_window_sum{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\"} 3"
         ));
     }
 }

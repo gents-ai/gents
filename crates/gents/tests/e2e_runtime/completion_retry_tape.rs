@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{
-    build_run_timeline, AgentIdentity, DefraAgent, RunTimeline, RunTimelineRows,
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::{
+    build_run_timeline, AgentIdentity, Gents, RunTimeline, RunTimelineRows,
     TimelineInferenceCallRow, TimelineRequestRow, ToolCeiling,
 };
 use serde_json::Value;
@@ -388,7 +388,7 @@ async fn build_retry_agent(
     endpoint: &str,
     max_concurrent: i64,
     deadline_duration_secs: u64,
-) -> DefraAgent {
+) -> Gents {
     build_retry_agent_with_liveness(
         db,
         test_name,
@@ -407,10 +407,10 @@ async fn build_retry_agent_with_liveness(
     max_concurrent: i64,
     deadline_duration_secs: u64,
     stream_liveness_timeout_secs: Option<u64>,
-) -> DefraAgent {
+) -> Gents {
     upsert_retry_backend(db.node.as_ref(), endpoint, max_concurrent).await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
-    let mut behavior = DefraAgent::builder()
+    let mut behavior = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
         .default_behavior_id(RETRY_BEHAVIOR_ID)
@@ -430,7 +430,7 @@ async fn build_retry_agent_with_liveness(
         .expect("build completion retry tape agent")
 }
 
-async fn spawn_agent(node: &EmbeddedNode, agent: DefraAgent, agent_did: String) -> BootedAgent {
+async fn spawn_agent(node: &EmbeddedNode, agent: Gents, agent_did: String) -> BootedAgent {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
     wait_for_runtime_ready(node, &agent_did).await;

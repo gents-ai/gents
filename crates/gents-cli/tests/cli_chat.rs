@@ -48,7 +48,7 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("spawning defra-agent chat")?;
+        .context("spawning gents chat")?;
 
     {
         let stdin = child
@@ -63,10 +63,10 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
 
     let output = child
         .wait_with_output()
-        .context("waiting for defra-agent chat")?;
+        .context("waiting for gents chat")?;
     if !output.status.success() {
         bail!(
-            "defra-agent chat failed\nstdout:\n{}\nstderr:\n{}",
+            "gents chat failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
@@ -301,7 +301,7 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("spawning defra-agent chat for tool transcript test")?;
+        .context("spawning gents chat for tool transcript test")?;
 
     {
         let stdin = child
@@ -316,10 +316,10 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
 
     let output = child
         .wait_with_output()
-        .context("waiting for defra-agent chat tool transcript run")?;
+        .context("waiting for gents chat tool transcript run")?;
     if !output.status.success() {
         bail!(
-            "defra-agent chat failed\nstdout:\n{}\nstderr:\n{}",
+            "gents chat failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );

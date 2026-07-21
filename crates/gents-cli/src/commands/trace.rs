@@ -3,25 +3,25 @@ use std::fs;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_agent::adapter_projection::{
+use gents::adapter_projection::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
     adapter_projection_jsonl_records, build_adapter_projection,
     validate_adapter_projection_contract, AdapterProjectionKind, ProjectionContext,
     ProjectionRedactionMode,
 };
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::run_timeline::{
+use gents::graphql::escape_graphql_string;
+use gents::run_timeline::{
     build_run_timeline, RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineRequestEvent,
     TimelineRequestRow, TimelineToolCallEvent,
 };
 #[cfg(test)]
-use defra_agent::run_timeline::{
+use gents::run_timeline::{
     TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow, TimelineResponseRow,
     TimelineSessionRow, TimelineToolCallRow,
 };
-use defra_agent::run_timeline_fetch::{load_run_timeline, load_run_timeline_rows};
-use defra_agent::trace_export::{
+use gents::run_timeline_fetch::{load_run_timeline, load_run_timeline_rows};
+use gents::trace_export::{
     analyze_request_failure, analyze_tool_call, extract_raw_tool_call_json, latency_ms,
     raw_message_json, AmyToolCallTraceRecord,
 };

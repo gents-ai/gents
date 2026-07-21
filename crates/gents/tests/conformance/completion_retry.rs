@@ -4,11 +4,11 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use defra_agent::agent::completion_retry::{
+use gents::agent::completion_retry::{
     failure_class, CompletionRetryPolicy, CompletionRetryState, FailureClass, MidStreamDirective,
     PreStreamDirective, RetryKind,
 };
-use defra_agent::error::InferenceError;
+use gents::error::InferenceError;
 
 use crate::lean_vocab_test::{
     assert_lean_contract_vocabulary_matches, lean_completion_retry_cases, LeanCompletionRetryCase,
@@ -24,7 +24,7 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
     );
     assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
         domain: "CompletionRetryFailureClass",
-        rust_source: "defra_agent::agent::completion_retry::FailureClass",
+        rust_source: "gents::agent::completion_retry::FailureClass",
         rust_values: &["transport", "parse_bad_request", "permanent"],
     });
     assert_failure_class_bridge_matches_vocabulary();

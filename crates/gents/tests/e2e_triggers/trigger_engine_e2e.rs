@@ -3,10 +3,10 @@
 //!
 //! The full engine-level end-to-end assertion (a due Schedule driving
 //! materialization of an `AgentRequest` with populated trigger lineage) lives
-//! inside `crates/defra-agent/src/trigger_engine/tests.rs` because the engine,
+//! inside `crates/gents/src/trigger_engine/tests.rs` because the engine,
 //! source, and materializer types are crate-private (`pub(crate)`). From the
 //! outside, we can't construct an `ActiveRuntimeSnapshot` with a loaded
-//! behavior without going through the full `DefraAgent` bootstrap; doing that
+//! behavior without going through the full `Gents` bootstrap; doing that
 //! here would effectively duplicate `tests/schedule_snapshot_reconcile.rs`.
 //!
 //! Instead, this file asserts the externally-observable end of the
@@ -18,8 +18,8 @@
 //! regression here is a regression in the engine's materialization surface
 //! regardless of which concrete materializer is wired in.
 
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
+use gents::graphql::escape_graphql_string;
+use gents::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
 
 use crate::support::{test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS};
 

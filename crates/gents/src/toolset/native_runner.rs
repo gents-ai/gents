@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context as _};
-use defra_native_fs_runner::protocol::{NativeFsRunnerRequest, NativeFsRunnerResponse};
+use gents_fs_runner::protocol::{NativeFsRunnerRequest, NativeFsRunnerResponse};
 use tokio_util::sync::CancellationToken;
 
 use super::shared::{ToolContext, ToolError};
@@ -154,7 +154,7 @@ fn resolve_runner_command(root: &Path, base: &Path) -> Result<RunnerCommand, Too
     }
 
     Err(anyhow!(
-        "native filesystem runner binary not found; set {RUNNER_ENV}, install defra-native-fs-runner next to the defra-agent binary, or run a defra-agent binary with the built-in native filesystem runner"
+        "native filesystem runner binary not found; set {RUNNER_ENV}, install gents-fs-runner next to the gents binary, or run a gents binary with the built-in native filesystem runner"
     )
     .into())
 }
@@ -203,9 +203,9 @@ fn resolve_base_dir(root: &Path, base: &Path) -> Result<PathBuf, ToolError> {
 
 fn adjacent_runner_binary() -> Option<PathBuf> {
     let exe_name = if cfg!(windows) {
-        "defra-native-fs-runner.exe"
+        "gents-fs-runner.exe"
     } else {
-        "defra-native-fs-runner"
+        "gents-fs-runner"
     };
 
     let current = std::env::current_exe().ok()?;
@@ -225,7 +225,7 @@ fn adjacent_runner_binary() -> Option<PathBuf> {
 fn self_runner_binary() -> Option<PathBuf> {
     let current = std::env::current_exe().ok()?;
     let stem = current.file_stem()?.to_str()?;
-    if stem == "defra-agent" {
+    if stem == "gents" {
         Some(current)
     } else {
         None
@@ -341,7 +341,7 @@ mod tests {
         let now = Utc::now();
         let result = fs_runner_timed_out_result("grep", Some(now + ChronoDuration::hours(12)), now);
         assert!(
-            !result.contains("__defra_agent_tool_lifecycle__"),
+            !result.contains("__gents_tool_lifecycle__"),
             "cap expiry must not carry the lifecycle marker: {result}"
         );
         assert!(result.contains("per-call cap"), "{result}");
@@ -352,7 +352,7 @@ mod tests {
         let now = Utc::now();
         let result = fs_runner_timed_out_result("grep", None, now);
         assert!(
-            !result.contains("__defra_agent_tool_lifecycle__"),
+            !result.contains("__gents_tool_lifecycle__"),
             "{result}"
         );
     }
@@ -363,7 +363,7 @@ mod tests {
         let deadline = now - ChronoDuration::seconds(1);
         let result = fs_runner_timed_out_result("grep", Some(deadline), now);
         assert!(
-            result.starts_with("__defra_agent_tool_lifecycle__:timedOut"),
+            result.starts_with("__gents_tool_lifecycle__:timedOut"),
             "{result}"
         );
     }

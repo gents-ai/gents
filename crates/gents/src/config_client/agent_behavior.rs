@@ -3,7 +3,7 @@ use crate::AgentBehaviorDocument as AgentBehavior;
 use anyhow::Result;
 
 use super::ConfigAccess;
-use defra_agent_protocol::graphql::{
+use gents_protocol::graphql::{
     graphql_bool_literal, optional_f64_field, optional_string_field,
 };
 
@@ -108,5 +108,5 @@ pub async fn write_agent_behavior_document(
         update_fields = update_fields,
     );
     let response = access.execute(&mutation).await?;
-    defra_agent_protocol::graphql::extract_mutation_doc_id(&response, "AgentBehavior")
+    gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentBehavior")
 }

@@ -1,6 +1,6 @@
 use super::*;
 
-use defra_agent::startup_readiness::{BuildOutcome, BuildStanding};
+use gents::startup_readiness::{BuildOutcome, BuildStanding};
 
 /// Fence for the bounded startup-readiness barrier (#559).
 ///

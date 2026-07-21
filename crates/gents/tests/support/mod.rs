@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use defra_agent::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{ensure_runtime_schemas, watcher::AgentRequest};
+use gents::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
+use gents::graphql::escape_graphql_string;
+use gents::{ensure_runtime_schemas, watcher::AgentRequest};
 use serde::Deserialize;
 use tempfile::TempDir;
 
@@ -33,7 +33,7 @@ pub struct TestDb {
 
 pub async fn test_db(name: &str) -> TestDb {
     let tempdir = tempfile::Builder::new()
-        .prefix(&format!("defra-agent-{name}-"))
+        .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
     let node = Arc::new(
@@ -87,7 +87,7 @@ type AgentConversation @branchable {
 /// collection (it swallows "already exists"), exactly as on an upgraded host.
 pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb {
     let tempdir = tempfile::Builder::new()
-        .prefix(&format!("defra-agent-{name}-"))
+        .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
     let node = Arc::new(
@@ -240,7 +240,7 @@ pub async fn test_p2p_db(name: &str) -> TestDb {
 
 pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission) -> TestDb {
     let tempdir = tempfile::Builder::new()
-        .prefix(&format!("defra-agent-{name}-"))
+        .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
     let node = Arc::new(
@@ -312,7 +312,7 @@ pub async fn create_request(
                 max_retries: {max_retries}
             }}) {{ _docID }}
         }}"#,
-        max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = node.execute(&mutation).await;
     assert!(
@@ -372,7 +372,7 @@ pub async fn create_retry_request(
                 max_retries: {max_retries}
             }}) {{ _docID }}
         }}"#,
-        max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = node.execute(&mutation).await;
     assert!(

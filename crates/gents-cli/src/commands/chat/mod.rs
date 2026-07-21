@@ -33,7 +33,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
     {
         Some(agent_did) => agent_did,
         None => bail!(
-            "agent DID is required; run `defra-agent init`, start `defra-agent server`, then retry `defra-agent chat`, or pass --agent-did explicitly"
+            "agent DID is required; run `gents init`, start `gents server`, then retry `gents chat`, or pass --agent-did explicitly"
         ),
     };
     let session_id = args

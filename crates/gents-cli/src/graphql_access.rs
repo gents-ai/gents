@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_agent_protocol::graphql::{
+use gents_protocol::graphql::{
     execute_graphql_async, extract_mutation_doc_id as shared_extract_mutation_doc_id,
     graphql_endpoint_available as shared_graphql_endpoint_available,
     graphql_input_literal as shared_graphql_input_literal, graphql_rows_from_response,
@@ -122,7 +122,7 @@ fn is_probably_local_graphql_endpoint(graphql: &str) -> bool {
 
 pub(crate) fn graphql_diagnostic_hint(graphql: &str) -> String {
     if is_probably_local_graphql_endpoint(graphql) {
-        "Next:\n  1. If this home is not initialized, run `defra-agent init`\n  2. Start the runtime with `defra-agent server`\n  3. Inspect it with `defra-agent status`".to_string()
+        "Next:\n  1. If this home is not initialized, run `gents init`\n  2. Start the runtime with `gents server`\n  3. Inspect it with `gents status`".to_string()
     } else {
         format!(
             "Next:\n  1. Verify the GraphQL endpoint {graphql}\n  2. Retry with `--graphql {graphql}` or point the command at the correct runtime"

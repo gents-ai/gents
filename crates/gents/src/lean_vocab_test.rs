@@ -1111,7 +1111,7 @@ pub(crate) fn assert_lean_to_defradb_vocabulary_matches(spec: LeanVocabulary<'_>
 }
 
 fn load_lean_contract_snapshot() -> LeanContractSnapshot {
-    defra_agent_lean_contract::load_contract_snapshot().unwrap_or_else(|error| panic!("{error:#}"))
+    gents_lean_contract::load_contract_snapshot().unwrap_or_else(|error| panic!("{error:#}"))
 }
 
 pub(crate) fn lean_to_defradb_values<'a>(
@@ -1415,12 +1415,12 @@ end Sample
     fn extracts_contract_json_between_sentinels() {
         let stdout = format!(
             "debug {{noise}}\n{}\n{{\"ok\":true}}\n{}\nmore {{noise}}\n",
-            defra_agent_lean_contract::CONTRACT_JSON_BEGIN,
-            defra_agent_lean_contract::CONTRACT_JSON_END
+            gents_lean_contract::CONTRACT_JSON_BEGIN,
+            gents_lean_contract::CONTRACT_JSON_END
         );
 
         assert_eq!(
-            defra_agent_lean_contract::extract_contract_json(&stdout).unwrap(),
+            gents_lean_contract::extract_contract_json(&stdout).unwrap(),
             "{\"ok\":true}"
         );
     }

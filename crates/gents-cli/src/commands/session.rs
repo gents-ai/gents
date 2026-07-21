@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::session::{fork, fork_via_http, ForkError, ForkOutcome, ForkParams};
+use gents::graphql::escape_graphql_string;
+use gents::session::{fork, fork_via_http, ForkError, ForkOutcome, ForkParams};
 use serde_json::{json, Value};
 
 use crate::cli::args::{ConfigListArgs, ConfigShowArgs, SessionCommand, SessionForkArgs};
@@ -98,7 +98,7 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
 
     // Fork v1 runs in-process against the on-disk data directory. DefraDB's
     // embedded node holds an exclusive lock on the data path, so this command
-    // cannot run while `defra-agent server` is running against the same home.
+    // cannot run while `gents server` is running against the same home.
     let home = resolve_home_dir(args.home.as_deref());
     let data_dir = default_data_dir(&home);
 
@@ -107,13 +107,13 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
         .await
         .with_context(|| {
             format!(
-                "opening embedded node at {}. If `defra-agent server` is running against \
+                "opening embedded node at {}. If `gents server` is running against \
                  the same home, stop it first — fork holds an exclusive lock on the data \
                  directory. To fork against the running server, rerun with --graphql.",
                 data_dir.display()
             )
         })?;
-    defra_agent::ensure_runtime_schemas(&node)
+    gents::ensure_runtime_schemas(&node)
         .await
         .context("ensuring runtime schemas")?;
 

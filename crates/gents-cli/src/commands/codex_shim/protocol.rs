@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
 use codex_protocol::models::MessagePhase;
-use defra_agent::InferenceBackend;
+use gents::InferenceBackend;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -100,7 +100,7 @@ where
 
 pub(super) fn initialize_result(state: &ShimState) -> Value {
     json!({
-        "userAgent": concat!("defra-agent-codex-shim/", env!("CARGO_PKG_VERSION")),
+        "userAgent": concat!("gents-codex-shim/", env!("CARGO_PKG_VERSION")),
         "codexHome": absolute_path(&state.codex_home),
         "platformFamily": std::env::consts::FAMILY,
         "platformOs": std::env::consts::OS

@@ -1,7 +1,7 @@
 use std::fs::OpenOptions;
 use std::path::Path;
 
-use defra_agent::log_rate::{RateLimitConfig, RateLimitFilter};
+use gents::log_rate::{RateLimitConfig, RateLimitFilter};
 use defra_agent_desktop_core::client::DesktopPaths;
 use tracing_subscriber::{prelude::*, EnvFilter};
 

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use defra_agent::{discover_backend_models, BackendProviderKind};
+use gents::{discover_backend_models, BackendProviderKind};
 use serde_json::{json, Value};
 
 use crate::shared::ConfigExportBundle;

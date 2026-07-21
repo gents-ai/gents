@@ -420,7 +420,7 @@ fn peer_pairing_from_live_value(value: &Value) -> Result<DesiredPeerPairing> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or(defra_agent::agent::p2p_reconcile::engine::DEFAULT_PAIRING_TEMPLATE);
+        .unwrap_or(gents::agent::p2p_reconcile::engine::DEFAULT_PAIRING_TEMPLATE);
 
     Ok(DesiredPeerPairing {
         peer_did: peer_did.to_string(),
@@ -441,7 +441,7 @@ fn peer_pairing_apply_value(
             pairing.peer_did
         )
     })?;
-    let template = defra_agent::agent::p2p_reconcile::resolve_template(&pairing.template)
+    let template = gents::agent::p2p_reconcile::resolve_template(&pairing.template)
         .ok_or_else(|| anyhow!("unknown peer pairing template {:?}", pairing.template))?;
     let collections = template
         .collections

@@ -24,7 +24,7 @@
 //! surfaces, and the DB ends at the pre-apply snapshot via atomicity.
 
 use anyhow::{Context, Result};
-use defra_agent_protocol::graphql::{execute_graphql_async_with_tx, GraphqlRequestOptions};
+use gents_protocol::graphql::{execute_graphql_async_with_tx, GraphqlRequestOptions};
 use defra_node::{EmbeddedNode, QueryRequest};
 use identity::Did;
 use query::TransactionHandle;

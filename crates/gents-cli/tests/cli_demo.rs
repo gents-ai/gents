@@ -1,4 +1,4 @@
-//! Integration coverage for `defra-agent demo`: the interactive shell is driven
+//! Integration coverage for `gents demo`: the interactive shell is driven
 //! non-interactively (piped stdin) against a test-only mock OpenAI endpoint. The
 //! *shipped* demo bundles no mock — these assert node bring-up, streaming chat,
 //! the seeded skills, live backend `reconfigure`, resume, and clean teardown.
@@ -15,11 +15,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
+use gents::defra_node::{EmbeddedNode, StorageBackend};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-/// Drive `defra-agent demo` to completion with `input` fed to its shell.
+/// Drive `gents demo` to completion with `input` fed to its shell.
 fn run_demo(tmp_home: &Path, args: &[&str], input: &str) -> Result<std::process::Output> {
     run_demo_with_env(tmp_home, args, input, &[])
 }
@@ -42,7 +42,7 @@ fn run_demo_with_env(
     for (name, value) in env {
         command.env(name, value);
     }
-    let mut child = command.spawn().context("spawning defra-agent demo")?;
+    let mut child = command.spawn().context("spawning gents demo")?;
     {
         let stdin = child
             .stdin
@@ -55,7 +55,7 @@ fn run_demo_with_env(
     }
     child
         .wait_with_output()
-        .context("waiting for defra-agent demo")
+        .context("waiting for gents demo")
 }
 
 /// True once nothing accepts connections on `127.0.0.1:port` (evidence the demo
@@ -90,7 +90,7 @@ fn allocate_demo_base_port() -> Result<u16> {
 fn require_success(output: &std::process::Output) -> Result<String> {
     if !output.status.success() {
         bail!(
-            "defra-agent demo exited non-zero\nstdout:\n{}\nstderr:\n{}",
+            "gents demo exited non-zero\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
@@ -194,7 +194,7 @@ fi
         ],
         "down\n",
         &[
-            ("DEFRA_AGENT_DESKTOP_BIN", &desktop_bin),
+            ("GENTS_DESKTOP_BIN", &desktop_bin),
             ("FAKE_DESKTOP_LOG", &desktop_log),
         ],
     )?;

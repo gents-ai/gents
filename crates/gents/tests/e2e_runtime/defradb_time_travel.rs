@@ -8,8 +8,8 @@
 
 use std::sync::Arc;
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -27,7 +27,7 @@ struct ProbeDb {
 
 async fn probe_db() -> ProbeDb {
     let tempdir = tempfile::Builder::new()
-        .prefix("defra-agent-time-travel-probe-")
+        .prefix("gents-time-travel-probe-")
         .tempdir()
         .expect("tempdir");
     let node = Arc::new(

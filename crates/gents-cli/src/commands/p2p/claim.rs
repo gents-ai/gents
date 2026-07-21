@@ -17,12 +17,12 @@
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent_protocol::bearer_token::{
+use gents::graphql::escape_graphql_string;
+use gents_protocol::bearer_token::{
     bearer_signing_payload, check_bearer_freshness, decode_bearer, BearerClaimRecord,
     BearerInviteToken,
 };
-use defra_agent_protocol::network_token::NetworkRecord;
+use gents_protocol::network_token::NetworkRecord;
 use serde_json::json;
 
 use crate::cli::args::P2pClaimArgs;
@@ -160,7 +160,7 @@ pub(super) async fn p2p_claim(args: P2pClaimArgs) -> Result<()> {
     http_post_json(&client, &format!("{api_base}/p2p/replicators"), &request)
         .await
         .context(
-            "installing the claim push replicator (is the local `defra-agent serve` daemon running?)",
+            "installing the claim push replicator (is the local `gents serve` daemon running?)",
         )?;
 
     print_json(&json!({
@@ -280,7 +280,7 @@ fn bearer_claim_create_mutation(record: &BearerClaimRecord) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use defra_agent_protocol::bearer_token::BEARER_TOKEN_VERSION;
+    use gents_protocol::bearer_token::BEARER_TOKEN_VERSION;
 
     fn network(network_id: &str, admin_did: &str) -> NetworkRecord {
         NetworkRecord {

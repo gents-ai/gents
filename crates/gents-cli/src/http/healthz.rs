@@ -1,11 +1,11 @@
-use defra_agent::ProcessLifecycleState;
+use gents::ProcessLifecycleState;
 use serde_json::{json, Value};
 
 use crate::http::prometheus::MetricsQueryData;
 use crate::http::router::RuntimeHttpState;
 use crate::http::version::version_response;
 
-const SERVICE_NAME: &str = "defra-agent";
+const SERVICE_NAME: &str = "gents";
 
 pub(crate) fn render_healthz_payload(
     state: &RuntimeHttpState,
@@ -167,7 +167,7 @@ mod tests {
     fn ready_runtime() -> MetricsRuntimeRow {
         MetricsRuntimeRow {
             agent_did: "did:defra-agent:test".to_string(),
-            process_state: defra_agent::ProcessLifecycleState::Ready
+            process_state: gents::ProcessLifecycleState::Ready
                 .as_str()
                 .to_string(),
             reconcile_phase: "idle".to_string(),

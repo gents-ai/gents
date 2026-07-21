@@ -512,7 +512,7 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
 /// `config apply` later made the behavior runnable; these vectors pin that a
 /// published generation — not a process restart — is what binds it.
 pub(super) fn generated_codex_shim_binding_cases_pin_runnable_gated_binding() {
-    use defra_agent::codex_shim_binding::{ShimBinding, ShimBindingState, ShimUnboundReason};
+    use gents::codex_shim_binding::{ShimBinding, ShimBindingState, ShimUnboundReason};
 
     let cases = lean_codex_shim_binding_cases();
     assert_eq!(

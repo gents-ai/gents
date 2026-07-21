@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_agent::agent::p2p_reconcile::templates::{FilterPredicate, PairingFilters};
+use gents::agent::p2p_reconcile::templates::{FilterPredicate, PairingFilters};
 use serde_json::{json, Value};
 
 use crate::cli::args::{P2pAccessArgs, P2pReplicatorAddArgs, P2pReplicatorRemoveArgs};

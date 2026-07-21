@@ -8,7 +8,7 @@ use axum::{
     Json,
 };
 use chrono::{DateTime, Utc};
-use defra_agent::graphql::escape_graphql_string;
+use gents::graphql::escape_graphql_string;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

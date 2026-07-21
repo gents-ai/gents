@@ -198,7 +198,7 @@ pub(crate) async fn update_schedule_runtime_fields(
 /// Description of a scheduled trigger for a task.
 ///
 /// Mirrors the `Schedule` GraphQL schema in
-/// `crates/defra-agent-schemas/schemas/agent/schedule.graphql`. Includes both
+/// `crates/gents-schemas/schemas/agent/schedule.graphql`. Includes both
 /// apply-owned fields (`schedule_id`, `task_id`, `interval_secs`, `cron`,
 /// `timezone`, `missed_run_policy`, `enabled`, `concurrency`, `created_at`,
 /// `updated_at`) and runtime-owned fields

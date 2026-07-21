@@ -1,5 +1,5 @@
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
 use serde::Deserialize;
 
 use super::{first_optional_row, first_row};

@@ -1,4 +1,4 @@
-use defra_agent::apply_model::{
+use gents::apply_model::{
     apply_all, apply_prefix, desired_references_closed, diff, manifest_realized,
     prefix_referrers_closed, references_of, retry_after_prefix, Collection, DesiredFields, DocRef,
     LiveState, Manifest,

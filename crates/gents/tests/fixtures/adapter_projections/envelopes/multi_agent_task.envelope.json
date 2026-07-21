@@ -46,7 +46,7 @@
           "child_request_id": "req-team-research-1",
           "id": "call-delegate-research",
           "request_id": "req-team-1",
-          "selected_service_id": "defra-agent",
+          "selected_service_id": "gents",
           "selected_tool_name": "delegate",
           "status": "completed",
           "tool_name": "delegate"
@@ -57,7 +57,7 @@
   "projection_id": "multi_agent_task",
   "projection_version": "v1",
   "provenance": {
-    "runtime": "defra-agent",
+    "runtime": "gents",
     "source_projection_id": "run_timeline",
     "source_projection_version": "v1"
   },

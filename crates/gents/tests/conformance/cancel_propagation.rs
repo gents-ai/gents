@@ -1,17 +1,17 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use defra_agent::agent::p2p_reconcile::{
+use gents::agent::p2p_reconcile::{
     resolve_template, EmbeddedRemoteP2pAdmin, FilterPredicate, PairingFilters, RemoteP2pAdmin,
 };
-use defra_agent::background_completion::{observe_cancel_cascade_ack, CancelAckOutcome};
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::tool_call_lifecycle::{
+use gents::background_completion::{observe_cancel_cascade_ack, CancelAckOutcome};
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::tool_call_lifecycle::{
     AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ToolCallLifecycle,
 };
-use defra_agent::{
-    default_behavior_id_for_agent, AgentIdentity, DefraAgent, DocumentRuntimeOptions, ToolCeiling,
+use gents::{
+    default_behavior_id_for_agent, AgentIdentity, Gents, DocumentRuntimeOptions, ToolCeiling,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -305,7 +305,7 @@ async fn boot_agent(db: TestDb, identity: Arc<dyn AgentIdentity>, name: &str) ->
         endpoint.endpoint(),
     )
     .await;
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {

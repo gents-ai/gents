@@ -2,20 +2,20 @@
 
 use std::time::Duration;
 
-use defra_agent::background_completion::{
+use gents::background_completion::{
     project_background_subagent_completion, BackgroundCompletionOutcome,
 };
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::llm::message::{
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
-use defra_agent::llm::ToolCallHookAction;
-use defra_agent::tool_call_lifecycle::{
+use gents::llm::ToolCallHookAction;
+use gents::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
 };
-use defra_agent::{
+use gents::{
     fetch_interrupt_requested_at, upsert_agent_behavior, upsert_tool_selection,
     AgentBehaviorDocument, DefraSessionHook, DefraWatcher, FailurePolicy, ToolSelectionDocument,
     Watcher,
@@ -82,7 +82,7 @@ async fn setup_fixture(test_name: &str) -> (crate::support::TestDb, String, Stri
         &ToolSelectionDocument {
             selection_id: format!("{test_name}-tools"),
             agent_did: AGENT_DID.to_string(),
-            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+            subagent_targets: Some(vec![gents::subagent_target_entry(
                 CHILD_BEHAVIOR_ID,
                 AGENT_DID,
                 CHILD_BEHAVIOR_ID,

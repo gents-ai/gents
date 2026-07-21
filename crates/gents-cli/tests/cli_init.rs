@@ -8,7 +8,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use defra_agent::{default_behavior_id_for_agent, default_tool_selection_id_for_behavior};
+use gents::{default_behavior_id_for_agent, default_tool_selection_id_for_behavior};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -287,7 +287,7 @@ fn init_hosted_preset_without_default_requires_model_name() -> Result<()> {
         .arg("--backend-preset")
         .arg("openai")
         .output()
-        .context("running defra-agent init with hosted preset and no model")?;
+        .context("running gents init with hosted preset and no model")?;
 
     assert!(!output.status.success(), "init should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -344,7 +344,7 @@ async fn init_defaults_to_local_llama_server_and_surfaces_identity() -> Result<(
     assert!(
         next_steps
             .iter()
-            .any(|step| step.as_str() == Some("defra-agent codex")),
+            .any(|step| step.as_str() == Some("gents codex")),
         "init should point at the codex subcommand: {init}"
     );
 
@@ -370,7 +370,7 @@ async fn init_identity_only_writes_stable_real_did_without_runtime_config() -> R
     let second_agent_did = agent_did_from_init(&second)?;
     assert_eq!(second_agent_did, first_agent_did);
 
-    let init_json = read_json_file(&home_dir.join(".defra-agent").join("init.json"))?;
+    let init_json = read_json_file(&home_dir.join(".gents").join("init.json"))?;
     assert_eq!(
         init_json.get("agent_did").and_then(Value::as_str),
         Some(first_agent_did.as_str())
@@ -397,7 +397,7 @@ async fn init_rejects_setting_both_api_key_and_api_key_env_var() -> Result<()> {
         .arg("TEST_BACKEND_KEY")
         .arg("http://127.0.0.1:65535/v1")
         .output()
-        .context("running defra-agent init with conflicting backend auth flags")?;
+        .context("running gents init with conflicting backend auth flags")?;
 
     assert!(!output.status.success(), "init should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -430,7 +430,7 @@ async fn init_dangerously_overwrite_replaces_existing_home() -> Result<()> {
         ],
     )?;
 
-    let runtime_home = home_dir.join(".defra-agent");
+    let runtime_home = home_dir.join(".gents");
     let stale_path = runtime_home.join("stale.txt");
     fs::write(&stale_path, "stale").context("writing stale file into runtime home")?;
     assert!(stale_path.exists(), "expected stale file to exist");

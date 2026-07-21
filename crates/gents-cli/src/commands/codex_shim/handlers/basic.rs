@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
-use defra_agent::{
+use gents::{
     backend_registry::list_enabled_backends, load_agent_behavior, AgentBehaviorDocument,
     InferenceBackend,
 };
@@ -16,7 +16,7 @@ use super::super::protocol::{
 use super::super::store::{execute_committed, query_node_json};
 use super::super::{Outbound, ShimState, JSONRPC_INVALID_PARAMS};
 use crate::config_writes::{write_agent_behavior_document, ConfigAccess};
-use defra_agent::graphql::escape_graphql_string;
+use gents::graphql::escape_graphql_string;
 
 pub(super) async fn handle_basic_request(
     outbound: &Outbound,

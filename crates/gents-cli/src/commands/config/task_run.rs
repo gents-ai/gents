@@ -2,7 +2,7 @@
 //! once against a running agent.
 //!
 //! This path intentionally duplicates the mutation shape produced by
-//! `defra_agent::write_manual_agent_request` instead of calling it: that
+//! `gents::write_manual_agent_request` instead of calling it: that
 //! helper takes `&EmbeddedNode`, and the CLI generally runs against a remote
 //! agent over GraphQL-over-HTTP via [`ConfigAccess::Graphql`]. Both paths
 //! produce the same `(caused_by_trigger_id = null,
@@ -15,8 +15,8 @@
 //! reason to branch.
 
 use anyhow::{anyhow, Result};
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::template::{render_template, task_node_ctx, TemplateScope};
+use gents::graphql::escape_graphql_string;
+use gents::template::{render_template, task_node_ctx, TemplateScope};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -29,7 +29,7 @@ use crate::{print_json, resolve_config_access, resolve_graphql_endpoint};
 
 /// Must match `lifecycle::DEFAULT_REQUEST_MAX_RETRIES` and the value written by
 /// `write_manual_agent_request`. Kept inline here so the CLI mutation is a
-/// self-contained record of the shape — the defra-agent constant is not
+/// self-contained record of the shape — the gents constant is not
 /// re-exported.
 const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 
@@ -208,7 +208,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     }
     // The mutation succeeded (no `errors` array). `create_AgentRequest` may
     // return the `_docID` inline, or it may omit it entirely — mirroring the
-    // quirk documented in `defra_agent::lifecycle::manual`. When inline
+    // quirk documented in `gents::lifecycle::manual`. When inline
     // extraction yields nothing, fall back to a follow-up query filtered by
     // the just-written `request_id`. The row exists either way; treating the
     // missing-inline shape as a hard failure would make the operator retry
@@ -247,14 +247,14 @@ pub(crate) fn resolve_task_id_for(
     match (positional, flag) {
         (Some(positional), Some(flag)) if positional != flag => {
             anyhow::bail!(
-                "conflicting task ids provided: positional={} and --task-id={}\nNext:\n  1. Pass the task id once: `defra-agent task {command} TASK_ID`\n  2. Or use `--task-id TASK_ID`, but not both",
+                "conflicting task ids provided: positional={} and --task-id={}\nNext:\n  1. Pass the task id once: `gents task {command} TASK_ID`\n  2. Or use `--task-id TASK_ID`, but not both",
                 positional,
                 flag
             );
         }
         (Some(task_id), _) | (_, Some(task_id)) => Ok(task_id.to_string()),
         (None, None) => anyhow::bail!(
-            "missing task id\nNext:\n  1. Pass it positionally: `defra-agent task {command} TASK_ID`\n  2. Or use `--task-id TASK_ID`"
+            "missing task id\nNext:\n  1. Pass it positionally: `gents task {command} TASK_ID`\n  2. Or use `--task-id TASK_ID`"
         ),
     }
 }

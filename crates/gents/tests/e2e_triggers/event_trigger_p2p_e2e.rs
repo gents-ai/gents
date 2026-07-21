@@ -11,7 +11,7 @@
 //!
 //! Topology:
 //!   - Node A (`db_writer`): a bare writer node, P2P enabled, no agent.
-//!   - Node B (`db_agent`): runs the `DefraAgent` + an `EventTrigger` watching
+//!   - Node B (`db_agent`): runs the `Gents` + an `EventTrigger` watching
 //!     `ReplicatedEvent`.
 //!
 //! Ordering matters: the source doc is written on A only AFTER B's trigger is
@@ -29,9 +29,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{AgentIdentity, DefraAgent, DocumentRuntimeOptions, ToolCeiling};
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::{AgentIdentity, Gents, DocumentRuntimeOptions, ToolCeiling};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -418,7 +418,7 @@ async fn p2p_replicated_doc_fires_event_trigger() {
     )
     .await;
 
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db_agent.node.clone(),
         identity,
         DocumentRuntimeOptions {

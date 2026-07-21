@@ -274,8 +274,8 @@ fn init_tracing() {
                 .without_time()
                 // Per-callsite log-rate ceiling: no code path may flood the
                 // host journal, however hot its failure loop (#588).
-                .with_filter(defra_agent::log_rate::RateLimitFilter::new(
-                    defra_agent::log_rate::RateLimitConfig::default(),
+                .with_filter(gents::log_rate::RateLimitFilter::new(
+                    gents::log_rate::RateLimitConfig::default(),
                 )),
         )
         .try_init();

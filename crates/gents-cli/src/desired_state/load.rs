@@ -11,7 +11,7 @@ use super::{
     DesiredSkill, DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport,
     DesiredTask, DesiredToolSelection, DesiredToolServiceRegistry, HasUniqueId,
 };
-use defra_agent::Collection;
+use gents::Collection;
 
 pub(crate) fn load_manifest_root(
     root: &Path,

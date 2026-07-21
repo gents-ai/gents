@@ -3,8 +3,8 @@ use std::sync::RwLock as StdRwLock;
 use std::time::SystemTime;
 
 #[cfg(test)]
-use defra_agent::agent::p2p_reconcile::{compute_pairing_diff, PairingActual, RemoteP2pAdmin};
-use defra_agent::agent::p2p_reconcile::{
+use gents::agent::p2p_reconcile::{compute_pairing_diff, PairingActual, RemoteP2pAdmin};
+use gents::agent::p2p_reconcile::{
     reconcile_peer_tick, DiffOp, GraphqlPairingStateStore, PairingDesired, PairingStateStore,
     RemoteP2pAdminError,
 };
@@ -589,7 +589,7 @@ mod pairing_reconcile_tests {
             &self,
             addresses: &[String],
             _collections: &[String],
-            _filters: &defra_agent::agent::p2p_reconcile::PairingFilters,
+            _filters: &gents::agent::p2p_reconcile::PairingFilters,
         ) -> RemoteP2pAdminResult<()> {
             for address in addresses {
                 self.installed_replicators
@@ -753,7 +753,7 @@ mod pairing_reconcile_tests {
                     stub.add_replicator(
                         &addresses,
                         &[],
-                        &defra_agent::agent::p2p_reconcile::PairingFilters::default(),
+                        &gents::agent::p2p_reconcile::PairingFilters::default(),
                     )
                     .await
                     .unwrap();

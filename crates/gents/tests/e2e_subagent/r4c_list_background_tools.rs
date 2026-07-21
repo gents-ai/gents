@@ -1,13 +1,13 @@
 //! Integration tests for R4c list_background_tools.
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::llm::tool::BoxFuture;
-use defra_agent::llm::tool::ToolDefinition;
-use defra_agent::llm::tool::{ToolDyn, ToolError};
-use defra_agent::llm::ToolCallHookAction;
-use defra_agent::tool_call_lifecycle::ToolCallLifecycle;
-use defra_agent::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::llm::tool::BoxFuture;
+use gents::llm::tool::ToolDefinition;
+use gents::llm::tool::{ToolDyn, ToolError};
+use gents::llm::ToolCallHookAction;
+use gents::tool_call_lifecycle::ToolCallLifecycle;
+use gents::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use serde_json::{json, Value};
 
 use crate::support::{test_db, AGENT_DID};
@@ -239,7 +239,7 @@ async fn list_background_tools_returns_running_bg_tools() {
 #[tokio::test]
 async fn list_background_tools_reports_running_live_output_bytes() {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let tools = defra_agent::ToolSet::builder()
+    let tools = gents::ToolSet::builder()
         .bash_unrestricted(tempdir.path())
         .build()
         .build_native_tools()

@@ -5,16 +5,16 @@
 //! runs (live model), and the result flows back to the orchestrator.
 //!
 //! Normal test runs skip these (they are `#[ignore]`-gated AND early-return
-//! unless `DEFRA_AGENT_LIVE_SUBAGENT=1`). To run locally:
+//! unless `GENTS_LIVE_SUBAGENT=1`). To run locally:
 //!
 //! ```bash
-//! DEFRA_AGENT_LIVE_SUBAGENT=1 \
-//!   cargo test -p defra-agent --test subagent_delegation_live -- --ignored --nocapture
+//! GENTS_LIVE_SUBAGENT=1 \
+//!   cargo test -p gents --test subagent_delegation_live -- --ignored --nocapture
 //! ```
 //!
 //! Endpoint/model are overridable:
-//! - `DEFRA_AGENT_LIVE_SUBAGENT_ENDPOINT` (default `http://100.73.235.38:8000/v1`)
-//! - `DEFRA_AGENT_LIVE_SUBAGENT_MODEL` (default `d4f`)
+//! - `GENTS_LIVE_SUBAGENT_ENDPOINT` (default `http://100.73.235.38:8000/v1`)
+//! - `GENTS_LIVE_SUBAGENT_MODEL` (default `d4f`)
 //!
 //! ## Cross-node delegation (Test 2)
 //!
@@ -33,12 +33,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::{
     agent::p2p_reconcile::resolve_template, default_behavior_id_for_agent,
     default_inference_profile_id_for_behavior, ensure_agent_principal, load_agent_behavior,
-    upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DefraAgent,
+    upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, Gents,
     DocumentRuntimeOptions, SubagentTarget, ToolCeiling, ToolSelectionDocument,
 };
 use serde::Deserialize;
@@ -55,16 +55,16 @@ const RESEARCHER_BEHAVIOR_ID: &str = "live-researcher";
 const RESEARCHER_TARGET_NAME: &str = "researcher";
 
 fn live_enabled() -> bool {
-    std::env::var("DEFRA_AGENT_LIVE_SUBAGENT").as_deref() == Ok("1")
+    std::env::var("GENTS_LIVE_SUBAGENT").as_deref() == Ok("1")
 }
 
 fn live_endpoint() -> String {
-    std::env::var("DEFRA_AGENT_LIVE_SUBAGENT_ENDPOINT")
+    std::env::var("GENTS_LIVE_SUBAGENT_ENDPOINT")
         .unwrap_or_else(|_| DEFAULT_LIVE_ENDPOINT.to_string())
 }
 
 fn live_model() -> String {
-    std::env::var("DEFRA_AGENT_LIVE_SUBAGENT_MODEL")
+    std::env::var("GENTS_LIVE_SUBAGENT_MODEL")
         .unwrap_or_else(|_| DEFAULT_LIVE_MODEL.to_string())
 }
 
@@ -73,10 +73,10 @@ fn live_model() -> String {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live: set DEFRA_AGENT_LIVE_SUBAGENT=1 and pass --ignored"]
+#[ignore = "live: set GENTS_LIVE_SUBAGENT=1 and pass --ignored"]
 async fn live_local_subagent_delegation() -> Result<()> {
     if !live_enabled() {
-        eprintln!("DEFRA_AGENT_LIVE_SUBAGENT is not 1; skipping live local subagent delegation");
+        eprintln!("GENTS_LIVE_SUBAGENT is not 1; skipping live local subagent delegation");
         return Ok(());
     }
 
@@ -241,11 +241,11 @@ async fn live_local_subagent_delegation() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live: set DEFRA_AGENT_LIVE_SUBAGENT=1 and pass --ignored"]
+#[ignore = "live: set GENTS_LIVE_SUBAGENT=1 and pass --ignored"]
 async fn live_cross_node_subagent_delegation() -> Result<()> {
     if !live_enabled() {
         eprintln!(
-            "DEFRA_AGENT_LIVE_SUBAGENT is not 1; skipping live cross-node subagent delegation"
+            "GENTS_LIVE_SUBAGENT is not 1; skipping live cross-node subagent delegation"
         );
         return Ok(());
     }
@@ -477,7 +477,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
 
     agent_a.shutdown().await;
     agent_b.shutdown().await;
-    // BootedAgent only stops DefraAgent::run; P2P belongs to the embedded node.
+    // BootedAgent only stops Gents::run; P2P belongs to the embedded node.
     db_a.node.shutdown().await;
     db_b.node.shutdown().await;
     Ok(())
@@ -519,9 +519,9 @@ async fn assert_endpoint_reachable(endpoint: &str) {
     }
 }
 
-/// Boot a full DefraAgent from the behavior documents owned by `identity`'s DID.
+/// Boot a full Gents from the behavior documents owned by `identity`'s DID.
 async fn boot_document_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Result<BootedAgent> {
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {

@@ -2,7 +2,7 @@
 //!
 //! Both production construction paths
 //! (`document_view::snapshot::resolve_document_runtime_snapshot_from_view`
-//! and `DefraAgentBuilder::build`) funnel their principal/behavior Arc
+//! and `GentsBuilder::build`) funnel their principal/behavior Arc
 //! construction through `assemble_principal_and_behaviors`. This is the
 //! sole place where `Arc::new(AgentPrincipal { ... })` happens during a
 //! snapshot build, and where the principal Arc is cloned into each

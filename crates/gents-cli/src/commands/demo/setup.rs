@@ -16,7 +16,7 @@ pub(super) fn resolve_home(explicit: Option<PathBuf>) -> PathBuf {
         std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir)
-            .join(".defra-agent-demo")
+            .join(".gents-demo")
     })
 }
 
@@ -73,8 +73,8 @@ pub(super) async fn seed_demo_skills(bin: &Path, graphql: &str, agent_did: &str)
         (
             "fleet-guide",
             "Fleet Guide",
-            "Explain this defra-agent demo and suggest what to try next.",
-            "You are running inside `defra-agent demo`, an agent whose state lives in a DefraDB \
+            "Explain this gents demo and suggest what to try next.",
+            "You are running inside `gents demo`, an agent whose state lives in a DefraDB \
              control plane. Explain P2P pairing and cross-node subagent delegation in plain \
              terms, and suggest the user try `pair` then `delegate` in the demo shell. You can \
              read your own configuration with the defra_query tool (behaviors, tool selections, \

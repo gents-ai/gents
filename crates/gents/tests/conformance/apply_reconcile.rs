@@ -6,7 +6,7 @@
 //! this file anchors the model to specific concrete inputs an engineer can
 //! reason about without running proptest.
 
-use defra_agent::apply_model::{
+use gents::apply_model::{
     apply_all, apply_prefix, desired_references_closed, diff, diff_prune, manifest_realized,
     prefix_referrers_closed, references_of, retry_after_prefix, retry_after_prune_prefix,
     ApplyStep, Collection, DesiredFields, DocRef, LiveState, Manifest,

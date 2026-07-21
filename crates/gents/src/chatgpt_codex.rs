@@ -8,7 +8,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use codex_login::default_client::default_headers;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
-use defra_agent_protocol::row::OAuthCredentialRow;
+use gents_protocol::row::OAuthCredentialRow;
 use defra_node::EmbeddedNode;
 use rig::http_client::{
     self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, MultipartForm, Request, ReqwestClient,
@@ -50,16 +50,16 @@ pub fn classify_chatgpt_auth_error(
         ChatGptAuthProblem::Missing => format!(
             "No OAuthCredential document found for agent {agent_did} and provider {provider}.\n\
              To use the ChatGPT subscription backend, run \
-             `defra-agent codex-login --agent-did {agent_did}`."
+             `gents codex-login --agent-did {agent_did}`."
         ),
         ChatGptAuthProblem::WrongMode { found_mode } => format!(
             "OAuthCredential for agent {agent_did} and provider {provider} is {found_mode}, \
              but the ChatGPT subscription backend needs an enabled ChatGPT OAuth credential.\n\
-             Run `defra-agent codex-login --agent-did {agent_did}` or select an API-key backend."
+             Run `gents codex-login --agent-did {agent_did}` or select an API-key backend."
         ),
         ChatGptAuthProblem::Expired => format!(
             "ChatGPT OAuth credential for agent {agent_did} and provider {provider} is expired or revoked.\n\
-             Re-authenticate with `defra-agent codex-login --agent-did {agent_did}`."
+             Re-authenticate with `gents codex-login --agent-did {agent_did}`."
         ),
         ChatGptAuthProblem::Other(detail) => {
             format!(
@@ -326,11 +326,11 @@ pub async fn upsert_oauth_credential(
         );
     }
     let response = json!({ "data": response.data.unwrap_or(Value::Null) });
-    defra_agent_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")
+    gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")
 }
 
 pub fn oauth_credentials_from_response(response: &Value) -> Vec<Result<OAuthCredential>> {
-    defra_agent_protocol::graphql::graphql_rows_from_response(response, "OAuthCredential")
+    gents_protocol::graphql::graphql_rows_from_response(response, "OAuthCredential")
         .into_iter()
         .map(oauth_credential_from_value)
         .collect()
@@ -369,7 +369,7 @@ pub fn build_chatgpt_codex_headers(
 
 /// Codex CLI version advertised to the ChatGPT Codex backend — used for BOTH the request `version`
 /// header and the `/models` `client_version` query param, since the backend gates model
-/// availability on it. Advertise a recent supported Codex CLI version rather than defra-agent's
+/// availability on it. Advertise a recent supported Codex CLI version rather than gents's
 /// own crate version (which the backend treats as ancient and rejects everything). Override at
 /// runtime with `DEFRA_CHATGPT_CODEX_CLIENT_VERSION` when the supported floor moves.
 pub fn chatgpt_codex_client_version() -> String {
@@ -417,21 +417,21 @@ fn oauth_credential_input_fields(credential: &OAuthCredential) -> Vec<(&'static 
         ),
         (
             "id_token",
-            defra_agent_protocol::graphql::nullable_string_field(
+            gents_protocol::graphql::nullable_string_field(
                 "id_token",
                 credential.id_token.as_deref(),
             ),
         ),
         (
             "account_id",
-            defra_agent_protocol::graphql::nullable_string_field(
+            gents_protocol::graphql::nullable_string_field(
                 "account_id",
                 credential.account_id.as_deref(),
             ),
         ),
         (
             "chatgpt_plan_type",
-            defra_agent_protocol::graphql::nullable_string_field(
+            gents_protocol::graphql::nullable_string_field(
                 "chatgpt_plan_type",
                 credential.chatgpt_plan_type.as_deref(),
             ),
@@ -440,7 +440,7 @@ fn oauth_credential_input_fields(credential: &OAuthCredential) -> Vec<(&'static 
             "is_fedramp",
             format!(
                 "is_fedramp: {}",
-                defra_agent_protocol::graphql::graphql_bool_literal(credential.is_fedramp)
+                gents_protocol::graphql::graphql_bool_literal(credential.is_fedramp)
             ),
         ),
         (
@@ -458,7 +458,7 @@ fn oauth_credential_input_fields(credential: &OAuthCredential) -> Vec<(&'static 
             "enabled",
             format!(
                 "enabled: {}",
-                defra_agent_protocol::graphql::graphql_bool_literal(credential.enabled)
+                gents_protocol::graphql::graphql_bool_literal(credential.enabled)
             ),
         ),
     ]
@@ -1455,7 +1455,7 @@ mod tests {
 
         assert!(msg.contains("did:key:zAgent"), "names the agent DID: {msg}");
         assert!(
-            msg.contains("defra-agent codex-login"),
+            msg.contains("gents codex-login"),
             "tells the user how to fix it: {msg}"
         );
     }
@@ -1483,7 +1483,7 @@ mod tests {
         );
 
         assert!(msg.to_lowercase().contains("expired"), "{msg}");
-        assert!(msg.contains("defra-agent codex-login"), "{msg}");
+        assert!(msg.contains("gents codex-login"), "{msg}");
     }
 
     fn sample_credential() -> OAuthCredential {

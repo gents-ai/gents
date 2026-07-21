@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_agent::{
-    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity, DefraAgent,
+use gents::{
+    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity, Gents,
     DocumentRuntimeOptions, KeyIdentity, ToolCeiling,
 };
 
@@ -19,14 +19,14 @@ fn test_identity(name: &str) -> KeyIdentity {
 }
 
 async fn bind_default_behavior_backend(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
     backend_id: &str,
     endpoint: &str,
 ) {
     let bootstrap = ensure_agent_principal(node, agent_did).await.unwrap();
-    let escaped_backend_id = defra_agent::graphql::escape_graphql_string(backend_id);
-    let escaped_endpoint = defra_agent::graphql::escape_graphql_string(endpoint);
+    let escaped_backend_id = gents::graphql::escape_graphql_string(backend_id);
+    let escaped_endpoint = gents::graphql::escape_graphql_string(endpoint);
     let mutation = format!(
         r#"mutation {{
             upsert_InferenceBackend(
@@ -68,7 +68,7 @@ async fn bind_default_behavior_backend(
 }
 
 async fn wait_for_runtime_snapshot<F>(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
     predicate: F,
 ) -> RuntimeSnapshot
@@ -101,7 +101,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
         UNUSED_BACKEND_ENDPOINT,
     )
     .await;
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {

@@ -1,4 +1,4 @@
-use defra_agent::goal::{
+use gents::goal::{
     decide_goal_continuation, GoalAction, GoalAuditObservation, GoalDecision, GoalRequestTerminal,
     GoalState, GoalStatus,
 };

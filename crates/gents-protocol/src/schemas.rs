@@ -7,7 +7,7 @@
 //! registered before runtime reconciliation can begin.
 
 // agent domain
-pub use defra_agent_schemas::{
+pub use gents_schemas::{
     AGENT_BEHAVIOR, AGENT_BEHAVIOR_NAME, AGENT_CONVERSATION, AGENT_CONVERSATION_NAME, AGENT_MEMORY,
     AGENT_MEMORY_NAME, AGENT_MESSAGE, AGENT_MESSAGE_NAME, AGENT_NETWORK, AGENT_NETWORK_NAME,
     AGENT_PRINCIPAL, AGENT_PRINCIPAL_NAME, AGENT_REQUEST, AGENT_REQUEST_NAME, AGENT_RESPONSE,
@@ -46,12 +46,12 @@ pub const TOOL_SERVICE_HEALTH_STATE: &str =
     include_str!("../schemas/services/tool_service_health_state.graphql");
 
 /// Schemas that must be registered before the runtime can start reconciling.
-/// Mirrors the legacy `defra_agent::schema::RUNTIME_ALL`.
+/// Mirrors the legacy `gents::schema::RUNTIME_ALL`.
 pub const RUNTIME_ALL: &[&str] = &[INFERENCE_BACKEND];
 pub const RUNTIME_COLLECTION_NAMES: &[&str] = &[INFERENCE_BACKEND_NAME];
 
 /// Every schema required by a full agent deployment. Registration order
-/// matches the legacy `defra_agent::schema::ALL`.
+/// matches the legacy `gents::schema::ALL`.
 pub const ALL: &[&str] = &[
     AGENT_PRINCIPAL,
     AGENT_BEHAVIOR,

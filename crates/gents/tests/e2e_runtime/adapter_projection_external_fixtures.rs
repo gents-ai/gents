@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use defra_agent::{
+use gents::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
     adapter_projection_jsonl_records, validate_adapter_projection_contract,
@@ -9,10 +9,10 @@ use defra_agent::{
 };
 use serde_json::Value;
 
-const FIXTURE_ROOT_ENV: &str = "DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES";
+const FIXTURE_ROOT_ENV: &str = "GENTS_ADAPTER_INTEROP_FIXTURES";
 
 #[test]
-#[ignore = "external interop: set DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES and pass --ignored"]
+#[ignore = "external interop: set GENTS_ADAPTER_INTEROP_FIXTURES and pass --ignored"]
 fn external_adapter_projection_fixtures_validate_against_contracts() -> Result<()> {
     let Some(root) = std::env::var_os(FIXTURE_ROOT_ENV)
         .map(PathBuf::from)

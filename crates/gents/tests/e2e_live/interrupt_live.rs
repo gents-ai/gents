@@ -4,20 +4,20 @@
 //! inference service. To run it locally:
 //!
 //! ```bash
-//! DEFRA_AGENT_LIVE_OPENAI=1 \
-//! DEFRA_AGENT_LIVE_OPENAI_ENDPOINT=http://100.74.68.88:8000/v1 \
-//! DEFRA_AGENT_LIVE_OPENAI_MODEL=Qwen3.5-122B-A10B-NVFP4 \
-//! cargo test -p defra-agent --test interrupt_live -- --ignored --nocapture
+//! GENTS_LIVE_OPENAI=1 \
+//! GENTS_LIVE_OPENAI_ENDPOINT=http://100.74.68.88:8000/v1 \
+//! GENTS_LIVE_OPENAI_MODEL=Qwen3.5-122B-A10B-NVFP4 \
+//! cargo test -p gents --test interrupt_live -- --ignored --nocapture
 //! ```
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{interrupt_request, AgentIdentity, DefraAgent, ToolCeiling};
-use defra_agent_protocol::transcript::present_persisted_message;
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::{interrupt_request, AgentIdentity, Gents, ToolCeiling};
+use gents_protocol::transcript::present_persisted_message;
 
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::{
@@ -36,18 +36,18 @@ const LIVE_BACKEND_ID: &str = "backend-live-openai-interrupt";
 const LIVE_BEHAVIOR_ID: &str = "live-interrupt";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "live: set DEFRA_AGENT_LIVE_OPENAI=1 and pass --ignored"]
+#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
 async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
-    if std::env::var("DEFRA_AGENT_LIVE_OPENAI").as_deref() != Ok("1") {
-        eprintln!("DEFRA_AGENT_LIVE_OPENAI is not 1; skipping live interrupt smoke");
+    if std::env::var("GENTS_LIVE_OPENAI").as_deref() != Ok("1") {
+        eprintln!("GENTS_LIVE_OPENAI is not 1; skipping live interrupt smoke");
         return Ok(());
     }
 
-    let endpoint = std::env::var("DEFRA_AGENT_LIVE_OPENAI_ENDPOINT")
+    let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
         .unwrap_or_else(|_| DEFAULT_LIVE_ENDPOINT.to_string());
-    let model = std::env::var("DEFRA_AGENT_LIVE_OPENAI_MODEL")
+    let model = std::env::var("GENTS_LIVE_OPENAI_MODEL")
         .unwrap_or_else(|_| DEFAULT_LIVE_MODEL.to_string());
-    let api_key = std::env::var("DEFRA_AGENT_LIVE_OPENAI_API_KEY").unwrap_or_default();
+    let api_key = std::env::var("GENTS_LIVE_OPENAI_API_KEY").unwrap_or_default();
 
     let db = crate::support::test_db("live-openai-interrupt").await;
     let agent = boot_live_agent(&db, &endpoint, &model, &api_key).await?;
@@ -125,7 +125,7 @@ async fn boot_live_agent(
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("live-openai-interrupt"));
     upsert_live_backend(db.node.as_ref(), endpoint, model, api_key).await;
 
-    let agent = DefraAgent::builder()
+    let agent = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
         .default_behavior_id(LIVE_BEHAVIOR_ID)

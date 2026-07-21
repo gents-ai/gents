@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_agent::{graphql::escape_graphql_string, tool_call_lifecycle::CancelCause};
+use gents::{graphql::escape_graphql_string, tool_call_lifecycle::CancelCause};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::time::Instant;

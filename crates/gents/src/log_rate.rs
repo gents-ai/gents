@@ -25,7 +25,7 @@ use tracing_subscriber::layer::{Context, Filter};
 
 /// Target used for suppression summary events. Exempt from rate limiting so
 /// the summaries themselves can never recurse into suppression.
-pub const SUMMARY_TARGET: &str = "defra_agent::log_rate";
+pub const SUMMARY_TARGET: &str = "gents::log_rate";
 
 /// Configuration for the per-callsite log-rate ceiling.
 #[derive(Debug, Clone, Copy)]

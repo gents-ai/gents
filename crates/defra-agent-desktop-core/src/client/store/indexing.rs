@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use defra_agent_protocol::row::AgentResponseRow;
+use gents_protocol::row::AgentResponseRow;
 
 use super::{ClientStore, ClientStoreRows};
 

@@ -125,7 +125,7 @@ def queueDeadlineConformanceCaseJson
 
 
 /-- Startup-readiness vectors for the bounded build-failure barrier
-(defra-agent#559).
+(gents#559).
 
 `outcomes` is the build-attempt sequence the slot observes; `post_standing` is
 the behavior's standing with the barrier afterwards. `blocks_ready` pins the

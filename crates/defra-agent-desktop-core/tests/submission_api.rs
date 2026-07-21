@@ -372,7 +372,7 @@ async fn peer_pairing_desired_count(
     node: &defra_node::EmbeddedNode,
     peer_id: &str,
 ) -> Result<usize> {
-    let peer_id = defra_agent_protocol::graphql::escape_graphql_string(peer_id);
+    let peer_id = gents_protocol::graphql::escape_graphql_string(peer_id);
     let response = node
         .execute(&format!(
             r#"query {{

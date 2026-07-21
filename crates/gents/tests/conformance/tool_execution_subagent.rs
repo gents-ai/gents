@@ -14,7 +14,7 @@
 // remainder of Bucket 3 is filled in.
 use crate::support::test_db;
 #[allow(unused_imports)]
-use defra_agent::tool_call_lifecycle::{
+use gents::tool_call_lifecycle::{
     create_subagent_request, AwaitMode, CancelCause, CancelPolicy, CascadeIntent, ChildTerminal,
     FailureClass, IllegalToolCallTransition, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
@@ -36,7 +36,7 @@ fn test_deadline() -> chrono::DateTime<chrono::Utc> {
 /// that DefraDB schema validation passes. Parent linkage fields are only
 /// written when `Some`.
 async fn make_completed_request(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     request_id: &str,
     parent_request_id: Option<&str>,
     parent_tool_call_id: Option<&str>,
@@ -45,20 +45,20 @@ async fn make_completed_request(
     let depth: u32 = if parent_request_id.is_some() { 1 } else { 0 };
     let parent_req_field = parent_request_id
         .map(|id| {
-            let escaped = defra_agent::graphql::escape_graphql_string(id);
+            let escaped = gents::graphql::escape_graphql_string(id);
             format!(r#"caused_by_parent_request_id: "{escaped}","#)
         })
         .unwrap_or_default();
     let parent_tc_field = parent_tool_call_id
         .map(|id| {
-            let escaped = defra_agent::graphql::escape_graphql_string(id);
+            let escaped = gents::graphql::escape_graphql_string(id);
             format!(r#"caused_by_parent_tool_call_id: "{escaped}","#)
         })
         .unwrap_or_default();
-    let rid = defra_agent::graphql::escape_graphql_string(request_id);
-    let content = defra_agent::graphql::escape_graphql_string(final_message);
+    let rid = gents::graphql::escape_graphql_string(request_id);
+    let content = gents::graphql::escape_graphql_string(final_message);
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let now_escaped = defra_agent::graphql::escape_graphql_string(&now);
+    let now_escaped = gents::graphql::escape_graphql_string(&now);
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -84,7 +84,7 @@ async fn make_completed_request(
             }}) {{ _docID }}
         }}"#,
         agent_did = crate::support::AGENT_DID,
-        max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
         prf = parent_req_field,
         ptc = parent_tc_field,
     );
@@ -100,7 +100,7 @@ async fn make_completed_request(
 /// Test helper: same as `make_completed_request` but for non-completed terminal
 /// states: "failed", "dead", "interrupted", "superseded".
 async fn make_terminal_request(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     request_id: &str,
     parent_request_id: Option<&str>,
     parent_tool_call_id: Option<&str>,
@@ -109,20 +109,20 @@ async fn make_terminal_request(
     let depth: u32 = if parent_request_id.is_some() { 1 } else { 0 };
     let parent_req_field = parent_request_id
         .map(|id| {
-            let escaped = defra_agent::graphql::escape_graphql_string(id);
+            let escaped = gents::graphql::escape_graphql_string(id);
             format!(r#"caused_by_parent_request_id: "{escaped}","#)
         })
         .unwrap_or_default();
     let parent_tc_field = parent_tool_call_id
         .map(|id| {
-            let escaped = defra_agent::graphql::escape_graphql_string(id);
+            let escaped = gents::graphql::escape_graphql_string(id);
             format!(r#"caused_by_parent_tool_call_id: "{escaped}","#)
         })
         .unwrap_or_default();
-    let rid = defra_agent::graphql::escape_graphql_string(request_id);
-    let state_escaped = defra_agent::graphql::escape_graphql_string(state);
+    let rid = gents::graphql::escape_graphql_string(request_id);
+    let state_escaped = gents::graphql::escape_graphql_string(state);
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let now_escaped = defra_agent::graphql::escape_graphql_string(&now);
+    let now_escaped = gents::graphql::escape_graphql_string(&now);
     // "dead"/"interrupted"/"superseded" are not valid `status` values in the
     // existing schema — the `status` field uses the legacy R1 vocabulary
     // ("pending", "processing", "completed", "error", "superseded") while
@@ -159,7 +159,7 @@ async fn make_terminal_request(
             }}) {{ _docID }}
         }}"#,
         agent_did = crate::support::AGENT_DID,
-        max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
         prf = parent_req_field,
         ptc = parent_tc_field,
     );
@@ -173,10 +173,10 @@ async fn make_terminal_request(
 }
 
 async fn fetch_tool_call_state_and_result(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     tool_call_id: &str,
 ) -> (String, String) {
-    let tool_call_id = defra_agent::graphql::escape_graphql_string(tool_call_id);
+    let tool_call_id = gents::graphql::escape_graphql_string(tool_call_id);
     let query = format!(
         r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }}) {{
             lifecycle_state
@@ -195,10 +195,10 @@ async fn fetch_tool_call_state_and_result(
 }
 
 async fn fetch_tool_call_await_mode(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     tool_call_id: &str,
 ) -> String {
-    let tool_call_id = defra_agent::graphql::escape_graphql_string(tool_call_id);
+    let tool_call_id = gents::graphql::escape_graphql_string(tool_call_id);
     let query = format!(
         r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }}) {{
             await_mode
@@ -949,7 +949,7 @@ async fn run_bridge_failure_case(
     );
 
     // Verify persistence — read the bridge tool back from DB.
-    let tc_id_escaped = defra_agent::graphql::escape_graphql_string(&tc_id);
+    let tc_id_escaped = gents::graphql::escape_graphql_string(&tc_id);
     let query = format!(
         r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tc_id_escaped}" }} }}) {{ lifecycle_state }} }}"#
     );
@@ -1168,7 +1168,7 @@ async fn test_make_terminal_request_all_states() {
         .await
         .unwrap_or_else(|e| panic!("make_terminal_request({state}) failed: {e}"));
 
-        let rid_escaped = defra_agent::graphql::escape_graphql_string(&rid);
+        let rid_escaped = gents::graphql::escape_graphql_string(&rid);
         let query = format!(
             r#"{{
                 AgentRequest(filter: {{ request_id: {{ _eq: "{rid_escaped}" }} }}) {{
@@ -1332,7 +1332,7 @@ async fn integration_create_subagent_request_at_max_depth_succeeds() {
     // The helper returns a freshly minted UUID; verify by reading the row
     // back out of the DB and checking the stored fields.
     assert!(!new_id.is_empty(), "expected non-empty request_id");
-    let new_id_escaped = defra_agent::graphql::escape_graphql_string(&new_id);
+    let new_id_escaped = gents::graphql::escape_graphql_string(&new_id);
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{new_id_escaped}" }} }}) {{

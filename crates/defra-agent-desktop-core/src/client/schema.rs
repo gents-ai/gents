@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_agent_protocol::schemas::{
+use gents_protocol::schemas::{
     ALL, ALL_COLLECTION_NAMES, BRANCHABLE_COLLECTION_NAMES, RUNTIME_ALL, RUNTIME_COLLECTION_NAMES,
 };
 use defra_node::EmbeddedNode;

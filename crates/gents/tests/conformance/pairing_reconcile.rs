@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use defra_agent::agent::p2p_reconcile::{
+use gents::agent::p2p_reconcile::{
     merge_layered_desired, DiffOp, FilterPredicate, PairingDesired, PairingFilters,
 };
 

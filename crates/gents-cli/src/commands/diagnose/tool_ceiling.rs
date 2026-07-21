@@ -34,7 +34,7 @@ pub(super) fn diagnose_tool_ceiling(init_config: Option<&StoredInitConfig>) -> V
         None => json!({
             "ok": true,
             "error": null,
-            "note": "no local init.json found; tool ceiling is unknown until `defra-agent init` runs"
+            "note": "no local init.json found; tool ceiling is unknown until `gents init` runs"
         }),
     }
 }

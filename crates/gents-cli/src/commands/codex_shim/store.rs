@@ -1,6 +1,6 @@
 use anyhow::Result;
-use defra_agent::defra_node::{EmbeddedNode, QueryRequest};
-use defra_agent_protocol::transcript::present_persisted_message;
+use gents::defra_node::{EmbeddedNode, QueryRequest};
+use gents_protocol::transcript::present_persisted_message;
 use serde_json::{json, Value};
 
 use super::progress::response_field_is_blank;

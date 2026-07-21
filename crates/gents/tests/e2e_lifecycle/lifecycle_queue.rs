@@ -1,5 +1,5 @@
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::interrupt_request;
+use gents::graphql::escape_graphql_string;
+use gents::interrupt_request;
 
 use crate::support::snapshots::fetch_request_snapshot;
 use crate::support::{
@@ -7,7 +7,7 @@ use crate::support::{
 };
 
 async fn create_pending_request_with_metadata(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     request_id: &str,
     session_id: &str,
     metadata: &str,
@@ -40,7 +40,7 @@ async fn create_pending_request_with_metadata(
                 max_retries: {max_retries}
             }}) {{ _docID }}
         }}"#,
-        max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let response = node.execute(&mutation).await;
     assert!(

@@ -1,5 +1,5 @@
 {
-  "$id": "https://schemas.defra.ai/defra-agent/adapter-projection/openai_codex_run_trace/v1-eval-jsonl-record.schema.json",
+  "$id": "https://schemas.defra.ai/gents/adapter-projection/openai_codex_run_trace/v1-eval-jsonl-record.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {

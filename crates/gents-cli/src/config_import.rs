@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::io::Read;
 
 use anyhow::{Context, Result};
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::Collection;
+use gents::graphql::escape_graphql_string;
+use gents::Collection;
 use serde_json::Value;
 
 use crate::config_bundle::{sanitize_import_document, select_apply_collection_docs};
@@ -22,7 +22,7 @@ use crate::{
 };
 
 #[cfg(test)]
-#[path = "../../defra-agent/src/lean_vocab_test.rs"]
+#[path = "../../gents/src/lean_vocab_test.rs"]
 mod lean_vocab_test;
 
 const CONFIG_IMPORT_BATCH_SIZE: usize = 50;
@@ -344,7 +344,7 @@ async fn apply_generic_import_collection_batched(
             Ok(())
         }
         Err(error) => Err(anyhow::anyhow!(
-            "importing {collection_name} batch failed: {error}\nNext:\n  1. If a document already exists, rerun with `defra-agent config import --override`\n  2. Or remove the existing document and retry"
+            "importing {collection_name} batch failed: {error}\nNext:\n  1. If a document already exists, rerun with `gents config import --override`\n  2. Or remove the existing document and retry"
         )),
     }
 }
@@ -444,7 +444,7 @@ async fn apply_generic_import_document(
             )
         } else {
             anyhow::anyhow!(
-                "importing {collection_name} {} failed: {error}\nNext:\n  1. If the document already exists, rerun with `defra-agent config import --override`\n  2. Or remove the existing document and retry",
+                "importing {collection_name} {} failed: {error}\nNext:\n  1. If the document already exists, rerun with `gents config import --override`\n  2. Or remove the existing document and retry",
                 doc.unique_value
             )
         }
@@ -863,7 +863,7 @@ pub(crate) async fn apply_desired_state_changes(
     let desired_bundle = desired_bundle.as_bundle();
     let mut counts = ConfigApplyCounts::default();
 
-    let per_collection_sleep = std::env::var("DEFRA_AGENT_CONFIG_APPLY_SLEEP_MS")
+    let per_collection_sleep = std::env::var("GENTS_CONFIG_APPLY_SLEEP_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .map(std::time::Duration::from_millis);
@@ -961,7 +961,7 @@ mod tests {
 
     #[test]
     fn every_apply_collection_schema_has_a_recreate_identity_field() {
-        use defra_agent_protocol::schemas;
+        use gents_protocol::schemas;
 
         for collection in Collection::ALL {
             let schema = match collection {
@@ -1153,8 +1153,8 @@ doc_1: create_Task(input: { task_id: "b" }) { _docID }
 
     #[tokio::test]
     async fn generic_override_recreates_a_tombstoned_tool_selection() -> Result<()> {
-        use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
-        use defra_agent::ensure_runtime_schemas;
+        use gents::defra_node::{EmbeddedNode, StorageBackend};
+        use gents::ensure_runtime_schemas;
 
         let tempdir = tempfile::tempdir()?;
         let node = EmbeddedNode::builder()
@@ -1330,7 +1330,7 @@ mod lean_apply_write_boundary_tests {
     };
     use super::*;
     use axum::{extract::State, routing::post, Json, Router};
-    use defra_agent::BackendProviderKind;
+    use gents::BackendProviderKind;
     use regex::Regex;
     use serde_json::{json, Map};
     use std::collections::{BTreeMap, BTreeSet};

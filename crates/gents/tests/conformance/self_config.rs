@@ -1,5 +1,5 @@
 //! SelfConfig conformance home: pin the production patch layer
-//! (`defra_agent::config_client::patch`) against the Lean `SelfConfig` model.
+//! (`gents::config_client::patch`) against the Lean `SelfConfig` model.
 //!
 //! Two fences:
 //! - the per-target field tables (all/writable/protected, unique key,
@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use defra_agent::config_client::patch::{
+use gents::config_client::patch::{
     apply_patch, ensure_admissible, SelfConfigPatch, SelfConfigTarget, ALL_SELF_CONFIG_TARGETS,
     DEFAULT_SELF_CONFIG_CATEGORIES, SELF_CONFIG_CATEGORIES,
 };
@@ -41,14 +41,14 @@ fn sdl_field_names(sdl: &str) -> Vec<String> {
 
 fn bundled_sdl(collection: &str) -> &'static str {
     match collection {
-        "AgentBehavior" => defra_agent_protocol::schemas::AGENT_BEHAVIOR,
-        "ToolSelection" => defra_agent_protocol::schemas::TOOL_SELECTION,
-        "InferenceProfile" => defra_agent_protocol::schemas::INFERENCE_PROFILE,
-        "InferenceBackend" => defra_agent_protocol::schemas::INFERENCE_BACKEND,
-        "ToolServiceRegistry" => defra_agent_protocol::schemas::TOOL_SERVICE_REGISTRY,
-        "Task" => defra_agent_protocol::schemas::TASK,
-        "Schedule" => defra_agent_protocol::schemas::SCHEDULE,
-        "EventTrigger" => defra_agent_protocol::schemas::EVENT_TRIGGER,
+        "AgentBehavior" => gents_protocol::schemas::AGENT_BEHAVIOR,
+        "ToolSelection" => gents_protocol::schemas::TOOL_SELECTION,
+        "InferenceProfile" => gents_protocol::schemas::INFERENCE_PROFILE,
+        "InferenceBackend" => gents_protocol::schemas::INFERENCE_BACKEND,
+        "ToolServiceRegistry" => gents_protocol::schemas::TOOL_SERVICE_REGISTRY,
+        "Task" => gents_protocol::schemas::TASK,
+        "Schedule" => gents_protocol::schemas::SCHEDULE,
+        "EventTrigger" => gents_protocol::schemas::EVENT_TRIGGER,
         other => panic!("no bundled SDL mapping for {other}"),
     }
 }

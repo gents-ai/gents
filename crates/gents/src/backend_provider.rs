@@ -144,7 +144,7 @@ pub async fn discover_models(
             let Some(credential) = chatgpt_credential else {
                 tracing::Span::current().record("failure_class", "auth");
                 anyhow::bail!(
-                    "ChatGPT Codex model discovery requires an OAuthCredential document; run `defra-agent codex-login` for the agent DID first"
+                    "ChatGPT Codex model discovery requires an OAuthCredential document; run `gents codex-login` for the agent DID first"
                 );
             };
             request = request.bearer_auth(&credential.access_token);
@@ -164,7 +164,7 @@ pub async fn discover_models(
                 }
             }
             // Must match the request `version` header: /models gates the returned model set on
-            // the advertised Codex client version (defra-agent's own version returns an empty set).
+            // the advertised Codex client version (gents's own version returns an empty set).
             request = request.query(&[(
                 "client_version",
                 crate::chatgpt_codex::chatgpt_codex_client_version(),

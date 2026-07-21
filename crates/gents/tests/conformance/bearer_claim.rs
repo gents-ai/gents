@@ -13,7 +13,7 @@ use std::sync::Mutex;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use defra_agent::agent::p2p_reconcile::{
+use gents::agent::p2p_reconcile::{
     decide_bearer_claim, reconcile_bearer_claim_tick, BearerClaimStore, BearerClaimVerdicts,
     BearerRejection, NonceBinding, PreparedBearerClaim,
 };

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_agent::{HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS};
+use gents::{HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

@@ -5,7 +5,7 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
-use defra_agent::{BackendProviderKind, OpenAiWireApi};
+use gents::{BackendProviderKind, OpenAiWireApi};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::output_format::OutputFormat;
@@ -22,8 +22,8 @@ use crate::default_backend_max_queue_depth;
 
 #[derive(Parser)]
 #[command(
-    name = "defra-agent",
-    about = "Local-first CLI for bootstrapping, running, and inspecting a defra-agent runtime",
+    name = "gents",
+    about = "Local-first CLI for bootstrapping, running, and inspecting a gents runtime",
     after_help = CLI_AFTER_HELP
 )]
 pub(crate) struct Cli {
@@ -47,7 +47,7 @@ pub(crate) enum Command {
     #[command(
         name = "server",
         alias = "serve",
-        about = "Run the local defra-agent runtime from an initialized home",
+        about = "Run the local gents runtime from an initialized home",
         after_help = SERVER_AFTER_HELP
     )]
     Server(ServeArgs),
@@ -169,7 +169,7 @@ pub(crate) enum Command {
 pub(crate) struct DemoArgs {
     #[arg(
         long,
-        help = "Demo state directory. Defaults to ~/.defra-agent-demo (persists)"
+        help = "Demo state directory. Defaults to ~/.gents-demo (persists)"
     )]
     pub(crate) home: Option<PathBuf>,
     #[arg(
@@ -220,9 +220,9 @@ pub(crate) struct NativeFsRunnerArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct CodexAuthProbeArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
-    #[arg(long, help = "GraphQL endpoint for the target defra-agent node")]
+    #[arg(long, help = "GraphQL endpoint for the target gents node")]
     pub(crate) graphql: Option<String>,
     #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
     pub(crate) agent_did: Option<String>,
@@ -238,9 +238,9 @@ pub(crate) struct CodexAuthProbeArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct CodexLoginArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
-    #[arg(long, help = "GraphQL endpoint for the target defra-agent node")]
+    #[arg(long, help = "GraphQL endpoint for the target gents node")]
     pub(crate) graphql: Option<String>,
     #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
     pub(crate) agent_did: Option<String>,
@@ -256,7 +256,7 @@ pub(crate) struct CodexLoginArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct ProvisionArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(
         long,
@@ -310,7 +310,7 @@ pub(crate) enum IdentityBackendArg {
 
 #[derive(clap::Args)]
 pub(crate) struct InitArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, hide = true)]
     pub(crate) data_dir: Option<PathBuf>,
@@ -470,13 +470,13 @@ impl InitArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct ResetArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
 pub(crate) struct ServeArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, hide = true)]
     pub(crate) data_dir: Option<PathBuf>,
@@ -523,7 +523,7 @@ pub(crate) struct ServeArgs {
     #[arg(
         long,
         default_value_t = false,
-        help = "Disable the Codex TUI endpoint (`defra-agent codex` needs it)"
+        help = "Disable the Codex TUI endpoint (`gents codex` needs it)"
     )]
     pub(crate) no_codex_shim: bool,
     #[arg(
@@ -612,7 +612,7 @@ pub(crate) struct CodexArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct ChatArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
@@ -673,7 +673,7 @@ pub(crate) enum McpCommand {
 
 #[derive(clap::Args)]
 pub(crate) struct McpProbeArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(
         long,
@@ -702,7 +702,7 @@ pub(crate) enum FleetCommand {
 
 #[derive(clap::Args)]
 pub(crate) struct BackgroundListArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
     pub(crate) graphql: Option<String>,
@@ -730,7 +730,7 @@ pub(crate) struct BackgroundListArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct FleetSlotsArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the live runtime")]
     pub(crate) graphql: Option<String>,
@@ -865,7 +865,7 @@ impl BackendPresetArg {
             Self::GenericOpenAiCompatible => None,
             Self::OpenAi => Some("https://api.openai.com/v1"),
             Self::OpenRouter => Some("https://openrouter.ai/api/v1"),
-            Self::ChatGptCodex => Some(defra_agent::chatgpt_codex::default_backend_endpoint()),
+            Self::ChatGptCodex => Some(gents::chatgpt_codex::default_backend_endpoint()),
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_ENDPOINT),
             Self::Vllm => Some("http://127.0.0.1:8000/v1"),
             Self::LlamaCpp => Some("http://127.0.0.1:8080/v1"),
@@ -955,7 +955,7 @@ pub(crate) enum TraceCommand {
 
 #[derive(clap::Args)]
 pub(crate) struct TraceExportArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
     pub(crate) graphql: Option<String>,
@@ -979,7 +979,7 @@ pub(crate) struct TraceExportArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct TraceTimelineArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
     pub(crate) graphql: Option<String>,
@@ -991,7 +991,7 @@ pub(crate) struct TraceTimelineArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct TraceProjectArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
     pub(crate) graphql: Option<String>,
@@ -1210,7 +1210,7 @@ pub(crate) enum ToolSelectionCommand {
     #[command(
         name = "subagent-target-entry",
         about = "Build a single --subagent-target JSON entry from its parts",
-        after_help = "Example:\n  defra-agent config tools set --graphql <url> --agent-did <did> \\\n    --selection-id main --subagent-target \"$(defra-agent config tools \\\n    subagent-target-entry --name researcher --agent-did did:key:z... \\\n    --behavior-id did:key:z...:default)\""
+        after_help = "Example:\n  gents config tools set --graphql <url> --agent-did <did> \\\n    --selection-id main --subagent-target \"$(gents config tools \\\n    subagent-target-entry --name researcher --agent-did did:key:z... \\\n    --behavior-id did:key:z...:default)\""
     )]
     SubagentTargetEntry(SubagentTargetEntryArgs),
 }
@@ -1270,7 +1270,7 @@ pub(crate) enum ToolsCommand {
 
 #[derive(clap::Args)]
 pub(crate) struct ToolExplainArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
     pub(crate) graphql: Option<String>,
@@ -1843,7 +1843,7 @@ pub(crate) struct BackendDiscoverModelsArgs {
     pub(crate) agent_did: Option<String>,
     #[arg(
         long,
-        help = "Agent home directory used to resolve the local agent DID for ChatGptCodex discovery (defaults to ~/.defra-agent). Pass --agent-did instead to target a specific agent"
+        help = "Agent home directory used to resolve the local agent DID for ChatGptCodex discovery (defaults to ~/.gents). Pass --agent-did instead to target a specific agent"
     )]
     pub(crate) home: Option<PathBuf>,
 }
@@ -1953,7 +1953,7 @@ pub(crate) enum SchemaCommand {
 
 #[derive(clap::Args)]
 pub(crate) struct SchemaApplyArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(
         long,
@@ -2221,7 +2221,7 @@ pub(crate) enum P2pPairingsCommand {
     #[command(
         about = "Create or update a desired pairing row (the runtime reconciles it)",
         after_help = "\
-Writes a PeerPairingDesired row. A running defra-agent runtime reads desired \
+Writes a PeerPairingDesired row. A running gents runtime reads desired \
 rows on its pairing sweep and reconciles live P2P state toward them — this \
 command never mutates live wiring itself.\n\
 \n\
@@ -2371,7 +2371,7 @@ pub(crate) struct P2pJoinArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    /// Invite token produced by `defra-agent p2p pairings invite`.
+    /// Invite token produced by `gents p2p pairings invite`.
     #[arg(value_name = "TOKEN")]
     pub(crate) token: String,
     /// Override the scope template from the token. When both `--template` and a
@@ -2514,7 +2514,7 @@ pub(crate) enum RequestInterruptCauseArg {
     UserCancelled,
 }
 
-impl From<RequestInterruptCauseArg> for defra_agent::tool_call_lifecycle::CancelCause {
+impl From<RequestInterruptCauseArg> for gents::tool_call_lifecycle::CancelCause {
     fn from(value: RequestInterruptCauseArg) -> Self {
         match value {
             RequestInterruptCauseArg::Interrupted => Self::Interrupted,
@@ -2884,7 +2884,7 @@ mod tests {
 
     fn parse_tools_set(extra: &[&str]) -> ToolSelectionUpsertArgs {
         let mut argv = vec![
-            "defra-agent",
+            "gents",
             "config",
             "tools",
             "set",
@@ -2909,7 +2909,7 @@ mod tests {
     }
 
     fn parse_init(extra: &[&str]) -> InitArgs {
-        let mut argv = vec!["defra-agent", "init"];
+        let mut argv = vec!["gents", "init"];
         argv.extend_from_slice(extra);
         let cli = Cli::try_parse_from(argv).expect("init should parse");
         match cli.command {
@@ -2919,7 +2919,7 @@ mod tests {
     }
 
     fn parse_server(extra: &[&str]) -> ServeArgs {
-        let mut argv = vec!["defra-agent", "server"];
+        let mut argv = vec!["gents", "server"];
         argv.extend_from_slice(extra);
         let cli = Cli::try_parse_from(argv).expect("server should parse");
         match cli.command {
@@ -3036,7 +3036,7 @@ mod tests {
         assert!(!parse_init(&[]).write_tools);
         assert!(!parse_init(&[]).yolo);
         assert!(
-            Cli::try_parse_from(["defra-agent", "init", "--write", "--yolo"]).is_err(),
+            Cli::try_parse_from(["gents", "init", "--write", "--yolo"]).is_err(),
             "--write and --yolo conflict"
         );
     }
@@ -3144,7 +3144,7 @@ mod tests {
     #[test]
     fn top_level_task_run_parses_operator_affordance() {
         let cli = Cli::try_parse_from([
-            "defra-agent",
+            "gents",
             "task",
             "run",
             "--task-id",
@@ -3167,7 +3167,7 @@ mod tests {
     #[test]
     fn top_level_task_run_accepts_positional_task_id_and_wait() {
         let cli = Cli::try_parse_from([
-            "defra-agent",
+            "gents",
             "task",
             "run",
             "host-check",
@@ -3199,7 +3199,7 @@ mod tests {
     #[test]
     fn top_level_task_list_and_show_parse() {
         let list = Cli::try_parse_from([
-            "defra-agent",
+            "gents",
             "task",
             "list",
             "--graphql",
@@ -3216,7 +3216,7 @@ mod tests {
             _ => panic!("expected `task list`"),
         }
 
-        let show = Cli::try_parse_from(["defra-agent", "task", "show", "host-check"])
+        let show = Cli::try_parse_from(["gents", "task", "show", "host-check"])
             .expect("task show should parse");
         match show.command {
             Command::Task {
@@ -3232,7 +3232,7 @@ mod tests {
     #[test]
     fn config_task_run_remains_available_as_compatibility_path() {
         let cli = Cli::try_parse_from([
-            "defra-agent",
+            "gents",
             "config",
             "task",
             "run",
@@ -3258,7 +3258,7 @@ mod tests {
 
     #[test]
     fn config_task_list_and_show_remain_available() {
-        let list = Cli::try_parse_from(["defra-agent", "config", "task", "list"])
+        let list = Cli::try_parse_from(["gents", "config", "task", "list"])
             .expect("config task list should parse");
         match list.command {
             Command::Config {
@@ -3271,7 +3271,7 @@ mod tests {
         }
 
         let show = Cli::try_parse_from([
-            "defra-agent",
+            "gents",
             "config",
             "task",
             "show",
@@ -3296,17 +3296,17 @@ mod tests {
     #[test]
     fn deprecated_spellings_still_parse() {
         for argv in [
-            vec!["defra-agent", "config", "task", "list"],
-            vec!["defra-agent", "p2p", "pairings", "rm", "--peer", "p1"],
-            vec!["defra-agent", "p2p", "pairings", "unpair", "--peer", "p1"],
-            vec!["defra-agent", "show", "request", "req-1"],
+            vec!["gents", "config", "task", "list"],
+            vec!["gents", "p2p", "pairings", "rm", "--peer", "p1"],
+            vec!["gents", "p2p", "pairings", "unpair", "--peer", "p1"],
+            vec!["gents", "show", "request", "req-1"],
         ] {
             Cli::try_parse_from(&argv).unwrap_or_else(|err| panic!("{argv:?}: {err}"));
         }
     }
 
     fn parse_p2p_invite(extra: &[&str]) -> P2pInviteArgs {
-        let mut argv = vec!["defra-agent", "p2p", "pairings", "invite"];
+        let mut argv = vec!["gents", "p2p", "pairings", "invite"];
         argv.extend_from_slice(extra);
         let cli = Cli::try_parse_from(argv).expect("p2p pairings invite should parse");
         match cli.command {
@@ -3321,7 +3321,7 @@ mod tests {
     }
 
     fn parse_p2p_join(extra: &[&str]) -> P2pJoinArgs {
-        let mut argv = vec!["defra-agent", "p2p", "pairings", "join", "dapair1-token"];
+        let mut argv = vec!["gents", "p2p", "pairings", "join", "dapair1-token"];
         argv.extend_from_slice(extra);
         let cli = Cli::try_parse_from(argv).expect("p2p pairings join should parse");
         match cli.command {
@@ -3337,7 +3337,7 @@ mod tests {
 
     fn parse_p2p_replicator_add(extra: &[&str]) -> P2pReplicatorAddArgs {
         let mut argv = vec![
-            "defra-agent",
+            "gents",
             "p2p",
             "admin",
             "replicators",
@@ -3383,7 +3383,7 @@ mod tests {
     fn p2p_pairing_front_door_rejects_removed_scope_flags() {
         for argv in [
             vec![
-                "defra-agent",
+                "gents",
                 "p2p",
                 "pairings",
                 "set",
@@ -3395,7 +3395,7 @@ mod tests {
                 "AgentRequest",
             ],
             vec![
-                "defra-agent",
+                "gents",
                 "p2p",
                 "pairings",
                 "set",
@@ -3407,7 +3407,7 @@ mod tests {
                 "chat-requests",
             ],
             vec![
-                "defra-agent",
+                "gents",
                 "p2p",
                 "pairings",
                 "invite",
@@ -3415,7 +3415,7 @@ mod tests {
                 "chat-requests",
             ],
             vec![
-                "defra-agent",
+                "gents",
                 "p2p",
                 "pairings",
                 "join",
@@ -3477,14 +3477,14 @@ mod tests {
         use crate::cli::deprecations::{deprecation_warning, DEPRECATED};
 
         for (path, replacement) in DEPRECATED {
-            let mut argv = vec!["defra-agent".to_string()];
+            let mut argv = vec!["gents".to_string()];
             argv.extend(path.iter().copied().map(str::to_string));
             argv.extend(deprecated_path_required_args(path));
 
             let warning =
                 deprecation_warning(&argv).unwrap_or_else(|| panic!("missing warning: {argv:?}"));
             assert!(
-                warning.contains(&format!("use `defra-agent {}`", replacement)),
+                warning.contains(&format!("use `gents {}`", replacement)),
                 "warning did not mention replacement for {argv:?}: {warning}"
             );
 

@@ -203,7 +203,7 @@ fn assert_periodic_recovery_registry_matches_lean(
     }
 
     let mut rust_periodic_by_id = BTreeMap::new();
-    for metadata in defra_agent::periodic_recovery_sweep_metadata() {
+    for metadata in gents::periodic_recovery_sweep_metadata() {
         assert!(
             !metadata.sweep_ids.is_empty(),
             "periodic recovery registry entry {} must name at least one Lean sweep id",
@@ -234,7 +234,7 @@ fn assert_periodic_recovery_registry_matches_lean(
 }
 
 fn rust_periodic_recovery_sweep_ids() -> BTreeSet<&'static str> {
-    defra_agent::periodic_recovery_sweep_metadata()
+    gents::periodic_recovery_sweep_metadata()
         .iter()
         .flat_map(|metadata| metadata.sweep_ids.iter().copied())
         .collect()

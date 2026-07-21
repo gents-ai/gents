@@ -1,7 +1,7 @@
 # DefraDB store-upgrade fixture
 
 `v0612_populated_rocksdb.tar.zst.b64` contains only the RocksDB directory from
-a normal `defra-agent init` run using v0.6.12
+a normal `gents init` run using v0.6.12
 (`b7a4b4ea5fdedab14e2269250e0d6f0f89c4f254`). It has the complete runtime
 schema set plus the synthetic principal, backend, behavior, inference profile,
 and tool selections created by init.

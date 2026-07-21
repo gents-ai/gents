@@ -1,4 +1,4 @@
-use defra_agent::Collection;
+use gents::Collection;
 use std::collections::BTreeSet;
 
 fn config_apply_order_from_source() -> Vec<Collection> {

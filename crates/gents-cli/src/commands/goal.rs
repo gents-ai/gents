@@ -1,12 +1,12 @@
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
-use defra_agent::config_client::ConfigAccess;
-use defra_agent::goal::{
+use gents::config_client::ConfigAccess;
+use gents::goal::{
     apply_operator_status_transition, delete_goals_for_session, deterministic_goal_id,
     load_canonical_goal, set_goal, GoalDocument, GoalSnapshot, GoalState, GoalStatus,
     BLOCKED_AUDIT_THRESHOLD, GOAL_FIELDS,
 };
-use defra_agent::graphql::escape_graphql_string;
+use gents::graphql::escape_graphql_string;
 
 use crate::cli::args::{GoalCommand, GoalScopeArgs, GoalSetArgs, GoalShowArgs, GoalStatusArg};
 use crate::cli::output_format::OutputFormat;

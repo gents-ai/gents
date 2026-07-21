@@ -1,8 +1,8 @@
 # Schema Data Model
 
 This directory contains the non-agent DefraDB GraphQL schemas used by
-`defra-agent`. The agent collection schemas live in the dependency-free
-`defra-agent-schemas` crate so external document-peer consumers can depend on
+`gents`. The agent collection schemas live in the dependency-free
+`gents-schemas` crate so external document-peer consumers can depend on
 the same collection contract without pulling in runtime/protocol dependencies.
 
 The schema is intentionally document-oriented. The runtime resolves behavior and
@@ -218,8 +218,8 @@ Some boundaries are deliberate:
 
 ## Where Schemas Are Registered
 
-The runtime registers schemas from `crates/defra-agent/src/schema.rs`, via
-`defra_agent_protocol::schemas`.
+The runtime registers schemas from `crates/gents/src/schema.rs`, via
+`gents_protocol::schemas`.
 
 That file is the authoritative list of which SDL files are loaded into the
 embedded DefraDB node.

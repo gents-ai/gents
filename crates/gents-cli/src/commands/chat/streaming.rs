@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::time::Duration;
 
 use anyhow::Result;
-use defra_agent::graphql::escape_graphql_string;
+use gents::graphql::escape_graphql_string;
 use serde_json::Value;
 
 use crate::{
@@ -292,14 +292,14 @@ pub(super) async fn stream_turn_progress(
                 if !terminal_content.contains(error_message) {
                     println!("[agent error] {error_message}");
                     println!(
-                        "[inspect] defra-agent response show {}",
+                        "[inspect] gents response show {}",
                         submitted.request_id
                     );
                     io::stdout().flush()?;
                 }
             } else if response_status == "error" || matches!(lifecycle_state, "failed" | "dead") {
                 println!(
-                    "[inspect] defra-agent response show {}",
+                    "[inspect] gents response show {}",
                     submitted.request_id
                 );
                 io::stdout().flush()?;

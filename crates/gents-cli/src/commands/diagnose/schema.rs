@@ -34,7 +34,7 @@ pub(super) async fn load_runtime_row(
     access: &ConfigAccess,
     agent_did: &str,
 ) -> Result<Option<Value>> {
-    use defra_agent::graphql::escape_graphql_string;
+    use gents::graphql::escape_graphql_string;
     let query = format!(
         r#"{{
             AgentRuntime(

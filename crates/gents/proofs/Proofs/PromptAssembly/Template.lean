@@ -17,7 +17,7 @@ only on the binding restricted to those reads (engine purity / strict-undefined
 evaluation). The cache-safety guarantee is therefore a property of *which
 variables a template reads*, not of engine expressiveness.
 
-Rust conformance: `crates/defra-agent/tests/conformance/prompt_template.rs`.
+Rust conformance: `crates/gents/tests/conformance/prompt_template.rs`.
 -/
 
 namespace PromptAssembly.Template

@@ -32,7 +32,7 @@ fn read_per_doc_collection(root: &Path, dir_name: &str) -> Result<Vec<Value>> {
     Ok(docs)
 }
 
-/// Run `defra-agent config export --root <root>` and return the stdout
+/// Run `gents config export --root <root>` and return the stdout
 /// confirmation string. Errors if the command exits non-zero.
 fn run_config_export(home_dir: &Path, root: &Path, extra_args: &[&str]) -> Result<String> {
     let root_str = root
@@ -43,7 +43,7 @@ fn run_config_export(home_dir: &Path, root: &Path, extra_args: &[&str]) -> Resul
     run_cli_text(home_dir, &args)
 }
 
-/// Run `defra-agent config apply --root <root>` and return the JSON report.
+/// Run `gents config apply --root <root>` and return the JSON report.
 fn run_config_apply(home_dir: &Path, root: &Path) -> Result<Value> {
     let root_str = root
         .to_str()
@@ -72,7 +72,7 @@ async fn config_export_bind_home_ignores_stale_runtime_state_agent_did() -> Resu
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
-    let explicit_home = home_dir.join(".defra-agent");
+    let explicit_home = home_dir.join(".gents");
     write_json_file(
         &explicit_home.join("runtime.json"),
         &serde_json::json!({
@@ -214,7 +214,7 @@ async fn config_import_round_trips_and_requires_override() -> Result<()> {
 
     // Build an inline JSON bundle representing a freshly initialised agent.
     let bundle = serde_json::json!({
-        "format": "defra-agent-config/v2",
+        "format": "gents-config/v2",
         "agent_did": agent_did,
         "exported_at": "2026-01-01T00:00:00Z",
         "access_mode": "local",
@@ -322,7 +322,7 @@ async fn config_import_round_trips_and_requires_override() -> Result<()> {
         ],
     )?;
     assert!(
-        stderr.contains("defra-agent config import --override"),
+        stderr.contains("gents config import --override"),
         "expected override guidance in stderr, got:\n{stderr}"
     );
 

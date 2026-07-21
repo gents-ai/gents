@@ -9,7 +9,7 @@ consumer wiring is intentionally deferred to a follow-up issue.
 
 These vectors pin the *structural* contract; behavioral coverage
 (stub-text formatting, file-activity extraction, byte-count display)
-stays in `crates/defra-agent/src/compaction/tests.rs` and is not
+stays in `crates/gents/src/compaction/tests.rs` and is not
 replaced by the cases here.
 -/
 

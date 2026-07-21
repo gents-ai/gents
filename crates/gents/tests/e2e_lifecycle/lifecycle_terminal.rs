@@ -1,6 +1,6 @@
-use defra_agent::lifecycle::ClaimOutcome;
-use defra_agent::watcher::AgentRequest;
-use defra_agent::RequestLifecycle;
+use gents::lifecycle::ClaimOutcome;
+use gents::watcher::AgentRequest;
+use gents::RequestLifecycle;
 use serde::Deserialize;
 
 use crate::support::{

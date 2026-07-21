@@ -29,14 +29,14 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
     let agent_did = resolve_agent_did(Some(&home_dir), args.agent_did.as_deref())?;
-    let provider = defra_agent::chatgpt_codex::normalize_provider(&args.provider);
+    let provider = gents::chatgpt_codex::normalize_provider(&args.provider);
     let credential = load_oauth_credential(&access, &agent_did, &provider)
         .await?
         .ok_or_else(|| {
-            anyhow::anyhow!(defra_agent::chatgpt_codex::classify_chatgpt_auth_error(
+            anyhow::anyhow!(gents::chatgpt_codex::classify_chatgpt_auth_error(
                 &agent_did,
                 &provider,
-                &defra_agent::chatgpt_codex::ChatGptAuthProblem::Missing,
+                &gents::chatgpt_codex::ChatGptAuthProblem::Missing,
             ))
         })?;
     // Read-only: the probe NEVER refreshes the token. Refreshing here would make the probe a
@@ -45,16 +45,16 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
     // credential. If the stored access token is expired, the /models call below 401s and we
     // surface actionable guidance; the owning runtime is the single writer that refreshes.
 
-    let backend_url = defra_agent::chatgpt_codex::default_backend_endpoint();
+    let backend_url = gents::chatgpt_codex::default_backend_endpoint();
     let models_url = format!("{}/models", backend_url.trim_end_matches('/'));
     let mut request = reqwest::Client::new()
         .get(&models_url)
         .query(&[(
             "client_version",
-            defra_agent::chatgpt_codex::chatgpt_codex_client_version(),
+            gents::chatgpt_codex::chatgpt_codex_client_version(),
         )])
         .bearer_auth(&credential.access_token);
-    for (name, value) in defra_agent::chatgpt_codex::build_chatgpt_codex_headers(
+    for (name, value) in gents::chatgpt_codex::build_chatgpt_codex_headers(
         credential.account_id.as_deref(),
         credential.is_fedramp,
     )? {
@@ -80,10 +80,10 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
     if !status.is_success() {
         let body = String::from_utf8_lossy(&body);
         if status.as_u16() == 401 || status.as_u16() == 403 {
-            let guidance = defra_agent::chatgpt_codex::classify_chatgpt_auth_error(
+            let guidance = gents::chatgpt_codex::classify_chatgpt_auth_error(
                 &agent_did,
                 &provider,
-                &defra_agent::chatgpt_codex::ChatGptAuthProblem::Expired,
+                &gents::chatgpt_codex::ChatGptAuthProblem::Expired,
             );
             bail!("models request failed with HTTP {status}: {body}\n{guidance}");
         }
@@ -141,10 +141,10 @@ pub(crate) async fn load_oauth_credential(
     access: &ConfigAccess,
     agent_did: &str,
     provider: &str,
-) -> Result<Option<defra_agent::chatgpt_codex::OAuthCredential>> {
-    let query = defra_agent::chatgpt_codex::oauth_credential_query(agent_did, provider);
+) -> Result<Option<gents::chatgpt_codex::OAuthCredential>> {
+    let query = gents::chatgpt_codex::oauth_credential_query(agent_did, provider);
     let response = access.execute(&query).await?;
-    defra_agent::chatgpt_codex::oauth_credentials_from_response(&response)
+    gents::chatgpt_codex::oauth_credentials_from_response(&response)
         .into_iter()
         .next()
         .transpose()

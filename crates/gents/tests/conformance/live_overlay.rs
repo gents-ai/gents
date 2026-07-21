@@ -6,7 +6,7 @@
 //! matches `expectOverlay` from the Lean case table emitted by
 //! `Proofs.Conformance.Contracts`.
 
-use defra_agent_protocol::client_protocol::ClientTurnState;
+use gents_protocol::client_protocol::ClientTurnState;
 
 use crate::lean_vocab_test::{lean_live_overlay_cases, LeanLiveOverlayCase};
 

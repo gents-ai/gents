@@ -2,8 +2,8 @@ use super::*;
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_agent::defra_node::{EmbeddedNode, QueryResponse};
-use defra_agent::{
+use gents::defra_node::{EmbeddedNode, QueryResponse};
+use gents::{
     ActiveRuntimeSnapshot, AgentRequest, ConcurrencyMode, DefraWatcher, EventSource,
     ResolvedEventTrigger, ResolvedTask, SubagentSource, TriggerSource, Watcher,
 };
@@ -770,7 +770,7 @@ async fn install_subagent_source_fixture(node: &EmbeddedNode) -> Result<(), Stri
         &ToolSelectionDocument {
             selection_id: TOOL_SELECTION_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
-            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+            subagent_targets: Some(vec![gents::subagent_target_entry(
                 AGENT_NAME, AGENT_DID, AGENT_NAME, None,
             )]),
             subagent_spawn_enabled: Some(true),
@@ -862,11 +862,11 @@ fn active_snapshot(
     })
 }
 
-fn runtime_behavior(behavior_id: &str) -> Arc<defra_agent::AgentBehavior> {
-    let identity: Arc<dyn defra_agent::AgentIdentity> = Arc::new(
+fn runtime_behavior(behavior_id: &str) -> Arc<gents::AgentBehavior> {
+    let identity: Arc<dyn gents::AgentIdentity> = Arc::new(
         crate::support::fixtures::test_identity(&format!("event-delivery-{behavior_id}")),
     );
-    let principal = Arc::new(defra_agent::AgentPrincipal {
+    let principal = Arc::new(gents::AgentPrincipal {
         agent_did: AGENT_DID.to_string(),
         identity,
         default_behavior_id: AGENT_NAME.to_string(),

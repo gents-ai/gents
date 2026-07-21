@@ -1,5 +1,5 @@
 use chrono::Utc;
-use defra_agent::tool_call_lifecycle::{CancelCause, ToolCallLifecycle};
+use gents::tool_call_lifecycle::{CancelCause, ToolCallLifecycle};
 
 use crate::lean_vocab_test::{
     lean_composed_invariant_witness, lean_composed_invariant_witness_by_scenario,

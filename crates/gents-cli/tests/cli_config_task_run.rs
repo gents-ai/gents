@@ -8,10 +8,10 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
-#[path = "../../defra-agent/src/lean_vocab_test.rs"]
+#[path = "../../gents/src/lean_vocab_test.rs"]
 mod lean_vocab_test;
 
-/// End-to-end test for `defra-agent config task run --task-id --args`.
+/// End-to-end test for `gents config task run --task-id --args`.
 ///
 /// Seeds a `Task` + `AgentBehavior` via the standard apply path against a
 /// running agent, then invokes the `config task run` subcommand and verifies

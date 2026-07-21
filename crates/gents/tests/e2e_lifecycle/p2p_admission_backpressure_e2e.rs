@@ -14,8 +14,8 @@
 
 use std::time::{Duration, Instant};
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
 use serde::Deserialize;
 
 use crate::support::{test_p2p_db_with_admission, TestP2pAdmission};

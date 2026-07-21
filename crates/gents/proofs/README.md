@@ -1,6 +1,6 @@
-# defra-agent Lean Proofs
+# gents Lean Proofs
 
-This directory contains the Lean 4 model for `defra-agent`.
+This directory contains the Lean 4 model for `gents`.
 
 The goal is not to prove math in isolation. The goal is to make the runtime
 state machines explicit enough that:
@@ -51,7 +51,7 @@ local lemmas only — not listed as fenced proven areas):
 curl https://elan.lean-lang.org/elan-init.sh -sSf | sh -s -- -y
 
 # Build all proofs.
-cd crates/defra-agent/proofs
+cd crates/gents/proofs
 lake build
 
 # Print the Rust conformance contract JSON used by Rust tests.
@@ -91,7 +91,7 @@ Separately, **obligation models** (no Rust refinement tests yet):
   (success-ack backing, pending capacity, timeout frees the push
   semaphore). Does **not** prove multi-wave hub stability, Bitswap stall
   recovery, gossip send-loop health, or that the pinned `p2p` crate
-  implements these transitions. Operator knobs on `defra-agent server`
+  implements these transitions. Operator knobs on `gents server`
   expose the production bounds these models talk about.
 
 The proof boundary matters:
@@ -166,7 +166,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Properties/SchedulingSafety.lean` | Scheduler/fleet safety properties S7-S9 |
 | `Proofs/Properties/SchedulingLiveness.lean` | Scheduler/fleet liveness properties |
 | `Proofs/Properties/Decidable.lean` | Finite-state exhaustive checks |
-| `Proofs/Conformance/DefraAgent.lean` | Mapping from Lean state to Rust/DefraDB state |
+| `Proofs/Conformance/Gents.lean` | Mapping from Lean state to Rust/DefraDB state |
 | `Proofs/Conformance/Boundaries.lean` | Intentional product policies and external assumptions at the Rust/Lean boundary |
 | `Proofs/Conformance/Deviations.lean` | Active unresolved Rust/spec mismatches |
 | `Proofs/Conformance/SchedulerConformance.lean` | Scheduler-specific conformance notes |
@@ -207,7 +207,7 @@ Rust conformance tests do not hand-maintain separate Lean parity tables for the
 core executable machines. The test helper in `src/lean_vocab_test.rs` runs:
 
 ```bash
-cd crates/defra-agent/proofs
+cd crates/gents/proofs
 lake build Proofs.Conformance.Contracts
 lake env lean --run Proofs/Conformance/Contracts.lean
 ```
@@ -265,7 +265,7 @@ product-boundary/follow-up, so adding a Lean contract also requires making its
 runtime coverage explicit.
 
 Coverage consumers are registered in
-`crates/defra-agent/tests/support/conformance_consumers.rs`. Add a registry
+`crates/gents/tests/support/conformance_consumers.rs`. Add a registry
 entry in the same change as a new `consumerCoverage` ledger row: Rust entries
 name the package, source file, module path, and `#[test]`/`#[tokio::test]`
 function, while TypeScript entries name the app, source file, suite, and test.
@@ -696,11 +696,11 @@ must refine them through DB-visible state updates.
 
 The main conformance files are:
 
-- `crates/defra-agent/tests/state_machine_conformance.rs`
-- `crates/defra-agent/src/admission/tests.rs`
-- `crates/defra-agent-protocol/src/client_protocol/tests.rs`
-- `crates/defra-agent-cli/src/desired_state/tests.rs`
-- `Proofs/Conformance/DefraAgent.lean`
+- `crates/gents/tests/state_machine_conformance.rs`
+- `crates/gents/src/admission/tests.rs`
+- `crates/gents-protocol/src/client_protocol/tests.rs`
+- `crates/gents-cli/src/desired_state/tests.rs`
+- `Proofs/Conformance/Gents.lean`
 - `Proofs/Conformance/Boundaries.lean`
 - `Proofs/Conformance/CoverageLedger.lean`
 - `Proofs/Conformance/SchedulerConformance.lean`
@@ -787,7 +787,7 @@ gaps.
 
 ### Apply Storage Atomicity
 
-`defra-agent-cli config apply` today is best-effort: if a write fails partway
+`gents-cli config apply` today is best-effort: if a write fails partway
 through the ordered apply sequence, the database is left in a durable prefix and
 there is no rollback. `Proofs/ApplyReconcile/Prefix.lean` covers this non-atomic
 case: every prefix preserves runtime/live-owned fields, already-written

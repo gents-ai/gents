@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use defra_agent::Collection;
+use gents::Collection;
 
 use super::{DesiredStateManifest, HasUniqueId};
 

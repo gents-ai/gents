@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_agent_protocol::graphql::escape_graphql_string;
+use gents_protocol::graphql::escape_graphql_string;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -299,7 +299,7 @@ impl ServiceHealthMap {
 
 /// Context for persisting `MCPServiceHealthSnapshot` rows to DefraDB at the
 /// end of every health-check cycle. The production `spawn_health_checker`
-/// builds one of these per agent; CLI one-shot probes (`defra-agent mcp
+/// builds one of these per agent; CLI one-shot probes (`gents mcp
 /// probe`) and tests pass `None` to skip persistence.
 #[derive(Clone, Copy)]
 pub struct HealthPersistenceContext<'a> {
@@ -836,7 +836,7 @@ async fn upsert_persisted_health_state(
 
     // The persisted-row identity is the compound (service_id, agent_did) —
     // see the schema comment in
-    // crates/defra-agent-protocol/schemas/services/tool_service_health_state.graphql.
+    // crates/gents-protocol/schemas/services/tool_service_health_state.graphql.
     // The upsert filter must match on both so two agents that register the
     // same service_id don't overwrite each other's row.
     //

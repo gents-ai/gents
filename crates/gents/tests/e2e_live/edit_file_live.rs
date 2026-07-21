@@ -11,26 +11,26 @@
 //! (`Proofs/EditMatch/`) and conformance-fenced; this pins the
 //! model-facing contract end to end.
 //!
-//! Gated on `DEFRA_AGENT_D4F_LIVE=1` (same gate and backend as
+//! Gated on `GENTS_D4F_LIVE=1` (same gate and backend as
 //! `steward_loop_live.rs`). Run with:
 //!
 //! ```bash
-//! DEFRA_AGENT_D4F_LIVE=1 cargo test --test e2e_live \
+//! GENTS_D4F_LIVE=1 cargo test --test e2e_live \
 //!   -- --test-threads=1 edit_file_live --nocapture
 //! ```
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{
-    load_agent_behavior, upsert_agent_behavior, upsert_tool_selection, DefraAgent,
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::{
+    load_agent_behavior, upsert_agent_behavior, upsert_tool_selection, Gents,
     DocumentRuntimeOptions, ToolCeiling, ToolSelectionDocument,
 };
 use serde::Deserialize;
 
-use defra_agent::AgentIdentity;
+use gents::AgentIdentity;
 
 use crate::steward_loop_live::{bind_d4f_backend, wait_for_request_terminal};
 use crate::support::fixtures::test_identity;
@@ -38,7 +38,7 @@ use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, 
 use crate::support::test_db;
 
 fn d4f_enabled() -> bool {
-    std::env::var("DEFRA_AGENT_D4F_LIVE").as_deref() == Ok("1")
+    std::env::var("GENTS_D4F_LIVE").as_deref() == Ok("1")
 }
 
 /// The drifted config the model must edit: CRLF line endings and trailing
@@ -86,7 +86,7 @@ async fn fetch_tool_calls(node: &EmbeddedNode, request_id: &str) -> Vec<ToolCall
 #[tokio::test(flavor = "multi_thread")]
 async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
     if !d4f_enabled() {
-        eprintln!("DEFRA_AGENT_D4F_LIVE is not 1; skipping edit_file live qualification");
+        eprintln!("GENTS_D4F_LIVE is not 1; skipping edit_file live qualification");
         return;
     }
 
@@ -124,7 +124,7 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
         .await
         .expect("bind tool selection");
 
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         Arc::clone(&identity),
         DocumentRuntimeOptions {

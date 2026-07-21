@@ -13,9 +13,9 @@ pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
     let agent_did = resolve_agent_did(Some(&home_dir), args.agent_did.as_deref())?;
-    let provider = defra_agent::chatgpt_codex::normalize_provider(&args.provider);
+    let provider = gents::chatgpt_codex::normalize_provider(&args.provider);
     let synthetic_home =
-        std::env::temp_dir().join(format!("defra-agent-codex-login-{}", Uuid::new_v4()));
+        std::env::temp_dir().join(format!("gents-codex-login-{}", Uuid::new_v4()));
     let mut opts = ServerOptions::new(
         synthetic_home.clone(),
         args.client_id.unwrap_or_else(|| CLIENT_ID.to_string()),
@@ -65,16 +65,16 @@ pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
     let token_data = auth
         .get_token_data()
         .context("ChatGPT login did not expose token data")?;
-    let credential = defra_agent::chatgpt_codex::OAuthCredential::from_login_token_data(
+    let credential = gents::chatgpt_codex::OAuthCredential::from_login_token_data(
         &agent_did,
         &provider,
         &token_data,
         chrono::Utc::now(),
     );
-    let mutation = defra_agent::chatgpt_codex::oauth_credential_upsert_mutation(&credential);
+    let mutation = gents::chatgpt_codex::oauth_credential_upsert_mutation(&credential);
     let response = access.execute(&mutation).await?;
     let doc_id =
-        defra_agent_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
+        gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
 
     print_json(&json!({
         "doc_id": doc_id,

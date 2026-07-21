@@ -9,7 +9,7 @@ groups, then the live-assistant overlay. The *order and the message↔tool-group
 partition* are semantics a second shell must reproduce exactly; only the pixels
 are presentation.
 
-This models `defra_agent_protocol::timeline::build_timeline_order`. The Rust
+This models `gents_protocol::timeline::build_timeline_order`. The Rust
 function is structured in the same four phases this model concatenates:
 
     buildOrder = body ++ pending ++ orphans ++ overlay

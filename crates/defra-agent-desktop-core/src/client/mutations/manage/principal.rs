@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
-use defra_agent_protocol::row::AgentPrincipalRow;
+use gents_protocol::row::AgentPrincipalRow;
 use defra_node::EmbeddedNode;
 
 use super::super::graphql::{

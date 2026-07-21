@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
-use defra_agent::retry::{
+use gents::retry::{
     defradb_conflict_retry_backoff, is_defradb_transaction_conflict_text,
     DEFRA_DB_CONFLICT_MAX_RETRIES,
 };
@@ -66,7 +66,7 @@ pub async fn doc_id_for_selection(graphql: &str, selection_id: &str) -> Result<S
 
 /// Run a GraphQL mutation/query against an embedded node, failing on any
 /// GraphQL-level errors.
-pub async fn exec(node: &defra_agent::defra_node::EmbeddedNode, query: &str) -> Result<()> {
+pub async fn exec(node: &gents::defra_node::EmbeddedNode, query: &str) -> Result<()> {
     let response = node.execute(query).await;
     if response.has_errors() {
         bail!("GraphQL mutation failed: {:?}", response.errors);

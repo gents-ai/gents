@@ -30,22 +30,22 @@ fn env_ms(key: &str) -> Option<Duration> {
 }
 
 pub fn heartbeat_interval() -> Duration {
-    env_ms("DEFRA_AGENT_REGISTRY_HEARTBEAT_MS").unwrap_or(DEFAULT_HEARTBEAT)
+    env_ms("GENTS_REGISTRY_HEARTBEAT_MS").unwrap_or(DEFAULT_HEARTBEAT)
 }
 
 pub fn sweep_interval() -> Duration {
-    env_ms("DEFRA_AGENT_PAIRING_SWEEP_MS").unwrap_or(DEFAULT_SWEEP)
+    env_ms("GENTS_PAIRING_SWEEP_MS").unwrap_or(DEFAULT_SWEEP)
 }
 
 /// Signed endpoint heartbeat reuses the registry heartbeat env unless explicitly
 /// overridden so registry freshness and endpoint freshness do not drift by
 /// accident.
 pub fn endpoint_interval() -> Duration {
-    env_ms("DEFRA_AGENT_ENDPOINT_HEARTBEAT_MS").unwrap_or_else(heartbeat_interval)
+    env_ms("GENTS_ENDPOINT_HEARTBEAT_MS").unwrap_or_else(heartbeat_interval)
 }
 
 pub fn stale_after() -> Duration {
-    env_ms("DEFRA_AGENT_REGISTRY_STALE_MS")
+    env_ms("GENTS_REGISTRY_STALE_MS")
         .unwrap_or_else(|| heartbeat_interval() * DEFAULT_STALE_MULTIPLE)
 }
 
@@ -63,7 +63,7 @@ pub const DEFAULT_RECIPROCAL_STALE: Duration = Duration::from_secs(24 * 60 * 60)
 /// unreachable address; deliberate revocation is intent removal, which retracts
 /// immediately regardless of freshness.
 pub fn reciprocal_stale_after() -> Duration {
-    env_ms("DEFRA_AGENT_RECIPROCAL_STALE_MS").unwrap_or(DEFAULT_RECIPROCAL_STALE)
+    env_ms("GENTS_RECIPROCAL_STALE_MS").unwrap_or(DEFAULT_RECIPROCAL_STALE)
 }
 
 #[cfg(test)]
@@ -72,11 +72,11 @@ mod tests {
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
     const KEYS: &[&str] = &[
-        "DEFRA_AGENT_REGISTRY_HEARTBEAT_MS",
-        "DEFRA_AGENT_PAIRING_SWEEP_MS",
-        "DEFRA_AGENT_ENDPOINT_HEARTBEAT_MS",
-        "DEFRA_AGENT_REGISTRY_STALE_MS",
-        "DEFRA_AGENT_RECIPROCAL_STALE_MS",
+        "GENTS_REGISTRY_HEARTBEAT_MS",
+        "GENTS_PAIRING_SWEEP_MS",
+        "GENTS_ENDPOINT_HEARTBEAT_MS",
+        "GENTS_REGISTRY_STALE_MS",
+        "GENTS_RECIPROCAL_STALE_MS",
     ];
 
     fn env_lock() -> &'static Mutex<()> {
@@ -131,11 +131,11 @@ mod tests {
     #[test]
     fn env_overrides_are_in_milliseconds() {
         let _env = EnvGuard::clear();
-        std::env::set_var("DEFRA_AGENT_REGISTRY_HEARTBEAT_MS", "1250");
-        std::env::set_var("DEFRA_AGENT_PAIRING_SWEEP_MS", "500");
-        std::env::set_var("DEFRA_AGENT_ENDPOINT_HEARTBEAT_MS", "750");
-        std::env::set_var("DEFRA_AGENT_REGISTRY_STALE_MS", "2500");
-        std::env::set_var("DEFRA_AGENT_RECIPROCAL_STALE_MS", "4500");
+        std::env::set_var("GENTS_REGISTRY_HEARTBEAT_MS", "1250");
+        std::env::set_var("GENTS_PAIRING_SWEEP_MS", "500");
+        std::env::set_var("GENTS_ENDPOINT_HEARTBEAT_MS", "750");
+        std::env::set_var("GENTS_REGISTRY_STALE_MS", "2500");
+        std::env::set_var("GENTS_RECIPROCAL_STALE_MS", "4500");
 
         assert_eq!(heartbeat_interval(), Duration::from_millis(1250));
         assert_eq!(sweep_interval(), Duration::from_millis(500));
@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn endpoint_and_stale_fallback_follow_heartbeat() {
         let _env = EnvGuard::clear();
-        std::env::set_var("DEFRA_AGENT_REGISTRY_HEARTBEAT_MS", "2000");
+        std::env::set_var("GENTS_REGISTRY_HEARTBEAT_MS", "2000");
 
         assert_eq!(endpoint_interval(), Duration::from_secs(2));
         assert_eq!(stale_after(), Duration::from_secs(6));
@@ -166,7 +166,7 @@ mod tests {
 
         // End-to-end: a `0` env override must not yield a zero interval.
         let _env = EnvGuard::clear();
-        std::env::set_var("DEFRA_AGENT_PAIRING_SWEEP_MS", "0");
+        std::env::set_var("GENTS_PAIRING_SWEEP_MS", "0");
         assert_eq!(sweep_interval(), DEFAULT_SWEEP);
     }
 }

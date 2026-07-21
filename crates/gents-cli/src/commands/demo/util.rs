@@ -76,10 +76,10 @@ pub(super) async fn run_cli_text(bin: &Path, args: &[String]) -> Result<String> 
         .args(args)
         .output()
         .await
-        .context("running defra-agent subcommand")?;
+        .context("running gents subcommand")?;
     if !output.status.success() {
         bail!(
-            "defra-agent {} failed: {}",
+            "gents {} failed: {}",
             args.first().cloned().unwrap_or_default(),
             String::from_utf8_lossy(&output.stderr).trim()
         );
@@ -91,7 +91,7 @@ pub(super) async fn run_cli_json(bin: &Path, args: &[String]) -> Result<Value> {
     let stdout = run_cli_text(bin, args).await?;
     serde_json::from_str(stdout.trim()).with_context(|| {
         format!(
-            "parsing JSON from defra-agent {}",
+            "parsing JSON from gents {}",
             args.first().cloned().unwrap_or_default()
         )
     })

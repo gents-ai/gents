@@ -31,7 +31,7 @@ const SHIM_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(feature = "codex-tui")]
 pub(crate) async fn codex(args: CodexArgs) -> Result<()> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        bail!("`defra-agent codex` is interactive and needs a terminal; use `defra-agent chat` for scripted turns");
+        bail!("`gents codex` is interactive and needs a terminal; use `gents chat` for scripted turns");
     }
 
     let endpoint = resolve_endpoint(&args.remote)?;
@@ -61,7 +61,7 @@ pub(crate) async fn codex(args: CodexArgs) -> Result<()> {
 #[cfg(not(feature = "codex-tui"))]
 pub(crate) async fn codex(_args: CodexArgs) -> Result<()> {
     bail!(
-        "`defra-agent codex` was built without the `codex-tui` feature; rebuild with default features or connect an external Codex client to the running shim"
+        "`gents codex` was built without the `codex-tui` feature; rebuild with default features or connect an external Codex client to the running shim"
     )
 }
 
@@ -95,10 +95,10 @@ async fn probe_shim(endpoint: &RemoteAppServerEndpoint) -> Result<()> {
     match tokio::time::timeout(SHIM_PROBE_TIMEOUT, connect).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => bail!(
-            "no Codex shim listening at {authority} ({error}); start `defra-agent server` first"
+            "no Codex shim listening at {authority} ({error}); start `gents server` first"
         ),
         Err(_) => bail!(
-            "timed out reaching the Codex shim at {authority}; start `defra-agent server` first"
+            "timed out reaching the Codex shim at {authority}; start `gents server` first"
         ),
     }
 }

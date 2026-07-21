@@ -144,7 +144,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             did = %self.behavior.agent_did(),
             model = %self.behavior.model_name,
             context_window = self.behavior.context_window,
-            "defra-agent behavior started"
+            "gents behavior started"
         );
 
         self.startup_barrier
@@ -157,7 +157,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         tracing::info!(
             behavior_id = %self.behavior.behavior_id,
             did = %self.behavior.agent_did(),
-            "defra-agent behavior executor online"
+            "gents behavior executor online"
         );
 
         loop {

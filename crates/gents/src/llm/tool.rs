@@ -1,5 +1,5 @@
 //! Native tool trait + definition, mirroring rig's `tool::{Tool, ToolDyn,
-//! ToolError}` and `completion::ToolDefinition`. defra-agent is not a wasm
+//! ToolError}` and `completion::ToolDefinition`. gents is not a wasm
 //! target, so the wasm-compat bounds reduce to `Send`/`Sync` and the boxed
 //! future is a plain [`BoxFuture`].
 //!

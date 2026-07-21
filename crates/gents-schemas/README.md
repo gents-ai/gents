@@ -1,10 +1,10 @@
-# defra-agent-schemas
+# gents-schemas
 
-Dependency-free GraphQL schema bundle for the defra-agent agent collection
+Dependency-free GraphQL schema bundle for the gents agent collection
 contract.
 
 This crate owns the agent-domain `.graphql` files that document-peer consumers
-need to share with defra-agent:
+need to share with gents:
 
 - agent identity, behavior, runtime, and tool selection
 - per-agent memory
@@ -15,4 +15,4 @@ need to share with defra-agent:
 
 The crate intentionally has no runtime dependencies. Consumers that only need
 the collection contract should depend on this crate instead of
-`defra-agent-protocol`.
+`gents-protocol`.

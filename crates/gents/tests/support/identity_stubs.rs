@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use defra_agent::{AgentIdentity, ServiceAccount};
+use gents::{AgentIdentity, ServiceAccount};
 
 /// Test-only `AgentIdentity` that returns the chosen DID.
 #[allow(dead_code)]

@@ -1,12 +1,12 @@
 //! R6 agent-facing background tool integration tests.
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::llm::tool::BoxFuture;
-use defra_agent::llm::tool::ToolDefinition;
-use defra_agent::llm::tool::{ToolDyn, ToolError};
-use defra_agent::llm::ToolCallHookAction;
-use defra_agent::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::llm::tool::BoxFuture;
+use gents::llm::tool::ToolDefinition;
+use gents::llm::tool::{ToolDyn, ToolError};
+use gents::llm::ToolCallHookAction;
+use gents::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use serde::Deserialize;
 use serde_json::Value;
 

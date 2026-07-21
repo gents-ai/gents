@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
 use serde_json::Value;
 
 pub async fn wait_for_runtime_process_state(

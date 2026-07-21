@@ -2,7 +2,7 @@ use super::*;
 use crate::ensure_schemas;
 use crate::llm::message::{AssistantContent, Text, UserContent};
 use crate::test_support::first_content;
-use defra_agent_protocol::transcript::decode_persisted_message;
+use gents_protocol::transcript::decode_persisted_message;
 
 #[test]
 fn test_load_history_deserializes_plain_text() {

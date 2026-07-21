@@ -37,9 +37,9 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-live-demo-{}", Uuid::new_v4().simple());
-    let model_endpoint = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT")
+    let model_endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model_name = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME")
+    let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
 
     let init_args = vec![
@@ -333,9 +333,9 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-live-projection-{}", Uuid::new_v4().simple());
-    let model_endpoint = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT")
+    let model_endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model_name = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME")
+    let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     let mut init_args = vec![
         "--agent-name".to_string(),
@@ -347,9 +347,9 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         "--max-queue-depth".to_string(),
         "2".to_string(),
     ];
-    if std::env::var_os("DEFRA_AGENT_CLI_E2E_API_KEY").is_some() {
+    if std::env::var_os("GENTS_CLI_E2E_API_KEY").is_some() {
         init_args.push("--api-key-env-var".to_string());
-        init_args.push("DEFRA_AGENT_CLI_E2E_API_KEY".to_string());
+        init_args.push("GENTS_CLI_E2E_API_KEY".to_string());
     }
     init_args.push(model_endpoint);
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
@@ -717,9 +717,9 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
 
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let model_endpoint = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT")
+    let model_endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model_name = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME")
+    let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     let mut init_args = vec![
         "--agent-name".to_string(),
@@ -731,9 +731,9 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         "--max-queue-depth".to_string(),
         "8".to_string(),
     ];
-    if std::env::var_os("DEFRA_AGENT_CLI_E2E_API_KEY").is_some() {
+    if std::env::var_os("GENTS_CLI_E2E_API_KEY").is_some() {
         init_args.push("--api-key-env-var".to_string());
-        init_args.push("DEFRA_AGENT_CLI_E2E_API_KEY".to_string());
+        init_args.push("GENTS_CLI_E2E_API_KEY".to_string());
     }
     init_args.push(model_endpoint.clone());
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();

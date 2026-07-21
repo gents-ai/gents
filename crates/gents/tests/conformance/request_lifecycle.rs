@@ -280,7 +280,7 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
             retry_root_request: request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -393,7 +393,7 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
             retry_root_request: request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -470,7 +470,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
             retry_root_request: request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -525,7 +525,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
             retry_root_request: lifecycle.request().request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -787,7 +787,7 @@ async fn latest_only_transition_to_superseded() {
             retry_root_request: seeded.request().request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1196,7 +1196,7 @@ async fn latest_only_event_transition_to_superseded() {
             retry_root_request: seeded.request().request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1339,13 +1339,13 @@ async fn fire_errored_event_does_not_create_request() {
 // --- Moved from tooling_slots_queue_command.rs (#446 mirror split): R4a
 // queue-admission and claim-deadline rows project from Request/Session
 // executables, so their home is the Request lifecycle fence.
-use defra_agent::background_completion::{
+use gents::background_completion::{
     project_background_subagent_completion, BackgroundCompletionOutcome,
 };
-use defra_agent::tool_call_lifecycle::{
+use gents::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
 };
-use defra_agent::{AgentBehaviorDocument, ToolSelectionDocument};
+use gents::{AgentBehaviorDocument, ToolSelectionDocument};
 
 pub(super) async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
     let cases = lean_queue_deadline_cases();
@@ -1666,7 +1666,7 @@ fn request_from_parts(
     session_id: &str,
     created_at: &str,
     deadline: Option<String>,
-) -> defra_agent::AgentRequest {
+) -> gents::AgentRequest {
     let mut request = build_request(
         doc_id,
         request_id.to_string(),
@@ -1679,7 +1679,7 @@ fn request_from_parts(
 
 fn lifecycle_for(
     node: &std::sync::Arc<EmbeddedNode>,
-    request: defra_agent::AgentRequest,
+    request: gents::AgentRequest,
     deadline_duration_secs: u64,
 ) -> RequestLifecycle {
     RequestLifecycle::new_with_agent_did(
@@ -1970,7 +1970,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
     .await;
     assert_pre_queue_snapshot(case, &pre);
 
-    defra_agent::interrupt_request(db.node.as_ref(), parent_request_id)
+    gents::interrupt_request(db.node.as_ref(), parent_request_id)
         .await
         .unwrap();
 
@@ -2100,7 +2100,7 @@ async fn create_queue_request(
                 subagent_depth: 0{metadata_field}{deadline_field}
             }}) {{ _docID }}
         }}"#,
-        max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let response = node.execute(&mutation).await;
     assert!(
@@ -2148,12 +2148,12 @@ async fn install_background_completion_fixture(node: &EmbeddedNode) {
     const TOOL_SELECTION_ID: &str = "queue-deadline-tools";
     const CHILD_BEHAVIOR_ID: &str = "queue-deadline-child";
 
-    defra_agent::upsert_tool_selection(
+    gents::upsert_tool_selection(
         node,
         &ToolSelectionDocument {
             selection_id: TOOL_SELECTION_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
-            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+            subagent_targets: Some(vec![gents::subagent_target_entry(
                 CHILD_BEHAVIOR_ID,
                 AGENT_DID,
                 CHILD_BEHAVIOR_ID,
@@ -2166,7 +2166,7 @@ async fn install_background_completion_fixture(node: &EmbeddedNode) {
     )
     .await
     .unwrap();
-    defra_agent::upsert_agent_behavior(
+    gents::upsert_agent_behavior(
         node,
         &AgentBehaviorDocument {
             skill_refs: Vec::new(),
@@ -2190,7 +2190,7 @@ async fn install_background_completion_fixture(node: &EmbeddedNode) {
     )
     .await
     .unwrap();
-    defra_agent::upsert_agent_behavior(
+    gents::upsert_agent_behavior(
         node,
         &AgentBehaviorDocument {
             skill_refs: Vec::new(),

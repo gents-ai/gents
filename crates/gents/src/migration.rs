@@ -507,7 +507,7 @@ fn ensure_field_kind_matches_reference(
         "{collection_name}.{field_name} has an unexpected field kind ({existing_kind}); \
          it must be scalar {expected_type} like its stable sibling ({expected_kind}). This is a \
          corrupted schema — likely an out-of-band additive patch applied with the wrong type. \
-         Repair the field before starting. See sourcenetwork/defra-agent#661 and #663."
+         Repair the field before starting. See source-inc/gents#661 and #663."
     );
     Ok(())
 }
@@ -1061,7 +1061,7 @@ pub async fn ensure_data_plane_pairing_desired_migrations(node: Arc<EmbeddedNode
     }
 
     match node
-        .add_schema(defra_agent_protocol::schemas::DATA_PLANE_PAIRING_DESIRED)
+        .add_schema(gents_protocol::schemas::DATA_PLANE_PAIRING_DESIRED)
         .await
     {
         Ok(()) => Ok(()),
@@ -1163,7 +1163,7 @@ pub async fn ensure_peer_registry_migrations(node: Arc<EmbeddedNode>) -> Result<
     }
 
     match node
-        .add_schema(defra_agent_protocol::schemas::PEER_REGISTRY)
+        .add_schema(gents_protocol::schemas::PEER_REGISTRY)
         .await
     {
         Ok(()) => Ok(()),
@@ -1208,7 +1208,7 @@ pub async fn ensure_consumed_invite_nonce_migrations(node: Arc<EmbeddedNode>) ->
     }
 
     match node
-        .add_schema(defra_agent_protocol::schemas::CONSUMED_INVITE_NONCE)
+        .add_schema(gents_protocol::schemas::CONSUMED_INVITE_NONCE)
         .await
     {
         Ok(()) => Ok(()),
@@ -1235,7 +1235,7 @@ pub async fn ensure_reciprocal_conversation_intent_migrations(
     }
 
     match node
-        .add_schema(defra_agent_protocol::schemas::RECIPROCAL_CONVERSATION_INTENT)
+        .add_schema(gents_protocol::schemas::RECIPROCAL_CONVERSATION_INTENT)
         .await
     {
         Ok(()) => Ok(()),
@@ -1255,7 +1255,7 @@ pub async fn ensure_inference_profile_migrations(node: Arc<EmbeddedNode>) -> Res
         .context("get InferenceProfile collection")?
     else {
         return match node
-            .add_schema(defra_agent_protocol::schemas::INFERENCE_PROFILE)
+            .add_schema(gents_protocol::schemas::INFERENCE_PROFILE)
             .await
         {
             Ok(()) => Ok(()),
@@ -1310,7 +1310,7 @@ pub async fn ensure_inference_call_cached_input_tokens_migration(
         .context("get InferenceCall collection")?
     else {
         return match node
-            .add_schema(defra_agent_protocol::schemas::INFERENCE_CALL)
+            .add_schema(gents_protocol::schemas::INFERENCE_CALL)
             .await
         {
             Ok(()) => Ok(()),
@@ -1373,7 +1373,7 @@ pub async fn ensure_pairing_bearer_claim_migrations(node: Arc<EmbeddedNode>) -> 
     }
 
     match node
-        .add_schema(defra_agent_protocol::schemas::PAIRING_BEARER_CLAIM)
+        .add_schema(gents_protocol::schemas::PAIRING_BEARER_CLAIM)
         .await
     {
         Ok(()) => Ok(()),
@@ -1397,7 +1397,7 @@ pub async fn ensure_agent_network_migrations(node: Arc<EmbeddedNode>) -> Result<
     }
 
     match node
-        .add_schema(defra_agent_protocol::schemas::AGENT_NETWORK)
+        .add_schema(gents_protocol::schemas::AGENT_NETWORK)
         .await
     {
         Ok(()) => Ok(()),
@@ -1420,7 +1420,7 @@ pub async fn ensure_network_membership_migrations(node: Arc<EmbeddedNode>) -> Re
     }
 
     match node
-        .add_schema(defra_agent_protocol::schemas::NETWORK_MEMBERSHIP)
+        .add_schema(gents_protocol::schemas::NETWORK_MEMBERSHIP)
         .await
     {
         Ok(()) => Ok(()),
@@ -1443,7 +1443,7 @@ pub async fn ensure_peer_endpoint_migrations(node: Arc<EmbeddedNode>) -> Result<
     }
 
     match node
-        .add_schema(defra_agent_protocol::schemas::PEER_ENDPOINT)
+        .add_schema(gents_protocol::schemas::PEER_ENDPOINT)
         .await
     {
         Ok(()) => Ok(()),
@@ -1465,7 +1465,7 @@ pub async fn ensure_agent_tool_approval_migrations(node: Arc<EmbeddedNode>) -> R
     }
 
     match node
-        .add_schema(defra_agent_protocol::schemas::AGENT_TOOL_APPROVAL)
+        .add_schema(gents_protocol::schemas::AGENT_TOOL_APPROVAL)
         .await
     {
         Ok(()) => Ok(()),
@@ -1488,7 +1488,7 @@ pub async fn ensure_network_join_request_migrations(node: Arc<EmbeddedNode>) -> 
     }
 
     match node
-        .add_schema(defra_agent_protocol::schemas::NETWORK_JOIN_REQUEST)
+        .add_schema(gents_protocol::schemas::NETWORK_JOIN_REQUEST)
         .await
     {
         Ok(()) => Ok(()),
@@ -1527,7 +1527,7 @@ async fn ensure_peer_pairing_applied_schema(node: &EmbeddedNode) -> Result<()> {
     }
 
     match node
-        .add_schema(defra_agent_protocol::schemas::PEER_PAIRING_APPLIED)
+        .add_schema(gents_protocol::schemas::PEER_PAIRING_APPLIED)
         .await
     {
         Ok(()) => Ok(()),
@@ -2515,9 +2515,9 @@ fn parse_sdl_fields(sdl: &str) -> Vec<(String, Vec<(String, String)>)> {
 }
 
 fn bundled_schema_sdls() -> impl Iterator<Item = &'static str> {
-    defra_agent_protocol::schemas::ALL
+    gents_protocol::schemas::ALL
         .iter()
-        .chain(defra_agent_protocol::schemas::RUNTIME_ALL.iter())
+        .chain(gents_protocol::schemas::RUNTIME_ALL.iter())
         .copied()
 }
 
@@ -2530,7 +2530,7 @@ fn bundled_schema_sdls() -> impl Iterator<Item = &'static str> {
 // old field, so a Kind repair discards that field's existing values. This path
 // exists for corrupted schemas such as #661, whose wrong-Kind field was already
 // unusable; intentional data-bearing retypes require a hand-written migration.
-const KIND_REPAIR_FIELD_PREFIX: &str = "defra_agent_kind_repair_";
+const KIND_REPAIR_FIELD_PREFIX: &str = "gents_kind_repair_";
 
 async fn finish_bundled_field_kind_repair(
     node: &EmbeddedNode,
@@ -4248,7 +4248,7 @@ mod patch_kind_tests {
     /// (rejecting a rewrite) on both the fresh-SDL and migrated-upgrade paths.
     #[test]
     fn all_conversation_collections_declare_agent_did_immutable() {
-        use defra_agent_protocol::schemas;
+        use gents_protocol::schemas;
         let conversation_sdls = [
             ("AgentRequest", schemas::AGENT_REQUEST),
             ("AgentResponse", schemas::AGENT_RESPONSE),
@@ -4502,7 +4502,7 @@ mod patch_kind_tests {
 
     #[test]
     fn sdl_parser_reads_bundled_schemas() {
-        let parsed = parse_sdl_fields(defra_agent_protocol::schemas::TOOL_SELECTION);
+        let parsed = parse_sdl_fields(gents_protocol::schemas::TOOL_SELECTION);
         assert_eq!(parsed.len(), 1);
         let (name, fields) = &parsed[0];
         assert_eq!(name, "ToolSelection");
@@ -4520,9 +4520,9 @@ mod patch_kind_tests {
             .iter()
             .map(|(collection, _)| collection.clone())
             .collect::<Vec<_>>();
-        let expected_names = defra_agent_protocol::schemas::ALL_COLLECTION_NAMES
+        let expected_names = gents_protocol::schemas::ALL_COLLECTION_NAMES
             .iter()
-            .chain(defra_agent_protocol::schemas::RUNTIME_COLLECTION_NAMES.iter())
+            .chain(gents_protocol::schemas::RUNTIME_COLLECTION_NAMES.iter())
             .map(|name| (*name).to_string())
             .collect::<Vec<_>>();
         assert_eq!(
@@ -4554,16 +4554,16 @@ mod patch_kind_tests {
     #[tokio::test]
     async fn bundled_schema_sweep_is_noop_on_fresh_schema_catalog() {
         let node = test_node().await;
-        for sdl in defra_agent_protocol::schemas::RUNTIME_ALL
+        for sdl in gents_protocol::schemas::RUNTIME_ALL
             .iter()
-            .chain(defra_agent_protocol::schemas::ALL.iter())
+            .chain(gents_protocol::schemas::ALL.iter())
         {
             node.add_schema(sdl).await.unwrap();
         }
 
-        let versions = defra_agent_protocol::schemas::RUNTIME_COLLECTION_NAMES
+        let versions = gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
             .iter()
-            .chain(defra_agent_protocol::schemas::ALL_COLLECTION_NAMES.iter())
+            .chain(gents_protocol::schemas::ALL_COLLECTION_NAMES.iter())
             .map(|collection_name| {
                 let collection = node
                     .get_collection(collection_name)
@@ -4590,7 +4590,7 @@ mod patch_kind_tests {
     #[tokio::test]
     async fn bundled_schema_sweep_patches_pre_openai_wire_api_backend() {
         let node = test_node().await;
-        let pre_wire_api_sdl = defra_agent_protocol::schemas::INFERENCE_BACKEND
+        let pre_wire_api_sdl = gents_protocol::schemas::INFERENCE_BACKEND
             .lines()
             .filter(|line| !line.contains("openai_wire_api"))
             .collect::<Vec<_>>()
@@ -4634,7 +4634,7 @@ mod patch_kind_tests {
     #[tokio::test]
     async fn inference_profile_migration_patches_pre_retry_collections() {
         let node = test_node().await;
-        let pre_retry_sdl: String = defra_agent_protocol::schemas::INFERENCE_PROFILE
+        let pre_retry_sdl: String = gents_protocol::schemas::INFERENCE_PROFILE
             .lines()
             .filter(|line| !line.contains("retry_"))
             .collect::<Vec<_>>()

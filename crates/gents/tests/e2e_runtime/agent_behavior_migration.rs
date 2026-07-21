@@ -23,7 +23,7 @@
 //! Additional tests added for PR #377:
 //!
 //! - `from_default_behavior_documents_succeeds_on_old_schema_db`: verifies that
-//!   `DefraAgent::from_default_behavior_documents` no longer crashes on an
+//!   `Gents::from_default_behavior_documents` no longer crashes on an
 //!   old-schema DB (H2 fix — migration now runs inside the constructor before
 //!   any behavior read).
 //!
@@ -41,11 +41,11 @@
 
 use std::sync::Arc;
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::ensure_runtime_schemas;
+use gents::defra_node::EmbeddedNode;
+use gents::ensure_runtime_schemas;
 use tempfile::TempDir;
 
-use defra_agent::DefraAgent;
+use gents::Gents;
 
 use crate::support::fixtures::test_identity;
 
@@ -74,13 +74,13 @@ struct OldSchemaDb {
 
 /// Boot a node with the OLD AgentBehavior schema (no description/summary),
 /// then install all other runtime schemas. This mirrors what happens when
-/// a pre-#377 defra-agent install boots a current binary: the existing
+/// a pre-#377 gents install boots a current binary: the existing
 /// AgentBehavior collection is already present (from the old SDL), so
 /// `ensure_runtime_schemas` silently skips it ("already exists"), leaving the
 /// collection without the new fields.
 async fn old_schema_db(name: &str) -> OldSchemaDb {
     let tempdir = tempfile::Builder::new()
-        .prefix(&format!("defra-agent-behavior-migration-{name}-"))
+        .prefix(&format!("gents-behavior-migration-{name}-"))
         .tempdir()
         .expect("tempdir");
     let node = Arc::new(
@@ -159,7 +159,7 @@ async fn migration_adds_description_and_summary_to_old_schema_db() {
     );
 
     // Run the migration.
-    defra_agent::migration::ensure_agent_behavior_migrations(node.clone())
+    gents::migration::ensure_agent_behavior_migrations(node.clone())
         .await
         .expect("ensure_agent_behavior_migrations must succeed on old-schema DB");
 
@@ -242,12 +242,12 @@ async fn migration_is_idempotent_on_already_patched_db() {
     let db = old_schema_db("idempotency").await;
     let node = db.node.clone();
 
-    defra_agent::migration::ensure_agent_behavior_migrations(node.clone())
+    gents::migration::ensure_agent_behavior_migrations(node.clone())
         .await
         .expect("first migration run");
 
     // Second run must also succeed without error.
-    defra_agent::migration::ensure_agent_behavior_migrations(node.clone())
+    gents::migration::ensure_agent_behavior_migrations(node.clone())
         .await
         .expect("second migration run (idempotency check)");
 }
@@ -259,7 +259,7 @@ async fn migration_is_noop_on_fresh_current_schema_db() {
     // Use the standard test_db helper which loads the current SDL (with description+summary).
     let db = crate::support::test_db("behavior_migration_fresh").await;
 
-    defra_agent::migration::ensure_agent_behavior_migrations(db.node.clone())
+    gents::migration::ensure_agent_behavior_migrations(db.node.clone())
         .await
         .expect("migration on fresh DB must succeed");
 
@@ -275,7 +275,7 @@ async fn migration_is_noop_on_fresh_current_schema_db() {
 
 // ─── H2(a): from_default_behavior_documents on an old-schema DB ─────────────
 
-/// Verify that `DefraAgent::from_default_behavior_documents` does NOT crash
+/// Verify that `Gents::from_default_behavior_documents` does NOT crash
 /// when called against a DB that was created before branch #377 (i.e. without
 /// `description`/`summary` on AgentBehavior).
 ///
@@ -292,7 +292,7 @@ async fn migration_is_noop_on_fresh_current_schema_db() {
 /// before the first SELECT.
 #[tokio::test]
 async fn from_default_behavior_documents_succeeds_on_old_schema_db() {
-    let identity: Arc<dyn defra_agent::AgentIdentity> =
+    let identity: Arc<dyn gents::AgentIdentity> =
         Arc::new(test_identity("from-default-behavior-pre377"));
     let agent_did = identity.did().to_string();
 
@@ -321,9 +321,9 @@ async fn from_default_behavior_documents_succeeds_on_old_schema_db() {
     );
 
     // Seed an AgentBehavior using the OLD schema fields only (no description/summary).
-    let default_behavior_id = defra_agent::default_behavior_id_for_agent(&agent_did);
-    let escaped_did = defra_agent::graphql::escape_graphql_string(&agent_did);
-    let escaped_bh_id = defra_agent::graphql::escape_graphql_string(&default_behavior_id);
+    let default_behavior_id = gents::default_behavior_id_for_agent(&agent_did);
+    let escaped_did = gents::graphql::escape_graphql_string(&agent_did);
+    let escaped_bh_id = gents::graphql::escape_graphql_string(&default_behavior_id);
     let behavior_mutation = format!(
         r#"mutation {{
             create_AgentBehavior(input: {{
@@ -379,11 +379,11 @@ async fn from_default_behavior_documents_succeeds_on_old_schema_db() {
 
     // This call must NOT return an "unknown field" error for description/summary.
     // The constructor now runs ensure_agent_behavior_migrations internally.
-    DefraAgent::from_default_behavior_documents(
+    Gents::from_default_behavior_documents(
         node.clone(),
         identity,
-        defra_agent::DocumentRuntimeOptions {
-            tool_ceiling: defra_agent::ToolCeiling::meta_only(),
+        gents::DocumentRuntimeOptions {
+            tool_ceiling: gents::ToolCeiling::meta_only(),
             ..Default::default()
         },
     )
@@ -434,7 +434,7 @@ async fn config_read_path_succeeds_on_old_schema_db() {
     );
 
     // Run the migration (mirrors what resolve_config_access now does).
-    defra_agent::migration::ensure_agent_behavior_migrations(node.clone())
+    gents::migration::ensure_agent_behavior_migrations(node.clone())
         .await
         .expect("migration must succeed on old-schema DB");
 
@@ -503,7 +503,7 @@ fn live_fixture_subagent_target_entry_parses() {
     let behavior_id = format!("{agent_did}:live-repo-audit-subagent");
 
     // Re-create the entry exactly as the fixed fixture does.
-    let entry = defra_agent::subagent_target_entry(
+    let entry = gents::subagent_target_entry(
         "repo-audit-subagent",
         agent_did,
         &behavior_id,
@@ -512,12 +512,12 @@ fn live_fixture_subagent_target_entry_parses() {
 
     // A bare string like the old fixture would produce fails to parse.
     assert!(
-        defra_agent::SubagentTarget::parse(&behavior_id).is_err(),
+        gents::SubagentTarget::parse(&behavior_id).is_err(),
         "bare behavior_id string must NOT parse as SubagentTarget (regression guard)"
     );
 
     // The fixed entry must parse successfully.
-    let parsed = defra_agent::SubagentTarget::parse(&entry)
+    let parsed = gents::SubagentTarget::parse(&entry)
         .expect("fixed fixture entry must parse as a valid SubagentTarget JSON object");
 
     assert_eq!(parsed.name, "repo-audit-subagent");

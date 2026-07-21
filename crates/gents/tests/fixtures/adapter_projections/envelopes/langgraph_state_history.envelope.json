@@ -78,7 +78,7 @@
   "projection_id": "langgraph_state_history",
   "projection_version": "v1",
   "provenance": {
-    "runtime": "defra-agent",
+    "runtime": "gents",
     "source_projection_id": "run_timeline",
     "source_projection_version": "v1"
   },

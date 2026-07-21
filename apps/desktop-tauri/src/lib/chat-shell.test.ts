@@ -111,7 +111,7 @@ function session(
 
 function loadLeanContractSnapshot(): LeanContractSnapshot {
   if (!leanContractSnapshot) {
-    const proofsDir = join(repoRoot(), "crates/defra-agent/proofs");
+    const proofsDir = join(repoRoot(), "crates/gents/proofs");
     runLeanCommand(proofsDir, ["build", "Proofs.Conformance.Contracts"]);
     const stdout = runLeanCommand(proofsDir, [
       "env",
@@ -187,7 +187,7 @@ function repoRoot() {
   let dir = dirname(fileURLToPath(import.meta.url));
   const root = parse(dir).root;
   while (dir !== root) {
-    if (existsSync(join(dir, "crates/defra-agent/proofs/lakefile.lean"))) {
+    if (existsSync(join(dir, "crates/gents/proofs/lakefile.lean"))) {
       return dir;
     }
     dir = dirname(dir);

@@ -5,9 +5,9 @@
 
 use std::sync::Arc;
 
-use defra_agent::self_config::build_self_config_tools;
-use defra_agent::tool_surface::SelfConfigToolConfig;
-use defra_agent::{load_agent_behavior, load_tool_selection, ToolSelectionDocument};
+use gents::self_config::build_self_config_tools;
+use gents::tool_surface::SelfConfigToolConfig;
+use gents::{load_agent_behavior, load_tool_selection, ToolSelectionDocument};
 use defra_node::EmbeddedNode;
 use serde_json::{json, Value};
 
@@ -42,7 +42,7 @@ async fn seed_config(node: &Arc<EmbeddedNode>) {
         response.errors
     );
 
-    defra_agent::document_config::upsert_tool_selection(
+    gents::document_config::upsert_tool_selection(
         node,
         &ToolSelectionDocument {
             selection_id: SELECTION_ID.to_string(),
@@ -107,7 +107,7 @@ fn tool_config(categories: &[&str], no_lockout: bool, dry_run: bool) -> SelfConf
 }
 
 async fn call_tool(
-    tools: &[Box<dyn defra_agent::llm::tool::ToolDyn>],
+    tools: &[Box<dyn gents::llm::tool::ToolDyn>],
     name: &str,
     args: Value,
 ) -> Result<String, String> {

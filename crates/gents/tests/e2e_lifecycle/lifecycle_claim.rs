@@ -1,6 +1,6 @@
-use defra_agent::lifecycle::ClaimOutcome;
-use defra_agent::watcher::{AgentRequest, DefraWatcher};
-use defra_agent::RequestLifecycle;
+use gents::lifecycle::ClaimOutcome;
+use gents::watcher::{AgentRequest, DefraWatcher};
+use gents::RequestLifecycle;
 use serde::Deserialize;
 
 use crate::support::{
@@ -31,7 +31,7 @@ async fn pending_request_hydrates_sampling_fields_and_metadata() {
     let session_id = "session-sampling-metadata";
     let metadata = r#" { "run_id": "foo" } "#;
     let deadline = "2026-03-23T00:05:00Z";
-    let escaped_metadata = defra_agent::graphql::escape_graphql_string(metadata);
+    let escaped_metadata = gents::graphql::escape_graphql_string(metadata);
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -501,7 +501,7 @@ async fn claim_preserves_explicit_behavior_id() {
                 max_retries: {max_retries}
             }}) {{ _docID }}
         }}"#,
-        max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = db.node.execute(&mutation).await;
     assert!(
@@ -574,7 +574,7 @@ async fn claim_preserves_explicit_request_deadline() {
     let created_at = chrono::Utc::now().to_rfc3339();
     let explicit_deadline_at = chrono::Utc::now() + chrono::Duration::minutes(5);
     let explicit_deadline = explicit_deadline_at.to_rfc3339();
-    let escaped_session_id = defra_agent::graphql::escape_graphql_string(&session_id);
+    let escaped_session_id = gents::graphql::escape_graphql_string(&session_id);
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -596,7 +596,7 @@ async fn claim_preserves_explicit_request_deadline() {
                 max_retries: {max_retries}
             }}) {{ _docID }}
         }}"#,
-        max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = db.node.execute(&mutation).await;
     assert!(
@@ -655,7 +655,7 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
     let invalid_deadline = "not-a-deadline";
-    let escaped_session_id = defra_agent::graphql::escape_graphql_string(&session_id);
+    let escaped_session_id = gents::graphql::escape_graphql_string(&session_id);
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -677,7 +677,7 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
                 max_retries: {max_retries}
             }}) {{ _docID }}
         }}"#,
-        max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = db.node.execute(&mutation).await;
     assert!(

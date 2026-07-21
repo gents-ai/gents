@@ -1,6 +1,6 @@
 //! Tool-call lifecycle state machine.
 //!
-//! Mirrors `crates/defra-agent/src/lifecycle.rs` (`RequestLifecycle`) for tool
+//! Mirrors `crates/gents/src/lifecycle.rs` (`RequestLifecycle`) for tool
 //! calls. Defines the persisted vocabulary, failure-class enum, and the
 //! `ToolCallLifecycle` struct that owns every persistence write.
 //!
@@ -17,7 +17,7 @@
 //!   `new_subagent` and recognizes spawn_subagent / wait_task / etc. tool names.
 //! - Cross-reference validation (target resolution, parent existence) is wired
 //!   by R3's `SubagentSource` work.
-//! - Cross-principal delegation (R6) lands with sourcenetwork/defra-agent#9.
+//! - Cross-principal delegation (R6) lands with source-inc/gents#9.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolCallState {

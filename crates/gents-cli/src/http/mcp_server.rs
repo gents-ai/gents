@@ -1,7 +1,7 @@
 //! MCP server surface for `defra_query`.
 //!
 //! Exposes the read-only structured query as an MCP tool over streamable-HTTP,
-//! mounted at `/mcp` on the running `defra-agent server`. External consumers
+//! mounted at `/mcp` on the running `gents server`. External consumers
 //! (e.g. a trace/eval pipeline) can call `defra_query` instead of hand-rolling
 //! a GraphQL client. The tool delegates to the same
 //! [`run_defra_query`](crate::commands::query::run_defra_query) helper the CLI
@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use defra_agent::defra_query::{CollectionScope, DefraQueryParams};
+use gents::defra_query::{CollectionScope, DefraQueryParams};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{ServerCapabilities, ServerInfo};
@@ -90,7 +90,7 @@ impl ServerHandler for DefraQueryMcp {
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
-            "defra-agent read-only query surface. Use the `defra_query` tool to read agent \
+            "gents read-only query surface. Use the `defra_query` tool to read agent \
              collections (AgentRequest, AgentResponse, AgentMessage, AgentToolCall, \
              AgentSession, ...) as structured JSON."
                 .to_string(),

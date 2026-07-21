@@ -4,7 +4,7 @@ import Mathlib.Data.Finset.Union
 /-!
 # Skills — privilege algebra
 
-Formal source-of-truth for defra-agent skills (spec
+Formal source-of-truth for gents skills (spec
 `docs/superpowers/specs/2026-06-02-skills-integration-design.md` (removed from the tree; see git history).
 
 A `Skill` declares the tools it *depends on* (`toolRefs`) — it never *grants*

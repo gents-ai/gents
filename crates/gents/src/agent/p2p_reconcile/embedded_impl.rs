@@ -261,7 +261,7 @@ fn to_defra_filters(filters: &PairingFilters) -> ReplicationFilters {
                 ReplicationFilter {
                     field: predicate.field.clone(),
                     value: serde_json::Value::String(predicate.value.clone()),
-                    // defra-agent's pairing scope is a simple field==value filter;
+                    // gents's pairing scope is a simple field==value filter;
                     // the rich `Conditions` predicate (added upstream) is unused.
                     conditions: None,
                 },

@@ -2,8 +2,8 @@ mod support;
 use support::*;
 
 use anyhow::{Context, Result};
-use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
-use defra_agent::ensure_runtime_schemas;
+use gents::defra_node::{EmbeddedNode, StorageBackend};
+use gents::ensure_runtime_schemas;
 use serde_json::Value;
 
 // Feature matrix tag: background-tools / operatorCli.

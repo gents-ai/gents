@@ -2,8 +2,8 @@
 //! files are skipped (and counted), and case-insensitive matching keeps
 //! working for both ASCII and non-ASCII needles.
 
-use defra_native_fs_runner::execute_request_with_base;
-use defra_native_fs_runner::protocol::{GrepArgs, NativeFsRunnerRequest};
+use gents_fs_runner::execute_request_with_base;
+use gents_fs_runner::protocol::{GrepArgs, NativeFsRunnerRequest};
 use serde_json::Value;
 
 mod support;

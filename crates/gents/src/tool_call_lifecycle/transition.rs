@@ -1,6 +1,6 @@
 //! Transition methods on ToolCallLifecycle.
 //!
-//! Mirrors `crates/defra-agent/src/lifecycle/transition.rs`. Each transition
+//! Mirrors `crates/gents/src/lifecycle/transition.rs`. Each transition
 //! method calls `ensure_state` at the top to assert the precondition state,
 //! then performs the GraphQL mutation atomically, then updates in-memory
 //! state on confirmed success.
@@ -221,7 +221,7 @@ mod native;
 mod tests;
 
 /// Helper to extract `_docID` from a `create_*` mutation response.
-/// Patterned off `crates/defra-agent/src/lifecycle/materialize.rs`.
+/// Patterned off `crates/gents/src/lifecycle/materialize.rs`.
 ///
 /// DefraDB versions may return the key as either `"create_AgentToolCall"` or
 /// `"add_AgentToolCall"` (the latter is observed at runtime). Both the scalar

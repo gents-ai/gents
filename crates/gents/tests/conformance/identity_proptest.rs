@@ -1,9 +1,9 @@
 //! Loader-dedup proptest.
 //!
 //! Drives the production helper `assemble_principal_and_behaviors` (from
-//! `crates/defra-agent/src/agent/principal_assembly.rs`) — the same
+//! `crates/gents/src/agent/principal_assembly.rs`) — the same
 //! helper that both `resolve_document_runtime_snapshot_from_view` and
-//! `DefraAgentBuilder::build` funnel through. Asserts `Arc::ptr_eq`
+//! `GentsBuilder::build` funnel through. Asserts `Arc::ptr_eq`
 //! across all behaviors in arbitrarily-generated worlds.
 //!
 //! **Regression class fenced:** if a future change moves the
@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use proptest::prelude::*;
 
-use defra_agent::__test_internals::{assemble_principal_and_behaviors, BehaviorBuildError};
-use defra_agent::{AgentBehavior, AgentIdentity, AgentPrincipal};
+use gents::__test_internals::{assemble_principal_and_behaviors, BehaviorBuildError};
+use gents::{AgentBehavior, AgentIdentity, AgentPrincipal};
 
 #[path = "../support/identity_stubs.rs"]
 mod identity_stubs;
@@ -35,30 +35,30 @@ fn build_stub_behavior_factory(
             behavior_id: behavior_id.clone(),
             principal,
             backend_id: None,
-            backend_provider_kind: defra_agent::BackendProviderKind::OpenAiCompatible,
-            openai_wire_api: defra_agent::OpenAiWireApi::ChatCompletions,
+            backend_provider_kind: gents::BackendProviderKind::OpenAiCompatible,
+            openai_wire_api: gents::OpenAiWireApi::ChatCompletions,
             backend_endpoint: String::new(),
             backend_api_key: None,
             backend_api_key_env_var: None,
-            model_name: defra_agent::DEFAULT_MODEL_NAME.to_string(),
-            context_window: defra_agent::DEFAULT_CONTEXT_WINDOW,
-            max_output_tokens: defra_agent::DEFAULT_MAX_OUTPUT_TOKENS,
-            max_turns: defra_agent::DEFAULT_MAX_TURNS,
+            model_name: gents::DEFAULT_MODEL_NAME.to_string(),
+            context_window: gents::DEFAULT_CONTEXT_WINDOW,
+            max_output_tokens: gents::DEFAULT_MAX_OUTPUT_TOKENS,
+            max_turns: gents::DEFAULT_MAX_TURNS,
             system_prompt: String::new(),
             request_context_template: None,
-            tools: defra_agent::BehaviorToolConfig::default(),
-            compaction_threshold: defra_agent::DEFAULT_COMPACTION_THRESHOLD,
-            compaction_strategy: defra_agent::CompactionStrategy::StripThenSummarize,
-            stream_batch_ms: defra_agent::DEFAULT_STREAM_BATCH_MS,
+            tools: gents::BehaviorToolConfig::default(),
+            compaction_threshold: gents::DEFAULT_COMPACTION_THRESHOLD,
+            compaction_strategy: gents::CompactionStrategy::StripThenSummarize,
+            stream_batch_ms: gents::DEFAULT_STREAM_BATCH_MS,
             stream_liveness_timeout: std::time::Duration::from_secs(
-                defra_agent::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+                gents::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
             ),
             deadline_duration: std::time::Duration::from_secs(
-                defra_agent::DEFAULT_DEADLINE_DURATION_SECS,
+                gents::DEFAULT_DEADLINE_DURATION_SECS,
             ),
             completion_retry:
-                defra_agent::agent::completion_retry::CompletionRetryProfileFields::default(),
-            sampling: defra_agent::SamplingConfig::default(),
+                gents::agent::completion_retry::CompletionRetryProfileFields::default(),
+            sampling: gents::SamplingConfig::default(),
         })
     })
 }

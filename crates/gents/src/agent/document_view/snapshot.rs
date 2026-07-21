@@ -142,7 +142,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                 let agent_did = view.principal.value.agent_did.as_str();
                 anyhow::bail!(
                     "behavior {} ChatGptCodex backend {} has no enabled OAuthCredential for agent \
-                     {agent_did}; run `defra-agent codex-login --agent-did {agent_did}`",
+                     {agent_did}; run `gents codex-login --agent-did {agent_did}`",
                     behavior.behavior_id,
                     backend.backend_id,
                 );

@@ -73,9 +73,9 @@ pub fn encode(token: &InviteToken) -> Result<String> {
 
 /// Decode a `TOKEN_PREFIX`-prefixed invite token string.
 ///
-/// Returns an error (mentioning "re-issue with a newer defra-agent") for any
+/// Returns an error (mentioning "re-issue with a newer gents") for any
 /// token whose `v` field is not `5`.  Older tokens are rejected so the issuer
-/// must re-mint with a current `defra-agent` binary.
+/// must re-mint with a current `gents` binary.
 pub fn decode(raw: &str) -> Result<InviteToken> {
     let encoded = raw
         .trim()
@@ -90,7 +90,7 @@ pub fn decode(raw: &str) -> Result<InviteToken> {
         5 => Ok(token),
         version => anyhow::bail!(
             "pairing invite token version {version} is not supported; \
-             re-issue with a newer defra-agent"
+             re-issue with a newer gents"
         ),
     }
 }

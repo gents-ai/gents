@@ -73,7 +73,7 @@ async fn transcript_messages_and_calls(
 ) -> (Vec<MessageSnapshot>, Vec<ToolCallSnapshot>, Vec<Message>) {
     let messages = fetch_message_snapshots_for_session(node, session_id).await;
     let tool_calls = fetch_tool_call_snapshots_for_session(node, session_id).await;
-    let history = defra_agent::load_history(node, session_id)
+    let history = gents::load_history(node, session_id)
         .await
         .expect("load transcript history");
     (messages, tool_calls, history)

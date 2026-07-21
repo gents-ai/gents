@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use defra_agent::mcp_pool::{resolve_mcp_url, McpPool};
+use gents::mcp_pool::{resolve_mcp_url, McpPool};
 use defra_agent_desktop_core::client::ClientCore;
-use defra_agent_protocol::row::ToolServiceRegistryRow;
+use gents_protocol::row::ToolServiceRegistryRow;
 
 use super::super::types::{
     ToolServiceSaveRequest, ToolServiceTestRequest, ToolServiceTestResult, ToolServiceToolView,

@@ -9,11 +9,11 @@ use std::io::{self, Write};
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
-use defra_agent::agent::p2p_reconcile::discovery::{heartbeat_is_fresh, REGISTRY_STALE_AFTER};
-use defra_agent::agent::p2p_reconcile::registry::{
+use gents::agent::p2p_reconcile::discovery::{heartbeat_is_fresh, REGISTRY_STALE_AFTER};
+use gents::agent::p2p_reconcile::registry::{
     registry_upsert_mutation, validate_offered_templates, RegistryEntry, UpsertKind,
 };
-use defra_agent::graphql::escape_graphql_string;
+use gents::graphql::escape_graphql_string;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -445,7 +445,7 @@ mod tests {
     #[test]
     fn p2p_network_list_table_parses() {
         let cli =
-            Cli::try_parse_from(["defra-agent", "p2p", "network", "list", "--output", "table"])
+            Cli::try_parse_from(["gents", "p2p", "network", "list", "--output", "table"])
                 .expect("p2p network list --output table should parse");
         match cli.command {
             crate::cli::args::Command::P2p {
@@ -463,7 +463,7 @@ mod tests {
     #[test]
     fn p2p_network_list_json_parses() {
         let cli =
-            Cli::try_parse_from(["defra-agent", "p2p", "network", "list", "--output", "json"])
+            Cli::try_parse_from(["gents", "p2p", "network", "list", "--output", "json"])
                 .expect("p2p network list --output json should parse");
         match cli.command {
             crate::cli::args::Command::P2p {
@@ -480,7 +480,7 @@ mod tests {
 
     #[test]
     fn p2p_network_list_default_output_is_table() {
-        let cli = Cli::try_parse_from(["defra-agent", "p2p", "network", "list"])
+        let cli = Cli::try_parse_from(["gents", "p2p", "network", "list"])
             .expect("p2p network list should parse");
         match cli.command {
             crate::cli::args::Command::P2p {
@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn p2p_network_register_parses() {
         let cli = Cli::try_parse_from([
-            "defra-agent",
+            "gents",
             "p2p",
             "network",
             "register",
@@ -528,7 +528,7 @@ mod tests {
     #[test]
     fn p2p_network_register_bare_parses() {
         let cli = Cli::try_parse_from([
-            "defra-agent",
+            "gents",
             "p2p",
             "network",
             "register",
@@ -554,7 +554,7 @@ mod tests {
 
     #[test]
     fn p2p_network_rm_parses() {
-        let cli = Cli::try_parse_from(["defra-agent", "p2p", "network", "rm"])
+        let cli = Cli::try_parse_from(["gents", "p2p", "network", "rm"])
             .expect("p2p network rm should parse");
         match cli.command {
             crate::cli::args::Command::P2p {
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn p2p_network_create_parses() {
         let cli = Cli::try_parse_from([
-            "defra-agent",
+            "gents",
             "p2p",
             "network",
             "create",
@@ -598,7 +598,7 @@ mod tests {
     fn p2p_network_grant_revoke_parse_member_did_and_output() {
         for (subcommand, expected_json) in [("grant", false), ("revoke", true)] {
             let mut argv = vec![
-                "defra-agent",
+                "gents",
                 "p2p",
                 "network",
                 subcommand,

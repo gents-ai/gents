@@ -1,16 +1,16 @@
 //! Runtime-side schema registration helpers.
 //!
-//! Schema strings are the canonical exports of `defra_agent_protocol::schemas`.
+//! Schema strings are the canonical exports of `gents_protocol::schemas`.
 //! This module preserves the legacy `*_SCHEMA` names via re-exported aliases
 //! and wires the canonical arrays to an `EmbeddedNode` via `ensure_schemas`
 //! and `ensure_runtime_schemas`.
 
 use anyhow::Result;
 #[cfg(feature = "agent-memory")]
-pub use defra_agent_protocol::schemas::AGENT_MEMORY as AGENT_MEMORY_SCHEMA;
+pub use gents_protocol::schemas::AGENT_MEMORY as AGENT_MEMORY_SCHEMA;
 #[cfg(not(feature = "agent-memory"))]
-use defra_agent_protocol::schemas::AGENT_MEMORY;
-pub use defra_agent_protocol::schemas::{
+use gents_protocol::schemas::AGENT_MEMORY;
+pub use gents_protocol::schemas::{
     AGENT_BEHAVIOR as AGENT_BEHAVIOR_SCHEMA, AGENT_CONVERSATION as AGENT_CONVERSATION_SCHEMA,
     AGENT_MESSAGE as AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL as AGENT_PRINCIPAL_SCHEMA,
     AGENT_REQUEST as AGENT_REQUEST_SCHEMA, AGENT_RESPONSE as AGENT_RESPONSE_SCHEMA,
@@ -68,12 +68,12 @@ pub async fn ensure_config_bootstrap_schemas(node: &EmbeddedNode) -> Result<()> 
 
 #[cfg(feature = "agent-memory")]
 pub async fn ensure_schemas(node: &EmbeddedNode) -> Result<()> {
-    ensure_schema_set(node, defra_agent_protocol::schemas::ALL).await
+    ensure_schema_set(node, gents_protocol::schemas::ALL).await
 }
 
 #[cfg(not(feature = "agent-memory"))]
 pub async fn ensure_schemas(node: &EmbeddedNode) -> Result<()> {
-    let schemas = defra_agent_protocol::schemas::ALL
+    let schemas = gents_protocol::schemas::ALL
         .iter()
         .copied()
         .filter(|schema| *schema != AGENT_MEMORY)

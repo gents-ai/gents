@@ -9,8 +9,8 @@ use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use tokio::process::{Child, Command};
 
-use defra_agent::agent::p2p_reconcile::{resolve_template, SOURCE_OPERATOR};
-use defra_agent::graphql::escape_graphql_string;
+use gents::agent::p2p_reconcile::{resolve_template, SOURCE_OPERATOR};
+use gents::graphql::escape_graphql_string;
 
 use crate::graphql_access::post_graphql;
 
@@ -70,12 +70,12 @@ pub(super) fn spawn_server(bin: &Path, home: &Path, port: u16, log: &Path) -> Re
         "disabled",
     ]);
     // The demo backends use the OpenAI chat-completions wire.
-    cmd.env("DEFRA_AGENT_OPENAI_CHAT_COMPLETIONS", "1");
+    cmd.env("GENTS_OPENAI_CHAT_COMPLETIONS", "1");
     // Fast pairing reconcile so `pair` converges in seconds, not minutes.
-    cmd.env("DEFRA_AGENT_REGISTRY_HEARTBEAT_MS", "1000");
-    cmd.env("DEFRA_AGENT_PAIRING_SWEEP_MS", "1000");
-    cmd.env("DEFRA_AGENT_REGISTRY_STALE_MS", "300000");
-    cmd.env("DEFRA_AGENT_ENDPOINT_HEARTBEAT_MS", "1000");
+    cmd.env("GENTS_REGISTRY_HEARTBEAT_MS", "1000");
+    cmd.env("GENTS_PAIRING_SWEEP_MS", "1000");
+    cmd.env("GENTS_REGISTRY_STALE_MS", "300000");
+    cmd.env("GENTS_ENDPOINT_HEARTBEAT_MS", "1000");
     cmd.stdout(file).stderr(errfile).kill_on_drop(true);
     cmd.spawn().context("spawning demo server")
 }
@@ -264,7 +264,7 @@ async fn upsert_data_plane(
 }
 
 fn data_plane_collections_literal(template: &str) -> Result<String> {
-    use defra_agent::agent::p2p_reconcile::templates::APP_COLLECTIONS_TEMPLATE;
+    use gents::agent::p2p_reconcile::templates::APP_COLLECTIONS_TEMPLATE;
     let template = resolve_template(template)
         .with_context(|| format!("unknown data-plane template {template:?}"))?;
     if template.id == APP_COLLECTIONS_TEMPLATE {
@@ -532,10 +532,10 @@ async fn wait_runtime_reconcile(graphql: &str, prev_generation: i64) -> Result<(
 
 pub(super) async fn desktop(fleet: &Fleet) -> Result<()> {
     let Some(desktop_bin) = resolve_desktop_bin() else {
-        println!("  The desktop app (`defra-agent-desktop`) was not found.");
-        println!("  Install it, or set DEFRA_AGENT_DESKTOP_BIN, then run `desktop` again.");
+        println!("  The desktop app (`gents-desktop`) was not found.");
+        println!("  Install it, or set GENTS_DESKTOP_BIN, then run `desktop` again.");
         println!(
-            "  To seed it by hand: defra-agent-desktop init --status-endpoint {}",
+            "  To seed it by hand: gents-desktop init --status-endpoint {}",
             fleet.graphql_a
         );
         return Ok(());
@@ -564,9 +564,9 @@ pub(super) async fn desktop(fleet: &Fleet) -> Result<()> {
 
     println!("  launching the desktop app…");
     let mut cmd = std::process::Command::new(&desktop_bin);
-    cmd.env("DEFRA_AGENT_DESKTOP_HOME", path_arg(&desktop_home));
+    cmd.env("GENTS_DESKTOP_HOME", path_arg(&desktop_home));
     // Loopback demo nodes are already paired by the CLI; don't re-pair remotely.
-    cmd.env("DEFRA_AGENT_DESKTOP_PAIR_REMOTE_P2P", "0");
+    cmd.env("GENTS_DESKTOP_PAIR_REMOTE_P2P", "0");
     cmd.spawn().context("launching the desktop app")?;
 
     println!("  ✓ Desktop app launched — it pairs with your demo node(s) over P2P.");
@@ -598,23 +598,23 @@ async fn seed_desktop(
     Ok(())
 }
 
-/// Locate the `defra-agent-desktop` launcher: explicit env, then a sibling of
+/// Locate the `gents-desktop` launcher: explicit env, then a sibling of
 /// this binary, then PATH.
 fn resolve_desktop_bin() -> Option<PathBuf> {
-    if let Some(explicit) = std::env::var_os("DEFRA_AGENT_DESKTOP_BIN") {
+    if let Some(explicit) = std::env::var_os("GENTS_DESKTOP_BIN") {
         let path = PathBuf::from(explicit);
         if path.is_file() {
             return Some(path);
         }
     }
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(sibling) = exe.parent().map(|dir| dir.join("defra-agent-desktop")) {
+        if let Some(sibling) = exe.parent().map(|dir| dir.join("gents-desktop")) {
             if sibling.is_file() {
                 return Some(sibling);
             }
         }
     }
-    let name = "defra-agent-desktop";
+    let name = "gents-desktop";
     std::env::var_os("PATH").and_then(|path| {
         std::env::split_paths(&path)
             .map(|dir| dir.join(name))

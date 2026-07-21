@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{discover_backend_models, BackendProviderKind};
+use gents::graphql::escape_graphql_string;
+use gents::{discover_backend_models, BackendProviderKind};
 use serde_json::{json, Value};
 
 use crate::cli::*;
@@ -40,7 +40,7 @@ pub(super) async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
         "backend_id": args.backend_id,
         "backend_preset": args.backend_preset.map(BackendPresetArg::as_str),
         "provider_kind": backend.provider_kind.as_str(),
-        "openai_wire_api": backend.openai_wire_api.map(defra_agent::OpenAiWireApi::as_str),
+        "openai_wire_api": backend.openai_wire_api.map(gents::OpenAiWireApi::as_str),
         "endpoint": backend.endpoint,
         "api_key": backend.api_key.as_ref().map(|_| "<redacted>"),
         "api_key_env_var": backend.api_key_env_var,
@@ -82,10 +82,10 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         // Mirror codex-auth-probe: on an auth-class failure for ChatGptCodex, append the
         // re-login guidance the bare discovery error omits.
         Err(error) if is_chatgpt_codex && discovery_error_is_auth(&error) => {
-            let guidance = defra_agent::chatgpt_codex::classify_chatgpt_auth_error(
+            let guidance = gents::chatgpt_codex::classify_chatgpt_auth_error(
                 codex_agent_did.as_deref().unwrap_or(""),
-                defra_agent::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
-                &defra_agent::chatgpt_codex::ChatGptAuthProblem::Expired,
+                gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+                &gents::chatgpt_codex::ChatGptAuthProblem::Expired,
             );
             anyhow::bail!("{error:#}\n{guidance}");
         }
@@ -110,11 +110,11 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
 /// primitive then emits actionable `codex-login` guidance).
 async fn load_chatgpt_credential_for_discovery(
     args: &BackendDiscoverModelsArgs,
-) -> Result<(Option<defra_agent::chatgpt_codex::OAuthCredential>, String)> {
+) -> Result<(Option<gents::chatgpt_codex::OAuthCredential>, String)> {
     let Some(graphql) = normalize_optional_string(args.graphql.as_deref()) else {
         anyhow::bail!(
             "--graphql is required to discover models for a ChatGptCodex backend: its OAuth \
-             credential is a DefraDB document. Run `defra-agent codex-login` first if needed."
+             credential is a DefraDB document. Run `gents codex-login` first if needed."
         );
     };
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
@@ -122,7 +122,7 @@ async fn load_chatgpt_credential_for_discovery(
     let credential = crate::commands::codex_auth_probe::load_oauth_credential(
         &access,
         &agent_did,
-        defra_agent::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+        gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
     )
     .await?;
     Ok((credential, agent_did))
@@ -135,7 +135,7 @@ async fn load_chatgpt_credential_for_discovery(
 fn discovery_error_is_auth(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
-            .downcast_ref::<defra_agent::backend_provider::ModelDiscoveryHttpError>()
+            .downcast_ref::<gents::backend_provider::ModelDiscoveryHttpError>()
             .is_some_and(|http| http.is_auth())
     })
 }
@@ -297,7 +297,7 @@ fn resolve_backend_endpoint(
         })
         .ok_or_else(|| match mode {
             BackendResolutionMode::Init => anyhow::anyhow!(
-                "an inference endpoint is required\nNext:\n  1. Pass it explicitly: `defra-agent init --inference-url http://HOST:PORT/v1 --model-name MODEL`\n  2. Or choose a preset with a default endpoint: `defra-agent init --backend-preset openrouter --model-name MODEL`\n  3. Or set INFERENCE_ENDPOINT before running `defra-agent init`"
+                "an inference endpoint is required\nNext:\n  1. Pass it explicitly: `gents init --inference-url http://HOST:PORT/v1 --model-name MODEL`\n  2. Or choose a preset with a default endpoint: `gents init --backend-preset openrouter --model-name MODEL`\n  3. Or set INFERENCE_ENDPOINT before running `gents init`"
             ),
             BackendResolutionMode::ConfigWrite => anyhow::anyhow!(
                 "an inference endpoint is required\nNext:\n  1. Pass --inference-url explicitly\n  2. Or choose a preset with a default endpoint, such as --backend-preset openrouter"

@@ -44,12 +44,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::defra_write::BoundedWriteTool;
-use defra_agent::document_config::{WriteToolDecl, WriteToolField};
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::llm::tool::Tool;
-use defra_agent::{AgentIdentity, DefraAgent, DocumentRuntimeOptions, ToolCeiling};
+use gents::defra_node::EmbeddedNode;
+use gents::defra_write::BoundedWriteTool;
+use gents::document_config::{WriteToolDecl, WriteToolField};
+use gents::graphql::escape_graphql_string;
+use gents::llm::tool::Tool;
+use gents::{AgentIdentity, Gents, DocumentRuntimeOptions, ToolCeiling};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -274,7 +274,7 @@ fn assert_multi_field_render(request: &AgentRequestRow, trigger_id: &str) {
     );
 }
 
-/// Boot a live `DefraAgent` with the `ActionRequest` Task + EventTrigger seeded
+/// Boot a live `Gents` with the `ActionRequest` Task + EventTrigger seeded
 /// and reconciled into the active snapshot. Returns the running agent's handle,
 /// its shutdown sender, and its DID. The source schema must already be
 /// registered on the node before calling.
@@ -297,7 +297,7 @@ async fn boot_agent_with_action_trigger(
     )
     .await;
 
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {

@@ -99,7 +99,7 @@ pub fn decode_bearer(raw: &str) -> Result<BearerInviteToken> {
         BEARER_TOKEN_VERSION => Ok(token),
         version => anyhow::bail!(
             "bearer invite token version {version} is not supported; \
-             re-issue with a newer defra-agent"
+             re-issue with a newer gents"
         ),
     }
 }

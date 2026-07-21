@@ -2,18 +2,18 @@
 
 use std::time::Duration;
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::llm::message::{
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
-use defra_agent::llm::ToolCallHookAction;
-use defra_agent::tool_call_lifecycle::{
+use gents::llm::ToolCallHookAction;
+use gents::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelCause, CancelPolicy, CascadeDispatch,
     ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
-use defra_agent::{
+use gents::{
     fetch_interrupt_requested_at, interrupt_request, load_history, upsert_agent_behavior,
     upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook, FailurePolicy,
     ToolSelectionDocument,
@@ -32,7 +32,7 @@ const CHILD_BEHAVIOR_ID: &str = "r4-child";
 /// running against the SAME node. The `SubagentSource` materializes child
 /// `AgentRequest`s from the `AgentToolCall` bridge rows the hook writes.
 ///
-/// We run only the `SubagentSource` (not a full `DefraAgent`) so the runtime
+/// We run only the `SubagentSource` (not a full `Gents`) so the runtime
 /// does not also claim and process the pending child requests — these tests
 /// drive child completion by hand.
 struct SpawnFixture {
@@ -137,7 +137,7 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
                 targets
                     .into_iter()
                     .map(|behavior_id| {
-                        defra_agent::subagent_target_entry(
+                        gents::subagent_target_entry(
                             behavior_id,
                             &agent_did,
                             behavior_id,
@@ -202,7 +202,7 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
     .await
     .unwrap();
 
-    // Run only the `SubagentSource` (not a full `DefraAgent`) against the same
+    // Run only the `SubagentSource` (not a full `Gents`) against the same
     // node the hook writes to. The snapshot lists only the local child behavior
     // so cross-deployment targets are declined deterministically.
     let source = spawn_subagent_source(

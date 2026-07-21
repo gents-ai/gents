@@ -1,4 +1,4 @@
-//! Shared substrate for any DefraDB peer participating in a `defra-agent`
+//! Shared substrate for any DefraDB peer participating in a `gents`
 //! control plane: GraphQL schema strings, client turn-observation protocol,
 //! and serde row mirrors for every replicated collection.
 

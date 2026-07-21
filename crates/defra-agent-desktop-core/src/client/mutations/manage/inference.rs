@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use defra_agent_protocol::row::InferenceBackendRow;
+use gents_protocol::row::InferenceBackendRow;
 use defra_node::EmbeddedNode;
 use serde_json::Value;
 

@@ -1,4 +1,4 @@
-use defra_agent::{BackendProviderKind, Collection, OpenAiWireApi};
+use gents::{BackendProviderKind, Collection, OpenAiWireApi};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -132,7 +132,7 @@ impl CodexShimHealth {
 /// Shared so the shim supervisor can flip it long after `/healthz` started serving.
 pub(crate) type CodexShimHealthHandle = std::sync::Arc<std::sync::RwLock<CodexShimHealth>>;
 
-/// Persisted so `/status`, `defra-agent status`, and `/metrics` can report the
+/// Persisted so `/status`, `gents status`, and `/metrics` can report the
 /// knobs that matter during hub saturation (#630) without re-resolving CLI args.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct P2pAdmissionState {

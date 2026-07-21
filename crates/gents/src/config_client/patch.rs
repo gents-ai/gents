@@ -20,7 +20,7 @@ use anyhow::{bail, Result};
 use serde_json::{Map, Value};
 
 use crate::graphql::escape_graphql_string;
-use defra_agent_protocol::graphql::{extract_mutation_doc_id, graphql_input_literal};
+use gents_protocol::graphql::{extract_mutation_doc_id, graphql_input_literal};
 
 use super::ConfigApplyTxn;
 

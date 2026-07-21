@@ -20,7 +20,7 @@ async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
         &ToolSelectionDocument {
             selection_id: "r4-parent-tools".to_string(),
             agent_did: agent_did.clone(),
-            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+            subagent_targets: Some(vec![gents::subagent_target_entry(
                 GHOST_BEHAVIOR_ID,
                 &agent_did,
                 GHOST_BEHAVIOR_ID,

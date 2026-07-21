@@ -316,7 +316,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
             completed_at: None,
             interrupted_at: None,
         }],
-        tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {
+        tool_calls: vec![gents_protocol::row::AgentToolCallRow {
             partial_output_tail: None,
             partial_output_seq: None,
             tool_call_key: "tool-1".to_string(),
@@ -689,7 +689,7 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
             reasoning: None,
             timestamp: Some("2026-04-21T12:00:00Z".to_string()),
         }],
-        tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {
+        tool_calls: vec![gents_protocol::row::AgentToolCallRow {
             partial_output_tail: None,
             partial_output_seq: None,
             tool_call_key: "tool-1".to_string(),
@@ -770,7 +770,7 @@ fn structured_command_policy_denial_projects_to_rendered_tool() {
             ended: None,
             status: Some("active".to_string()),
         }],
-        tool_calls: vec![defra_agent_protocol::row::AgentToolCallRow {
+        tool_calls: vec![gents_protocol::row::AgentToolCallRow {
             partial_output_tail: None,
             partial_output_seq: None,
             tool_call_key: "tool-denial".to_string(),

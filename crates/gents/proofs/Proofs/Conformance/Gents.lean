@@ -5,12 +5,12 @@ import Proofs.Persistence
 import Proofs.Conformance.Triggers
 
 /-!
-# Conformance Mapping: defra-agent → Ideal Model
+# Conformance Mapping: gents → Ideal Model
 
-Maps defra-agent's actual states and transitions to the ideal
+Maps gents's actual states and transitions to the ideal
 agent state machine.
 
-defra-agent local request states (from lifecycle.rs):
+gents local request states (from lifecycle.rs):
   Pending, Claimed, Streaming, Completed, Failed, Superseded, Dead, Interrupted
 
 These are implementation-local states. The persisted DefraDB request view now
@@ -25,7 +25,7 @@ and preserves the string for client/protocol parity, but the core request
 transition machine has no writer path into that state today.
 -/
 
-/-- defra-agent's local lifecycle states (from lifecycle.rs). -/
+/-- gents's local lifecycle states (from lifecycle.rs). -/
 inductive DefraLifecycleState where
   | pending
   | claimed
@@ -39,7 +39,7 @@ inductive DefraLifecycleState where
 
 namespace DefraLifecycleState
 
-/-- Map defra-agent's local in-process state to the ideal request state.
+/-- Map gents's local in-process state to the ideal request state.
     Key: local `claimed` refines to persisted `claimed / waiting|acquired`;
     local `streaming` refines to persisted `processing / executing`. -/
 def toIdeal : DefraLifecycleState → RequestState
@@ -60,7 +60,7 @@ theorem toIdeal_preserves_terminal (s : DefraLifecycleState) :
 
 end DefraLifecycleState
 
-/-- defra-agent's persisted `AgentRuntime.process_state` values. -/
+/-- gents's persisted `AgentRuntime.process_state` values. -/
 inductive DefraProcessState where
   | uninitialized
   | recovering
@@ -99,7 +99,7 @@ theorem recovering_blocks_work :
 
 end DefraProcessState
 
-/-- defra-agent's persisted `InferenceCall.call_state` values. -/
+/-- gents's persisted `InferenceCall.call_state` values. -/
 inductive DefraInferenceCallState where
   | queued
   | running

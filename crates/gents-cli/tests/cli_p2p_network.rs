@@ -23,8 +23,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
-use defra_agent::{load_tool_selection, subagent_target_entry, upsert_tool_selection};
+use gents::defra_node::{EmbeddedNode, StorageBackend};
+use gents::{load_tool_selection, subagent_target_entry, upsert_tool_selection};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -56,7 +56,7 @@ struct Node {
     serve: ServeProcess,
 }
 
-/// Init + spawn a server in `home` with `DEFRA_AGENT_DISCOVERY_AUTO_PAIR` set per
+/// Init + spawn a server in `home` with `GENTS_DISCOVERY_AUTO_PAIR` set per
 /// `auto_pair`, wait for readiness, and capture identity/peer details.
 async fn boot_node(
     tempdir: &Path,
@@ -84,7 +84,7 @@ async fn boot_node(
     let agent_did = agent_did_from_init(&init)?;
 
     let envs: Vec<(&str, &str)> = if auto_pair {
-        vec![("DEFRA_AGENT_DISCOVERY_AUTO_PAIR", "1")]
+        vec![("GENTS_DISCOVERY_AUTO_PAIR", "1")]
     } else {
         Vec::new()
     };
@@ -781,7 +781,7 @@ async fn network_signed_invite_authorization() -> Result<()> {
 /// the join fail at *signature verification* (not at token parsing), exercising
 /// the authorization guard rather than the decoder.
 fn tamper_token(token: &str) -> Result<String> {
-    use defra_agent_protocol::pairing_token::{decode, encode};
+    use gents_protocol::pairing_token::{decode, encode};
     let mut decoded = decode(token).context("decoding valid token to tamper its signature")?;
     if decoded.sig.is_empty() {
         bail!("token has no signature to tamper");
@@ -954,7 +954,7 @@ async fn configure_remote_subagent_target(
     target_behavior_id: &str,
     allow: bool,
 ) -> Result<()> {
-    let data_dir = home.join(".defra-agent").join("data");
+    let data_dir = home.join(".gents").join("data");
     let node = EmbeddedNode::builder()
         .data_path(&data_dir)
         .with_storage_backend(StorageBackend::RocksDb)

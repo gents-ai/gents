@@ -1,9 +1,9 @@
 use super::*;
 use std::sync::Arc;
 
-use defra_agent::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
-use defra_agent::StreamWriter;
-use defra_agent_protocol::transcript::present_persisted_message;
+use gents::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
+use gents::StreamWriter;
+use gents_protocol::transcript::present_persisted_message;
 
 use super::support::fixtures::test_identity;
 use super::support::interrupt::{
@@ -628,7 +628,7 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
                 mark_materialized(db.node.clone(), &request_id, sequence as u32).await;
             }
             writer
-                .finalize(&doc_id, defra_agent::streaming::StreamStatus::Complete)
+                .finalize(&doc_id, gents::streaming::StreamStatus::Complete)
                 .await
                 .expect("finalize complete");
         }
@@ -640,7 +640,7 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
                     .expect("set error reason");
             }
             writer
-                .finalize(&doc_id, defra_agent::streaming::StreamStatus::Error)
+                .finalize(&doc_id, gents::streaming::StreamStatus::Error)
                 .await
                 .expect("finalize error");
         }
@@ -653,7 +653,7 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
         }
         "observe_idempotent_finalize" => {
             writer
-                .finalize(&doc_id, defra_agent::streaming::StreamStatus::Complete)
+                .finalize(&doc_id, gents::streaming::StreamStatus::Complete)
                 .await
                 .expect("idempotent finalize");
         }
@@ -959,14 +959,14 @@ async fn boot_streaming_interrupt_flow_agent(
     test_name: &str,
     endpoint: &str,
 ) -> BootedAgent {
-    let identity: Arc<dyn defra_agent::AgentIdentity> = Arc::new(test_identity(test_name));
+    let identity: Arc<dyn gents::AgentIdentity> = Arc::new(test_identity(test_name));
     upsert_interrupt_flow_backend(db.node.as_ref(), endpoint).await;
 
-    let agent = defra_agent::DefraAgent::builder()
+    let agent = gents::Gents::builder()
         .node(db.node.clone())
         .identity(identity)
         .default_behavior_id(AGENT_NAME)
-        .tool_ceiling(defra_agent::ToolCeiling::meta_only())
+        .tool_ceiling(gents::ToolCeiling::meta_only())
         .behavior(AGENT_NAME)
         .backend_id(INTERRUPT_FLOW_BACKEND_ID)
         .model_name(INTERRUPT_FLOW_MODEL)
@@ -988,14 +988,14 @@ async fn boot_streaming_idle_timeout_agent(
     test_name: &str,
     endpoint: &str,
 ) -> BootedAgent {
-    let identity: Arc<dyn defra_agent::AgentIdentity> = Arc::new(test_identity(test_name));
+    let identity: Arc<dyn gents::AgentIdentity> = Arc::new(test_identity(test_name));
     upsert_idle_timeout_backend(db.node.as_ref(), endpoint).await;
 
-    let agent = defra_agent::DefraAgent::builder()
+    let agent = gents::Gents::builder()
         .node(db.node.clone())
         .identity(identity)
         .default_behavior_id(AGENT_NAME)
-        .tool_ceiling(defra_agent::ToolCeiling::meta_only())
+        .tool_ceiling(gents::ToolCeiling::meta_only())
         .behavior(AGENT_NAME)
         .backend_id(IDLE_TIMEOUT_BACKEND_ID)
         .model_name(IDLE_TIMEOUT_MODEL)
@@ -1192,7 +1192,7 @@ fn drive_compaction_reducer_case(case: &lean_vocab_test::LeanCompactionReducerCa
     }
 
     if case.name == "strip_is_strictly_idempotent" {
-        let reapplied = defra_agent::compaction::strip_tool_results(reduced.clone()).0;
+        let reapplied = gents::compaction::strip_tool_results(reduced.clone()).0;
         assert_eq!(
             abstract_prompt_view(&reduced),
             abstract_prompt_view(&reapplied),
@@ -1223,8 +1223,8 @@ fn apply_compaction_reducer(
 ) -> Vec<Message> {
     match case.reducer.as_str() {
         "identity" => input,
-        "strip_tool_results" => defra_agent::compaction::strip_tool_results(input).0,
-        "any_valid" if case.safe_to_reduce => defra_agent::compaction::strip_tool_results(input).0,
+        "strip_tool_results" => gents::compaction::strip_tool_results(input).0,
+        "any_valid" if case.safe_to_reduce => gents::compaction::strip_tool_results(input).0,
         "any_valid" => input,
         other => panic!("unsupported compaction reducer {other:?} for {}", case.name),
     }

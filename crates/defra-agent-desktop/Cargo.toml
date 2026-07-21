@@ -9,7 +9,7 @@ description = "Compatibility launcher for the Tauri defra-agent desktop"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-defra-agent = { path = "../defra-agent" }
+gents = { path = "../gents" }
 defra-agent-desktop-core.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

@@ -169,7 +169,7 @@ pub(super) async fn handle_thread_request(
                                 behavior_id = context_behavior_id,
                                 "Codex shim could not load child or root context windows; using the runtime default"
                             );
-                            defra_agent::DEFAULT_CONTEXT_WINDOW as i64
+                            gents::DEFAULT_CONTEXT_WINDOW as i64
                         })
                 }
                 Err(error) => {
@@ -178,7 +178,7 @@ pub(super) async fn handle_thread_request(
                         behavior_id = context_behavior_id,
                         "Codex shim could not load the effective context window; using the runtime default"
                     );
-                    defra_agent::DEFAULT_CONTEXT_WINDOW as i64
+                    gents::DEFAULT_CONTEXT_WINDOW as i64
                 }
             };
             send_notification(

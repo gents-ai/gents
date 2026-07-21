@@ -3,7 +3,7 @@ use crate::{BackendProviderKind, OpenAiWireApi};
 use anyhow::Result;
 
 use super::{mint_recreate_identity_timestamp, ConfigAccess};
-use defra_agent_protocol::graphql::{
+use gents_protocol::graphql::{
     graphql_bool_literal, nullable_string_field, string_list_field,
 };
 
@@ -117,5 +117,5 @@ pub async fn write_inference_backend_document(
         update_fields = update_fields,
     );
     let response = access.execute(&mutation).await?;
-    defra_agent_protocol::graphql::extract_mutation_doc_id(&response, "InferenceBackend")
+    gents_protocol::graphql::extract_mutation_doc_id(&response, "InferenceBackend")
 }

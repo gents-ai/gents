@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::llm::ToolCallHookAction;
-use defra_agent::{
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::llm::ToolCallHookAction;
+use gents::{
     default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior,
-    upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DefraAgent, DefraSessionHook,
+    upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, Gents, DefraSessionHook,
     DocumentRuntimeOptions, FailurePolicy, ToolCeiling, ToolSelectionDocument,
 };
 use serde::Deserialize;
@@ -154,7 +154,7 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
         _endpoint,
     } = child_agent;
     booted.shutdown().await;
-    // BootedAgent only stops DefraAgent::run; P2P belongs to the embedded node.
+    // BootedAgent only stops Gents::run; P2P belongs to the embedded node.
     parent_db.node.shutdown().await;
     child_db.node.shutdown().await;
 }
@@ -221,7 +221,7 @@ async fn boot_child_agent(case: &LeanR5CrossDeploymentCase) -> RunningChildAgent
     )
     .await;
 
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -277,7 +277,7 @@ async fn setup_parent_hook_on_db(
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: PARENT_AGENT_DID.to_string(),
-            subagent_targets: Some(vec![defra_agent::subagent_target_entry(
+            subagent_targets: Some(vec![gents::subagent_target_entry(
                 case.target_behavior_id.clone(),
                 target_owner_did,
                 case.target_behavior_id.clone(),

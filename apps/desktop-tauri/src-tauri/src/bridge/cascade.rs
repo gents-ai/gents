@@ -8,8 +8,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
 use defra_agent_desktop_core::client::ClientCore;
 use serde_json::Value;
 
@@ -520,7 +520,7 @@ async fn latch_cascade_descendants(
     preview: &CascadeCancelPreview,
 ) -> Result<(), String> {
     for child in &preview.will_interrupt {
-        defra_agent::interrupt_request(core.node(), &child.request_id)
+        gents::interrupt_request(core.node(), &child.request_id)
             .await
             .map_err(|error| {
                 format!(

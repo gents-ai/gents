@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
 use codex_protocol::models::MessagePhase;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent_protocol::transcript::present_persisted_message;
+use gents::graphql::escape_graphql_string;
+use gents_protocol::transcript::present_persisted_message;
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
 
@@ -661,7 +661,7 @@ fn append_request_items(
         }
         if !rendered_materialized && !response.content.trim().is_empty() {
             items.push(agent_message_item_with_phase(
-                &format!("defra-agent-{}", request.request_id),
+                &format!("gents-{}", request.request_id),
                 &response.content,
                 Some(MessagePhase::FinalAnswer),
             ));
@@ -699,7 +699,7 @@ fn append_assistant_message_items(
             MessagePhase::Commentary
         };
         items.push(agent_message_item_with_phase(
-            &format!("defra-agent-message-{sequence}"),
+            &format!("gents-message-{sequence}"),
             &presentation.body_markdown,
             Some(phase),
         ));

@@ -11,7 +11,7 @@ pub(crate) fn deprecation_warning(argv: &[String]) -> Option<String> {
     DEPRECATED.iter().find_map(|(path, replacement)| {
         words.starts_with(path).then(|| {
             format!(
-                "warning: `defra-agent {}` is deprecated; use `defra-agent {replacement}`",
+                "warning: `gents {}` is deprecated; use `gents {replacement}`",
                 path.join(" ")
             )
         })
@@ -77,18 +77,18 @@ mod tests {
 
     #[test]
     fn config_task_warns() {
-        let warning = deprecation_warning(&argv(&["defra-agent", "config", "task", "run", "x"]))
+        let warning = deprecation_warning(&argv(&["gents", "config", "task", "run", "x"]))
             .expect("expected config task warning");
         assert_eq!(
             warning,
-            "warning: `defra-agent config task` is deprecated; use `defra-agent task`"
+            "warning: `gents config task` is deprecated; use `gents task`"
         );
     }
 
     #[test]
     fn replacement_task_path_does_not_warn() {
         assert_eq!(
-            deprecation_warning(&argv(&["defra-agent", "task", "run", "x"])),
+            deprecation_warning(&argv(&["gents", "task", "run", "x"])),
             None
         );
     }
@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn leading_option_values_are_skipped() {
         let warning = deprecation_warning(&argv(&[
-            "defra-agent",
+            "gents",
             "--home",
             "local-home",
             "config",
@@ -105,14 +105,14 @@ mod tests {
         .expect("expected warning after leading option");
         assert_eq!(
             warning,
-            "warning: `defra-agent config task` is deprecated; use `defra-agent task`"
+            "warning: `gents config task` is deprecated; use `gents task`"
         );
     }
 
     #[test]
     fn leading_option_equals_form_is_skipped() {
         let warning = deprecation_warning(&argv(&[
-            "defra-agent",
+            "gents",
             "--home=local-home",
             "show",
             "response",
@@ -121,14 +121,14 @@ mod tests {
         .expect("expected warning after leading option");
         assert_eq!(
             warning,
-            "warning: `defra-agent show response` is deprecated; use `defra-agent response show`"
+            "warning: `gents show response` is deprecated; use `gents response show`"
         );
     }
 
     #[test]
     fn unknown_commands_do_not_warn() {
         assert_eq!(
-            deprecation_warning(&argv(&["defra-agent", "config", "backend", "set"])),
+            deprecation_warning(&argv(&["gents", "config", "backend", "set"])),
             None
         );
     }
@@ -136,22 +136,22 @@ mod tests {
     #[test]
     fn p2p_pair_warns() {
         let warning =
-            deprecation_warning(&argv(&["defra-agent", "p2p", "pair", "--peer", "peer-1"]))
+            deprecation_warning(&argv(&["gents", "p2p", "pair", "--peer", "peer-1"]))
                 .expect("expected p2p pair warning");
         assert_eq!(
             warning,
-            "warning: `defra-agent p2p pair` is deprecated; use `defra-agent p2p pairings set`"
+            "warning: `gents p2p pair` is deprecated; use `gents p2p pairings set`"
         );
     }
 
     #[test]
     fn p2p_unpair_warns() {
         let warning =
-            deprecation_warning(&argv(&["defra-agent", "p2p", "unpair", "--peer", "peer-1"]))
+            deprecation_warning(&argv(&["gents", "p2p", "unpair", "--peer", "peer-1"]))
                 .expect("expected p2p unpair warning");
         assert_eq!(
             warning,
-            "warning: `defra-agent p2p unpair` is deprecated; use `defra-agent p2p pairings rm`"
+            "warning: `gents p2p unpair` is deprecated; use `gents p2p pairings rm`"
         );
     }
 
@@ -161,7 +161,7 @@ mod tests {
         // spelling — it must parse silently.
         assert_eq!(
             deprecation_warning(&argv(&[
-                "defra-agent",
+                "gents",
                 "p2p",
                 "pairings",
                 "unpair",
@@ -176,7 +176,7 @@ mod tests {
     fn trailing_option_values_are_skipped() {
         assert_eq!(
             command_words(&argv(&[
-                "defra-agent",
+                "gents",
                 "p2p",
                 "pairings",
                 "remove",

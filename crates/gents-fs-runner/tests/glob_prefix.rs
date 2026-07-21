@@ -3,8 +3,8 @@
 //! nonexistent prefix returns immediately with a diagnostic instead of a
 //! full-tree walk that looks identical to a genuine miss.
 
-use defra_native_fs_runner::execute_request_with_base;
-use defra_native_fs_runner::protocol::{GlobArgs, NativeFsRunnerRequest};
+use gents_fs_runner::execute_request_with_base;
+use gents_fs_runner::protocol::{GlobArgs, NativeFsRunnerRequest};
 use serde_json::Value;
 
 mod support;
@@ -125,14 +125,14 @@ fn glob_prefix_pruning_composes_with_path_argument() {
     // path="crates" + pattern="crates/..." must not double-join into
     // crates/crates/... and report false zero matches.
     let root = unique_root("prefix-with-path");
-    std::fs::create_dir_all(root.join("crates/defra-agent/src")).unwrap();
-    std::fs::write(root.join("crates/defra-agent/src/lib.rs"), "x").unwrap();
+    std::fs::create_dir_all(root.join("crates/gents/src")).unwrap();
+    std::fs::write(root.join("crates/gents/src/lib.rs"), "x").unwrap();
 
     let output = execute_request_with_base(
         root.clone(),
         None,
         NativeFsRunnerRequest::Glob(GlobArgs {
-            pattern: "crates/defra-agent/**/*.rs".to_string(),
+            pattern: "crates/gents/**/*.rs".to_string(),
             path: Some("crates".to_string()),
             max_matches: 100,
             raw_json: true,
@@ -145,7 +145,7 @@ fn glob_prefix_pruning_composes_with_path_argument() {
 
     let _ = std::fs::remove_dir_all(&root);
     assert_eq!(value["returned_count"], 1, "{value}");
-    assert_eq!(value["matches"][0]["path"], "crates/defra-agent/src/lib.rs");
+    assert_eq!(value["matches"][0]["path"], "crates/gents/src/lib.rs");
     assert_eq!(value["pattern_prefix_exists"], true);
 }
 

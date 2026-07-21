@@ -62,7 +62,7 @@ async fn config_apply_updates_backend_from_fresh_init_home_locally() -> Result<(
     let root_str = root
         .to_str()
         .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
-    let explicit_home = home_dir.join(".defra-agent");
+    let explicit_home = home_dir.join(".gents");
     let explicit_home_str = explicit_home
         .to_str()
         .ok_or_else(|| anyhow!("explicit home path is not UTF-8"))?;
@@ -206,7 +206,7 @@ async fn config_apply_prunes_live_only_tasks_and_schedules_when_requested_locall
     let root_str = root
         .to_str()
         .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
-    let explicit_home = home_dir.join(".defra-agent");
+    let explicit_home = home_dir.join(".gents");
     let explicit_home_str = explicit_home
         .to_str()
         .ok_or_else(|| anyhow!("explicit home path is not UTF-8"))?;
@@ -490,7 +490,7 @@ async fn config_apply_rebinds_placeholder_manifest_to_home_identity_locally() ->
     let target_agent_did = agent_did_from_init(&target_init)?;
     assert_ne!(target_agent_did, placeholder_did);
     assert_ne!(target_agent_did, source_agent_did);
-    let target_home = target_home_env.join(".defra-agent");
+    let target_home = target_home_env.join(".gents");
     let target_home_str = target_home.to_str().expect("utf-8 target home");
     let root_str = root.to_str().expect("utf-8 root");
 
@@ -649,7 +649,7 @@ async fn reapply_recreates_a_pruned_unique_row() -> Result<()> {
     let root_str = root
         .to_str()
         .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
-    let explicit_home = home_dir.join(".defra-agent");
+    let explicit_home = home_dir.join(".gents");
     let explicit_home_str = explicit_home
         .to_str()
         .ok_or_else(|| anyhow!("explicit home path is not UTF-8"))?;

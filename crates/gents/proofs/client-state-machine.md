@@ -5,10 +5,10 @@ Formal derivation reference: `Proofs/Client.lean`
 Shell workflow reference: `Proofs/ClientShell.lean`
 
 Rust reference implementation:
-`crates/defra-agent-protocol/src/client_protocol.rs`
+`crates/gents-protocol/src/client_protocol.rs`
 
 This document explains the formal model for client implementers building CLI,
-web, mobile, or desktop applications against the `defra-agent` document
+web, mobile, or desktop applications against the `gents` document
 surface.
 
 The Lean file captures the client-state derivation rules and their
@@ -292,7 +292,7 @@ reading the initial snapshot and MUST drain the subscription continuously
 thereafter. Drop-counter signals (`Subscription::check_and_reset_dropped() > 0`)
 MUST trigger a scope-bounded resync, scoped to the currently-selected
 `agent_did` when one is set. Per-event patches MUST upsert by stable per-collection
-key (the `*_merge_key` functions in `defra-agent-desktop-core::client::store`),
+key (the `*_merge_key` functions in `gents-desktop-core::client::store`),
 so that row-level merges converge to the same state a full reload would produce.
 
 These invariants preserve T1 — equivalent merged observations converge before
@@ -392,8 +392,8 @@ function deriveAttempt(
 
 ### Rust
 
-See `crates/defra-agent-protocol/src/client_protocol.rs` for the full reference
+See `crates/gents-protocol/src/client_protocol.rs` for the full reference
 implementation, including typed lifecycle parsing, the derivation function, and
 metadata-based chain resolution. The conformance suite in
-`crates/defra-agent-protocol/src/client_protocol/tests.rs` exercises the full
+`crates/gents-protocol/src/client_protocol/tests.rs` exercises the full
 derivation table plus T2/T3/T5 spot checks against the Lean model.

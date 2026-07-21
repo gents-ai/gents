@@ -3,7 +3,7 @@
 //!
 //! This lives in its own integration binary because suppression summaries
 //! are emitted through the process-global dispatcher (see
-//! `defra_agent::log_rate`), so the test must own `set_global_default` —
+//! `gents::log_rate`), so the test must own `set_global_default` —
 //! which cannot be done inside the shared `--lib` test binary.
 
 use std::io;
@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use defra_agent::log_rate::{RateLimitConfig, RateLimitFilter, SUMMARY_TARGET};
+use gents::log_rate::{RateLimitConfig, RateLimitFilter, SUMMARY_TARGET};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Layer;

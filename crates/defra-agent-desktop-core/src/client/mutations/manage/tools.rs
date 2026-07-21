@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use defra_agent_protocol::row::{ToolSelectionRow, ToolServiceRegistryRow};
+use gents_protocol::row::{ToolSelectionRow, ToolServiceRegistryRow};
 use defra_node::EmbeddedNode;
 use serde_json::Value;
 

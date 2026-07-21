@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_agent::goal::{load_canonical_goal, set_goal, GoalStatus, UPDATE_GOAL_TOOL_NAME};
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::AgentIdentity;
+use gents::goal::{load_canonical_goal, set_goal, GoalStatus, UPDATE_GOAL_TOOL_NAME};
+use gents::graphql::escape_graphql_string;
+use gents::AgentIdentity;
 use serde::Deserialize;
 
 use super::steward_loop_live::{
@@ -20,7 +20,7 @@ struct GoalChildRow {
 }
 
 async fn wait_for_goal_child(
-    node: &defra_agent::defra_node::EmbeddedNode,
+    node: &gents::defra_node::EmbeddedNode,
     goal_id: &str,
     timeout: Duration,
 ) -> GoalChildRow {
@@ -59,7 +59,7 @@ async fn wait_for_goal_child(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn durable_goal_continues_with_real_inference_until_model_completes() {
-    if std::env::var("DEFRA_AGENT_D4F_LIVE").as_deref() != Ok("1") {
+    if std::env::var("GENTS_D4F_LIVE").as_deref() != Ok("1") {
         return;
     }
 

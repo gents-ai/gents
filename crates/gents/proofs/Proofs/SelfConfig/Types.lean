@@ -10,7 +10,7 @@ complement (identity/unique keys, owner DID, runtime-owned status fields,
 secrets, apply-managed fields).
 
 `allFields` mirrors the bundled SDL field lists
-(`defra-agent-schemas/schemas/**` and `defra-agent-protocol/schemas/**`), in
+(`gents-schemas/schemas/**` and `gents-protocol/schemas/**`), in
 declaration order. The Rust conformance test pins this mirror against the
 bundled SDL, so a schema field added without a self-config classification
 breaks the fence rather than silently defaulting to writable or protected.

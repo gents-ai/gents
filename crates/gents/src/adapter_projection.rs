@@ -365,7 +365,7 @@ pub fn build_adapter_projection(
         source_behavior_id: timeline.behavior_id.clone(),
         redaction_mode: context.redaction_mode,
         provenance: ProjectionProvenance {
-            runtime: "defra-agent".to_string(),
+            runtime: "gents".to_string(),
             source_projection_id: RUN_TIMELINE_PROJECTION_ID.to_string(),
             source_projection_version: ADAPTER_PROJECTION_VERSION.to_string(),
             actor_did: context.actor_did.clone(),
@@ -839,7 +839,7 @@ pub fn adapter_projection_eval_jsonl_records(
 pub fn adapter_projection_json_schema(kind: AdapterProjectionKind) -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": format!("https://schemas.defra.ai/defra-agent/adapter-projection/{}/{}.schema.json", kind.id(), ADAPTER_PROJECTION_VERSION),
+        "$id": format!("https://schemas.defra.ai/gents/adapter-projection/{}/{}.schema.json", kind.id(), ADAPTER_PROJECTION_VERSION),
         "title": kind.title(),
         "type": "object",
         "additionalProperties": false,
@@ -876,7 +876,7 @@ pub fn adapter_projection_json_schema(kind: AdapterProjectionKind) -> Value {
 pub fn adapter_projection_jsonl_record_schema(kind: AdapterProjectionKind) -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": format!("https://schemas.defra.ai/defra-agent/adapter-projection/{}/{}-jsonl-record.schema.json", kind.id(), ADAPTER_PROJECTION_VERSION),
+        "$id": format!("https://schemas.defra.ai/gents/adapter-projection/{}/{}-jsonl-record.schema.json", kind.id(), ADAPTER_PROJECTION_VERSION),
         "title": format!("{} JSONL Record", kind.title()),
         "type": "object",
         "additionalProperties": false,
@@ -907,7 +907,7 @@ pub fn adapter_projection_jsonl_record_schema(kind: AdapterProjectionKind) -> Va
 pub fn adapter_projection_eval_jsonl_record_schema(kind: AdapterProjectionKind) -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": format!("https://schemas.defra.ai/defra-agent/adapter-projection/{}/{}-eval-jsonl-record.schema.json", kind.id(), ADAPTER_PROJECTION_VERSION),
+        "$id": format!("https://schemas.defra.ai/gents/adapter-projection/{}/{}-eval-jsonl-record.schema.json", kind.id(), ADAPTER_PROJECTION_VERSION),
         "title": format!("{} Eval JSONL Record", kind.title()),
         "type": "object",
         "additionalProperties": false,
@@ -1202,7 +1202,7 @@ fn provenance_schema() -> Value {
         "additionalProperties": false,
         "required": ["runtime", "source_projection_id", "source_projection_version"],
         "properties": {
-            "runtime": { "const": "defra-agent" },
+            "runtime": { "const": "gents" },
             "source_projection_id": { "const": RUN_TIMELINE_PROJECTION_ID },
             "source_projection_version": { "const": ADAPTER_PROJECTION_VERSION },
             "actor_did": optional_string_schema()
@@ -2044,7 +2044,7 @@ mod tests {
 
     fn read_adapter_projection_fixture(fixture_name: &str) -> (AdapterProjectionEnvelope, Value) {
         let path = workspace_root().join(format!(
-            "crates/defra-agent/tests/fixtures/adapter_projections/envelopes/{fixture_name}.envelope.json"
+            "crates/gents/tests/fixtures/adapter_projections/envelopes/{fixture_name}.envelope.json"
         ));
         let raw = std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));

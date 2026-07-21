@@ -6,15 +6,15 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
-use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
-use defra_agent::ensure_runtime_schemas;
-use defra_agent::llm::message::{AssistantContent, Message, ToolCall, ToolFunction};
+use gents::defra_node::{EmbeddedNode, StorageBackend};
+use gents::ensure_runtime_schemas;
+use gents::llm::message::{AssistantContent, Message, ToolCall, ToolFunction};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 fn adapter_schema_snapshot(snapshot_name: &str, suffix: &str) -> Result<Value> {
     read_workspace_json(&format!(
-        "crates/defra-agent/tests/fixtures/adapter_projections/contracts/{snapshot_name}.{suffix}.json"
+        "crates/gents/tests/fixtures/adapter_projections/contracts/{snapshot_name}.{suffix}.json"
     ))
 }
 
@@ -290,7 +290,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
         let json_schema =
             serde_json::from_str::<Value>(&json_schema_output).context("parsing JSON schema")?;
         let expected_json_schema = read_workspace_json(&format!(
-            "crates/defra-agent/tests/fixtures/adapter_projections/contracts/{snapshot_name}.schema.json"
+            "crates/gents/tests/fixtures/adapter_projections/contracts/{snapshot_name}.schema.json"
         ))?;
         assert_eq!(
             json_schema, expected_json_schema,
@@ -311,7 +311,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
         let jsonl_schema =
             serde_json::from_str::<Value>(&jsonl_schema_output).context("parsing JSONL schema")?;
         let expected_jsonl_schema = read_workspace_json(&format!(
-            "crates/defra-agent/tests/fixtures/adapter_projections/contracts/{snapshot_name}.jsonl-record.schema.json"
+            "crates/gents/tests/fixtures/adapter_projections/contracts/{snapshot_name}.jsonl-record.schema.json"
         ))?;
         assert_eq!(
             jsonl_schema, expected_jsonl_schema,
@@ -332,7 +332,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
         let eval_jsonl_schema = serde_json::from_str::<Value>(&eval_jsonl_schema_output)
             .context("parsing eval JSONL schema")?;
         let expected_eval_jsonl_schema = read_workspace_json(&format!(
-            "crates/defra-agent/tests/fixtures/adapter_projections/contracts/{snapshot_name}.eval-jsonl-record.schema.json"
+            "crates/gents/tests/fixtures/adapter_projections/contracts/{snapshot_name}.eval-jsonl-record.schema.json"
         ))?;
         assert_eq!(
             eval_jsonl_schema, expected_eval_jsonl_schema,
@@ -1599,7 +1599,7 @@ fn projection_mock_tool_calls() -> Value {
             "started_at": "2026-06-05T18:00:01Z",
             "deadline_at": null,
             "completed_at": "2026-06-05T18:00:02Z",
-            "selected_service_id": "defra-agent",
+            "selected_service_id": "gents",
             "selected_tool_name": "spawn_subagent",
             "tool_failure_class": null,
             "denial_reason": null,

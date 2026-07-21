@@ -26,7 +26,7 @@ skill-reminder injection in `daemon/request.rs`, and the per-turn request
 shape of `loop_stream::build_request`), so the layer order is fixed by
 definition and any reordering is a Lean-breaking change.
 
-Rust conformance: `crates/defra-agent/tests/conformance/prompt_assembly.rs`
+Rust conformance: `crates/gents/tests/conformance/prompt_assembly.rs`
 runs the shared vectors through `sanitize_history_for_provider`.
 -/
 

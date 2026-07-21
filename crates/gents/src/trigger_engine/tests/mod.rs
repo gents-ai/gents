@@ -63,7 +63,7 @@ fn stub_principal() -> Arc<crate::identity::AgentPrincipal> {
 }
 
 const LEAN_TRIGGER_TYPES_MODEL: &str = include_str!("../../../proofs/Proofs/Triggers/Types.lean");
-const LEAN_TRIGGER_TYPES_FILE: &str = "crates/defra-agent/proofs/Proofs/Triggers/Types.lean";
+const LEAN_TRIGGER_TYPES_FILE: &str = "crates/gents/proofs/Proofs/Triggers/Types.lean";
 
 #[test]
 fn rust_trigger_kind_vocabulary_matches_lean_model() {

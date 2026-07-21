@@ -14,7 +14,7 @@ import type { RenderedTimelineItem, RenderedToolCallView } from "../src/lib/type
 // Sentinel matrix
 //
 // Each (rust_bail_text, expected_rule_id) pair below corresponds to a
-// `bail!()` site in crates/defra-agent/src/toolset/shared/command.rs.
+// `bail!()` site in crates/gents/src/toolset/shared/command.rs.
 // When the runtime is enriched to persist structured DenialReason
 // (issue #286 follow-up), this regex parser retires — but until then,
 // the parser MUST match every command-policy bail string that ships.

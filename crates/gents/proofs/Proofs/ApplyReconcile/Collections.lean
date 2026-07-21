@@ -13,7 +13,7 @@ Collection ordering and document references for the apply model.
 namespace ApplyReconcile
 
 /-- Operator-controlled document collections. Mirrors the Rust
-    `enum Collection` in `defra-agent-cli`. -/
+    `enum Collection` in `gents-cli`. -/
 inductive Collection where
   | agentPrincipal
   | agentBehavior
@@ -30,7 +30,7 @@ inductive Collection where
   deriving DecidableEq, Repr
 
 /-- Apply ordering rank. Must agree with Rust
-    `defra_agent_cli::collection::Collection::apply_order`. -/
+    `gents_cli::collection::Collection::apply_order`. -/
 def Collection.applyOrder : Collection → Nat
   | .inferenceBackend      => 0
   | .toolSelection         => 0
@@ -87,7 +87,7 @@ instance (a b : DocRef) : Decidable (a ≤ b) := by
 
 
 /-- Exhaustive Collection pattern-match acting as a parity contract
-    with the Rust `defra_agent::Collection` enum. When the Rust enum
+    with the Rust `gents::Collection` enum. When the Rust enum
     gains a variant, the Rust-side test
     `collection::tests::canonical_variants_and_ranks` breaks first;
     this example's pattern-match also becomes non-exhaustive and fails

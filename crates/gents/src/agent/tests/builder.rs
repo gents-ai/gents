@@ -12,7 +12,7 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
     insert_backend(node.as_ref(), "builder-backend", "http://127.0.0.1:8777/v1").await;
     let identity = Arc::new(test_identity("builder-custom-tools"));
 
-    let agent = DefraAgent::builder()
+    let agent = Gents::builder()
         .node(node.clone())
         .identity(identity.clone())
         .tool_ceiling(ToolCeiling::meta_only())
@@ -49,7 +49,7 @@ async fn builder_requires_resolvable_backend_documents() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("builder-missing-backend"));
 
-    let error = match DefraAgent::builder()
+    let error = match Gents::builder()
         .node(node)
         .identity(identity)
         .behavior("policy-ops")

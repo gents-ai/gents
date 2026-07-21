@@ -5,10 +5,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::{
+use gents::defra_node::EmbeddedNode;
+use gents::{
     ensure_runtime_schemas, load_macos_keychain_identity, load_macos_secure_enclave_identity,
-    AgentIdentity, DefraAgent, DocumentRuntimeOptions, KeyIdentity, McpPool,
+    AgentIdentity, Gents, DocumentRuntimeOptions, KeyIdentity, McpPool,
     ProcessLifecycleObserver, ProcessLifecycleState, ToolCeiling,
 };
 use serde_json::{json, Value};
@@ -23,7 +23,7 @@ use crate::{
     print_json, read_init_config, resolve_home_dir, server_start_failure_hint, write_runtime_state,
     DEFAULT_AGENT_NAME,
 };
-use defra_agent::codex_shim_binding::{ShimBinding, ShimUnboundReason};
+use gents::codex_shim_binding::{ShimBinding, ShimUnboundReason};
 
 pub(crate) struct CliReadyObserver {
     pub(crate) tx: watch::Sender<ProcessLifecycleState>,
@@ -42,7 +42,7 @@ struct CliRunnableBehaviorObserver {
     tx: watch::Sender<Vec<String>>,
 }
 
-impl defra_agent::RuntimeSnapshotObserver for CliRunnableBehaviorObserver {
+impl gents::RuntimeSnapshotObserver for CliRunnableBehaviorObserver {
     fn on_generation_published(&self, _generation: u64, runnable_behavior_ids: &[String]) {
         let _ = self.tx.send(runnable_behavior_ids.to_vec());
     }
@@ -66,7 +66,7 @@ fn announce_codex_shim(
         bound.codex_home().display(),
     );
     eprintln!("Codex shim event log: {}", bound.trace_path().display());
-    eprintln!("Chat from another terminal with: defra-agent codex");
+    eprintln!("Chat from another terminal with: gents codex");
     if codex_shim_url != crate::DEFAULT_CODEX_REMOTE {
         eprintln!("  (this shim is not on the default address; pass --remote {codex_shim_url})");
     }
@@ -82,9 +82,9 @@ fn announce_codex_shim(
     json!({
         "websocket": codex_shim_url,
         "launch_command": if codex_shim_url == crate::DEFAULT_CODEX_REMOTE {
-            "defra-agent codex".to_string()
+            "gents codex".to_string()
         } else {
-            format!("defra-agent codex --remote {codex_shim_url}")
+            format!("gents codex --remote {codex_shim_url}")
         },
         "shim_home": bound.codex_home().to_path_buf(),
         "codex_home": bound.codex_home().to_path_buf(),
@@ -143,7 +143,7 @@ fn spawn_codex_shim_supervisor(
                              the shim is now running on {url} (no restart was needed)."
                         );
                         if bind_addr.is_loopback() {
-                            eprintln!("Chat from another terminal with: defra-agent codex");
+                            eprintln!("Chat from another terminal with: gents codex");
                         }
                         bound.spawn();
                         return;
@@ -269,9 +269,9 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     let mcp_query_scope = if !args.enable_mcp {
         None
     } else if args.mcp_query_collections.is_empty() {
-        Some(defra_agent::defra_query::CollectionScope::all())
+        Some(gents::defra_query::CollectionScope::all())
     } else {
-        Some(defra_agent::defra_query::CollectionScope::restricted(
+        Some(gents::defra_query::CollectionScope::restricted(
             args.mcp_query_collections.clone(),
         ))
     };
@@ -282,7 +282,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     // One measured-health handle shared between the runtime's prober (writer)
     // and the /metrics endpoint (reader), so the probe-status metric reports
     // measurement instead of the stored document constant (#640).
-    let backend_health = defra_agent::BackendHealthMap::new();
+    let backend_health = gents::BackendHealthMap::new();
     // Created before the HTTP surface because the shim may bind long after
     // /healthz starts serving: the supervisor flips this when a published
     // generation makes the bound behavior runnable (#699).
@@ -325,14 +325,14 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     // Single sanctioned migration entry point: run the FULL set so the CLI
     // `server` path can never drift from the daemon/desktop hosts on which
     // migrations have run.
-    defra_agent::migration::ensure_all_runtime_migrations(node.clone()).await?;
+    gents::migration::ensure_all_runtime_migrations(node.clone()).await?;
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
     // The host's window onto reconciliation: every published generation's
     // runnable behaviors. The Codex shim reconciles against this instead of the
     // boot-time document read that stranded it in #699.
     let (runnable_tx, runnable_rx) = watch::channel::<Vec<String>>(Vec::new());
 
-    let agent = DefraAgent::from_default_behavior_documents(
+    let agent = Gents::from_default_behavior_documents(
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
@@ -350,7 +350,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     .await
     .with_context(|| {
         format!(
-            "starting defra-agent server from {}\n{}",
+            "starting gents server from {}\n{}",
             home_dir.display(),
             server_start_failure_hint(&home_dir)
         )
@@ -395,7 +395,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
                 }
             }
             joined = &mut run_handle => {
-                let result = joined.context("joining defra-agent runtime task")?;
+                let result = joined.context("joining gents runtime task")?;
                 return result;
             }
         }
@@ -487,7 +487,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
                 eprintln!("Codex endpoint pending: {:#}", error.error());
                 eprintln!(
                     "The server keeps running. The shim binds by itself once behavior {bound_behavior_id:?} \
-                     becomes runnable (for example after `defra-agent config apply`) — no restart needed."
+                     becomes runnable (for example after `gents config apply`) — no restart needed."
                 );
                 codex_shim_output = Some(json!({
                     "pending": true,
@@ -576,16 +576,16 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             );
         }
         eprintln!(
-            "defra-agent server is running with IROH P2P. Press Ctrl-C to stop. For the desktop demo, run `defra-agent-desktop init`, launch `defra-agent-desktop`, wait for `replication: subscriptions armed`, then chat."
+            "gents server is running with IROH P2P. Press Ctrl-C to stop. For the desktop demo, run `gents-desktop init`, launch `gents-desktop`, wait for `replication: subscriptions armed`, then chat."
         );
     } else {
-        eprintln!("defra-agent server is running local-only. Press Ctrl-C to stop.");
+        eprintln!("gents server is running local-only. Press Ctrl-C to stop.");
     }
 
     if let Some(handle) = codex_shim_handle.as_mut() {
         tokio::select! {
             result = &mut run_handle => {
-                result.context("joining defra-agent runtime task")?
+                result.context("joining gents runtime task")?
             }
             result = handle => {
                 result.context("joining Codex shim task")?
@@ -596,7 +596,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     } else {
         run_handle
             .await
-            .context("joining defra-agent runtime task")?
+            .context("joining gents runtime task")?
     }
 }
 
@@ -987,7 +987,7 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for local tools"))
 }
 
-/// Shim host for URLs handed to `defra-agent codex --remote`: IPv6 addresses
+/// Shim host for URLs handed to `gents codex --remote`: IPv6 addresses
 /// need bracketing to form a valid authority (`ws://[::1]:9292/`).
 fn display_shim_host(host: IpAddr) -> String {
     let host_text = display_host(host);
@@ -1005,7 +1005,7 @@ mod shim_host_tests {
     use clap::Parser;
 
     fn parse_server(extra: &[&str]) -> ServeArgs {
-        let mut argv = vec!["defra-agent", "server"];
+        let mut argv = vec!["gents", "server"];
         argv.extend_from_slice(extra);
         let cli = Cli::try_parse_from(argv).expect("server should parse");
         match cli.command {

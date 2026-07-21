@@ -11,7 +11,7 @@ new machine). A `ScopeTemplate` is a named pairing intent — a collection set, 
 `Scope` (how per-peer document filtering is derived) and a `Delivery` (filtered
 push vs. subscribe+replicate).
 
-Mirrors the Rust `crates/defra-agent/src/agent/p2p_reconcile/templates.rs`:
+Mirrors the Rust `crates/gents/src/agent/p2p_reconcile/templates.rs`:
 `ScopeTemplate { id, collections, scope, delivery }`, `Scope = PeerDid {field} |
 Unscoped | PerCollection`, `Delivery = Push | Replicate`, and `scope_filter`.
 The catalog is a static `&[ScopeTemplate]`; here it is a concrete

@@ -42,7 +42,7 @@ pub(crate) use principal_assembly::BehaviorBuildError;
 
 #[cfg(test)]
 pub(crate) use builder::PendingAgentBehavior;
-pub use builder::{BehaviorBuilder, DefraAgentBuilder};
+pub use builder::{BehaviorBuilder, GentsBuilder};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessLifecycleState {
@@ -119,7 +119,7 @@ pub(crate) struct DocumentResolveContext {
 }
 
 #[derive(Clone)]
-pub struct DefraAgent {
+pub struct Gents {
     node: Arc<EmbeddedNode>,
     principal: Arc<AgentPrincipal>,
     behaviors: Vec<Arc<AgentBehavior>>,
@@ -140,15 +140,15 @@ pub struct DefraAgent {
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     /// Populated once the runtime's `TriggerEngine` has constructed the
-    /// `ManualSource`. In-process callers that cloned this `DefraAgent`
+    /// `ManualSource`. In-process callers that cloned this `Gents`
     /// before calling `run()` can then observe the handle via
     /// [`Self::manual_trigger_handle`].
     pub(crate) manual_trigger_handle: Arc<OnceCell<ManualTriggerHandle>>,
 }
 
-impl DefraAgent {
-    pub fn builder() -> DefraAgentBuilder {
-        DefraAgentBuilder::new()
+impl Gents {
+    pub fn builder() -> GentsBuilder {
+        GentsBuilder::new()
     }
 
     pub async fn from_default_behavior_documents(
@@ -174,7 +174,7 @@ impl DefraAgent {
             "from_default_behavior_documents called with a snapshot lacking a principal; \
              the production loader always sets principal: Some(...) — a None snapshot \
              means a non-production path bypassed the loader and would produce a \
-             DefraAgent.principal that's NOT Arc::ptr_eq to the snapshot's behavior principals",
+             Gents.principal that's NOT Arc::ptr_eq to the snapshot's behavior principals",
         );
         // The snapshot carries the principal Arc constructed once in the loader.
         // Fall back to a synthetic principal if (in tests) the snapshot has none.
@@ -240,9 +240,9 @@ impl DefraAgent {
 
     /// Returns the deployment principal record.
     ///
-    /// All DefraDB ops issued by this `DefraAgent` are signed by
+    /// All DefraDB ops issued by this `Gents` are signed by
     /// `self.principal.identity`. Two `AgentBehavior`s on the same
-    /// `DefraAgent` share this Arc by construction (single-principal
+    /// `Gents` share this Arc by construction (single-principal
     /// per snapshot invariant), so any DID-keyed permission decision
     /// returns identical results for behaviors on this deployment.
     pub fn principal(&self) -> &AgentPrincipal {
@@ -285,7 +285,7 @@ impl DefraAgent {
     /// `None` means the runtime is still in early bootstrap (the trigger
     /// engine spawns after `run()` resolves the initial snapshot and passes
     /// the startup barrier). In-process callers that need to push manual
-    /// fires should clone this `DefraAgent`, spawn `run()` on one copy, and
+    /// fires should clone this `Gents`, spawn `run()` on one copy, and
     /// poll the clone until this returns `Some`.
     #[allow(dead_code)] // consumed by CLI (Task 8) and desktop (Task 10)
     pub(crate) fn manual_trigger_handle(&self) -> Option<&ManualTriggerHandle> {

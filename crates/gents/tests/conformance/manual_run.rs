@@ -3,7 +3,7 @@
 //! # Scope
 //!
 //! These tests lock down the externally-observable contract between the
-//! shared manual-run helper (`defra_agent::write_manual_agent_request`) and
+//! shared manual-run helper (`gents::write_manual_agent_request`) and
 //! DefraDB. The helper is the single entry point both the CLI (`config task
 //! run`) and the desktop "Run Now" button use; asserting its persistence
 //! behavior here keeps both surfaces honest through one checkpoint.
@@ -24,7 +24,7 @@
 //!
 //! * `ManualTriggerHandle::run_task_now` error cases (unknown task, disabled
 //!   task via empty-snapshot): `ManualTriggerHandle` and
-//!   `ActiveRuntimeSnapshot` are both `pub(crate)` in `defra-agent`, so they
+//!   `ActiveRuntimeSnapshot` are both `pub(crate)` in `gents`, so they
 //!   cannot be constructed from an integration-test crate. The equivalent
 //!   contract is pinned in-crate by
 //!   `src/trigger_engine/tests.rs::manual_source_run_task_now_rejects_unknown_task`
@@ -32,12 +32,12 @@
 //!   `snapshot.active_tasks()` during resolve, so the same "not in the active
 //!   snapshot" path fires — no separate case needed.
 //! * End-to-end CLI coverage of the `config task run` command: pinned by
-//!   `crates/defra-agent-cli/tests/cli_config_task_run.rs` (Task 9), which
+//!   `crates/gents-cli/tests/cli_config_task_run.rs` (Task 9), which
 //!   drives the CLI binary against an embedded node and asserts the same
 //!   pending-lifecycle landing this file asserts at the helper surface.
 
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::write_manual_agent_request;
+use gents::graphql::escape_graphql_string;
+use gents::write_manual_agent_request;
 use serde_json::Value;
 
 use crate::support::{test_db, AGENT_DID, AGENT_NAME};
@@ -45,7 +45,7 @@ use crate::support::{test_db, AGENT_DID, AGENT_NAME};
 /// Fetch the full row shape the helper writes so tests can inspect lineage,
 /// execution origin, lifecycle state, and the rendered content without
 /// reconstructing the filter in every case.
-async fn fetch_manual_row(node: &defra_agent::defra_node::EmbeddedNode, doc_id: &str) -> Value {
+async fn fetch_manual_row(node: &gents::defra_node::EmbeddedNode, doc_id: &str) -> Value {
     let escaped = escape_graphql_string(doc_id);
     let query = format!(
         r#"{{
@@ -77,7 +77,7 @@ async fn fetch_manual_row(node: &defra_agent::defra_node::EmbeddedNode, doc_id: 
 /// Count how many `AgentRequest` rows carry the manual lineage tuple (null
 /// trigger id, `"manual"` trigger kind). Used by the parallel-concurrency
 /// case to confirm a second row really did land.
-async fn count_manual_agent_requests(node: &defra_agent::defra_node::EmbeddedNode) -> usize {
+async fn count_manual_agent_requests(node: &gents::defra_node::EmbeddedNode) -> usize {
     let query = r#"{
         AgentRequest(filter: { caused_by_trigger_kind: { _eq: "manual" } }) {
             _docID

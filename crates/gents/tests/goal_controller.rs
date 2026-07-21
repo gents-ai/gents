@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_agent::goal::{load_canonical_goal, set_goal, update_goal_fields, GoalStatus};
-use defra_agent::{ActiveRuntimeSnapshot, GoalSource, TriggerSource, UpdateSubscriptionSource};
+use gents::goal::{load_canonical_goal, set_goal, update_goal_fields, GoalStatus};
+use gents::{ActiveRuntimeSnapshot, GoalSource, TriggerSource, UpdateSubscriptionSource};
 use serde::Deserialize;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;

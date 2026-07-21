@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::{ensure, Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
-use defra_agent::defra_node::{EmbeddedNode, StorageBackend};
+use gents::defra_node::{EmbeddedNode, StorageBackend};
 use serde_json::Value;
 
 const AGENT_DID: &str = "did:key:z6Mkihm5VkTy99iTnDPQcJZC6MPZXuUQxeRN36C4UMFQEXYY";
@@ -62,7 +62,7 @@ async fn populated_v0612_store_upgrades_and_reopens_without_reset() -> Result<()
             .await
             .context("open populated v0.6.12 store with the current DefraDB pin")?,
     );
-    defra_agent::migration::ensure_all_runtime_migrations(node.clone())
+    gents::migration::ensure_all_runtime_migrations(node.clone())
         .await
         .context("run the existing agent runtime migration pipeline")?;
 
@@ -131,7 +131,7 @@ async fn populated_v0612_store_upgrades_and_reopens_without_reset() -> Result<()
             .await
             .context("reopen migrated v0.6.12 store")?,
     );
-    defra_agent::migration::ensure_all_runtime_migrations(reopened.clone())
+    gents::migration::ensure_all_runtime_migrations(reopened.clone())
         .await
         .context("rerun runtime migrations idempotently")?;
     let after_reopen = execute_ok(

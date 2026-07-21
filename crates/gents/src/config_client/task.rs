@@ -2,7 +2,7 @@ use crate::graphql::escape_graphql_string;
 use anyhow::Result;
 use serde_json::Value;
 
-use defra_agent_protocol::graphql::graphql_input_literal;
+use gents_protocol::graphql::graphql_input_literal;
 
 use super::common::{
     mint_recreate_identity, query_documents_by_unique_value, select_existing_document,
@@ -46,7 +46,7 @@ pub async fn write_task_document(
     );
 
     let response = txn.execute(&mutation).await?;
-    match defra_agent_protocol::graphql::extract_mutation_doc_id(&response, "Task") {
+    match gents_protocol::graphql::extract_mutation_doc_id(&response, "Task") {
         Ok(doc_id) => Ok(doc_id),
         Err(extract_error) => {
             let current = select_matching_task_row(txn, task_id, update_doc).await?;
@@ -95,7 +95,7 @@ async fn create_task_document(
         input_literal = input_literal,
     );
     let response = txn.execute(&mutation).await?;
-    match defra_agent_protocol::graphql::extract_mutation_doc_id(&response, "Task") {
+    match gents_protocol::graphql::extract_mutation_doc_id(&response, "Task") {
         Ok(doc_id) => Ok(doc_id),
         Err(extract_error) => {
             let current = select_matching_task_row(txn, task_id, add_doc).await?;

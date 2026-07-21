@@ -5,8 +5,8 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
-use defra_agent::{graphql::escape_graphql_string, AgentIdentity};
-use defra_agent_protocol::network_token::{
+use gents::{graphql::escape_graphql_string, AgentIdentity};
+use gents_protocol::network_token::{
     derive_membership_key, derive_network_id, encode_pointer, EndpointRecord, MembershipRecord,
     NetworkPointer, NetworkRecord, NETWORK_POINTER_VERSION,
 };

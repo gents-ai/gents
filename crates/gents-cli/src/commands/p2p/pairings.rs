@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
-use defra_agent::graphql::escape_graphql_string;
+use gents::graphql::escape_graphql_string;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -171,7 +171,7 @@ pub(super) async fn p2p_pairings_remove(args: P2pPairingRefArgs) -> Result<()> {
 /// the normalized id. An unknown template is a hard error (with the catalog
 /// listed) rather than a silent fallback, since the operator named it explicitly.
 pub(super) fn resolve_pairing_template(template: &str) -> Result<String> {
-    use defra_agent::agent::p2p_reconcile::templates::{
+    use gents::agent::p2p_reconcile::templates::{
         builtin_templates, resolve_template, APP_COLLECTIONS_TEMPLATE,
     };
     let template = template.trim();
@@ -331,7 +331,7 @@ pub(super) fn upsert_pairing_mutation(
 /// informational; the template id is authoritative. `template` is assumed
 /// already validated by `resolve_pairing_template`.
 fn template_collections(template: &str) -> Vec<String> {
-    use defra_agent::agent::p2p_reconcile::resolve_template;
+    use gents::agent::p2p_reconcile::resolve_template;
     resolve_template(template)
         .map(|t| t.collections.iter().map(|&c| c.to_string()).collect())
         .unwrap_or_default()
@@ -489,7 +489,7 @@ fn peer_id_from_address_like_peer(value: &str) -> Option<String> {
 /// the strict Replicate-style collection check, which is the conservative choice
 /// (a missing subscription reports unhealthy rather than falsely healthy).
 fn is_push_template(template: Option<&str>) -> bool {
-    use defra_agent::agent::p2p_reconcile::{resolve_template, Delivery};
+    use gents::agent::p2p_reconcile::{resolve_template, Delivery};
     template
         .and_then(resolve_template)
         .map(|t| t.delivery == Delivery::Push)

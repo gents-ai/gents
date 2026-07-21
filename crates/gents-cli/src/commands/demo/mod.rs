@@ -1,4 +1,4 @@
-//! `defra-agent demo` — an interactive, self-contained fleet demo that ships in
+//! `gents demo` — an interactive, self-contained fleet demo that ships in
 //! the binary. It boots a single curated local agent (read-only tools + demo
 //! skills) backed by a real model (interactive first-run backend picker,
 //! persisted), and drops into an interactive `demo>` shell: `chat` with the
@@ -32,7 +32,7 @@ use util::short;
 const NODE_A_NAME: &str = "demo";
 
 pub(crate) async fn demo(args: DemoArgs) -> Result<()> {
-    let bin = std::env::current_exe().context("resolving the defra-agent binary path")?;
+    let bin = std::env::current_exe().context("resolving the gents binary path")?;
     let home = resolve_home(args.home.clone());
     if args.reset && home.exists() {
         std::fs::remove_dir_all(&home).ok();
@@ -99,7 +99,7 @@ pub(crate) async fn demo(args: DemoArgs) -> Result<()> {
 
     fleet.teardown();
     println!(
-        "Stopped. Your demo agent is saved at {} (run `defra-agent demo` again to resume, or `--reset` to start over).",
+        "Stopped. Your demo agent is saved at {} (run `gents demo` again to resume, or `--reset` to start over).",
         home.display()
     );
     result

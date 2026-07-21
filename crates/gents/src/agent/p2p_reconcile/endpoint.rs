@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use defra_agent_protocol::network_token::EndpointRecord;
+use gents_protocol::network_token::EndpointRecord;
 use defra_node::EmbeddedNode;
 use tokio_util::sync::CancellationToken;
 

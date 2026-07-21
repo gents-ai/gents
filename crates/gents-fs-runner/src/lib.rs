@@ -14,7 +14,7 @@ use protocol::{GlobArgs, NativeFsRunnerRequest};
 
 pub fn self_test() -> Result<()> {
     let root = std::env::temp_dir().join(format!(
-        "defra-native-fs-runner-self-test-{}",
+        "gents-fs-runner-self-test-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&root);
@@ -49,7 +49,7 @@ mod tests {
     #[test]
     fn request_with_base_resolves_relative_paths_from_base() {
         let root = std::env::temp_dir().join(format!(
-            "defra-native-fs-runner-root-{}",
+            "gents-fs-runner-root-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&root);
@@ -80,7 +80,7 @@ mod tests {
     #[test]
     fn grep_accepts_single_file_path() {
         let root = std::env::temp_dir().join(format!(
-            "defra-native-fs-runner-grep-file-{}",
+            "gents-fs-runner-grep-file-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&root);

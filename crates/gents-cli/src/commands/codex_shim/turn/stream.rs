@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use codex_app_server_protocol as codex;
 use codex_protocol::models::MessagePhase;
-use defra_agent::UpdateSubscriptionSource;
+use gents::UpdateSubscriptionSource;
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
@@ -757,7 +757,7 @@ fn prime_projection_from_turn(
     known_tool_calls: &mut BTreeMap<String, ToolProjectionStatus>,
     known_compaction_states: &mut BTreeMap<String, String>,
 ) {
-    let preferred_agent_id = format!("defra-agent-{request_id}");
+    let preferred_agent_id = format!("gents-{request_id}");
     let preferred_reasoning_id = reasoning_item_id(request_id, 0);
     let mut resumed_agent = None;
     let mut found_preferred_agent = false;
@@ -1136,7 +1136,7 @@ async fn send_thread_token_usage_update(
             behavior_id = %state.behavior_id,
             "Codex shim could not load the effective context window; using the runtime default"
         );
-        defra_agent::DEFAULT_CONTEXT_WINDOW as i64
+        gents::DEFAULT_CONTEXT_WINDOW as i64
     });
     send_notification(
         outbound,
@@ -1212,7 +1212,7 @@ async fn cancel_pending_steering_request(
     request_id: &str,
 ) {
     connection.take_steering_input(request_id).await;
-    if let Err(error) = defra_agent::interrupt_request(state.node.as_ref(), request_id).await {
+    if let Err(error) = gents::interrupt_request(state.node.as_ref(), request_id).await {
         tracing::warn!(
             %error,
             request_id,
@@ -1230,7 +1230,7 @@ async fn steering_input_for_request(
         return Ok(input);
     }
 
-    let request_id_escaped = defra_agent::graphql::escape_graphql_string(request_id);
+    let request_id_escaped = gents::graphql::escape_graphql_string(request_id);
     let query = format!(
         r#"{{
             AgentRequest(

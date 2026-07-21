@@ -2102,7 +2102,7 @@ async fn unparseable_tool_args_notify_model_and_terminalize_failed() {
     assert!(
         !tool_results
             .iter()
-            .any(|r| r.contains("__defra_agent_tool_lifecycle__")),
+            .any(|r| r.contains("__gents_tool_lifecycle__")),
         "the internal marker must never leak to the model, got: {tool_results:?}"
     );
 

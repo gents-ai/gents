@@ -42,7 +42,7 @@ pub(crate) struct RuntimeLivenessSnapshot {
     pub(crate) active_tool_calls: Vec<ActiveToolCall>,
     pub(crate) ignored_foreign_tool_call_count: i64,
     pub(crate) active_native_executors_available: bool,
-    pub(crate) active_native_executors: Vec<defra_agent::NativeExecutorStatus>,
+    pub(crate) active_native_executors: Vec<gents::NativeExecutorStatus>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -170,7 +170,7 @@ pub(crate) fn compute_request_liveness_summary(
 
 pub(crate) fn with_active_native_executors(
     mut snapshot: RuntimeLivenessSnapshot,
-    active_native_executors: Vec<defra_agent::NativeExecutorStatus>,
+    active_native_executors: Vec<gents::NativeExecutorStatus>,
 ) -> RuntimeLivenessSnapshot {
     snapshot.active_native_executors_available = true;
     snapshot.active_native_executors = active_native_executors;

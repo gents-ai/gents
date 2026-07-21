@@ -14,8 +14,8 @@
 //! canonical-content messages so the full Rust composition is exercised while
 //! staying within the modeled fragment.
 
-use defra_agent::compaction::sanitize_history_for_provider;
-use defra_agent::llm::message::{
+use gents::compaction::sanitize_history_for_provider;
+use gents::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
@@ -281,7 +281,7 @@ fn pairing_identity_uses_call_id_over_item_id() {
 // per tool call and never changes row shape — so these vectors fence the value
 // contract the row-granular sanitize theorems cannot see.
 
-use defra_agent::llm::tool::normalize_tool_call_arguments;
+use gents::llm::tool::normalize_tool_call_arguments;
 
 /// The #589 production poison (Amy's persisted row `Rrt-HmhWfFSmkh1HSUmHt`):
 /// out-of-channel contamination with LITERAL newlines inside strings,

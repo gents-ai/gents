@@ -103,7 +103,7 @@ async fn run_agent_starts_when_startup_probe_cannot_validate_model() {
     )
     .await;
     let observer = Arc::new(RecordingObserver::default());
-    let agent = crate::DefraAgent::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_behavior_documents(
         node.clone(),
         identity.clone(),
         crate::agent::DocumentRuntimeOptions {
@@ -176,7 +176,7 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
         .await
         .unwrap();
 
-    let agent = crate::DefraAgent::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_behavior_documents(
         node.clone(),
         identity.clone(),
         crate::agent::DocumentRuntimeOptions {
@@ -238,7 +238,7 @@ async fn run_agent_starts_with_all_behaviors_unavailable_and_rejects_requests_at
         "unknown",
     )
     .await;
-    let agent = crate::DefraAgent::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_behavior_documents(
         node.clone(),
         identity.clone(),
         crate::agent::DocumentRuntimeOptions {
@@ -324,7 +324,7 @@ async fn run_agent_recovers_backend_availability_without_restart() {
         "unknown",
     )
     .await;
-    let agent = crate::DefraAgent::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_behavior_documents(
         node.clone(),
         identity.clone(),
         crate::agent::DocumentRuntimeOptions {
@@ -390,7 +390,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         1,
     )
     .await;
-    let agent = crate::DefraAgent::builder()
+    let agent = crate::Gents::builder()
         .node(node.clone())
         .identity(identity.clone())
         .default_behavior_id("general")

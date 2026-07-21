@@ -8,9 +8,9 @@ use opentelemetry_sdk::trace::{SdkTracerProvider, SpanExporter};
 use opentelemetry_sdk::Resource;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-const DEFAULT_SERVICE_NAME: &str = "defra-agent";
+const DEFAULT_SERVICE_NAME: &str = "gents";
 const DEFAULT_HOSTNAME: &str = "unknown";
-const TRACER_NAME: &str = "defra-agent";
+const TRACER_NAME: &str = "gents";
 
 pub(crate) struct TelemetryGuard {
     tracer_provider: Option<SdkTracerProvider>,
@@ -59,8 +59,8 @@ impl TelemetryGuard {
 /// journald at ~350k WARN lines/sec and wedged the host. Whatever the source,
 /// no single callsite may emit unbounded output; suppression is reported via
 /// bounded summary events, so failures stay visible.
-fn log_rate_ceiling() -> defra_agent::log_rate::RateLimitFilter {
-    defra_agent::log_rate::RateLimitFilter::new(defra_agent::log_rate::RateLimitConfig::default())
+fn log_rate_ceiling() -> gents::log_rate::RateLimitFilter {
+    gents::log_rate::RateLimitFilter::new(gents::log_rate::RateLimitConfig::default())
 }
 
 pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {

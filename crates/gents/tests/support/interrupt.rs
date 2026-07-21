@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use defra_agent::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
-use defra_agent::defra_node::{EmbeddedNode, QueryResponse};
-use defra_agent::graphql::escape_graphql_string;
+use gents::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
+use gents::defra_node::{EmbeddedNode, QueryResponse};
+use gents::graphql::escape_graphql_string;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -110,7 +110,7 @@ pub async fn create_runtime_request(
                 max_retries: {max_retries}
             }}) {{ _docID }}
         }}"#,
-        max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let response =
         execute_mutation_with_transaction_retry(node, &mutation, "create_runtime_request").await;

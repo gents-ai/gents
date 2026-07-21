@@ -1,13 +1,13 @@
 use std::time::Duration;
 
 use anyhow::{bail, Result};
-use defra_agent::background_completion::{
+use gents::background_completion::{
     observe_cancel_cascade_ack, project_background_subagent_completion,
     reconcile_unclaimed_cross_deployment_spawns,
 };
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLifecycle};
-use defra_agent::{
+use gents::graphql::escape_graphql_string;
+use gents::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLifecycle};
+use gents::{
     interrupt_request, upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument,
     RequestLifecycle, ToolSelectionDocument,
 };
@@ -649,7 +649,7 @@ async fn ensure_behavior(node: &HarnessNode, behavior_id: &str, agent_did: &str)
                 ]
                 .into_iter()
                 .map(|target_behavior_id| {
-                    defra_agent::subagent_target_entry(
+                    gents::subagent_target_entry(
                         target_behavior_id,
                         agent_did,
                         target_behavior_id,

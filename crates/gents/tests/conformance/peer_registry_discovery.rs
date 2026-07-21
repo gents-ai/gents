@@ -13,17 +13,17 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{Duration as ChronoDuration, Utc};
-use defra_agent::agent::p2p_reconcile::discovery::{
+use gents::agent::p2p_reconcile::discovery::{
     decide_join_admission, derive_registry_desired, reconcile_discovery_tick, DiscoveredEntry,
     DiscoveryStore, JoinAdmission, RegistryMemberRow,
 };
-use defra_agent::agent::p2p_reconcile::network::{
+use gents::agent::p2p_reconcile::network::{
     decide_v5_admission, derive_network_desired, peer_is_materializable, reconcile_network_tick,
     select_materializable_entries, select_revoked_member_dids, NetworkEndpointEntry, NetworkStore,
     V5AdmissionClaim, V5Rejection,
 };
-use defra_agent::identity::{AgentIdentity, KeyIdentity};
-use defra_agent_protocol::network_token::{EndpointRecord, MembershipRecord, NetworkRecord};
+use gents::identity::{AgentIdentity, KeyIdentity};
+use gents_protocol::network_token::{EndpointRecord, MembershipRecord, NetworkRecord};
 
 fn entry(peer: &str, live: bool) -> DiscoveredEntry {
     DiscoveredEntry {

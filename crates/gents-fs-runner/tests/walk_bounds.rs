@@ -2,7 +2,7 @@
 //! the walk so a zero-match search over a huge root returns partial results
 //! with explicit exhaustion metadata instead of scanning everything.
 
-use defra_native_fs_runner::protocol::{GlobArgs, GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
+use gents_fs_runner::protocol::{GlobArgs, GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
 
 mod support;
 use support::{run_json, unique_root};

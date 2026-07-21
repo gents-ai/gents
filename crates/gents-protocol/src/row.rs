@@ -514,7 +514,7 @@ pub struct CompactionEntryRow {
 
 /// Serde mirror of the `Task` replicated document.
 ///
-/// Mirrors `crates/defra-agent-schemas/schemas/agent/task.graphql`.
+/// Mirrors `crates/gents-schemas/schemas/agent/task.graphql`.
 /// Tasks are apply-owned descriptions of a prompt template bound to a
 /// behavior. They are globally addressed by `task_id`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -540,7 +540,7 @@ pub struct TaskRow {
 
 /// Serde mirror of the `Skill` replicated document.
 ///
-/// Mirrors `crates/defra-agent-schemas/schemas/agent/skill.graphql`.
+/// Mirrors `crates/gents-schemas/schemas/agent/skill.graphql`.
 /// A skill is a reusable instruction + tool-dependency fragment owned by a
 /// principal (`agent_did`) and composed into a behavior's prompt/tool surface
 /// at activation time (decision D1). `tool_refs` are *declared* dependencies,
@@ -574,7 +574,7 @@ pub struct SkillRow {
 
 /// Serde mirror of the `Schedule` replicated document.
 ///
-/// Mirrors `crates/defra-agent-schemas/schemas/agent/schedule.graphql`.
+/// Mirrors `crates/gents-schemas/schemas/agent/schedule.graphql`.
 /// Schedules bind a `Task` to a recurring trigger. The runtime owns the
 /// fire bookkeeping fields (`next_run_at`, `last_attempt_at`, `last_status`,
 /// `last_error`, `fire_count`); apply owns everything else.
@@ -613,7 +613,7 @@ pub struct ScheduleRow {
 
 /// Serde mirror of the `EventTrigger` replicated document.
 ///
-/// Mirrors `crates/defra-agent-schemas/schemas/agent/event_trigger.graphql`.
+/// Mirrors `crates/gents-schemas/schemas/agent/event_trigger.graphql`.
 /// EventTriggers bind a `Task` to a document-created event on a source
 /// collection. The apply path owns the description of the trigger
 /// (`trigger_id`, `task_id`, `source_collection`, `event_kind`, `filter`,

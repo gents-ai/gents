@@ -4,9 +4,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use defra_agent::tool_surface::ToolPolicySurface;
-use defra_agent::tool_surface::{BashMode, EndpointScope, FileToolMode, ToolPolicyBash};
-use defra_agent::toolset::{CommandExecutionMode, CommandNetworkMode};
+use gents::tool_surface::ToolPolicySurface;
+use gents::tool_surface::{BashMode, EndpointScope, FileToolMode, ToolPolicyBash};
+use gents::toolset::{CommandExecutionMode, CommandNetworkMode};
 
 use crate::lean_vocab_test::{
     LeanToolPolicySurfaceView as View, LeanToolPolicyWriteGrant as WriteGrant,

@@ -1,24 +1,24 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::event_delivery_contract::{
+use gents::defra_node::EmbeddedNode;
+use gents::event_delivery_contract::{
     runtime_event_delivery_source_contracts, EventDeliverySourceContract,
 };
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
-use defra_agent::llm::message::{
+use gents::graphql::escape_graphql_string;
+use gents::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
+use gents::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
-use defra_agent::llm::tool::BoxFuture;
-use defra_agent::llm::tool::ToolDefinition;
-use defra_agent::llm::tool::{ToolDyn, ToolError};
-use defra_agent::llm::{HookAction, ToolCallHookAction};
-use defra_agent::tool_call_lifecycle::{
+use gents::llm::tool::BoxFuture;
+use gents::llm::tool::ToolDefinition;
+use gents::llm::tool::{ToolDyn, ToolError};
+use gents::llm::{HookAction, ToolCallHookAction};
+use gents::tool_call_lifecycle::{
     AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
-use defra_agent::{
+use gents::{
     fetch_interrupt_requested_at, interrupt_request, upsert_agent_behavior, upsert_tool_selection,
     write_manual_agent_request, AgentBehaviorDocument, BackgroundToolRegistry, DefraSessionHook,
     DefraStreamWriter, FailurePolicy, InferenceCall, RequestLifecycle, ToolSelectionDocument,

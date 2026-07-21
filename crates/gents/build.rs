@@ -1,4 +1,4 @@
-//! Build the WASM lens artifacts before defra-agent compiles, so
+//! Build the WASM lens artifacts before gents compiles, so
 //! migration.rs can `include_bytes!` them.
 //!
 //! The WASM target requires the wasm32-unknown-unknown rust target. If it's
@@ -21,7 +21,7 @@ fn main() {
     ] {
         let lens_dir = workspace_root
             .join("crates")
-            .join("defra-agent-lenses")
+            .join("gents-lenses")
             .join(subdir);
         println!(
             "cargo:rerun-if-changed={}",
@@ -34,12 +34,12 @@ fn main() {
     }
 
     // Skip the WASM build when running rustdoc or in environments without the
-    // wasm32 target. The result is a build that compiles defra-agent for
-    // syntax/type checking but produces a defra-agent that will panic at
+    // wasm32 target. The result is a build that compiles gents for
+    // syntax/type checking but produces a gents that will panic at
     // startup if it actually tries to register the lens. Reasonable trade-off
     // for `cargo doc` and similar local-dev paths; production builds always
     // have the WASM target.
-    if env::var("DEFRA_AGENT_SKIP_LENS_BUILD").is_ok() {
+    if env::var("GENTS_SKIP_LENS_BUILD").is_ok() {
         emit_stub_artifact(
             &workspace_root,
             "AGENT_TOOL_CALL_LIFECYCLE_V1_TO_V2_LENS_WASM_PATH",
@@ -99,7 +99,7 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
                  If the wasm32-unknown-unknown target is not installed, run:\n\
                  \trustup target add wasm32-unknown-unknown\n\
                  To skip the lens build (e.g. for `cargo doc`), set \
-                 DEFRA_AGENT_SKIP_LENS_BUILD=1."
+                 GENTS_SKIP_LENS_BUILD=1."
             );
         }
     };
@@ -128,7 +128,7 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
 }
 
 fn workspace_root() -> PathBuf {
-    // Walk up from CARGO_MANIFEST_DIR (crates/defra-agent) two levels.
+    // Walk up from CARGO_MANIFEST_DIR (crates/gents) two levels.
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     manifest_dir
         .parent()
@@ -146,7 +146,7 @@ fn emit_stub_artifact(workspace_root: &Path, env_var: &str, stub_name: &str) {
     let bytes: [u8; 8] = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
     std::fs::write(&stub_path, bytes).expect("write stub WASM");
     println!("cargo:rustc-env={}={}", env_var, stub_path.display());
-    println!("cargo:warning=DEFRA_AGENT_SKIP_LENS_BUILD set; using stub WASM (lens will not function at runtime).");
+    println!("cargo:warning=GENTS_SKIP_LENS_BUILD set; using stub WASM (lens will not function at runtime).");
 
     let _ = workspace_root; // suppress unused warning
 }

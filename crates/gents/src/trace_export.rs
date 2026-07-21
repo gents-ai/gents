@@ -217,7 +217,7 @@ pub fn extract_raw_tool_call_json(
     persisted_tool_call_id: &str,
     persisted_tool_name: &str,
 ) -> Option<Value> {
-    let message = defra_agent_protocol::transcript::decode_persisted_message(role, content);
+    let message = gents_protocol::transcript::decode_persisted_message(role, content);
     let Message::Assistant { content, .. } = message else {
         return None;
     };

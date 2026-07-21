@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use defra_agent::defra_node::{EmbeddedNode, NodeBuilder, StorageBackend};
-use defra_agent::ensure_runtime_schemas;
+use gents::defra_node::{EmbeddedNode, NodeBuilder, StorageBackend};
+use gents::ensure_runtime_schemas;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -45,7 +45,7 @@ const DEFAULT_OLLAMA_ENDPOINT: &str = "http://localhost:11434/v1";
 const DEFAULT_OLLAMA_MODEL_NAME: &str = "hf.co/google/gemma-4-12B-it-qat-q4_0-gguf";
 /// Default model for the ChatGptCodex preset. ChatGPT subscriptions serve plain `gpt-5.x` slugs
 /// (not `-codex` variants); see `docs/backends.md`. List the account's models with
-/// `defra-agent config backend discover-models`.
+/// `gents config backend discover-models`.
 const DEFAULT_CHATGPT_CODEX_MODEL_NAME: &str = "gpt-5.5";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 const DEFAULT_CODEX_SHIM_PORT: u16 = 9292;
@@ -60,151 +60,151 @@ const DEFAULT_P2P_RATE_LIMIT_RATE: f64 = p2p::sync::DEFAULT_RATE_LIMIT_RATE;
 const DEFAULT_P2P_MAX_PENDING_DAGS: usize = p2p::sync::DEFAULT_MAX_PENDING_DAGS;
 const DEFAULT_LOG_FILTER: &str = concat!(
     "warn,",
-    "defra_agent::agent::runtime=info,",
-    "defra_agent::agent::daemon=info,",
-    "defra_agent::agent::reconcile=info,",
-    "defra_agent::hook=info,",
-    "defra_agent::session::sessions=info,",
-    "defra_agent::streaming=info,",
-    "defra_agent::trigger_engine=info"
+    "gents::agent::runtime=info,",
+    "gents::agent::daemon=info,",
+    "gents::agent::reconcile=info,",
+    "gents::hook=info,",
+    "gents::session::sessions=info,",
+    "gents::streaming=info,",
+    "gents::trigger_engine=info"
 );
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 const CLI_AFTER_HELP: &str = "\
 Quick start:
-  defra-agent init
-  defra-agent server
-  defra-agent codex
+  gents init
+  gents server
+  gents codex
 
 Or without the Codex TUI:
-  defra-agent chat
+  gents chat
 
 Inspect the local runtime:
-  defra-agent status
-  defra-agent response show REQUEST_ID
-  defra-agent task list
-  defra-agent task show TASK_ID
-  defra-agent task run TASK_ID --wait
-  defra-agent background list
-  defra-agent mcp probe --all
-  defra-agent reset
+  gents status
+  gents response show REQUEST_ID
+  gents task list
+  gents task show TASK_ID
+  gents task run TASK_ID --wait
+  gents background list
+  gents mcp probe --all
+  gents reset
 
 Update runtime documents:
-  defra-agent config backend set ...
-  defra-agent config behavior set ...
-  defra-agent config tools set ...";
+  gents config backend set ...
+  gents config behavior set ...
+  gents config tools set ...";
 const INIT_AFTER_HELP: &str = "\
 Bootstrap a local home directory with one default backend, one default behavior, and a safe read-only tool selection.
 
 Examples:
-  defra-agent init
-  defra-agent init --inference-url http://HOST:PORT/v1 --model-name MODEL
-  defra-agent init --backend-preset openrouter --model-name MODEL
-  defra-agent init --backend-preset openai --model-name MODEL
-  defra-agent init --write
-  defra-agent init --yolo
-  defra-agent init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write
-  defra-agent init --enable-memory --defra-query-collection AgentRequest
-  defra-agent init --identity-only
-  defra-agent init --identity-only --identity-backend macos-keychain --keychain-label LABEL
-  defra-agent init --identity-only --identity-backend macos-secure-enclave --secure-enclave-label LABEL
+  gents init
+  gents init --inference-url http://HOST:PORT/v1 --model-name MODEL
+  gents init --backend-preset openrouter --model-name MODEL
+  gents init --backend-preset openai --model-name MODEL
+  gents init --write
+  gents init --yolo
+  gents init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write
+  gents init --enable-memory --defra-query-collection AgentRequest
+  gents init --identity-only
+  gents init --identity-only --identity-backend macos-keychain --keychain-label LABEL
+  gents init --identity-only --identity-backend macos-secure-enclave --secure-enclave-label LABEL
 
 Next:
   llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
-  defra-agent server
-  defra-agent codex";
+  gents server
+  gents codex";
 const PROVISION_AFTER_HELP: &str = "\
 Provision binds a portable manifest root to this host's initialized identity,
 applies it locally, and verifies an exact post-apply diff.
 
 Examples:
-  defra-agent provision --home /path/to/home --root infra/agents/HOST/AGENT
-  defra-agent provision --root infra/agents/mini-1/mini-1-steward
-  defra-agent provision --root infra/agents/dev/dev-agent --bootstrap-file-identity
-  defra-agent provision --root infra/agents/mini-1/mini-1-steward --bootstrap-macos-keychain --keychain-label LABEL
-  defra-agent provision --root infra/agents/mini-1/mini-1-steward --bootstrap-macos-secure-enclave --secure-enclave-label LABEL
+  gents provision --home /path/to/home --root infra/agents/HOST/AGENT
+  gents provision --root infra/agents/mini-1/mini-1-steward
+  gents provision --root infra/agents/dev/dev-agent --bootstrap-file-identity
+  gents provision --root infra/agents/mini-1/mini-1-steward --bootstrap-macos-keychain --keychain-label LABEL
+  gents provision --root infra/agents/mini-1/mini-1-steward --bootstrap-macos-secure-enclave --secure-enclave-label LABEL
 
 Production low-level flow:
-  defra-agent init --identity-only --identity-backend macos-keychain --keychain-label LABEL
-  defra-agent init --identity-only --identity-backend macos-secure-enclave --secure-enclave-label LABEL
-  defra-agent config apply --root <root> --home <home> --bind-agent-did home
-  defra-agent config diff --root <root> --home <home> --bind-agent-did home
+  gents init --identity-only --identity-backend macos-keychain --keychain-label LABEL
+  gents init --identity-only --identity-backend macos-secure-enclave --secure-enclave-label LABEL
+  gents config apply --root <root> --home <home> --bind-agent-did home
+  gents config diff --root <root> --home <home> --bind-agent-did home
 
 File-key development flow:
-  defra-agent provision --root <root> --bootstrap-file-identity";
+  gents provision --root <root> --bootstrap-file-identity";
 const RESET_AFTER_HELP: &str = "\
 Examples:
-  defra-agent reset
-  defra-agent reset --home /path/to/home";
+  gents reset
+  gents reset --home /path/to/home";
 const SERVER_AFTER_HELP: &str = "\
 `server` reads the initialized home directory, starts the embedded DefraDB runtime, serves GraphQL locally, and starts IROH P2P for desktop pairing.
 
 Common flow:
-  defra-agent init
-  defra-agent server
-  defra-agent codex
+  gents init
+  gents server
+  gents codex
 
 The server runs the Codex TUI endpoint by default (loopback only); disable it
-with --no-codex-shim. `defra-agent codex` in another terminal connects to it.
+with --no-codex-shim. `gents codex` in another terminal connects to it.
 
 For laptop-to-fleet use, bind the shim on a reachable interface:
-  defra-agent server --codex-shim-bind-addr <trusted-private-or-tailscale-ip>
-  defra-agent codex --remote ws://<tailscale-host>:9292/
+  gents server --codex-shim-bind-addr <trusted-private-or-tailscale-ip>
+  gents codex --remote ws://<tailscale-host>:9292/
 
 Identity note:
   Standalone server startup supports file keys, macOS keychain software-key homes initialized with identity_backend=macos-keychain, and macOS Secure Enclave homes initialized with identity_backend=macos-secure-enclave.
   Homes with a real agent DID and no key_path must include a supported identity_backend and label in init.json.";
 const CHAT_AFTER_HELP: &str = "\
 Examples:
-  defra-agent chat
-  defra-agent chat \"summarize this repo\"
-  defra-agent chat --session-id SESSION_ID \"continue the previous conversation\"
+  gents chat
+  gents chat \"summarize this repo\"
+  gents chat --session-id SESSION_ID \"continue the previous conversation\"
 
 Diagnostics:
-  defra-agent status
-  defra-agent response show REQUEST_ID";
+  gents status
+  gents response show REQUEST_ID";
 const CODEX_AFTER_HELP: &str = "\
 Runs the Codex terminal UI in-process, connected to the local agent's Codex
 shim. Codex-side approvals and sandboxing are bypassed: the tool preset chosen
-at `defra-agent init` (read-only by default) is the permission boundary.
+at `gents init` (read-only by default) is the permission boundary.
 
 Examples:
-  defra-agent codex
-  defra-agent codex \"what is in this directory?\"
-  defra-agent codex --remote ws://127.0.0.1:9292/
+  gents codex
+  gents codex \"what is in this directory?\"
+  gents codex --remote ws://127.0.0.1:9292/
 
-Requires a running `defra-agent server` in another terminal.";
+Requires a running `gents server` in another terminal.";
 const P2P_AFTER_HELP: &str = "\
 Examples:
-  defra-agent p2p status
-  defra-agent p2p peers --home /path/to/home
-  defra-agent p2p diagnose
+  gents p2p status
+  gents p2p peers --home /path/to/home
+  gents p2p diagnose
 
   # Declarative pairing (the normal path — the runtime reconciles these):
-  defra-agent p2p pairings set --did <agent-did> --address <ticket-or-multiaddr> --template conversation
-  defra-agent p2p pairings list
-  defra-agent p2p pairings rm --peer <peer-id>
-  defra-agent p2p network create --name \"Fleet One\"
-  defra-agent p2p network grant <member-did>
-  defra-agent p2p pairings invite --member-did <member-did> --template network-control
-  defra-agent p2p pairings join <invite-token>
+  gents p2p pairings set --did <agent-did> --address <ticket-or-multiaddr> --template conversation
+  gents p2p pairings list
+  gents p2p pairings rm --peer <peer-id>
+  gents p2p network create --name \"Fleet One\"
+  gents p2p network grant <member-did>
+  gents p2p pairings invite --member-did <member-did> --template network-control
+  gents p2p pairings join <invite-token>
 
   # Service discovery:
-  defra-agent p2p network register
-  defra-agent p2p network list
-  defra-agent p2p templates list
+  gents p2p network register
+  gents p2p network list
+  gents p2p templates list
 
   # Low-level live wiring (escape hatch — prefer `p2p pairings`):
-  defra-agent p2p admin connect --peer <peer-id-or-address>
-  defra-agent p2p admin replicators add --peer <peer-id-or-address> --collection AgentRequest --filter AgentRequest:agent_did=<agent-did>
-  defra-agent p2p admin documents sync --collection AgentRequest --doc-id <doc-id>";
+  gents p2p admin connect --peer <peer-id-or-address>
+  gents p2p admin replicators add --peer <peer-id-or-address> --collection AgentRequest --filter AgentRequest:agent_did=<agent-did>
+  gents p2p admin documents sync --collection AgentRequest --doc-id <doc-id>";
 const SCHEMA_AFTER_HELP: &str = "\
 Apply app-specific DefraDB collection schemas to a running or local store.
 
 Examples:
-  defra-agent schema apply ./app-schemas
-  defra-agent schema apply ./app-schemas --graphql http://127.0.0.1:9191/api/v0/graphql
-  defra-agent schema apply ./schemas/action_request.graphql --patch ./schemas/action_request.patch.json
+  gents schema apply ./app-schemas
+  gents schema apply ./app-schemas --graphql http://127.0.0.1:9191/api/v0/graphql
+  gents schema apply ./schemas/action_request.graphql --patch ./schemas/action_request.patch.json
 
 Directory inputs apply *.graphql and *.gql files, then additive patch files
 named *.patch.json or *.json-patch. Patch files contain a JSON Patch array, or
@@ -213,48 +213,48 @@ const STATUS_AFTER_HELP: &str = "\
 Status reads the local runtime by default.
 
 Examples:
-  defra-agent status
-  defra-agent status --home /path/to/home
-  defra-agent status --graphql http://127.0.0.1:9191/api/v0/graphql";
+  gents status
+  gents status --home /path/to/home
+  gents status --graphql http://127.0.0.1:9191/api/v0/graphql";
 const BACKGROUND_AFTER_HELP: &str = "\
 Lists AgentToolCall rows persisted with await_mode=background and enriches them with live runtime liveness when available.
 Live native-process enrichment requires --graphql pointing at the running runtime; local --home reads print NATIVE_TOOL=unknown.
 Native-process matches are scoped by tool name because runtime liveness does not expose per-call native process IDs.
 
 Examples:
-  defra-agent background list
-  defra-agent background list --home /path/to/home
-  defra-agent background list --graphql http://127.0.0.1:9191/api/v0/graphql
-  defra-agent background list --request REQUEST_ID
-  defra-agent background list --state running --age-gt 5m
-  defra-agent background list --output json";
+  gents background list
+  gents background list --home /path/to/home
+  gents background list --graphql http://127.0.0.1:9191/api/v0/graphql
+  gents background list --request REQUEST_ID
+  gents background list --state running --age-gt 5m
+  gents background list --output json";
 const MCP_AFTER_HELP: &str = "\
 Examples:
-  defra-agent mcp probe SERVICE_ID
-  defra-agent mcp probe --all
-  defra-agent mcp probe SERVICE_ID --timeout 10s
-  defra-agent mcp probe --all --graphql http://127.0.0.1:9191/api/v0/graphql --output json";
+  gents mcp probe SERVICE_ID
+  gents mcp probe --all
+  gents mcp probe SERVICE_ID --timeout 10s
+  gents mcp probe --all --graphql http://127.0.0.1:9191/api/v0/graphql --output json";
 const FLEET_AFTER_HELP: &str = "\
 Shows the live fleet slot-accounting snapshot exposed by the local runtime HTTP API.
 
 Examples:
-  defra-agent fleet slots
-  defra-agent fleet slots --home /path/to/home
-  defra-agent fleet slots --graphql http://127.0.0.1:9191/api/v0/graphql";
+  gents fleet slots
+  gents fleet slots --home /path/to/home
+  gents fleet slots --graphql http://127.0.0.1:9191/api/v0/graphql";
 const TASK_AFTER_HELP: &str = "\
 Inspect configured Task documents and create pending AgentRequests with manual trigger lineage.
 
 Examples:
-  defra-agent task list
-  defra-agent task show host-check
-  defra-agent task run host-check
-  defra-agent task run host-check --args '{\"scope\":\"host\"}' --wait
-  defra-agent task run --task-id host-check --graphql http://127.0.0.1:9191/api/v0/graphql";
+  gents task list
+  gents task show host-check
+  gents task run host-check
+  gents task run host-check --args '{\"scope\":\"host\"}' --wait
+  gents task run --task-id host-check --graphql http://127.0.0.1:9191/api/v0/graphql";
 const SHOW_AFTER_HELP: &str = "\
 Examples:
-  defra-agent status
-  defra-agent request show REQUEST_ID
-  defra-agent response show REQUEST_ID";
+  gents status
+  gents request show REQUEST_ID
+  gents response show REQUEST_ID";
 const TRACE_AFTER_HELP: &str = "\
 Exports one JSON object per persisted AgentToolCall row. The command reads
 AgentSession, AgentRequest, AgentResponse, AgentMessage, AgentBehavior, and
@@ -262,62 +262,62 @@ AgentToolCall rows, then infers Amy baseline fields without mutating runtime
 state.
 
 Examples:
-  defra-agent trace export --home /path/to/home
-  defra-agent trace export --graphql http://127.0.0.1:9191/api/v0/graphql
-  defra-agent trace export --graphql http://100.69.4.79:9191/api/v0/graphql --run-id amy-readonly-001 --limit 200 > amy-tool-calls.jsonl
-  defra-agent trace timeline --request-id REQUEST_ID --home /path/to/home
-  defra-agent trace project --projection openai-codex --request-id REQUEST_ID --redaction public --home /path/to/home
-  defra-agent trace project --projection langgraph --request-id REQUEST_ID --format jsonl --home /path/to/home
-  defra-agent trace project --projection multi-agent --request-id REQUEST_ID --scope-agent-did DID --home /path/to/home
-  defra-agent trace project --projection multi-agent --request-id REQUEST_ID --format eval-jsonl --home /path/to/home
-  defra-agent trace project-schema --projection multi-agent --format eval-jsonl";
+  gents trace export --home /path/to/home
+  gents trace export --graphql http://127.0.0.1:9191/api/v0/graphql
+  gents trace export --graphql http://100.69.4.79:9191/api/v0/graphql --run-id amy-readonly-001 --limit 200 > amy-tool-calls.jsonl
+  gents trace timeline --request-id REQUEST_ID --home /path/to/home
+  gents trace project --projection openai-codex --request-id REQUEST_ID --redaction public --home /path/to/home
+  gents trace project --projection langgraph --request-id REQUEST_ID --format jsonl --home /path/to/home
+  gents trace project --projection multi-agent --request-id REQUEST_ID --scope-agent-did DID --home /path/to/home
+  gents trace project --projection multi-agent --request-id REQUEST_ID --format eval-jsonl --home /path/to/home
+  gents trace project-schema --projection multi-agent --format eval-jsonl";
 const CONFIG_AFTER_HELP: &str = "\
 Examples:
-  defra-agent config validate --root infra/agents/default
-  defra-agent config validate --root infra/agents/default --home /path/to/home --bind-agent-did home
-  defra-agent config diff --root infra/agents/default --home /path/to/home
-  defra-agent config apply --root infra/agents/default --home /path/to/home --bind-agent-did home
-  defra-agent config backend set --graphql URL --backend-id <backend-id> --name <name> --backend-preset openrouter --max-concurrent 2
-  defra-agent config backend discover-models --backend-preset openrouter
-  defra-agent config behavior set --graphql URL --agent-did <AGENT_DID> --backend-id <backend-id> --model-name MODEL
-  defra-agent config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --enable-file-tools
-  defra-agent config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --enable-memory true
-  defra-agent config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --subagent-spawn-enabled true --subagent-target '<json>'";
+  gents config validate --root infra/agents/default
+  gents config validate --root infra/agents/default --home /path/to/home --bind-agent-did home
+  gents config diff --root infra/agents/default --home /path/to/home
+  gents config apply --root infra/agents/default --home /path/to/home --bind-agent-did home
+  gents config backend set --graphql URL --backend-id <backend-id> --name <name> --backend-preset openrouter --max-concurrent 2
+  gents config backend discover-models --backend-preset openrouter
+  gents config behavior set --graphql URL --agent-did <AGENT_DID> --backend-id <backend-id> --model-name MODEL
+  gents config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --enable-file-tools
+  gents config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --enable-memory true
+  gents config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --subagent-spawn-enabled true --subagent-target '<json>'";
 const REQUEST_AFTER_HELP: &str = "\
-`request` is the low-level document path. Most users should prefer `defra-agent chat`.
+`request` is the low-level document path. Most users should prefer `gents chat`.
 
 Examples:
-  defra-agent request submit --content \"summarize this repo\"
-  defra-agent request show REQUEST_ID";
+  gents request submit --content \"summarize this repo\"
+  gents request show REQUEST_ID";
 const RESPONSE_AFTER_HELP: &str = "\
 Examples:
-  defra-agent response wait REQUEST_ID
-  defra-agent response show REQUEST_ID";
+  gents response wait REQUEST_ID
+  gents response show REQUEST_ID";
 const SESSION_AFTER_HELP: &str = "\
 Fork a conversation into a new session seeded from a user-turn prefix \
 of the source. Child inherits principal; behavior can be swapped with \
 --behavior.";
 const SUBAGENT_AFTER_HELP: &str = "\
 Examples:
-  defra-agent subagent list
-  defra-agent subagent list --root REQUEST_ID
-  defra-agent subagent list --root REQUEST_ID --depth 2
-  defra-agent subagent list --root REQUEST_ID --output json
-  defra-agent subagent cancel REQUEST_ID
-  defra-agent subagent cancel REQUEST_ID --cascade=false
-  defra-agent subagent cancel REQUEST_ID --wait --timeout 30s --output json";
+  gents subagent list
+  gents subagent list --root REQUEST_ID
+  gents subagent list --root REQUEST_ID --depth 2
+  gents subagent list --root REQUEST_ID --output json
+  gents subagent cancel REQUEST_ID
+  gents subagent cancel REQUEST_ID --cascade=false
+  gents subagent cancel REQUEST_ID --wait --timeout 30s --output json";
 const SUBAGENT_LIST_AFTER_HELP: &str =
     "Without --root, only requests that participate in subagent lineage are shown.";
 const DIAGNOSE_AFTER_HELP: &str = "\
 Examples:
-  defra-agent diagnose
-  defra-agent diagnose --home /path/to/home
-  defra-agent diagnose --graphql http://127.0.0.1:9191/api/v0/graphql";
+  gents diagnose
+  gents diagnose --home /path/to/home
+  gents diagnose --graphql http://127.0.0.1:9191/api/v0/graphql";
 const TOOLS_AFTER_HELP: &str = "\
 Examples:
-  defra-agent tools explain
-  defra-agent tools explain --behavior-id BEHAVIOR_ID
-  defra-agent tools explain --graphql http://127.0.0.1:9191/api/v0/graphql
+  gents tools explain
+  gents tools explain --behavior-id BEHAVIOR_ID
+  gents tools explain --graphql http://127.0.0.1:9191/api/v0/graphql
 
 The explain output separates model-callable tools from operator HTTP/MCP surfaces
 and includes warnings for confusing defaults such as empty allowlists that mean
@@ -330,10 +330,10 @@ The output is designed to be committed to version control and applied with
 format that `config import` consumes.
 
 Examples:
-  defra-agent config export --root ./my-agent
-  defra-agent config export --root ./my-agent --force
-  defra-agent config export --root ./my-agent --agent-did <AGENT_DID>
-  defra-agent config export --root ./my-agent --home /path/to/home --bind-agent-did home";
+  gents config export --root ./my-agent
+  gents config export --root ./my-agent --force
+  gents config export --root ./my-agent --agent-did <AGENT_DID>
+  gents config export --root ./my-agent --home /path/to/home --bind-agent-did home";
 const CONFIG_IMPORT_AFTER_HELP: &str = "\
 Imports desired configuration documents from a legacy JSON bundle file.
 
@@ -345,11 +345,11 @@ Default behavior is insert-only and will fail if a document already exists.
 Use --override to switch to upsert mode.
 
 Examples:
-  defra-agent config import agent-config.json
-  cat agent-config.json | defra-agent config import
-  defra-agent config import agent-config.json --override";
-pub(crate) const CONFIG_EXPORT_FORMAT_V1: &str = "defra-agent-config/v1";
-pub(crate) const CONFIG_EXPORT_FORMAT: &str = "defra-agent-config/v2";
+  gents config import agent-config.json
+  cat agent-config.json | gents config import
+  gents config import agent-config.json --override";
+pub(crate) const CONFIG_EXPORT_FORMAT_V1: &str = "gents-config/v1";
+pub(crate) const CONFIG_EXPORT_FORMAT: &str = "gents-config/v2";
 
 pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("AgentPrincipal", "agent_did"),
@@ -592,7 +592,7 @@ pub(crate) async fn resolve_config_access(
         // drift on which migrations have run (e.g. the `agent_did` scope key that
         // `ToolCallLifecycle::load` selects, or description/summary from #377).
         // Idempotent check-then-add, so the cost is bounded per invocation.
-        defra_agent::migration::ensure_all_runtime_migrations(node_arc.clone()).await?;
+        gents::migration::ensure_all_runtime_migrations(node_arc.clone()).await?;
         // Unwrap the Arc: at this point the only live Arc is node_arc itself, so
         // try_unwrap always succeeds. The unwrap_or_else fallback is unreachable
         // but required by the type system.
@@ -635,7 +635,7 @@ pub(crate) fn dangerously_overwrite_home(home_dir: &Path) -> Result<()> {
     if let Some(user_home) = std::env::var_os("HOME").map(PathBuf::from) {
         if home_dir == user_home {
             anyhow::bail!(
-                "refusing to dangerously overwrite the user home directory {}; pass a dedicated defra-agent home instead",
+                "refusing to dangerously overwrite the user home directory {}; pass a dedicated gents home instead",
                 home_dir.display()
             );
         }
@@ -648,7 +648,7 @@ pub(crate) fn dangerously_overwrite_home(home_dir: &Path) -> Result<()> {
 
 pub(crate) fn server_start_failure_hint(home_dir: &Path) -> String {
     format!(
-        "Next:\n  1. For the default local backend, run `llama-server -hf {DEFAULT_INIT_MODEL_NAME}` and make sure it is listening on {DEFAULT_INIT_ENDPOINT}\n  2. Point the backend elsewhere with `defra-agent config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id <ID> --name <NAME> --endpoint <URL> --max-concurrent 2`\n  3. Inspect the initialized home at {}\n  4. If persisted runtime state is stale, run `defra-agent reset --home {}`",
+        "Next:\n  1. For the default local backend, run `llama-server -hf {DEFAULT_INIT_MODEL_NAME}` and make sure it is listening on {DEFAULT_INIT_ENDPOINT}\n  2. Point the backend elsewhere with `gents config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id <ID> --name <NAME> --endpoint <URL> --max-concurrent 2`\n  3. Inspect the initialized home at {}\n  4. If persisted runtime state is stale, run `gents reset --home {}`",
         init_config_path(home_dir).display(),
         home_dir.display()
     )

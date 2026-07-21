@@ -18,7 +18,7 @@
 //!     the object — `finish_reason == "length"`).
 //!
 //! Both land at the SAME client seam: `crate::llm::tool::ToolDyn::call`
-//! (`crates/defra-agent/src/llm/tool.rs`), which deserializes the model's
+//! (`crates/gents/src/llm/tool.rs`), which deserializes the model's
 //! `arguments` string into the tool's typed `Args`.
 //!
 //! Before the fix, a parse failure there became `ToolError::JsonError`, which the
@@ -49,7 +49,7 @@
 //! These tests are deterministic and need no live backend; they exercise the
 //! real `ToolDyn::call` seam directly.
 
-use defra_agent::llm::tool::{Tool, ToolDefinition, ToolDyn, ToolError, UnparseableArgsKind};
+use gents::llm::tool::{Tool, ToolDefinition, ToolDyn, ToolError, UnparseableArgsKind};
 use serde::{Deserialize, Serialize};
 
 /// Mirror of a steward status-report tool's argument shape: a large markdown

@@ -41,7 +41,7 @@ history self-heals at request build). The theorems:
   an object recovers THAT object, not the empty fallback (the #589
   corrupt-payload salvage: the intended call survives).
 
-Rust conformance: `crates/defra-agent/tests/conformance/prompt_assembly.rs`
+Rust conformance: `crates/gents/tests/conformance/prompt_assembly.rs`
 (the `PromptAssembly` home in the structure fence).
 -/
 

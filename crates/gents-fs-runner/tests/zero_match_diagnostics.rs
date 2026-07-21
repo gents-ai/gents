@@ -3,8 +3,8 @@
 //! path anchor is corrected on the first attempt instead of retried through
 //! repeated full walks.
 
-use defra_native_fs_runner::execute_request_with_base;
-use defra_native_fs_runner::protocol::{GlobArgs, GrepArgs, NativeFsRunnerRequest};
+use gents_fs_runner::execute_request_with_base;
+use gents_fs_runner::protocol::{GlobArgs, GrepArgs, NativeFsRunnerRequest};
 use serde_json::Value;
 
 mod support;

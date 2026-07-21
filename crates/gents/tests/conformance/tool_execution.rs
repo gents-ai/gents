@@ -8,7 +8,7 @@
 
 use crate::support::snapshots::fetch_tool_call_snapshots_for_session;
 use crate::support::test_db;
-use defra_agent::tool_call_lifecycle::{CancelCause, FailureClass, ToolCallLifecycle};
+use gents::tool_call_lifecycle::{CancelCause, FailureClass, ToolCallLifecycle};
 
 use crate::lean_vocab_test::{lean_tool_preflight_case, lean_tool_retry_case};
 

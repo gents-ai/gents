@@ -1,5 +1,5 @@
 {
-  "$id": "https://schemas.defra.ai/defra-agent/adapter-projection/multi_agent_task/v1.schema.json",
+  "$id": "https://schemas.defra.ai/gents/adapter-projection/multi_agent_task/v1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -272,7 +272,7 @@
           ]
         },
         "runtime": {
-          "const": "defra-agent"
+          "const": "gents"
         },
         "source_projection_id": {
           "const": "run_timeline"

@@ -823,7 +823,7 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         .join("object.json");
 
     // Use InferenceBackend as the source collection — it's registered on
-    // every defra-agent server, so the apply-time live validation (filter
+    // every gents server, so the apply-time live validation (filter
     // syntax probe + `doc.*` field resolution) can succeed against a
     // known-good schema. `name` and `enabled` are real fields on
     // InferenceBackend.
@@ -1182,7 +1182,7 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
 //   * valid filter + valid `doc.*` paths apply cleanly.
 //
 // All three use `InferenceBackend` as the source collection — it is one of
-// the runtime-registered agent schemas on any defra-agent server, so the
+// the runtime-registered agent schemas on any gents server, so the
 // probe and introspection queries hit a known-good type without requiring
 // an external schema-registration path.
 // ---------------------------------------------------------------------------
