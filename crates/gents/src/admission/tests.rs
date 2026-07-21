@@ -50,7 +50,7 @@ fn request(request_id: &str) -> AgentRequest {
     AgentRequest {
         doc_id: format!("doc-{request_id}"),
         request_id: request_id.to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         requester_did: None,
         behavior_id: Some("default".to_string()),
         session_id: format!("session-{request_id}"),

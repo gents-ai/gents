@@ -6,14 +6,14 @@ import Proofs.Request.Transition
 /-!
 # Codex Shim Projection
 
-Projection from the core DEFRA request/response model into the lighter
+Projection from the core GENTS request/response model into the lighter
 Codex-facing turn lifecycle.
 
 The shim turn phase is not an independent product lifecycle. It is the protocol
-view that stock Codex needs while a DEFRA request is running behind it:
+view that stock Codex needs while a GENTS request is running behind it:
 
-* non-terminal DEFRA request states project to `inProgress`;
-* terminal DEFRA request states project to a terminal Codex phase;
+* non-terminal GENTS request states project to `inProgress`;
+* terminal GENTS request states project to a terminal Codex phase;
 * response status can advance a non-terminal request observation when response
   replication wins the race;
 * local Codex interrupt acknowledgement takes precedence and projects directly
@@ -49,12 +49,12 @@ def projectRequestState : RequestState → TurnPhase
 /-!
 ## First-class subagent projection
 
-DEFRA's subagent tools and request lifecycle are projected into Codex's
+GENTS's subagent tools and request lifecycle are projected into Codex's
 `collabAgentToolCall` vocabulary.  This is deliberately an adapter mapping: it
 does not introduce a second subagent lifecycle.
 -/
 
-/-- DEFRA tools which have a first-class Codex collaboration equivalent. -/
+/-- GENTS tools which have a first-class Codex collaboration equivalent. -/
 inductive SubagentControlTool where
   | spawn
   | wait
@@ -72,7 +72,7 @@ inductive CollabTool where
   | closeAgent
   deriving DecidableEq, Repr
 
-/-- Project native DEFRA subagent controls into first-class Codex collaboration
+/-- Project native GENTS subagent controls into first-class Codex collaboration
 items.  Inspection tools (`list_subagents` and `read_subagent`) remain ordinary
 MCP calls and enter this model as `other`. -/
 def projectSubagentControl : SubagentControlTool → Option CollabTool
@@ -185,7 +185,7 @@ inductive CollabAgentPhase where
   | interrupted
   deriving DecidableEq, Repr
 
-/-- A child agent is terminal exactly when its DEFRA request is terminal. -/
+/-- A child agent is terminal exactly when its GENTS request is terminal. -/
 def CollabAgentPhase.terminal : CollabAgentPhase → Prop
   | .completed | .errored | .interrupted => True
   | .pendingInit | .running => False
@@ -274,8 +274,8 @@ theorem receiver_thread_is_child_session (link : SubagentThreadLink) :
 ### Subagent presentation metadata and discovery
 
 The runtime remains authoritative for optional presentation metadata.  The
-adapter preserves values which DEFRA owns and leaves unavailable values absent;
-it never substitutes Codex defaults.  Authorized DEFRA children are ordinary
+adapter preserves values which GENTS owns and leaves unavailable values absent;
+it never substitutes Codex defaults.  Authorized GENTS children are ordinary
 spawned subagent threads in the Codex source vocabulary.
 -/
 
@@ -299,7 +299,7 @@ theorem absent_runtime_reasoning_effort_stays_absent
     (projectCollabPresentationMetadata
       { model := model, reasoningEffort := none }).reasoningEffort = none := rfl
 
-/-- Source filters relevant to a DEFRA child created by `spawn_subagent`. -/
+/-- Source filters relevant to a GENTS child created by `spawn_subagent`. -/
 inductive ThreadSourceFilter where
   | cli
   | subAgent
@@ -356,7 +356,7 @@ theorem subagent_parent_omits_legacy_top_level (parentThreadId : String) :
 /-!
 ## Native reasoning presentation
 
-DEFRA owns two views of reasoning: the bounded live `AgentResponse.reasoning`
+GENTS owns two views of reasoning: the bounded live `AgentResponse.reasoning`
 preview and the durable `AgentMessage.reasoning` copy materialized before the
 live tail is cleared.  The shim projects both through Codex's raw reasoning
 channel. It must not relabel provider reasoning text as a summary merely to
@@ -567,7 +567,7 @@ theorem reasoning_completion_requires_an_open_item
 The runtime documents remain authoritative for thread liveness, behavior/model
 binding, tool identity and diagnostics, and timestamps. These functions define
 the loss-minimizing choices the stateless shim makes when Codex has fewer
-fields than DEFRA.
+fields than GENTS.
 -/
 
 inductive ThreadPresentationStatus where
@@ -662,10 +662,10 @@ theorem unavailable_child_model_falls_back_to_root :
     projectedThreadModel "root-model" none none = "root-model" := rfl
 
 theorem selected_tool_identity_overrides_model_facing_name :
-    projectedToolIdentity "defra" (some "service-a") = "service-a" := rfl
+    projectedToolIdentity "gents" (some "service-a") = "service-a" := rfl
 
 theorem absent_selected_tool_identity_keeps_fallback :
-    projectedToolIdentity "defra" none = "defra" := rfl
+    projectedToolIdentity "gents" none = "gents" := rfl
 
 theorem denial_diagnostic_has_priority :
     projectedToolFailure
@@ -718,7 +718,7 @@ theorem completed_compaction_replay_matches_runtime_order :
 ## Context and compaction presentation
 
 Codex distinguishes cumulative token accounting from the tokens occupying the
-current model context.  DEFRA persists both views in `InferenceCall`: the sum of
+current model context.  GENTS persists both views in `InferenceCall`: the sum of
 all terminal calls is cumulative accounting, while the newest inference call is
 the context observation.  The effective inference-profile window supplies the
 capacity.
@@ -830,7 +830,7 @@ def turnEffectivelyTerminal (obs : ProjectionObservation) : Prop :=
   obs.localInterruptAcked = true ∨
   responseStatusTerminal obs.responseStatus
 
-/-- Project a live DEFRA observation to the Codex-facing turn phase.
+/-- Project a live GENTS observation to the Codex-facing turn phase.
 
 For non-terminal request states, the response may be newer than the request row
 under replication lag, so complete/error responses can advance the projection.

@@ -522,7 +522,7 @@ async fn runtime_snapshot_uses_pairing_agent_did_not_peer_id() {
             r#"mutation {
                 create_PeerPairingDesired(input: {
                     peer_id: "peer-b",
-                    agent_did: "did:defra-agent:peer-b",
+                    agent_did: "did:test:peer-b",
                     collections: ["AgentRequest"],
                     replicator_addresses: [],
                     created_at: "2026-05-15T00:00:00Z",
@@ -550,7 +550,7 @@ async fn runtime_snapshot_uses_pairing_agent_did_not_peer_id() {
             .await
             .expect("snapshot should resolve");
 
-    assert!(snapshot.paired_peer_dids.contains("did:defra-agent:peer-b"));
+    assert!(snapshot.paired_peer_dids.contains("did:test:peer-b"));
     assert!(!snapshot.paired_peer_dids.contains("peer-b"));
 }
 
@@ -597,7 +597,7 @@ async fn runtime_snapshot_excludes_own_did_from_paired_peers() {
             r#"mutation {
                 create_PeerPairingDesired(input: {
                     peer_id: "peer-remote",
-                    agent_did: "did:defra-agent:peer-remote",
+                    agent_did: "did:test:peer-remote",
                     collections: ["AgentRequest"],
                     replicator_addresses: [],
                     created_at: "2026-06-04T00:00:00Z",
@@ -631,9 +631,7 @@ async fn runtime_snapshot_excludes_own_did_from_paired_peers() {
         snapshot.paired_peer_dids
     );
     assert!(
-        snapshot
-            .paired_peer_dids
-            .contains("did:defra-agent:peer-remote"),
+        snapshot.paired_peer_dids.contains("did:test:peer-remote"),
         "legitimate remote peer should still be present: {:?}",
         snapshot.paired_peer_dids
     );

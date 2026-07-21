@@ -31,8 +31,7 @@ use std::time::Duration;
 
 use gents::{
     ensure_agent_principal, graphql::escape_graphql_string, load_agent_behavior,
-    upsert_agent_behavior, AgentIdentity, Gents, DocumentRuntimeOptions, KeyIdentity,
-    ToolCeiling,
+    upsert_agent_behavior, AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, ToolCeiling,
 };
 
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
@@ -124,11 +123,7 @@ async fn create_task(
     );
 }
 
-async fn create_schedule(
-    node: &gents::defra_node::EmbeddedNode,
-    schedule_id: &str,
-    task_id: &str,
-) {
+async fn create_schedule(node: &gents::defra_node::EmbeddedNode, schedule_id: &str, task_id: &str) {
     let escaped_schedule_id = escape_graphql_string(schedule_id);
     let escaped_task_id = escape_graphql_string(task_id);
     let mutation = format!(

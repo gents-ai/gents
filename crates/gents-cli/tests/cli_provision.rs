@@ -21,7 +21,7 @@ async fn provision_initializes_home_binds_manifest_and_diff_exact() -> Result<()
         .join("mini-1-steward");
     fs::create_dir_all(&target_home_env)?;
 
-    let placeholder_did = "did:defra-agent:mini-1-steward";
+    let placeholder_did = "did:test:mini-1-steward";
     write_portable_manifest_root(tempdir.path(), &root, placeholder_did)?;
 
     let report = run_cli_json(
@@ -87,7 +87,7 @@ async fn provision_accepts_initialized_home_did_without_file_key_path() -> Resul
     fs::create_dir_all(&home_env)?;
     fs::create_dir_all(&home)?;
 
-    let placeholder_did = "did:defra-agent:mini-2-steward";
+    let placeholder_did = "did:test:mini-2-steward";
     let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
     write_json_file(
         &home.join("init.json"),
@@ -149,7 +149,7 @@ async fn provision_rejects_uninitialized_home_without_bootstrap_flag() -> Result
         .join("mini-3-steward");
     fs::create_dir_all(&home_env)?;
 
-    write_portable_manifest_root(tempdir.path(), &root, "did:defra-agent:mini-3-steward")?;
+    write_portable_manifest_root(tempdir.path(), &root, "did:test:mini-3-steward")?;
 
     let stderr = run_cli_failure_stderr(
         &home_env,
@@ -220,7 +220,7 @@ fn agent_did_from_report(report: &Value) -> Result<String> {
         .and_then(Value::as_str)
         .context("provision report missing agent_did")?;
     anyhow::ensure!(
-        !agent_did.starts_with("did:defra-agent:"),
+        !agent_did.starts_with("did:test:"),
         "provision returned placeholder DID: {agent_did}"
     );
     Ok(agent_did.to_string())

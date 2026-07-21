@@ -415,8 +415,8 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use tokio::sync::watch;
 
-    const PARENT_DID: &str = "did:defra-agent:parent";
-    const CHILD_DID: &str = "did:defra-agent:child";
+    const PARENT_DID: &str = "did:test:parent";
+    const CHILD_DID: &str = "did:test:child";
 
     async fn test_node() -> Arc<EmbeddedNode> {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
@@ -463,7 +463,7 @@ mod tests {
                     tool_call_key: "parent-request:spawn",
                     request_id: "parent-request",
                     session_id: "parent-session",
-                    agent_did: "did:defra-agent:parent",
+                    agent_did: "did:test:parent",
                     message_sequence: 1,
                     tool_name: "spawn_subagent",
                     tool_call_id: "spawn",
@@ -491,8 +491,8 @@ mod tests {
             r#"mutation {
                 create_AgentRequest(input: {
                     request_id: "child-request",
-                    agent_did: "did:defra-agent:child",
-                    requester_did: "did:defra-agent:parent",
+                    agent_did: "did:test:child",
+                    requester_did: "did:test:parent",
                     behavior_id: "child-behavior",
                     session_id: "child-session",
                     content: "child",

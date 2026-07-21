@@ -31,12 +31,10 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
-use gents::{
-    task_run_conversation_title, write_manual_agent_request_with_conversation_title,
-};
+use defra_node::EmbeddedNode;
+use gents::{task_run_conversation_title, write_manual_agent_request_with_conversation_title};
 use gents_protocol::graphql::normalize_optional_rfc3339;
 use gents_protocol::row::{EventTriggerRow, ScheduleRow, TaskRow};
-use defra_node::EmbeddedNode;
 use serde_json::Value;
 
 use super::super::graphql::{

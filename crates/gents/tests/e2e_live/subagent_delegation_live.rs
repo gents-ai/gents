@@ -38,8 +38,8 @@ use gents::graphql::escape_graphql_string;
 use gents::{
     agent::p2p_reconcile::resolve_template, default_behavior_id_for_agent,
     default_inference_profile_id_for_behavior, ensure_agent_principal, load_agent_behavior,
-    upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, Gents,
-    DocumentRuntimeOptions, SubagentTarget, ToolCeiling, ToolSelectionDocument,
+    upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, AgentIdentity,
+    DocumentRuntimeOptions, Gents, SubagentTarget, ToolCeiling, ToolSelectionDocument,
 };
 use serde::Deserialize;
 
@@ -64,8 +64,7 @@ fn live_endpoint() -> String {
 }
 
 fn live_model() -> String {
-    std::env::var("GENTS_LIVE_SUBAGENT_MODEL")
-        .unwrap_or_else(|_| DEFAULT_LIVE_MODEL.to_string())
+    std::env::var("GENTS_LIVE_SUBAGENT_MODEL").unwrap_or_else(|_| DEFAULT_LIVE_MODEL.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -244,9 +243,7 @@ async fn live_local_subagent_delegation() -> Result<()> {
 #[ignore = "live: set GENTS_LIVE_SUBAGENT=1 and pass --ignored"]
 async fn live_cross_node_subagent_delegation() -> Result<()> {
     if !live_enabled() {
-        eprintln!(
-            "GENTS_LIVE_SUBAGENT is not 1; skipping live cross-node subagent delegation"
-        );
+        eprintln!("GENTS_LIVE_SUBAGENT is not 1; skipping live cross-node subagent delegation");
         return Ok(());
     }
 

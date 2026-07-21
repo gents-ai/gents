@@ -58,7 +58,7 @@ fn completed_nonzero_command_exit_is_not_a_successful_outcome() {
 #[test]
 fn native_bash_output_metadata_drives_success_classification() {
     let result = concat!(
-        "defra_exec: {\"ok\":true,\"status\":\"success\",\"command\":\"printf ok\",",
+        "gents_exec: {\"ok\":true,\"status\":\"success\",\"command\":\"printf ok\",",
         "\"argv\":[\"printf\",\"ok\"],\"cwd\":\".\",\"exit_code\":0,",
         "\"timed_out\":false,\"duration_ms\":4,\"timeout_ms\":10000,",
         "\"execution_mode\":\"read_only\",\"network_mode\":\"inherit\",",
@@ -93,7 +93,7 @@ fn native_bash_output_metadata_drives_success_classification() {
 #[test]
 fn native_bash_nonzero_metadata_is_not_successful() {
     let result = concat!(
-        "defra_exec: {\"ok\":false,\"status\":\"exit_nonzero\",",
+        "gents_exec: {\"ok\":false,\"status\":\"exit_nonzero\",",
         "\"command\":\"grep -P foo README.md\",\"argv\":[\"grep\",\"-P\",\"foo\",\"README.md\"],",
         "\"cwd\":\".\",\"exit_code\":2,\"timed_out\":false,\"duration_ms\":4,",
         "\"timeout_ms\":10000,\"execution_mode\":\"read_only\",",
@@ -123,7 +123,7 @@ fn native_bash_nonzero_metadata_is_not_successful() {
 #[test]
 fn native_bash_timeout_metadata_is_retryable_timeout() {
     let result = concat!(
-        "defra_exec: {\"ok\":false,\"status\":\"timeout\",\"command\":\"sleep 2\",",
+        "gents_exec: {\"ok\":false,\"status\":\"timeout\",\"command\":\"sleep 2\",",
         "\"argv\":[\"sleep\",\"2\"],\"cwd\":\".\",\"exit_code\":null,",
         "\"timed_out\":true,\"duration_ms\":1000,\"timeout_ms\":1000,",
         "\"execution_mode\":\"read_only\",\"network_mode\":\"inherit\",",
@@ -162,7 +162,7 @@ fn native_bash_timeout_metadata_is_retryable_timeout() {
 #[test]
 fn native_file_output_metadata_prevents_false_positive_text_classification() {
     let result = concat!(
-        "defra_fs: {\"ok\":true,\"status\":\"success\",\"tool\":\"read_file\",",
+        "gents_fs: {\"ok\":true,\"status\":\"success\",\"tool\":\"read_file\",",
         "\"path\":\"notes.txt\",\"returned_count\":1,\"total_count\":1,",
         "\"truncated\":false}\n",
         "content:\n",
@@ -532,7 +532,7 @@ fn classifies_non_object_top_level_arguments() {
 fn classifies_stringified_call_tool_arguments_that_are_not_json() {
     let analysis = analyze_tool_call(
         "call_tool",
-        r#"{"service_id":"x-data","tool_name":"search","arguments":"query=defra"}"#,
+        r#"{"service_id":"x-data","tool_name":"search","arguments":"query=gents"}"#,
         "",
         "called",
     );
@@ -548,7 +548,7 @@ fn classifies_stringified_call_tool_arguments_that_are_not_json() {
     assert_eq!(analysis.validation_errors[0].path, "/arguments");
     assert_eq!(
         analysis.final_arguments_sent,
-        Some(json!({ "input": "query=defra" }))
+        Some(json!({ "input": "query=gents" }))
     );
 }
 
@@ -556,7 +556,7 @@ fn classifies_stringified_call_tool_arguments_that_are_not_json() {
 fn normalizes_stringified_call_tool_object_arguments() {
     let analysis = analyze_tool_call(
         "call_tool",
-        r#"{"service_id":"x-data","tool_name":"search","arguments":"{\"query\":\"defra\"}"}"#,
+        r#"{"service_id":"x-data","tool_name":"search","arguments":"{\"query\":\"gents\"}"}"#,
         "ok",
         "completed",
     );
@@ -565,7 +565,7 @@ fn normalizes_stringified_call_tool_object_arguments() {
     assert_eq!(analysis.tool_failure_class, None);
     assert_eq!(
         analysis.final_arguments_sent,
-        Some(json!({ "query": "defra" }))
+        Some(json!({ "query": "gents" }))
     );
 }
 

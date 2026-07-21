@@ -216,7 +216,7 @@ pub(super) async fn list_codex_threads_for_sources(
     }
 
     // Start from durable Codex roots, then walk only their authorized bridge
-    // graph. This keeps thread/list scoped to the same DEFRA authority as
+    // graph. This keeps thread/list scoped to the same GENTS authority as
     // thread/read and avoids a fleet-wide child scan. Git metadata is resolved
     // once per unique root workspace; children inherit their authorized root's
     // projection instead of spawning one git process per child.
@@ -484,7 +484,7 @@ mod tests {
                 parent_session_id: "root-session".to_string(),
                 root_session_id: "root-session".to_string(),
                 depth: 1,
-                agent_did: "did:defra:child".to_string(),
+                agent_did: "did:test:child".to_string(),
                 behavior_id: "child-behavior".to_string(),
                 model: None,
                 nickname: format!("child-{index}"),

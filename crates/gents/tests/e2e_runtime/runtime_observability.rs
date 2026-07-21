@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::{
-    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity, Gents,
-    DocumentRuntimeOptions, KeyIdentity, ToolCeiling,
+    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity,
+    DocumentRuntimeOptions, Gents, KeyIdentity, ToolCeiling,
 };
 
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};

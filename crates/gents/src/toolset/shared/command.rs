@@ -14,7 +14,7 @@ use crate::tool_call_lifecycle::runtime::current_tool_runtime_context;
 use crate::toolset::{CommandPolicyDenial, DenialReason};
 use crate::truncation::{truncate, TruncationLimits, TruncationMode};
 
-const OUTPUT_META_PREFIX: &str = "defra_exec: ";
+const OUTPUT_META_PREFIX: &str = "gents_exec: ";
 const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 #[cfg(target_os = "macos")]
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";

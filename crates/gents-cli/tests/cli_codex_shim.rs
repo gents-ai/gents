@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use codex_app_server_protocol as codex;
-use gents::subagent_target_entry;
 use futures_util::{SinkExt, StreamExt};
+use gents::subagent_target_entry;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use tokio::net::TcpStream;
@@ -19,7 +19,7 @@ use uuid::Uuid;
 type ShimWebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 const LIVE_CODEX_SHIM_TIMEOUT_SECS: &str = "900";
 
-fn defra_model_selection_id(backend_id: &str, model_name: &str) -> String {
+fn gents_model_selection_id(backend_id: &str, model_name: &str) -> String {
     format!("{backend_id}::{model_name}")
 }
 
@@ -264,7 +264,7 @@ async fn server_keeps_running_when_codex_shim_port_is_taken() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
+async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -288,7 +288,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     )?;
     let agent_did = agent_did_from_init(&init)?;
     let default_backend_id = default_backend_id(&agent_did);
-    let default_model_selection = defra_model_selection_id(&default_backend_id, &model_name);
+    let default_model_selection = gents_model_selection_id(&default_backend_id, &model_name);
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -436,7 +436,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
         read_typed_response(&mut ws, request_id(30)).await?;
     assert!(
         thread_list.data.iter().any(|thread| thread.id == thread_id),
-        "DEFRA-backed thread list did not include {thread_id}: {thread_list:?}"
+        "GENTS-backed thread list did not include {thread_id}: {thread_list:?}"
     );
 
     send_client_request(
@@ -489,7 +489,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
             request_id: request_id(34),
             params: codex::ThreadSetNameParams {
                 thread_id: thread_id.clone(),
-                name: "DEFRA-backed Codex thread".to_string(),
+                name: "GENTS-backed Codex thread".to_string(),
             },
         },
     )
@@ -535,7 +535,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
             request_id: request_id(37),
             params: codex::ThreadGoalSetParams {
                 thread_id: thread_id.clone(),
-                objective: Some("exercise DEFRA-backed Codex goal state".to_string()),
+                objective: Some("exercise GENTS-backed Codex goal state".to_string()),
                 status: Some(codex::ThreadGoalStatus::Active),
                 token_budget: Some(Some(123)),
             },
@@ -548,7 +548,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     assert_eq!(goal_set.goal.thread_id, thread_id);
     assert_eq!(
         goal_set.goal.objective,
-        "exercise DEFRA-backed Codex goal state"
+        "exercise GENTS-backed Codex goal state"
     );
     assert_eq!(goal_set.goal.token_budget, Some(123));
 
@@ -622,14 +622,14 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
                 limit: Some(1),
                 sort_key: None,
                 sort_direction: None,
-                model_providers: Some(vec!["defra".to_string()]),
+                model_providers: Some(vec!["gents".to_string()]),
                 source_kinds: Some(vec![codex::ThreadSourceKind::Cli]),
                 archived: Some(true),
                 cwd: Some(codex::ThreadListCwdFilter::One(
                     home_dir.display().to_string(),
                 )),
                 use_state_db_only: true,
-                search_term: Some("DEFRA-backed Codex thread".to_string()),
+                search_term: Some("GENTS-backed Codex thread".to_string()),
             },
         },
     )
@@ -735,7 +735,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     assert_eq!(
         turn_usage.model_context_window,
         Some(gents::DEFAULT_CONTEXT_WINDOW as i64),
-        "context capacity should come from the bound DEFRA inference profile"
+        "context capacity should come from the bound GENTS inference profile"
     );
 
     // The thread goal's tokens_used is derived from real session usage, so it
@@ -914,7 +914,7 @@ async fn codex_shim_protocol_turn_streams_defra_response() -> Result<()> {
     let summary: codex::GetConversationSummaryResponse =
         read_typed_response(&mut ws, request_id(45)).await?;
     assert_eq!(summary.summary.conversation_id.to_string(), thread_id);
-    assert_eq!(summary.summary.model_provider, "defra");
+    assert_eq!(summary.summary.model_provider, "gents");
 
     Ok(())
 }
@@ -1502,7 +1502,7 @@ async fn codex_shim_completes_blank_materialized_terminal_message() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_thread_fork_and_search_project_defra_sessions() -> Result<()> {
+async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -1790,8 +1790,8 @@ async fn codex_shim_fs_routes_are_unsupported() -> Result<()> {
         assert!(
             error
                 .message
-                .contains("model filesystem activity must run through DEFRA"),
-            "fs/* error should describe the DEFRA tool-call boundary for {method}: {error:?}"
+                .contains("model filesystem activity must run through GENTS"),
+            "fs/* error should describe the GENTS tool-call boundary for {method}: {error:?}"
         );
     }
 
@@ -1854,7 +1854,7 @@ async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
         request_id(551),
         "command/exec",
         json!({
-            "command": ["/bin/sh", "-lc", "printf defra-host-exec"],
+            "command": ["/bin/sh", "-lc", "printf gents-host-exec"],
             "cwd": home_dir.display().to_string(),
             "timeoutMs": 5000,
         }),
@@ -1862,14 +1862,14 @@ async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
     .await?;
     let exec_error = read_error_response(&mut ws, request_id(551)).await?;
     assert_eq!(exec_error.code, -32601);
-    assert!(exec_error.message.contains("DEFRA tool-call"));
+    assert!(exec_error.message.contains("GENTS tool-call"));
 
     send_raw_client_request(
         &mut ws,
         request_id(581),
         "process/spawn",
         json!({
-            "command": ["/bin/sh", "-lc", "printf defra-process-spawn"],
+            "command": ["/bin/sh", "-lc", "printf gents-process-spawn"],
             "processHandle": format!("process-{}", Uuid::new_v4().simple()),
             "cwd": home_dir.display().to_string(),
             "streamStdoutStderr": true,
@@ -1971,9 +1971,9 @@ async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
         &repo,
         &[
             "-c",
-            "user.name=Defra Test",
+            "user.name=Gents Test",
             "-c",
-            "user.email=defra-test@example.invalid",
+            "user.email=gents-test@example.invalid",
             "commit",
             "-m",
             "base",
@@ -2004,7 +2004,7 @@ async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_turn_steer_queues_defra_request_on_active_turn() -> Result<()> {
+async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -2166,7 +2166,7 @@ async fn codex_shim_turn_steer_queues_defra_request_on_active_turn() -> Result<(
             .pointer("/queue/queued_after_request_id")
             .and_then(Value::as_str),
         Some(steering_request_id.as_str()),
-        "second steering request should queue after the current DEFRA tail, not after the root turn"
+        "second steering request should queue after the current GENTS tail, not after the root turn"
     );
 
     send_client_request(
@@ -2272,11 +2272,11 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
     let started = read_turn_started(&mut ws).await?;
     assert_eq!(started.turn.id, turn_start.turn.id);
 
-    let (defra_request_id, session_id, _behavior_id) =
+    let (gents_request_id, session_id, _behavior_id) =
         wait_for_request(&graphql, &agent_did, &prompt).await?;
     assert_eq!(session_id, thread_id);
     let tool_call_key = format!("{session_id}:codex-bg-interrupt");
-    seed_running_background_tool(&graphql, &defra_request_id, &session_id, &tool_call_key).await?;
+    seed_running_background_tool(&graphql, &gents_request_id, &session_id, &tool_call_key).await?;
 
     let started_process = tokio::time::timeout(
         Duration::from_secs(15),
@@ -2307,7 +2307,7 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
 
     wait_for_request_lifecycle_state(
         &graphql,
-        &defra_request_id,
+        &gents_request_id,
         &["interrupted"],
         Duration::from_secs(15),
     )
@@ -2371,7 +2371,7 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
     let child_model_name = "child-projection-model";
     let child_model_selection = format!("{child_backend_id}::{child_model_name}");
     let root_model_selection =
-        defra_model_selection_id(&default_backend_id(&agent_did), &model_name);
+        gents_model_selection_id(&default_backend_id(&agent_did), &model_name);
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -2966,7 +2966,7 @@ async fn codex_shim_live_runtime_spawn_projects_real_subagent() -> Result<()> {
     let child_token = format!("CHILDLIVE-{}", &suffix[..8]);
     let smoke = start_live_codex_shim().await?;
     let child_behavior_id = configure_live_local_subagent(&smoke).await?;
-    let expected_child_model = defra_model_selection_id(&smoke.backend_id, &smoke.model_name);
+    let expected_child_model = gents_model_selection_id(&smoke.backend_id, &smoke.model_name);
 
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{}/", smoke.shim_port))
         .await
@@ -3048,7 +3048,7 @@ async fn codex_shim_live_runtime_spawn_projects_real_subagent() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires the configured real OpenAI-compatible backend"]
-async fn codex_shim_live_defra_filesystem_tools_project_to_codex_items() -> Result<()> {
+async fn codex_shim_live_gents_filesystem_tools_project_to_codex_items() -> Result<()> {
     let suffix = Uuid::new_v4().simple().to_string();
     let token = format!("FSLIVE-{}", &suffix[..8]);
     let smoke = start_live_codex_shim_with_write_tools(true, None).await?;
@@ -3101,7 +3101,7 @@ async fn codex_shim_live_defra_filesystem_tools_project_to_codex_items() -> Resu
 #[ignore = "requires the configured real OpenAI-compatible backend"]
 async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Result<()> {
     let prompt_token = "PROJLIVE";
-    let thread_name = format!("DEFRA live projection {}", Uuid::new_v4().simple());
+    let thread_name = format!("GENTS live projection {}", Uuid::new_v4().simple());
     let goal_objective = format!("exercise live projection {}", Uuid::new_v4().simple());
     let git_branch = "codex-shim-live-projection".to_string();
     let smoke = start_live_codex_shim().await?;
@@ -3351,7 +3351,7 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
         .data
         .iter()
         .find(|thread| thread.id == thread_id)
-        .ok_or_else(|| anyhow!("live DEFRA-backed thread list did not include {thread_id}"))?;
+        .ok_or_else(|| anyhow!("live GENTS-backed thread list did not include {thread_id}"))?;
     assert_eq!(listed.name.as_deref(), Some(thread_name.as_str()));
 
     send_client_request(
@@ -3598,7 +3598,7 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
     )?;
     let agent_did = agent_did_from_init(&init)?;
     let expected_model_selection =
-        defra_model_selection_id(&default_backend_id(&agent_did), &model_name);
+        gents_model_selection_id(&default_backend_id(&agent_did), &model_name);
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -3685,9 +3685,9 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
         read_typed_response(&mut ws, request_id(2)).await?;
     assert_eq!(
         thread_start.model, expected_model_selection,
-        "Defra remote runtime should use the bound behavior model, not the client Codex model"
+        "Gents remote runtime should use the bound behavior model, not the client Codex model"
     );
-    assert_eq!(thread_start.model_provider, "defra");
+    assert_eq!(thread_start.model_provider, "gents");
     assert_eq!(thread_start.approval_policy, codex::AskForApproval::Never);
     let expected_server_cwd = home_dir
         .canonicalize()
@@ -3765,7 +3765,7 @@ async fn stock_codex_remote_tmux_smoke_uses_existing_client_codex_home_with_real
     let smoke = start_live_codex_shim().await?;
     let client_codex_home = create_existing_client_codex_home(&smoke, "tmux")?;
     assert_ne!(client_codex_home, smoke.codex_home);
-    let session = format!("defra-codex-smoke-{}", Uuid::new_v4().simple());
+    let session = format!("gents-codex-smoke-{}", Uuid::new_v4().simple());
     let command = format!(
         "CODEX_HOME={} codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://127.0.0.1:{} {}",
         shell_quote_path(&client_codex_home),
@@ -3818,7 +3818,7 @@ async fn stock_codex_remote_tmux_multiturn_uses_existing_client_codex_home_with_
     let smoke = start_live_codex_shim().await?;
     let client_codex_home = create_existing_client_codex_home(&smoke, "tmux-multiturn")?;
     assert_ne!(client_codex_home, smoke.codex_home);
-    let session = format!("defra-codex-multiturn-{}", Uuid::new_v4().simple());
+    let session = format!("gents-codex-multiturn-{}", Uuid::new_v4().simple());
     let command = format!(
         "CODEX_HOME={} codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://127.0.0.1:{} {}",
         shell_quote_path(&client_codex_home),
@@ -3976,10 +3976,7 @@ async fn start_live_codex_shim_with_write_tools(
             "--codex-shim-timeout-secs",
             LIVE_CODEX_SHIM_TIMEOUT_SECS,
         ],
-        &[(
-            "RUST_LOG",
-            "error,gents_cli::commands::codex_shim=info",
-        )],
+        &[("RUST_LOG", "error,gents_cli::commands::codex_shim=info")],
     )?;
     wait_for_port(server_port, &mut server)?;
     wait_for_port(shim_port, &mut server)?;
@@ -4945,9 +4942,9 @@ fn init_test_git_repo(cwd: &std::path::Path, branch: &str) -> Result<String> {
         cwd,
         &[
             "-c",
-            "user.name=Defra Test",
+            "user.name=Gents Test",
             "-c",
-            "user.email=defra-test@example.invalid",
+            "user.email=gents-test@example.invalid",
             "commit",
             "-m",
             "base",
@@ -6183,13 +6180,13 @@ async fn codex_shim_model_list_enumerates_backend_models() -> Result<()> {
     )?;
     let agent_did = agent_did_from_init(&init)?;
     let default_backend_id = default_backend_id(&agent_did);
-    let default_model_selection = defra_model_selection_id(&default_backend_id, &model_name);
+    let default_model_selection = gents_model_selection_id(&default_backend_id, &model_name);
     let extra_model_name = format!("mock-codex-shim-extra-model-{}", Uuid::new_v4().simple());
     let extra_endpoint = MockChatEndpoint::start(&extra_model_name, "irrelevant")?;
     let extra_backend_id = format!("extra-backend-{}", Uuid::new_v4().simple());
-    let extra_model_selection = defra_model_selection_id(&extra_backend_id, &extra_model_name);
+    let extra_model_selection = gents_model_selection_id(&extra_backend_id, &extra_model_name);
     let duplicate_backend_id = format!("duplicate-backend-{}", Uuid::new_v4().simple());
-    let duplicate_model_selection = defra_model_selection_id(&duplicate_backend_id, &model_name);
+    let duplicate_model_selection = gents_model_selection_id(&duplicate_backend_id, &model_name);
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -6341,7 +6338,7 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
     let default_behavior_id = format!("{agent_did}:default");
     let default_backend_id = default_backend_id(&agent_did);
     let alt_model_name = format!("alt-model-{}", Uuid::new_v4().simple());
-    let alt_model_selection = defra_model_selection_id(&default_backend_id, &alt_model_name);
+    let alt_model_selection = gents_model_selection_id(&default_backend_id, &alt_model_name);
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -6434,7 +6431,7 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
     let alt_model_name = format!("mock-codex-shim-alt-model-{}", Uuid::new_v4().simple());
     let alt_endpoint = MockChatEndpoint::start(&alt_model_name, "irrelevant")?;
     let alt_backend_id = format!("alt-backend-{}", Uuid::new_v4().simple());
-    let alt_model_selection = defra_model_selection_id(&alt_backend_id, &alt_model_name);
+    let alt_model_selection = gents_model_selection_id(&alt_backend_id, &alt_model_name);
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -7320,7 +7317,7 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
                 thread_id: thread_start.thread.id.clone(),
                 input: vec![codex::UserInput::Skill {
                     name: "Injectable".to_string(),
-                    path: std::path::PathBuf::from("/defra/skills/inject-skill"),
+                    path: std::path::PathBuf::from("/gents/skills/inject-skill"),
                 }],
                 ..Default::default()
             },
@@ -7468,7 +7465,7 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
                     },
                     codex::UserInput::Skill {
                         name: "Unscoped".to_string(),
-                        path: std::path::PathBuf::from("/defra/skills/unscoped-skill"),
+                        path: std::path::PathBuf::from("/gents/skills/unscoped-skill"),
                     },
                 ],
                 ..Default::default()

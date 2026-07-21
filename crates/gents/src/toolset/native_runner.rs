@@ -11,7 +11,7 @@ use crate::tool_call_lifecycle::runtime::{
 };
 
 const MAX_NATIVE_RUNNER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
-const RUNNER_ENV: &str = "DEFRA_NATIVE_FS_RUNNER";
+const RUNNER_ENV: &str = "GENTS_FS_RUNNER";
 /// Hard backstop for a single filesystem-tool call (#729). The runner bounds
 /// itself with in-process walk budgets and returns partial results well
 /// before this; the cap only kills a wedged runner. Without it the only
@@ -351,10 +351,7 @@ mod tests {
     fn cap_expiry_without_request_deadline_is_not_a_lifecycle_timeout() {
         let now = Utc::now();
         let result = fs_runner_timed_out_result("grep", None, now);
-        assert!(
-            !result.contains("__gents_tool_lifecycle__"),
-            "{result}"
-        );
+        assert!(!result.contains("__gents_tool_lifecycle__"), "{result}");
     }
 
     #[test]

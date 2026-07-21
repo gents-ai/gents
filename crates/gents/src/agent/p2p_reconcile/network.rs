@@ -13,8 +13,8 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use gents_protocol::network_token::{EndpointRecord, MembershipRecord, NetworkRecord};
 use defra_node::{EmbeddedNode, EventName, QueryResponse};
+use gents_protocol::network_token::{EndpointRecord, MembershipRecord, NetworkRecord};
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 

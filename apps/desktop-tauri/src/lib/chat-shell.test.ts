@@ -12,8 +12,8 @@ import {
   type TurnState,
 } from "./chat-shell";
 
-const CONTRACT_JSON_BEGIN = "---BEGIN DEFRA LEAN CONTRACT JSON---";
-const CONTRACT_JSON_END = "---END DEFRA LEAN CONTRACT JSON---";
+const CONTRACT_JSON_BEGIN = "---BEGIN GENTS LEAN CONTRACT JSON---";
+const CONTRACT_JSON_END = "---END GENTS LEAN CONTRACT JSON---";
 // The generated contract test shells out to Lake before reading Lean JSON.
 const GENERATED_CONTRACT_TEST_TIMEOUT_MS = 30000;
 

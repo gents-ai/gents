@@ -3,10 +3,10 @@
 
 Small Codex-facing lifecycle for a single app-server turn.
 
-This deliberately models the adapter boundary, not the core DEFRA request
+This deliberately models the adapter boundary, not the core GENTS request
 lifecycle. The important property is that a Codex interrupt is locally terminal:
 the shim must emit a terminal turn notification and clear its active-turn slot
-without waiting for the asynchronous DEFRA request interrupt to settle.
+without waiting for the asynchronous GENTS request interrupt to settle.
 -/
 
 namespace CodexShim

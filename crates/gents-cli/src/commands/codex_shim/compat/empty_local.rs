@@ -60,7 +60,7 @@ pub(super) async fn send_empty_local_stub(
                 json!({
                     "marketplaceName": marketplace_name,
                     "installedRoot": absolute_path(
-                        &state.codex_home.join("marketplaces").join("defra-shim")
+                        &state.codex_home.join("marketplaces").join("gents-shim")
                     ),
                     "alreadyAdded": true
                 }),
@@ -116,14 +116,14 @@ pub(super) async fn send_empty_local_stub(
             let remote_plugin_id = params
                 .remote_plugin_id
                 .as_deref()
-                .unwrap_or("defra-shim-plugin-share")
+                .unwrap_or("gents-shim-plugin-share")
                 .to_string();
             send_result(
                 outbound,
                 request_id.clone(),
                 codex::PluginShareSaveResponse {
                     remote_plugin_id,
-                    share_url: "defra-shim://plugin-share/unavailable".to_string(),
+                    share_url: "gents-shim://plugin-share/unavailable".to_string(),
                 },
             )
             .await?
@@ -162,9 +162,9 @@ pub(super) async fn send_empty_local_stub(
                             .join("plugin-share")
                             .join(params.remote_plugin_id.as_str())
                     ),
-                    "marketplaceName": "defra-shim",
+                    "marketplaceName": "gents-shim",
                     "marketplacePath": absolute_path(
-                        &state.codex_home.join("marketplaces").join("defra-shim")
+                        &state.codex_home.join("marketplaces").join("gents-shim")
                     ),
                     "remoteVersion": null
                 }),
@@ -220,8 +220,8 @@ pub(super) async fn send_empty_local_stub(
                 request_id.clone(),
                 json!({
                     "status": "disabled",
-                    "serverName": "defra-shim",
-                    "installationId": "defra-shim",
+                    "serverName": "gents-shim",
+                    "installationId": "gents-shim",
                     "environmentId": null
                 }),
             )

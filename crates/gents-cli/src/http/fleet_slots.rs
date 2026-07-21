@@ -454,13 +454,13 @@ mod tests {
                 behaviors: vec![
                     BehaviorRow {
                         behavior_id: "behavior-a".to_string(),
-                        agent_did: "did:defra-agent:test".to_string(),
+                        agent_did: "did:test:test".to_string(),
                         backend_id: Some("backend-a".to_string()),
                         enabled: Some(true),
                     },
                     BehaviorRow {
                         behavior_id: "behavior-b".to_string(),
-                        agent_did: "did:defra-agent:test".to_string(),
+                        agent_did: "did:test:test".to_string(),
                         backend_id: Some("backend-a".to_string()),
                         enabled: Some(true),
                     },
@@ -476,13 +476,13 @@ mod tests {
                     InferenceCallRow {
                         backend_id: Some("backend-a".to_string()),
                         behavior_id: Some("behavior-a".to_string()),
-                        agent_did: Some("did:defra-agent:test".to_string()),
+                        agent_did: Some("did:test:test".to_string()),
                         call_state: "running".to_string(),
                     },
                     InferenceCallRow {
                         backend_id: Some("backend-a".to_string()),
                         behavior_id: Some("behavior-b".to_string()),
-                        agent_did: Some("did:defra-agent:test".to_string()),
+                        agent_did: Some("did:test:test".to_string()),
                         call_state: "queued".to_string(),
                     },
                 ],
@@ -538,7 +538,7 @@ mod tests {
             FleetSlotQueryEnvelope {
                 behaviors: vec![BehaviorRow {
                     behavior_id: "behavior-disabled".to_string(),
-                    agent_did: "did:defra-agent:test".to_string(),
+                    agent_did: "did:test:test".to_string(),
                     backend_id: Some("backend-unhealthy".to_string()),
                     enabled: Some(false),
                 }],
@@ -562,13 +562,13 @@ mod tests {
                     InferenceCallRow {
                         backend_id: Some("backend-unhealthy".to_string()),
                         behavior_id: Some("behavior-disabled".to_string()),
-                        agent_did: Some("did:defra-agent:test".to_string()),
+                        agent_did: Some("did:test:test".to_string()),
                         call_state: "running".to_string(),
                     },
                     InferenceCallRow {
                         backend_id: Some("backend-stale".to_string()),
                         behavior_id: Some("behavior-stale".to_string()),
-                        agent_did: Some("did:defra-agent:stale".to_string()),
+                        agent_did: Some("did:test:stale".to_string()),
                         call_state: "running".to_string(),
                     },
                 ],
@@ -635,7 +635,7 @@ mod tests {
         let stale_behavior = find_behavior(&snapshot, "behavior-stale");
         assert!(!stale_behavior.configured);
         assert!(!stale_behavior.enabled);
-        assert_eq!(stale_behavior.agent_did, "did:defra-agent:stale");
+        assert_eq!(stale_behavior.agent_did, "did:test:stale");
         assert_eq!(stale_behavior.backend_id, "backend-stale");
         assert_eq!(stale_behavior.assigned, 1);
         assert_eq!(stale_behavior.available, 0);

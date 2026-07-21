@@ -27,7 +27,7 @@ on:
         description: Host output directory for generated fixture captures
         required: true
         type: string
-        default: /tmp/defra-agent-adapter-interop-fixtures
+        default: /tmp/gents-adapter-interop-fixtures
       keep_output:
         description: Keep existing files in the output directory before generating
         required: true
@@ -46,11 +46,11 @@ jobs:
     runs-on: [self-hosted, Linux, X64, workstation-1]
     timeout-minutes: 60
     env:
-      ADAPTER_INTEROP_OUTPUT_DIR: ${{ inputs.output_dir || '/tmp/defra-agent-adapter-interop-fixtures' }}
+      ADAPTER_INTEROP_OUTPUT_DIR: ${{ inputs.output_dir || '/tmp/gents-adapter-interop-fixtures' }}
       ADAPTER_INTEROP_PROVIDER_MODE: ${{ inputs.langgraph_provider_mode || 'fake' }}
       ADAPTER_INTEROP_OPENAI_BASE_URL: ${{ inputs.openai_base_url || '' }}
       ADAPTER_INTEROP_OPENAI_MODEL: ${{ inputs.openai_model || '' }}
-      GIT_CONFIG_GLOBAL: /tmp/defra-agent-adapter-interop-${{ github.run_id }}.gitconfig
+      GIT_CONFIG_GLOBAL: /tmp/gents-adapter-interop-${{ github.run_id }}.gitconfig
     steps:
       - uses: actions/checkout@v4
         with:
@@ -112,18 +112,18 @@ jobs:
 
       - name: Run Docker adapter interop suite
         env:
-          DEFRA_AGENT_DOCKER_INTEROP_OUT: ${{ env.ADAPTER_INTEROP_OUTPUT_DIR }}
-          DEFRA_LANGGRAPH_PROVIDER_MODE: ${{ env.ADAPTER_INTEROP_PROVIDER_MODE }}
+          GENTS_DOCKER_INTEROP_OUT: ${{ env.ADAPTER_INTEROP_OUTPUT_DIR }}
+          GENTS_LANGGRAPH_PROVIDER_MODE: ${{ env.ADAPTER_INTEROP_PROVIDER_MODE }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ env.ADAPTER_INTEROP_OPENAI_BASE_URL }}
           OPENAI_MODEL: ${{ env.ADAPTER_INTEROP_OPENAI_MODEL }}
         run: |
           set -euo pipefail
           if [[ "${{ inputs.keep_output || false }}" == "true" ]]; then
-            export DEFRA_AGENT_DOCKER_INTEROP_KEEP=1
+            export GENTS_DOCKER_INTEROP_KEEP=1
           fi
           scripts/adapter-interop/run_docker_interop.sh \
-            "${DEFRA_AGENT_DOCKER_INTEROP_OUT}"
+            "${GENTS_DOCKER_INTEROP_OUT}"
 
       - name: Upload generated fixtures
         if: always()
@@ -132,7 +132,7 @@ jobs:
           name: adapter-interop-fixtures
           path: |
             ${{ env.ADAPTER_INTEROP_OUTPUT_DIR }}/*.json
-            ${{ env.ADAPTER_INTEROP_OUTPUT_DIR }}/defra-exports/*
+            ${{ env.ADAPTER_INTEROP_OUTPUT_DIR }}/gents-exports/*
           if-no-files-found: ignore
 
       - name: Cleanup git auth

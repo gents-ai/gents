@@ -153,7 +153,7 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
         r#"mutation {
             create_AgentRequest(input: {
                 request_id: "req-background",
-                agent_did: "did:defra-agent:test",
+                agent_did: "did:test:test",
                 behavior_id: "default",
                 session_id: "session-background",
                 content: "background list fixture",
@@ -167,7 +167,7 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
             }) { _docID }
             create_AgentRequest(input: {
                 request_id: "req-other",
-                agent_did: "did:defra-agent:test",
+                agent_did: "did:test:test",
                 behavior_id: "default",
                 session_id: "session-other",
                 content: "background list other fixture",

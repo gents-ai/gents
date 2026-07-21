@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use super::subagent_projection::LinkedSubagentThread;
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct DefraToolCallProgress {
+pub(super) struct GentsToolCallProgress {
     pub(super) tool_call_key: String,
     pub(super) tool_name: String,
     pub(super) status: String,
@@ -25,7 +25,7 @@ pub(super) struct DefraToolCallProgress {
     pub(super) subagent_link: Option<LinkedSubagentThread>,
 }
 
-pub(super) fn defra_turn_progress_query(request_id: &str, session_id: &str) -> String {
+pub(super) fn gents_turn_progress_query(request_id: &str, session_id: &str) -> String {
     format!(
         r#"{{
             AgentRequest(
@@ -109,7 +109,7 @@ pub(super) fn defra_turn_progress_query(request_id: &str, session_id: &str) -> S
     )
 }
 
-pub(super) fn defra_tool_progress_query(request_id: &str, session_id: &str) -> String {
+pub(super) fn gents_tool_progress_query(request_id: &str, session_id: &str) -> String {
     format!(
         r#"{{
             AgentToolCall(
@@ -142,8 +142,8 @@ pub(super) fn defra_tool_progress_query(request_id: &str, session_id: &str) -> S
     )
 }
 
-pub(super) fn decode_defra_tool_call_progress(row: &Value) -> Option<DefraToolCallProgress> {
-    Some(DefraToolCallProgress {
+pub(super) fn decode_gents_tool_call_progress(row: &Value) -> Option<GentsToolCallProgress> {
+    Some(GentsToolCallProgress {
         tool_call_key: row.get("tool_call_key")?.as_str()?.to_string(),
         tool_name: row.get("tool_name")?.as_str()?.to_string(),
         status: row.get("status")?.as_str()?.to_string(),
@@ -182,14 +182,14 @@ pub(super) fn decode_defra_tool_call_progress(row: &Value) -> Option<DefraToolCa
     })
 }
 
-pub(super) fn defra_tool_item(
-    tool: &DefraToolCallProgress,
+pub(super) fn gents_tool_item(
+    tool: &GentsToolCallProgress,
     status: codex::McpToolCallStatus,
 ) -> codex::ThreadItem {
     let (result, error) = match status {
         codex::McpToolCallStatus::Completed => (
             Some(Box::new(codex::McpToolCallResult {
-                content: defra_tool_result_content(&tool.result),
+                content: gents_tool_result_content(&tool.result),
                 structured_content: parse_json_value(&tool.result),
                 meta: None,
             })),
@@ -206,7 +206,7 @@ pub(super) fn defra_tool_item(
 
     codex::ThreadItem::McpToolCall {
         id: tool.tool_call_key.clone(),
-        server: selected_tool_identity(tool.selected_service_id.as_deref(), "defra"),
+        server: selected_tool_identity(tool.selected_service_id.as_deref(), "gents"),
         tool: selected_tool_identity(tool.selected_tool_name.as_deref(), &tool.tool_name),
         status,
         arguments: parse_json_value(&tool.args).unwrap_or_else(|| json!({})),
@@ -218,7 +218,7 @@ pub(super) fn defra_tool_item(
     }
 }
 
-pub(super) fn tool_duration_ms(tool: &DefraToolCallProgress) -> Option<i64> {
+pub(super) fn tool_duration_ms(tool: &GentsToolCallProgress) -> Option<i64> {
     tool.latency_ms.filter(|latency| *latency >= 0).or_else(|| {
         let started = tool.started_at.as_deref().and_then(timestamp_millis)?;
         let completed = tool.completed_at.as_deref().and_then(timestamp_millis)?;
@@ -226,11 +226,11 @@ pub(super) fn tool_duration_ms(tool: &DefraToolCallProgress) -> Option<i64> {
     })
 }
 
-pub(super) fn tool_started_at_ms(tool: &DefraToolCallProgress) -> Option<i64> {
+pub(super) fn tool_started_at_ms(tool: &GentsToolCallProgress) -> Option<i64> {
     tool.started_at.as_deref().and_then(timestamp_millis)
 }
 
-pub(super) fn tool_completed_at_ms(tool: &DefraToolCallProgress) -> Option<i64> {
+pub(super) fn tool_completed_at_ms(tool: &GentsToolCallProgress) -> Option<i64> {
     tool.completed_at.as_deref().and_then(timestamp_millis)
 }
 
@@ -242,7 +242,7 @@ fn selected_tool_identity(selected: Option<&str>, fallback: &str) -> String {
         .to_string()
 }
 
-fn tool_failure_message(tool: &DefraToolCallProgress) -> String {
+fn tool_failure_message(tool: &GentsToolCallProgress) -> String {
     [tool.denial_reason.as_deref(), tool.cancel_cause.as_deref()]
         .into_iter()
         .flatten()
@@ -257,7 +257,7 @@ fn tool_failure_message(tool: &DefraToolCallProgress) -> String {
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
         })
-        .unwrap_or_else(|| "DEFRA tool call failed".to_string())
+        .unwrap_or_else(|| "GENTS tool call failed".to_string())
 }
 
 fn optional_nonempty_string(row: &Value, field: &str) -> Option<String> {
@@ -280,7 +280,7 @@ pub(super) fn timestamp_millis(raw: &str) -> Option<i64> {
         .map(|timestamp| timestamp.timestamp_millis())
 }
 
-pub(super) fn defra_tool_call_status(tool: &DefraToolCallProgress) -> codex::McpToolCallStatus {
+pub(super) fn gents_tool_call_status(tool: &GentsToolCallProgress) -> codex::McpToolCallStatus {
     let status = tool
         .lifecycle_state
         .as_deref()
@@ -292,7 +292,7 @@ pub(super) fn defra_tool_call_status(tool: &DefraToolCallProgress) -> codex::Mcp
         status.as_str(),
         "cancelled" | "dead" | "error" | "failed" | "failure" | "timedout"
     ) || tool_result_looks_error(&tool.result)
-        || defra_exec_result_failed(&tool.result)
+        || gents_exec_result_failed(&tool.result)
     {
         return codex::McpToolCallStatus::Failed;
     }
@@ -365,21 +365,21 @@ pub(super) fn terminal_error_message(
         return Some(error.to_string());
     }
     if response_status == "error" {
-        return Some("DEFRA response ended with status error".to_string());
+        return Some("GENTS response ended with status error".to_string());
     }
     if matches!(lifecycle_state, "failed" | "dead") {
         return Some(
             failure_reason
                 .trim()
                 .is_empty()
-                .then(|| format!("DEFRA request ended with lifecycle_state {lifecycle_state}"))
+                .then(|| format!("GENTS request ended with lifecycle_state {lifecycle_state}"))
                 .unwrap_or_else(|| failure_reason.trim().to_string()),
         );
     }
     None
 }
 
-fn defra_tool_result_content(result: &str) -> Vec<Value> {
+fn gents_tool_result_content(result: &str) -> Vec<Value> {
     preview_compact_text(result)
         .map(|text| vec![json!({ "type": "text", "text": text })])
         .unwrap_or_default()
@@ -390,8 +390,8 @@ fn tool_result_looks_error(result: &str) -> bool {
     trimmed.starts_with("Toolset error:") || trimmed.starts_with("JsonError:")
 }
 
-fn defra_exec_result_failed(result: &str) -> bool {
-    let Some(metadata) = defra_exec_metadata(result) else {
+fn gents_exec_result_failed(result: &str) -> bool {
+    let Some(metadata) = gents_exec_metadata(result) else {
         return false;
     };
     metadata.get("ok").and_then(Value::as_bool) == Some(false)
@@ -401,9 +401,9 @@ fn defra_exec_result_failed(result: &str) -> bool {
             .is_some_and(|status| status != "success")
 }
 
-pub(super) fn defra_exec_metadata(result: &str) -> Option<Value> {
+pub(super) fn gents_exec_metadata(result: &str) -> Option<Value> {
     let first_line = result.lines().next()?.trim();
-    let raw = first_line.strip_prefix("defra_exec:")?.trim();
+    let raw = first_line.strip_prefix("gents_exec:")?.trim();
     serde_json::from_str(raw).ok()
 }
 
@@ -436,15 +436,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defra_tool_errors_render_as_failed_codex_tool_calls() {
+    fn gents_tool_errors_render_as_failed_codex_tool_calls() {
         let tool = test_tool("glob", "completed", r#"{"pattern":"**/*.lean"}"#)
             .with_result("Toolset error: missing runner");
 
         assert_eq!(
-            defra_tool_call_status(&tool),
+            gents_tool_call_status(&tool),
             codex::McpToolCallStatus::Failed
         );
-        let item = defra_tool_item(&tool, codex::McpToolCallStatus::Failed);
+        let item = gents_tool_item(&tool, codex::McpToolCallStatus::Failed);
         let codex::ThreadItem::McpToolCall {
             server,
             tool: tool_name,
@@ -456,7 +456,7 @@ mod tests {
         else {
             panic!("expected MCP tool call item");
         };
-        assert_eq!(server, "defra");
+        assert_eq!(server, "gents");
         assert_eq!(tool_name, "glob");
         assert_eq!(arguments["pattern"], "**/*.lean");
         assert_eq!(status, codex::McpToolCallStatus::Failed);
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn turn_progress_query_observes_compaction_lifecycle() {
-        let query = defra_turn_progress_query("request-1", "session-1");
+        let query = gents_turn_progress_query("request-1", "session-1");
         assert!(query.contains("InferenceCall("));
         assert!(query.contains(r#"call_kind: { _in: ["inference", "compaction"] }"#));
         assert!(query.contains("call_state"));
@@ -509,7 +509,7 @@ mod tests {
 
     #[test]
     fn tool_projection_prefers_runtime_identity_failure_and_latency() {
-        let mut tool = test_tool("configured_search", "failed", r#"{"query":"DEFRA"}"#)
+        let mut tool = test_tool("configured_search", "failed", r#"{"query":"GENTS"}"#)
             .with_result("provider returned a generic failure");
         tool.selected_service_id = Some("search-service".to_string());
         tool.selected_tool_name = Some("search".to_string());
@@ -520,7 +520,7 @@ mod tests {
         tool.started_at = Some("2026-07-15T10:00:00Z".to_string());
         tool.completed_at = Some("2026-07-15T10:00:01Z".to_string());
 
-        let item = defra_tool_item(&tool, codex::McpToolCallStatus::Failed);
+        let item = gents_tool_item(&tool, codex::McpToolCallStatus::Failed);
         let codex::ThreadItem::McpToolCall {
             server,
             tool,
@@ -546,7 +546,7 @@ mod tests {
             test_tool("search", "failed", "{}").with_result("connection refused to search service");
         tool.tool_failure_class = Some("external".to_string());
 
-        let item = defra_tool_item(&tool, codex::McpToolCallStatus::Failed);
+        let item = gents_tool_item(&tool, codex::McpToolCallStatus::Failed);
         let codex::ThreadItem::McpToolCall { error, .. } = item else {
             panic!("expected MCP tool call item");
         };
@@ -556,7 +556,7 @@ mod tests {
         );
 
         tool.result.clear();
-        let item = defra_tool_item(&tool, codex::McpToolCallStatus::Failed);
+        let item = gents_tool_item(&tool, codex::McpToolCallStatus::Failed);
         let codex::ThreadItem::McpToolCall { error, .. } = item else {
             panic!("expected MCP tool call item");
         };
@@ -586,8 +586,8 @@ mod tests {
     #[test]
     fn tool_queries_hydrate_runtime_presentation_metadata() {
         for query in [
-            defra_turn_progress_query("request-1", "session-1"),
-            defra_tool_progress_query("request-1", "session-1"),
+            gents_turn_progress_query("request-1", "session-1"),
+            gents_tool_progress_query("request-1", "session-1"),
         ] {
             for field in [
                 "selected_service_id",
@@ -604,8 +604,8 @@ mod tests {
         }
     }
 
-    fn test_tool(tool_name: &str, status: &str, args: &str) -> DefraToolCallProgress {
-        DefraToolCallProgress {
+    fn test_tool(tool_name: &str, status: &str, args: &str) -> GentsToolCallProgress {
+        GentsToolCallProgress {
             tool_call_key: "session:call".to_string(),
             tool_name: tool_name.to_string(),
             status: status.to_string(),
@@ -623,7 +623,7 @@ mod tests {
         fn with_result(self, result: &str) -> Self;
     }
 
-    impl ToolTestExt for DefraToolCallProgress {
+    impl ToolTestExt for GentsToolCallProgress {
         fn with_result(mut self, result: &str) -> Self {
             self.result = result.to_string();
             self

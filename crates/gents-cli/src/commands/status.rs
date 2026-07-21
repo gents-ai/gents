@@ -131,7 +131,7 @@ async fn load_live_http_liveness_value(graphql: &str) -> Option<Value> {
 }
 
 fn runtime_status_url(graphql: &str) -> Result<String> {
-    // The live liveness fast path targets the embedded Defra HTTP server shape
+    // The live liveness fast path targets the embedded DefraDB HTTP server shape
     // (`/api/v0/graphql` and `/status` on the same authority). Deployments that
     // split or rewrite those routes fall back to GraphQL-derived liveness.
     let mut url = reqwest::Url::parse(graphql).context("parsing GraphQL endpoint URL")?;
@@ -267,7 +267,7 @@ mod tests {
     ) -> ConfigExportBundle {
         ConfigExportBundle {
             format: CONFIG_EXPORT_FORMAT.to_string(),
-            agent_did: "did:defra-agent:test".to_string(),
+            agent_did: "did:test:test".to_string(),
             exported_at: "2026-04-14T00:00:00Z".to_string(),
             access_mode: "graphql".to_string(),
             agent_principal: None,

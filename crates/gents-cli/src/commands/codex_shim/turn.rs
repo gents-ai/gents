@@ -12,7 +12,7 @@ use active::{
     cancel_abandoned_steering_request, clear_stream_control_if_current, install_stream_control,
     load_active_codex_turn,
 };
-pub(super) use stream::{stream_defra_turn, TurnStreamOptions};
+pub(super) use stream::{stream_gents_turn, TurnStreamOptions};
 use submission::create_agent_request_with_retry;
 
 use super::progress::timestamp_millis;
@@ -29,7 +29,7 @@ use super::{
 };
 use crate::RequestSubmitOptions;
 
-pub(super) async fn start_defra_turn(
+pub(super) async fn start_gents_turn(
     connection: &ConnectionState,
     state: &ShimState,
     request_id: codex::RequestId,
@@ -44,7 +44,7 @@ pub(super) async fn start_defra_turn(
             &connection.outbound,
             request_id,
             JSONRPC_INVALID_PARAMS,
-            "linked DEFRA subagent threads are read-only; steer them from the parent thread"
+            "linked GENTS subagent threads are read-only; steer them from the parent thread"
                 .to_string(),
         )
         .await;
@@ -60,7 +60,7 @@ pub(super) async fn start_defra_turn(
             &connection.outbound,
             request_id,
             JSONRPC_INVALID_REQUEST,
-            "Codex turn input did not contain text for DEFRA".to_string(),
+            "Codex turn input did not contain text for GENTS".to_string(),
         )
         .await;
     }
@@ -85,7 +85,7 @@ pub(super) async fn start_defra_turn(
                 &connection.outbound,
                 request_id,
                 JSONRPC_INTERNAL_ERROR,
-                format!("failed to submit DEFRA AgentRequest: {err}"),
+                format!("failed to submit GENTS AgentRequest: {err}"),
             )
             .await;
         }
@@ -147,7 +147,7 @@ pub(super) async fn start_defra_turn(
     .await?;
 
     let mut projection = TurnProjection::new(state, &thread_id, &turn_id, cwd.clone(), started_at);
-    let result = match stream_defra_turn(
+    let result = match stream_gents_turn(
         connection,
         state,
         &submitted,
@@ -159,7 +159,7 @@ pub(super) async fn start_defra_turn(
     {
         Ok(()) => Ok(()),
         Err(err) => {
-            let message = format!("DEFRA turn failed: {err}");
+            let message = format!("GENTS turn failed: {err}");
             projection
                 .append_agent_delta(&connection.outbound, &format!("[agent error] {message}\n"))
                 .await?;
@@ -184,7 +184,7 @@ pub(super) async fn start_defra_turn(
     result
 }
 
-pub(super) async fn steer_defra_turn(
+pub(super) async fn steer_gents_turn(
     connection: &ConnectionState,
     state: &ShimState,
     request_id: codex::RequestId,
@@ -198,7 +198,7 @@ pub(super) async fn steer_defra_turn(
             &connection.outbound,
             request_id,
             JSONRPC_INVALID_PARAMS,
-            "linked DEFRA subagent threads are read-only; steer them from the parent thread"
+            "linked GENTS subagent threads are read-only; steer them from the parent thread"
                 .to_string(),
         )
         .await;
@@ -272,7 +272,7 @@ pub(super) async fn steer_defra_turn(
                 &connection.outbound,
                 request_id,
                 JSONRPC_INTERNAL_ERROR,
-                format!("failed to submit DEFRA steering AgentRequest: {err}"),
+                format!("failed to submit GENTS steering AgentRequest: {err}"),
             )
             .await;
         }

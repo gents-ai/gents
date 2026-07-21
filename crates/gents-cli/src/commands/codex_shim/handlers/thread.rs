@@ -494,7 +494,7 @@ pub(super) async fn handle_thread_request(
                     request_id,
                     JSONRPC_INVALID_PARAMS,
                     format!(
-                        "rollout path summaries are unavailable for DEFRA-backed Codex threads: {}",
+                        "rollout path summaries are unavailable for GENTS-backed Codex threads: {}",
                         rollout_path.display()
                     ),
                 )

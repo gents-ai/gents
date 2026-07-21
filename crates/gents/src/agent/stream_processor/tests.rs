@@ -41,7 +41,7 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:test",
+        "did:test:test",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -55,7 +55,7 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
     let request = AgentRequest {
         doc_id: "request-doc".to_string(),
         request_id: request_id.clone(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         requester_did: None,
         behavior_id: Some("general".to_string()),
         session_id: session_id.clone(),
@@ -75,7 +75,7 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "test-agent",
-        "did:defra-agent:test",
+        "did:test:test",
         request,
         30,
         crate::lifecycle::ExecutionOrigin::Interactive,
@@ -83,7 +83,7 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
     );
     let stream_writer = crate::streaming::DefraStreamWriter::new(
         node.clone(),
-        "did:defra-agent:test",
+        "did:test:test",
         Duration::from_secs(60),
     );
     // Begin a streaming response so reset_tail (called by persist_partial_turn)
@@ -141,7 +141,7 @@ async fn create_pending_request(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
-                agent_did: "did:defra-agent:test",
+                agent_did: "did:test:test",
                 behavior_id: "general",
                 session_id: "{session_id}",
                 retry_parent_request: "",
@@ -340,7 +340,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:test",
+        "did:test:test",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -355,7 +355,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     let request = AgentRequest {
         doc_id: request_doc_id,
         request_id: request_id.clone(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         requester_did: None,
         behavior_id: Some("general".to_string()),
         session_id: session_id.clone(),
@@ -376,7 +376,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
-        "did:defra-agent:test",
+        "did:test:test",
         request,
         30,
         ExecutionOrigin::Interactive,
@@ -384,11 +384,8 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
 
-    let stream_writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_millis(0),
-    );
+    let stream_writer =
+        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
     let response_doc_id = stream_writer
         .begin(&session_id, &request_id, "general")
         .await
@@ -502,7 +499,7 @@ async fn streamed_tool_result_persists_accumulated_assistant_turn_after_inline_c
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:test",
+        "did:test:test",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -520,7 +517,7 @@ async fn streamed_tool_result_persists_accumulated_assistant_turn_after_inline_c
     let request = AgentRequest {
         doc_id: request_doc_id,
         request_id: request_id.clone(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         requester_did: None,
         behavior_id: Some("general".to_string()),
         session_id: session_id.clone(),
@@ -540,18 +537,15 @@ async fn streamed_tool_result_persists_accumulated_assistant_turn_after_inline_c
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
-        "did:defra-agent:test",
+        "did:test:test",
         request,
         30,
         ExecutionOrigin::Interactive,
         "test-backend",
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let stream_writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_millis(0),
-    );
+    let stream_writer =
+        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
     let response_doc_id = stream_writer
         .begin(&session_id, &request_id, "general")
         .await
@@ -641,7 +635,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:test",
+        "did:test:test",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -659,7 +653,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
     let request = AgentRequest {
         doc_id: request_doc_id,
         request_id: request_id.clone(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         requester_did: None,
         behavior_id: Some("general".to_string()),
         session_id: session_id.clone(),
@@ -679,18 +673,15 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
-        "did:defra-agent:test",
+        "did:test:test",
         request,
         30,
         ExecutionOrigin::Interactive,
         "test-backend",
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let stream_writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_millis(0),
-    );
+    let stream_writer =
+        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
     let response_doc_id = stream_writer
         .begin(&session_id, &request_id, "general")
         .await
@@ -786,7 +777,7 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:test",
+        "did:test:test",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -806,7 +797,7 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
     let request = AgentRequest {
         doc_id: request_doc_id,
         request_id: request_id.clone(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         requester_did: None,
         behavior_id: Some("general".to_string()),
         session_id: session_id.clone(),
@@ -826,18 +817,15 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
-        "did:defra-agent:test",
+        "did:test:test",
         request,
         30,
         ExecutionOrigin::Interactive,
         "test-backend",
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let stream_writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_millis(0),
-    );
+    let stream_writer =
+        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
     let response_doc_id = stream_writer
         .begin(&session_id, &request_id, "general")
         .await
@@ -950,7 +938,7 @@ async fn post_tool_resumed_resets_response_tail() {
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:test",
+        "did:test:test",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -967,7 +955,7 @@ async fn post_tool_resumed_resets_response_tail() {
     let request = AgentRequest {
         doc_id: request_doc_id.clone(),
         request_id: request_id.clone(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         requester_did: None,
         behavior_id: Some("general".to_string()),
         session_id: session_id.clone(),
@@ -988,7 +976,7 @@ async fn post_tool_resumed_resets_response_tail() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
-        "did:defra-agent:test",
+        "did:test:test",
         request,
         30,
         ExecutionOrigin::Interactive,
@@ -1000,11 +988,8 @@ async fn post_tool_resumed_resets_response_tail() {
     assert_eq!(outcome, ClaimOutcome::Claimed, "expected Claimed outcome");
 
     // Use 0 ms batch interval so write_tokens flushes immediately to DB.
-    let stream_writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_millis(0),
-    );
+    let stream_writer =
+        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
     let response_doc_id = stream_writer
         .begin(&session_id, &request_id, "general")
         .await
@@ -1087,7 +1072,7 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:test",
+        "did:test:test",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -1102,7 +1087,7 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
     let request = AgentRequest {
         doc_id: request_doc_id,
         request_id: request_id.clone(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         requester_did: None,
         behavior_id: Some("general".to_string()),
         session_id: session_id.clone(),
@@ -1122,7 +1107,7 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
-        "did:defra-agent:test",
+        "did:test:test",
         request,
         30,
         ExecutionOrigin::Interactive,
@@ -1130,11 +1115,8 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
 
-    let stream_writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_millis(0),
-    );
+    let stream_writer =
+        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
     let response_doc_id = stream_writer
         .begin(&session_id, &request_id, "general")
         .await
@@ -1221,7 +1203,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:test",
+        "did:test:test",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -1239,7 +1221,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
     let request = AgentRequest {
         doc_id: request_doc_id,
         request_id: request_id.clone(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         requester_did: None,
         behavior_id: Some("general".to_string()),
         session_id: session_id.clone(),
@@ -1259,18 +1241,15 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
-        "did:defra-agent:test",
+        "did:test:test",
         request,
         30,
         ExecutionOrigin::Interactive,
         "test-backend",
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let stream_writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_millis(0),
-    );
+    let stream_writer =
+        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
     let response_doc_id = stream_writer
         .begin(&session_id, &request_id, "general")
         .await

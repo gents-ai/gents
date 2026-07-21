@@ -27,7 +27,7 @@ fn normalize_assistant_item(item: &mut Value, index: usize) {
     if !object.get("id").is_some_and(|value| !value.is_null()) {
         object.insert(
             "id".to_string(),
-            Value::String(format!("msg_defra_{index}")),
+            Value::String(format!("msg_gents_{index}")),
         );
     }
     if !object.get("status").is_some_and(|value| !value.is_null()) {
@@ -81,7 +81,7 @@ mod tests {
 
         let assistant = &value["input"][1];
         assert_eq!(assistant["type"], "message");
-        assert_eq!(assistant["id"], "msg_defra_1");
+        assert_eq!(assistant["id"], "msg_gents_1");
         assert_eq!(assistant["status"], "completed");
         assert_eq!(assistant["content"][0]["annotations"], json!([]));
     }
@@ -104,7 +104,7 @@ mod tests {
         normalize_responses_assistant_items(&mut value);
 
         let assistant = &value["input"][0];
-        assert_eq!(assistant["id"], "msg_defra_0");
+        assert_eq!(assistant["id"], "msg_gents_0");
         assert_eq!(assistant["status"], "completed");
         assert_eq!(assistant["content"][0]["annotations"], json!([]));
     }

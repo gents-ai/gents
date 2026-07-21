@@ -8,8 +8,8 @@ use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use codex_login::default_client::default_headers;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
-use gents_protocol::row::OAuthCredentialRow;
 use defra_node::EmbeddedNode;
+use gents_protocol::row::OAuthCredentialRow;
 use rig::http_client::{
     self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, MultipartForm, Request, ReqwestClient,
     Response, StreamingResponse,
@@ -371,7 +371,7 @@ pub fn build_chatgpt_codex_headers(
 /// header and the `/models` `client_version` query param, since the backend gates model
 /// availability on it. Advertise a recent supported Codex CLI version rather than gents's
 /// own crate version (which the backend treats as ancient and rejects everything). Override at
-/// runtime with `DEFRA_CHATGPT_CODEX_CLIENT_VERSION` when the supported floor moves.
+/// runtime with `GENTS_CHATGPT_CODEX_CLIENT_VERSION` when the supported floor moves.
 pub fn chatgpt_codex_client_version() -> String {
     std::env::var(CHATGPT_CODEX_CLIENT_VERSION_ENV)
         .ok()
@@ -382,7 +382,7 @@ pub fn chatgpt_codex_client_version() -> String {
 
 /// Default recent supported Codex CLI version (see [`chatgpt_codex_client_version`]).
 const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.138.0";
-const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "DEFRA_CHATGPT_CODEX_CLIENT_VERSION";
+const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "GENTS_CHATGPT_CODEX_CLIENT_VERSION";
 
 /// Rendered `name: value` GraphQL input entries for an `OAuthCredential`, each paired with its
 /// field name so a caller can omit immutable keys (see [`oauth_credential_upsert_mutation`]).
@@ -1155,7 +1155,7 @@ fn synthesize_completion_response(request_body: &[u8], sse_body: &str) -> Bytes 
         .unwrap_or_else(|| "gpt-5.2".to_string());
     let text = streamed_output_text(sse_body);
     let response = json!({
-        "id": "defra-chatgpt-codex-response",
+        "id": "gents-chatgpt-codex-response",
         "object": "response",
         "created_at": chrono::Utc::now().timestamp().max(0) as u64,
         "status": "completed",
@@ -1168,7 +1168,7 @@ fn synthesize_completion_response(request_body: &[u8], sse_body: &str) -> Bytes 
         "output": [
             {
                 "type": "message",
-                "id": "defra-chatgpt-codex-message",
+                "id": "gents-chatgpt-codex-message",
                 "role": "assistant",
                 "status": "completed",
                 "content": [

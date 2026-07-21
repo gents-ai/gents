@@ -82,7 +82,7 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
         db.node.clone(),
         child_request_id.clone(),
         child_session_id.clone(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "internal-cancel-descendant".to_string(),
         1,
         "spawn_subagent".to_string(),

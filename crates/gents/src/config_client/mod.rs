@@ -48,8 +48,8 @@ mod tool_selection;
 use std::sync::Arc;
 
 use anyhow::Result;
-use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use defra_node::EmbeddedNode;
+use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use serde_json::{json, Value};
 
 pub enum ConfigAccess {

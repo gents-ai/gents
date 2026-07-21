@@ -4,11 +4,11 @@ use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+use defra_p2p_adapter::P2POperations as P2POps;
 use gents_protocol::row::{
     AgentBehaviorRow, AgentPrincipalRow, AgentRequestRow, EventTriggerRow, InferenceBackendRow,
     InferenceProfileRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
-use defra_p2p_adapter::P2POperations as P2POps;
 
 use super::super::mutations::{
     self, CreatedConversation, PeerMutationResult, SubmitRequestOptions, SubmittedRequest,

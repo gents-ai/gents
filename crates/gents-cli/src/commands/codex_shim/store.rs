@@ -9,7 +9,7 @@ use crate::materialized_message_query;
 pub(super) async fn query_node_json(node: &EmbeddedNode, query: &str) -> Result<Value> {
     let response = node.execute(query).await;
     if response.has_errors() {
-        anyhow::bail!("DEFRA Codex shim query failed: {:?}", response.errors);
+        anyhow::bail!("GENTS Codex shim query failed: {:?}", response.errors);
     }
     Ok(json!({
         "data": response.data.unwrap_or_else(|| json!({})),
@@ -33,7 +33,7 @@ pub(super) async fn execute_committed(node: &EmbeddedNode, mutation: &str) -> Re
     let response = node.runner().execute_in_txn(request, &handle).await;
     if response.has_errors() {
         let _ = node.runner().rollback_txn(&handle).await;
-        anyhow::bail!("DEFRA Codex shim mutation failed: {:?}", response.errors);
+        anyhow::bail!("GENTS Codex shim mutation failed: {:?}", response.errors);
     }
     node.runner()
         .commit_txn(&handle)

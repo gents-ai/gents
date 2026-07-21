@@ -1532,8 +1532,8 @@ where
 mod tests {
     use super::*;
 
-    const LOCAL_DID: &str = "did:defra-agent:local-owner";
-    const FOREIGN_DID: &str = "did:defra-agent:foreign-owner";
+    const LOCAL_DID: &str = "did:test:local-owner";
+    const FOREIGN_DID: &str = "did:test:foreign-owner";
 
     async fn test_node() -> Arc<EmbeddedNode> {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());

@@ -746,7 +746,7 @@ mod tests {
                 "query": {
                     "type": "string",
                     "description": "Search text.",
-                    "examples": ["defra"]
+                    "examples": ["gents"]
                 },
                 "limit": {
                     "type": "integer",
@@ -801,14 +801,14 @@ mod tests {
 
         assert!(output.starts_with("## search_posts\nPurpose: Search x-data posts."));
         assert!(output.contains("Input contract:"));
-        assert!(output.contains("Required arguments:\n- `/arguments/query` (string; examples: \"defra\") - Search text."));
+        assert!(output.contains("Required arguments:\n- `/arguments/query` (string; examples: \"gents\") - Search text."));
         assert!(output.contains("Optional arguments:\n- `/arguments/limit` (integer; default: 10; minimum: 1; maximum: 100) - Maximum results to return."));
         assert!(
             output.contains("Unknown top-level fields: rejected (`additionalProperties: false`)")
         );
         assert!(output.contains("Raw schema: call `describe_tool` with `raw_schema: true`."));
         assert!(output.contains("Example `call_tool.arguments`:"));
-        assert!(output.contains("\"query\": \"defra\""));
+        assert!(output.contains("\"query\": \"gents\""));
         assert!(!output.contains("Input schema:\n```json"));
     }
 
@@ -821,7 +821,7 @@ mod tests {
                 "query": {
                     "type": "string",
                     "description": "Search text.",
-                    "examples": ["defra"]
+                    "examples": ["gents"]
                 },
                 "limit": {
                     "type": "integer",
@@ -934,7 +934,7 @@ mod tests {
                 json!({
                     "type": "string",
                     "description": "Search text.",
-                    "examples": ["defra agent schema navigation"]
+                    "examples": ["gents agent schema navigation"]
                 }),
             )))
             .collect::<Map<String, Value>>();

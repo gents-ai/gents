@@ -243,7 +243,7 @@ fn resolve_home_binding_agent_did(home: Option<&Path>) -> Result<String> {
     })?;
 
     let init_did = init_config.agent_did.trim();
-    if !init_did.is_empty() && !is_legacy_placeholder_did(init_did) {
+    if !init_did.is_empty() {
         if let Some(key_did) = load_init_key_did(init_config.key_path.as_deref(), &home_dir)? {
             if key_did != init_did {
                 anyhow::bail!(
@@ -257,7 +257,7 @@ fn resolve_home_binding_agent_did(home: Option<&Path>) -> Result<String> {
 
     load_init_key_did(init_config.key_path.as_deref(), &home_dir)?.ok_or_else(|| {
         anyhow::anyhow!(
-            "initialized home {} does not contain a real agent DID or identity key path; rerun `gents init --identity-only`",
+            "initialized home {} does not contain an agent DID or identity key path; rerun `gents init --identity-only`",
             home_dir.display()
         )
     })
@@ -338,7 +338,7 @@ fn enforce_manifest_rebind_safety(
 ) -> Result<()> {
     let concrete_mismatches = manifest_agent_dids(manifest)
         .into_iter()
-        .filter(|did| did != target_did && !is_legacy_placeholder_did(did))
+        .filter(|did| did != target_did)
         .collect::<Vec<_>>();
     if !concrete_mismatches.is_empty() && !force_rebind_concrete_did {
         anyhow::bail!(
@@ -376,10 +376,6 @@ fn rebind_manifest_agent_did(manifest: &mut DesiredStateManifest, target_did: &s
     for selection in &mut manifest.tool_selections {
         selection.agent_did = target_did.to_string();
     }
-}
-
-fn is_legacy_placeholder_did(did: &str) -> bool {
-    did.trim().starts_with("did:defra-agent:")
 }
 
 fn is_rebindable_agent_did_error(error: &str) -> bool {

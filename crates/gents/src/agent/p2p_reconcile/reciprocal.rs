@@ -4,8 +4,8 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
-use gents_protocol::network_token::EndpointRecord;
 use defra_node::{EmbeddedNode, EventName, QueryResponse};
+use gents_protocol::network_token::EndpointRecord;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 

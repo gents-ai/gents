@@ -57,11 +57,7 @@ fn behavior_config_prefers_raw_backend_api_key() {
 #[test]
 fn behavior_config_prefers_backend_specific_api_key_env_var() {
     let _env_guard = ENV_VAR_LOCK.blocking_lock();
-    let behavior = test_behavior(
-        "behavior-a",
-        "backend-a",
-        Some("GENTS_TEST_BACKEND_KEY"),
-    );
+    let behavior = test_behavior("behavior-a", "backend-a", Some("GENTS_TEST_BACKEND_KEY"));
 
     let mut env = TestEnvGuard::new(&["GENTS_TEST_BACKEND_KEY"]);
     env.set("GENTS_TEST_BACKEND_KEY", "backend-key");

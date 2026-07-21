@@ -33,11 +33,11 @@ fn empty_manifest(agent_did: &str) -> DesiredStateManifest {
 }
 
 fn manifest_with_default_behavior() -> DesiredStateManifest {
-    let mut manifest = empty_manifest("did:defra-agent:test");
+    let mut manifest = empty_manifest("did:test:test");
     manifest.agent_principal.default_behavior_id = Some("default".to_string());
     manifest.agent_behaviors.push(DesiredAgentBehavior {
         behavior_id: "default".to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         display_name: None,
         description: None,
         summary: None,
@@ -59,7 +59,7 @@ fn manifest_with_default_behavior() -> DesiredStateManifest {
 fn behavior_with(id: &str, backend_id: Option<&str>) -> DesiredAgentBehavior {
     DesiredAgentBehavior {
         behavior_id: id.to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         display_name: None,
         description: None,
         summary: None,
@@ -327,8 +327,8 @@ fn deletes_contain(
 
 #[test]
 fn prune_deletes_unreferenced_orphan_backend() {
-    let desired = empty_manifest("did:defra-agent:test");
-    let mut live = empty_manifest("did:defra-agent:test");
+    let desired = empty_manifest("did:test:test");
+    let mut live = empty_manifest("did:test:test");
     live.inference_backends.push(backend("k-orphan"));
 
     let deletes = super::prune::prune_safe_deletes(&desired, &live);
@@ -342,8 +342,8 @@ fn prune_deletes_unreferenced_orphan_backend() {
 #[test]
 fn prune_blocks_backend_referenced_by_behavior() {
     // Both live-only; the behavior references the backend.
-    let desired = empty_manifest("did:defra-agent:test");
-    let mut live = empty_manifest("did:defra-agent:test");
+    let desired = empty_manifest("did:test:test");
+    let mut live = empty_manifest("did:test:test");
     live.inference_backends.push(backend("k1"));
     live.agent_behaviors.push(behavior_with("b1", Some("k1")));
 
@@ -362,19 +362,15 @@ fn prune_blocks_backend_referenced_by_behavior() {
 
 #[test]
 fn prune_blocks_behavior_referenced_by_task() {
-    let desired = empty_manifest("did:defra-agent:test");
-    let mut live = empty_manifest("did:defra-agent:test");
+    let desired = empty_manifest("did:test:test");
+    let mut live = empty_manifest("did:test:test");
     live.agent_behaviors.push(behavior_with("b1", None));
     let mut task = sample_task("t1");
     task.behavior_id = "b1".to_string();
     live.tasks.push(task);
 
     let deletes = super::prune::prune_safe_deletes(&desired, &live);
-    assert!(deletes_contain(
-        &deletes,
-        gents::Collection::Task,
-        "t1"
-    ));
+    assert!(deletes_contain(&deletes, gents::Collection::Task, "t1"));
     assert!(
         !deletes_contain(&deletes, gents::Collection::AgentBehavior, "b1"),
         "behavior referenced by a live task must not be pruned"
@@ -383,8 +379,8 @@ fn prune_blocks_behavior_referenced_by_task() {
 
 #[test]
 fn prune_blocks_task_referenced_by_schedule_and_trigger() {
-    let desired = empty_manifest("did:defra-agent:test");
-    let mut live = empty_manifest("did:defra-agent:test");
+    let desired = empty_manifest("did:test:test");
+    let mut live = empty_manifest("did:test:test");
     let mut task = sample_task("t1");
     task.behavior_id = "b1".to_string();
     live.agent_behaviors.push(behavior_with("b1", None));
@@ -395,11 +391,7 @@ fn prune_blocks_task_referenced_by_schedule_and_trigger() {
 
     let deletes = super::prune::prune_safe_deletes(&desired, &live);
     // schedule + trigger reference the task; task must be protected.
-    assert!(deletes_contain(
-        &deletes,
-        gents::Collection::Schedule,
-        "s1"
-    ));
+    assert!(deletes_contain(&deletes, gents::Collection::Schedule, "s1"));
     assert!(deletes_contain(
         &deletes,
         gents::Collection::EventTrigger,
@@ -413,8 +405,8 @@ fn prune_blocks_task_referenced_by_schedule_and_trigger() {
 
 #[test]
 fn diff_manifests_prune_records_deletes_in_collection_diff() {
-    let desired = empty_manifest("did:defra-agent:test");
-    let mut live = empty_manifest("did:defra-agent:test");
+    let desired = empty_manifest("did:test:test");
+    let mut live = empty_manifest("did:test:test");
     live.inference_backends.push(backend("k-orphan"));
 
     let report = diff_manifests(
@@ -435,8 +427,8 @@ fn diff_manifests_prune_records_deletes_in_collection_diff() {
 
 #[test]
 fn diff_manifests_without_prune_records_no_deletes() {
-    let desired = empty_manifest("did:defra-agent:test");
-    let mut live = empty_manifest("did:defra-agent:test");
+    let desired = empty_manifest("did:test:test");
+    let mut live = empty_manifest("did:test:test");
     live.inference_backends.push(backend("k-orphan"));
 
     let report = diff_manifests(
@@ -469,7 +461,7 @@ fn sample_task(task_id: &str) -> DesiredTask {
 fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
     DesiredToolSelection {
         selection_id: selection_id.to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         display_name: None,
         tool_policy_version: None,
         enable_file_tools: false,
@@ -534,14 +526,14 @@ fn sample_event_trigger() -> DesiredEventTrigger {
 }
 
 fn empty_manifest_with_event_trigger(t: DesiredEventTrigger) -> DesiredStateManifest {
-    let mut m = empty_manifest("did:defra-agent:test");
+    let mut m = empty_manifest("did:test:test");
     m.event_triggers.push(t);
     m
 }
 
 #[test]
 fn normalize_sorts_and_dedups_read_only_command_allowlist() {
-    let mut manifest = empty_manifest("did:defra-agent:test");
+    let mut manifest = empty_manifest("did:test:test");
     let mut selection = sample_tool_selection("tasks-tools");
     selection.read_only_command_allowlist =
         vec!["ss".to_string(), "cat".to_string(), "ss".to_string()];
@@ -558,12 +550,12 @@ fn normalize_sorts_and_dedups_read_only_command_allowlist() {
 
 #[test]
 fn normalize_makes_read_only_command_allowlist_order_insensitive() {
-    let mut a = empty_manifest("did:defra-agent:test");
+    let mut a = empty_manifest("did:test:test");
     let mut sel_a = sample_tool_selection("tasks-tools");
     sel_a.read_only_command_allowlist = vec!["cat".to_string(), "ss".to_string()];
     a.tool_selections.push(sel_a);
 
-    let mut b = empty_manifest("did:defra-agent:test");
+    let mut b = empty_manifest("did:test:test");
     let mut sel_b = sample_tool_selection("tasks-tools");
     sel_b.read_only_command_allowlist = vec!["ss".to_string(), "cat".to_string()];
     b.tool_selections.push(sel_b);
@@ -620,7 +612,7 @@ fn live_tool_service_registry_preserves_null_storage_for_diff() {
 
 #[test]
 fn tool_service_registry_round_trip_preserves_send_agent_did() {
-    let mut manifest = empty_manifest("did:defra-agent:test");
+    let mut manifest = empty_manifest("did:test:test");
     manifest
         .tool_service_registries
         .push(DesiredToolServiceRegistry {
@@ -649,7 +641,7 @@ fn tool_service_registry_round_trip_preserves_send_agent_did() {
 
 #[test]
 fn tool_selection_round_trip_preserves_subagent_controls() {
-    let mut manifest = empty_manifest("did:defra-agent:test");
+    let mut manifest = empty_manifest("did:test:test");
     let mut selection = sample_tool_selection("default-tools");
     selection.subagent_targets = vec!["researcher".to_string()];
     selection.subagent_spawn_enabled = true;
@@ -1227,9 +1219,9 @@ mod load_manifest_root {
 
 #[test]
 fn diff_manifests_creates_task_when_live_is_empty() {
-    let mut desired = empty_manifest("did:defra-agent:test");
+    let mut desired = empty_manifest("did:test:test");
     desired.tasks.push(sample_task("summarize-inbox"));
-    let live = empty_manifest("did:defra-agent:test");
+    let live = empty_manifest("did:test:test");
 
     let report = diff_manifests(
         &PathBuf::from("/tmp/fake-root"),
@@ -1252,11 +1244,11 @@ fn diff_manifests_creates_task_when_live_is_empty() {
 
 #[test]
 fn diff_manifests_creates_schedule_when_live_is_empty() {
-    let mut desired = empty_manifest("did:defra-agent:test");
+    let mut desired = empty_manifest("did:test:test");
     desired
         .schedules
         .push(sample_schedule("summarize-inbox-hourly", "summarize-inbox"));
-    let live = empty_manifest("did:defra-agent:test");
+    let live = empty_manifest("did:test:test");
 
     let report = diff_manifests(
         &PathBuf::from("/tmp/fake-root"),
@@ -1329,12 +1321,12 @@ fn diff_manifests_with_prune_deletes_only_unreferenced_live_only_docs() {
 
 #[test]
 fn diff_manifests_marks_task_update_when_prompt_changes() {
-    let mut desired = empty_manifest("did:defra-agent:test");
+    let mut desired = empty_manifest("did:test:test");
     let mut desired_task = sample_task("summarize-inbox");
     desired_task.prompt_template = "New prompt body.".to_string();
     desired.tasks.push(desired_task);
 
-    let mut live = empty_manifest("did:defra-agent:test");
+    let mut live = empty_manifest("did:test:test");
     live.tasks.push(sample_task("summarize-inbox"));
 
     let report = diff_manifests(
@@ -1354,12 +1346,12 @@ fn diff_manifests_marks_task_update_when_prompt_changes() {
 
 #[test]
 fn diff_manifests_marks_tool_selection_update_when_mcp_allowlist_changes() {
-    let mut desired = empty_manifest("did:defra-agent:test");
+    let mut desired = empty_manifest("did:test:test");
     let mut desired_selection = sample_tool_selection("service-tools");
     desired_selection.allowed_mcp_service_ids = vec!["x-data".to_string()];
     desired.tool_selections.push(desired_selection);
 
-    let mut live = empty_manifest("did:defra-agent:test");
+    let mut live = empty_manifest("did:test:test");
     live.tool_selections
         .push(sample_tool_selection("service-tools"));
 
@@ -1383,12 +1375,12 @@ fn diff_manifests_marks_tool_selection_update_when_mcp_allowlist_changes() {
 
 #[test]
 fn diff_manifests_marks_schedule_update_when_interval_changes() {
-    let mut desired = empty_manifest("did:defra-agent:test");
+    let mut desired = empty_manifest("did:test:test");
     let mut desired_schedule = sample_schedule("summarize-inbox-hourly", "summarize-inbox");
     desired_schedule.interval_secs = Some(7200);
     desired.schedules.push(desired_schedule);
 
-    let mut live = empty_manifest("did:defra-agent:test");
+    let mut live = empty_manifest("did:test:test");
     live.schedules
         .push(sample_schedule("summarize-inbox-hourly", "summarize-inbox"));
 
@@ -1413,7 +1405,7 @@ fn diff_manifests_marks_schedule_update_when_interval_changes() {
 #[test]
 fn diff_manifests_creates_event_trigger_when_live_is_empty() {
     let manifest = empty_manifest_with_event_trigger(sample_event_trigger());
-    let live = empty_manifest("did:defra-agent:test");
+    let live = empty_manifest("did:test:test");
 
     let report = diff_manifests(
         &PathBuf::from("/tmp/fake-root"),
@@ -1467,7 +1459,7 @@ fn validation_errors(manifest: &DesiredStateManifest) -> Vec<String> {
 
 #[test]
 fn validate_rejects_non_positive_stream_liveness_timeout() {
-    let mut manifest = empty_manifest("did:defra-agent:test");
+    let mut manifest = empty_manifest("did:test:test");
     let mut profile = profile("fast");
     profile.stream_liveness_timeout_secs = Some(0);
     manifest.inference_profiles.push(profile);
@@ -1488,7 +1480,7 @@ fn validate_rejects_non_positive_stream_liveness_timeout() {
 fn validate_rejects_empty_string_in_subagent_targets() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
-    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.agent_did = "did:test:test".to_string();
     sel.subagent_targets = vec!["".to_string()];
     manifest.tool_selections.push(sel);
 
@@ -1505,7 +1497,7 @@ fn validate_rejects_empty_string_in_subagent_targets() {
 fn validate_rejects_subagent_spawn_enabled_without_targets() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
-    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.agent_did = "did:test:test".to_string();
     sel.subagent_spawn_enabled = true;
     sel.subagent_targets = Vec::new();
     manifest.tool_selections.push(sel);
@@ -1525,7 +1517,7 @@ fn validate_rejects_subagent_spawn_enabled_without_targets() {
 fn validate_rejects_subagent_spawn_enabled_with_empty_targets_vec() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
-    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.agent_did = "did:test:test".to_string();
     sel.subagent_spawn_enabled = true;
     sel.subagent_targets = Vec::new();
     manifest.tool_selections.push(sel);
@@ -1545,11 +1537,11 @@ fn validate_rejects_subagent_spawn_enabled_with_empty_targets_vec() {
 fn validate_accepts_subagent_spawn_enabled_with_targets() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
-    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.agent_did = "did:test:test".to_string();
     sel.subagent_spawn_enabled = true;
     sel.subagent_targets = vec![gents::subagent_target_entry(
         "researcher",
-        "did:defra-agent:test",
+        "did:test:test",
         "amy-research",
         None,
     )];
@@ -1568,11 +1560,11 @@ fn validate_accepts_subagent_spawn_enabled_with_targets() {
 fn validate_rejects_duplicate_subagent_target_name() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
-    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.agent_did = "did:test:test".to_string();
     sel.subagent_spawn_enabled = true;
     sel.subagent_targets = vec![
-        gents::subagent_target_entry("dup", "did:defra-agent:test", "amy-research", None),
-        gents::subagent_target_entry("dup", "did:defra-agent:test", "amy-code", None),
+        gents::subagent_target_entry("dup", "did:test:test", "amy-research", None),
+        gents::subagent_target_entry("dup", "did:test:test", "amy-code", None),
     ];
     manifest.tool_selections.push(sel);
 
@@ -1591,13 +1583,13 @@ fn validate_rejects_duplicate_subagent_target_name() {
 fn validate_rejects_remote_did_target_when_cross_deployment_off() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
-    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.agent_did = "did:test:test".to_string();
     sel.subagent_spawn_enabled = true;
     // Flag defaults to false: cross-deployment is OFF.
     sel.subagent_allow_cross_deployment = false;
     sel.subagent_targets = vec![gents::subagent_target_entry(
         "remote-researcher",
-        "did:defra-agent:OTHER-deployment",
+        "did:test:OTHER-deployment",
         "amy-research",
         None,
     )];
@@ -1618,12 +1610,12 @@ fn validate_rejects_remote_did_target_when_cross_deployment_off() {
 fn validate_accepts_remote_did_target_when_cross_deployment_on() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
-    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.agent_did = "did:test:test".to_string();
     sel.subagent_spawn_enabled = true;
     sel.subagent_allow_cross_deployment = true;
     sel.subagent_targets = vec![gents::subagent_target_entry(
         "remote-researcher",
-        "did:defra-agent:OTHER-deployment",
+        "did:test:OTHER-deployment",
         "amy-research",
         None,
     )];
@@ -1642,13 +1634,13 @@ fn validate_accepts_remote_did_target_when_cross_deployment_on() {
 fn validate_accepts_local_did_target_when_cross_deployment_off() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
-    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.agent_did = "did:test:test".to_string();
     sel.subagent_spawn_enabled = true;
     sel.subagent_allow_cross_deployment = false;
     // Same DID as the selection -> local target, allowed even with flag off.
     sel.subagent_targets = vec![gents::subagent_target_entry(
         "local-researcher",
-        "did:defra-agent:test",
+        "did:test:test",
         "amy-research",
         None,
     )];
@@ -1675,7 +1667,7 @@ fn write_tools_deserializer_converges_object_and_string_shapes() {
     fn deser_write_tools(write_tools: serde_json::Value) -> Vec<String> {
         let selection = json!({
             "selection_id": "conv-sel",
-            "agent_did": "did:defra-agent:test",
+            "agent_did": "did:test:test",
             "enable_file_tools": false,
             "file_tools_mode": "ReadOnly",
             "enable_bash": false,
@@ -1722,7 +1714,7 @@ fn validate_rejects_write_tool_with_empty_collection() {
     use gents::WriteToolDecl;
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
-    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.agent_did = "did:test:test".to_string();
     sel.write_tools = vec![write_tool_storage_entry(&WriteToolDecl {
         tool_name: "request_action".to_string(),
         collection: String::new(),
@@ -1745,7 +1737,7 @@ fn validate_rejects_write_tool_with_empty_field_name() {
     use gents::{WriteToolDecl, WriteToolField};
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
-    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.agent_did = "did:test:test".to_string();
     sel.write_tools = vec![write_tool_storage_entry(&WriteToolDecl {
         tool_name: "request_action".to_string(),
         collection: "ActionRequest".to_string(),
@@ -1771,7 +1763,7 @@ fn validate_rejects_duplicate_write_tool_name() {
     use gents::WriteToolDecl;
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
-    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.agent_did = "did:test:test".to_string();
     let decl = WriteToolDecl {
         tool_name: "request_action".to_string(),
         collection: "ActionRequest".to_string(),
@@ -1801,7 +1793,7 @@ fn validate_accepts_well_formed_write_tools() {
     use gents::{WriteToolDecl, WriteToolField};
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
-    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.agent_did = "did:test:test".to_string();
     sel.write_tools = vec![write_tool_storage_entry(&WriteToolDecl {
         tool_name: "request_action".to_string(),
         collection: "ActionRequest".to_string(),
@@ -1831,7 +1823,7 @@ fn validate_rejects_write_tool_name_colliding_with_builtin() {
     use gents::{WriteToolDecl, WriteToolField};
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
-    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.agent_did = "did:test:test".to_string();
     sel.write_tools = vec![write_tool_storage_entry(&WriteToolDecl {
         tool_name: "read_file".to_string(),
         collection: "AuditLog".to_string(),
@@ -1857,7 +1849,7 @@ fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
     use gents::WriteToolDecl;
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
-    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.agent_did = "did:test:test".to_string();
     sel.cli_tool_names = vec!["rg".to_string()];
     sel.write_tools = vec![write_tool_storage_entry(&WriteToolDecl {
         tool_name: "rg".to_string(),
@@ -1881,7 +1873,7 @@ fn validate_rejects_duplicate_write_tool_field_name() {
     use gents::{WriteToolDecl, WriteToolField};
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
-    sel.agent_did = "did:defra-agent:test".to_string();
+    sel.agent_did = "did:test:test".to_string();
     sel.write_tools = vec![write_tool_storage_entry(&WriteToolDecl {
         tool_name: "request_action".to_string(),
         collection: "ActionRequest".to_string(),
@@ -2111,7 +2103,7 @@ fn validate_rejects_schedule_unknown_concurrency() {
 fn validate_rejects_task_unknown_behavior() {
     let mut manifest = manifest_with_default_behavior();
     let mut task = sample_task("summarize-inbox");
-    task.behavior_id = "did:defra-agent:test:missing".to_string();
+    task.behavior_id = "did:test:test:missing".to_string();
     manifest.tasks.push(task);
 
     let errors = validation_errors(&manifest);

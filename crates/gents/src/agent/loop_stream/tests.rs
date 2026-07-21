@@ -464,7 +464,7 @@ async fn test_hook() -> (Arc<defra_node::EmbeddedNode>, DefraSessionHook) {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:test",
+        "did:test:test",
         FailurePolicy::default(),
     );
     (node, hook)

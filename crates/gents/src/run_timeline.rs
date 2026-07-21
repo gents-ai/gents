@@ -880,7 +880,7 @@ mod tests {
         let rows = RunTimelineRows {
             request: TimelineRequestRow {
                 request_id: "req-1".to_string(),
-                agent_did: Some("did:defra-agent:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 behavior_id: Some("amy".to_string()),
                 session_id: Some("session-1".to_string()),
                 lifecycle_state: Some("complete".to_string()),

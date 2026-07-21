@@ -13,10 +13,8 @@ pub use tools::{execute_request, execute_request_with_base};
 use protocol::{GlobArgs, NativeFsRunnerRequest};
 
 pub fn self_test() -> Result<()> {
-    let root = std::env::temp_dir().join(format!(
-        "gents-fs-runner-self-test-{}",
-        std::process::id()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("gents-fs-runner-self-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("src"))?;
     std::fs::write(root.join("src/main.rs"), "fn main() {}\n")?;
@@ -48,10 +46,8 @@ mod tests {
 
     #[test]
     fn request_with_base_resolves_relative_paths_from_base() {
-        let root = std::env::temp_dir().join(format!(
-            "gents-fs-runner-root-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("gents-fs-runner-root-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let base = root.join("repo");
         std::fs::create_dir_all(&base).unwrap();
@@ -79,10 +75,8 @@ mod tests {
 
     #[test]
     fn grep_accepts_single_file_path() {
-        let root = std::env::temp_dir().join(format!(
-            "gents-fs-runner-grep-file-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("gents-fs-runner-grep-file-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("repo/src")).unwrap();
         std::fs::write(root.join("repo/src/lib.rs"), "pub fn useful() {}\n").unwrap();

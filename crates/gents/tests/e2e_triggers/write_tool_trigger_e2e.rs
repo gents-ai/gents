@@ -49,7 +49,7 @@ use gents::defra_write::BoundedWriteTool;
 use gents::document_config::{WriteToolDecl, WriteToolField};
 use gents::graphql::escape_graphql_string;
 use gents::llm::tool::Tool;
-use gents::{AgentIdentity, Gents, DocumentRuntimeOptions, ToolCeiling};
+use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
 use serde::Deserialize;
 use serde_json::{json, Value};
 

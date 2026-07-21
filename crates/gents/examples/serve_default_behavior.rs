@@ -8,7 +8,7 @@ use gents::graphql::escape_graphql_string;
 use gents::{
     ensure_agent_principal, ensure_runtime_schemas, upsert_agent_behavior,
     upsert_inference_profile, upsert_tool_selection, AgentBehaviorDocument, AgentIdentity,
-    Gents, DocumentRuntimeOptions, InferenceProfile, KeyIdentity, McpPool, ToolCeiling,
+    DocumentRuntimeOptions, Gents, InferenceProfile, KeyIdentity, McpPool, ToolCeiling,
     ToolSelectionDocument,
 };
 use tokio::sync::watch;
@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
             .with_http(HttpConfig::with_addr(http_addr))
             .build()
             .await
-            .context("building embedded defra node")?,
+            .context("building embedded DefraDB node")?,
     );
     ensure_runtime_schemas(node.as_ref()).await?;
     let identity = Arc::new(

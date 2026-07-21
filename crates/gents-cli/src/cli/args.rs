@@ -534,7 +534,7 @@ pub(crate) struct ServeArgs {
     pub(crate) codex_shim_bind_addr: IpAddr,
     #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_PORT)]
     pub(crate) codex_shim_port: u16,
-    #[arg(long, help = "Optional DEFRA behavior override for Codex turns")]
+    #[arg(long, help = "Optional GENTS behavior override for Codex turns")]
     pub(crate) codex_shim_behavior_id: Option<String>,
     #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_TIMEOUT_SECS)]
     pub(crate) codex_shim_timeout_secs: u64,
@@ -3270,15 +3270,9 @@ mod tests {
             _ => panic!("expected `config task list`"),
         }
 
-        let show = Cli::try_parse_from([
-            "gents",
-            "config",
-            "task",
-            "show",
-            "--task-id",
-            "host-check",
-        ])
-        .expect("config task show should parse");
+        let show =
+            Cli::try_parse_from(["gents", "config", "task", "show", "--task-id", "host-check"])
+                .expect("config task show should parse");
         match show.command {
             Command::Config {
                 command:

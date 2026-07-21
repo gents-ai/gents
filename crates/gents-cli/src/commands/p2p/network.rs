@@ -444,9 +444,8 @@ mod tests {
 
     #[test]
     fn p2p_network_list_table_parses() {
-        let cli =
-            Cli::try_parse_from(["gents", "p2p", "network", "list", "--output", "table"])
-                .expect("p2p network list --output table should parse");
+        let cli = Cli::try_parse_from(["gents", "p2p", "network", "list", "--output", "table"])
+            .expect("p2p network list --output table should parse");
         match cli.command {
             crate::cli::args::Command::P2p {
                 command: crate::cli::args::P2pCommand::Network { command },
@@ -462,9 +461,8 @@ mod tests {
 
     #[test]
     fn p2p_network_list_json_parses() {
-        let cli =
-            Cli::try_parse_from(["gents", "p2p", "network", "list", "--output", "json"])
-                .expect("p2p network list --output json should parse");
+        let cli = Cli::try_parse_from(["gents", "p2p", "network", "list", "--output", "json"])
+            .expect("p2p network list --output json should parse");
         match cli.command {
             crate::cli::args::Command::P2p {
                 command: crate::cli::args::P2pCommand::Network { command },
@@ -597,13 +595,7 @@ mod tests {
     #[test]
     fn p2p_network_grant_revoke_parse_member_did_and_output() {
         for (subcommand, expected_json) in [("grant", false), ("revoke", true)] {
-            let mut argv = vec![
-                "gents",
-                "p2p",
-                "network",
-                subcommand,
-                "did:key:zMember",
-            ];
+            let mut argv = vec!["gents", "p2p", "network", subcommand, "did:key:zMember"];
             if expected_json {
                 argv.extend(["--output", "json"]);
             }

@@ -10,10 +10,10 @@ use super::command_projection::{
 };
 use super::compaction_projection::{
     compaction_projection_events, context_compaction_item, CompactionProjectionEvent,
-    DefraCompactionProgress,
+    GentsCompactionProgress,
 };
 use super::progress::{
-    defra_tool_item, tool_completed_at_ms, tool_started_at_ms, DefraToolCallProgress,
+    gents_tool_item, tool_completed_at_ms, tool_started_at_ms, GentsToolCallProgress,
 };
 use super::protocol::{
     agent_message_item, agent_message_item_with_phase, now_millis, send_notification,
@@ -250,7 +250,7 @@ impl<'a> TurnProjection<'a> {
         let item_id = if let Some(item_id) = self.active_agent_item_id.as_ref() {
             item_id.clone()
         } else {
-            let item_id = self.state.next_id("defra-message");
+            let item_id = self.state.next_id("gents-message");
             send_notification(
                 outbound,
                 self.state,
@@ -318,7 +318,7 @@ impl<'a> TurnProjection<'a> {
     async fn send_tool_started(
         &mut self,
         outbound: &Outbound,
-        tool: &DefraToolCallProgress,
+        tool: &GentsToolCallProgress,
     ) -> Result<()> {
         self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
             .await?;
@@ -326,7 +326,7 @@ impl<'a> TurnProjection<'a> {
             outbound,
             self.state,
             codex::ServerNotification::ItemStarted(codex::ItemStartedNotification {
-                item: defra_tool_item(tool, codex::McpToolCallStatus::InProgress),
+                item: gents_tool_item(tool, codex::McpToolCallStatus::InProgress),
                 thread_id: self.thread_id.to_string(),
                 turn_id: self.turn_id.to_string(),
                 started_at_ms: tool_started_at_ms(tool).unwrap_or_else(now_millis),
@@ -338,12 +338,12 @@ impl<'a> TurnProjection<'a> {
     async fn send_tool_completed(
         &mut self,
         outbound: &Outbound,
-        tool: &DefraToolCallProgress,
+        tool: &GentsToolCallProgress,
         status: codex::McpToolCallStatus,
     ) -> Result<()> {
         self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
             .await?;
-        let completed_item = defra_tool_item(tool, status);
+        let completed_item = gents_tool_item(tool, status);
         send_notification(
             outbound,
             self.state,
@@ -362,7 +362,7 @@ impl<'a> TurnProjection<'a> {
     async fn send_command_execution_started(
         &mut self,
         outbound: &Outbound,
-        tool: &DefraToolCallProgress,
+        tool: &GentsToolCallProgress,
         status: codex::CommandExecutionStatus,
     ) -> Result<()> {
         self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
@@ -383,7 +383,7 @@ impl<'a> TurnProjection<'a> {
     async fn send_command_execution_completed(
         &mut self,
         outbound: &Outbound,
-        tool: &DefraToolCallProgress,
+        tool: &GentsToolCallProgress,
         status: codex::CommandExecutionStatus,
     ) -> Result<()> {
         self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
@@ -422,7 +422,7 @@ impl<'a> TurnProjection<'a> {
     async fn send_file_change_started(
         &mut self,
         outbound: &Outbound,
-        tool: &DefraToolCallProgress,
+        tool: &GentsToolCallProgress,
     ) -> Result<()> {
         let Some(item) = file_change_item(tool, codex::PatchApplyStatus::InProgress) else {
             return Ok(());
@@ -445,7 +445,7 @@ impl<'a> TurnProjection<'a> {
     async fn send_collab_started(
         &mut self,
         outbound: &Outbound,
-        tool: &DefraToolCallProgress,
+        tool: &GentsToolCallProgress,
         projection: &CollabProjection,
     ) -> Result<()> {
         self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
@@ -468,7 +468,7 @@ impl<'a> TurnProjection<'a> {
     async fn send_collab_completed(
         &mut self,
         outbound: &Outbound,
-        tool: &DefraToolCallProgress,
+        tool: &GentsToolCallProgress,
         projection: &CollabProjection,
     ) -> Result<()> {
         self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
@@ -500,7 +500,7 @@ impl<'a> TurnProjection<'a> {
     async fn send_file_change_completed(
         &mut self,
         outbound: &Outbound,
-        tool: &DefraToolCallProgress,
+        tool: &GentsToolCallProgress,
         status: codex::PatchApplyStatus,
     ) -> Result<()> {
         let Some(item) = file_change_item(tool, status) else {
@@ -526,7 +526,7 @@ impl<'a> TurnProjection<'a> {
     pub(super) async fn send_tool_projection_update(
         &mut self,
         outbound: &Outbound,
-        tool: &DefraToolCallProgress,
+        tool: &GentsToolCallProgress,
         previous: Option<&ToolProjectionStatus>,
         current: &ToolProjectionStatus,
     ) -> Result<()> {
@@ -633,7 +633,7 @@ impl<'a> TurnProjection<'a> {
     pub(super) async fn send_compaction_projection_update(
         &mut self,
         outbound: &Outbound,
-        compaction: &DefraCompactionProgress,
+        compaction: &GentsCompactionProgress,
         previous_state: Option<&str>,
     ) -> Result<()> {
         let events = compaction_projection_events(previous_state, &compaction.call_state);
@@ -690,7 +690,7 @@ impl<'a> TurnProjection<'a> {
             .await?;
         let turn_error = if status == codex::TurnStatus::Failed {
             Some(codex::TurnError {
-                message: error_message.unwrap_or_else(|| "DEFRA turn failed".to_string()),
+                message: error_message.unwrap_or_else(|| "GENTS turn failed".to_string()),
                 codex_error_info: None,
                 additional_details: None,
             })

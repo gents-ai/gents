@@ -8,8 +8,8 @@ use anyhow::{Context, Result};
 use gents::defra_node::EmbeddedNode;
 use gents::{
     ensure_runtime_schemas, load_macos_keychain_identity, load_macos_secure_enclave_identity,
-    AgentIdentity, Gents, DocumentRuntimeOptions, KeyIdentity, McpPool,
-    ProcessLifecycleObserver, ProcessLifecycleState, ToolCeiling,
+    AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, ProcessLifecycleObserver,
+    ProcessLifecycleState, ToolCeiling,
 };
 use serde_json::{json, Value};
 use tokio::sync::watch;
@@ -319,7 +319,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         node_builder
             .build()
             .await
-            .context("building embedded defra node")?,
+            .context("building embedded DefraDB node")?,
     );
     ensure_runtime_schemas(node.as_ref()).await?;
     // Single sanctioned migration entry point: run the FULL set so the CLI
@@ -594,9 +594,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             }
         }
     } else {
-        run_handle
-            .await
-            .context("joining gents runtime task")?
+        run_handle.await.context("joining gents runtime task")?
     }
 }
 
@@ -613,7 +611,7 @@ fn resolve_server_identity(
 ) -> Result<ServerIdentity> {
     if let Some(config) = init_config {
         let agent_did = config.agent_did.trim();
-        if is_real_agent_did(agent_did)
+        if has_agent_did(agent_did)
             && args.key_path.is_none()
             && config
                 .key_path
@@ -745,7 +743,7 @@ fn ensure_identity_matches_init_config(
     let Some(config) = init_config else {
         return Ok(());
     };
-    if is_real_agent_did(&config.agent_did) && config.agent_did.trim() != resolved_did {
+    if has_agent_did(&config.agent_did) && config.agent_did.trim() != resolved_did {
         anyhow::bail!(
             "initialized home agent DID {} does not match loaded identity DID {}; repair init.json or use the correct --key-path",
             config.agent_did,
@@ -762,7 +760,7 @@ fn ensure_key_path_exists_for_initialized_did(
     let Some(config) = init_config else {
         return Ok(());
     };
-    if is_real_agent_did(&config.agent_did) && !key_path.exists() {
+    if has_agent_did(&config.agent_did) && !key_path.exists() {
         anyhow::bail!(
             "initialized home agent DID {} requires identity key {} to already exist; restore the configured key, pass --key-path for the matching key, or bootstrap the host identity backend first",
             config.agent_did,
@@ -772,9 +770,8 @@ fn ensure_key_path_exists_for_initialized_did(
     Ok(())
 }
 
-fn is_real_agent_did(did: &str) -> bool {
-    let did = did.trim();
-    !did.is_empty() && !did.starts_with("did:defra-agent:")
+fn has_agent_did(did: &str) -> bool {
+    !did.trim().is_empty()
 }
 
 fn default_p2p_secret_key_path(home_dir: &Path) -> PathBuf {

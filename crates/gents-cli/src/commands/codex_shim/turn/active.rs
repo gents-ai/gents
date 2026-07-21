@@ -170,7 +170,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
             active_turn_id = %active.turn_id,
             requested_turn_id = %turn_id,
             thread_id,
-            "Codex shim interrupt turn id did not match active DEFRA turn; interrupting active thread turn"
+            "Codex shim interrupt turn id did not match active GENTS turn; interrupting active thread turn"
         );
     }
 
@@ -200,7 +200,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
                 "error": error.to_string(),
             }),
         );
-        tracing::warn!(%error, request_id, "Codex shim failed to forward DEFRA interrupt");
+        tracing::warn!(%error, request_id, "Codex shim failed to forward GENTS interrupt");
     } else {
         trace::shim_event_fields(
             &state.trace_path,
@@ -244,7 +244,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
             tracing::warn!(
                 %error,
                 request_id,
-                "Codex shim failed to cancel queued DEFRA steering request after interrupt"
+                "Codex shim failed to cancel queued GENTS steering request after interrupt"
             );
         } else {
             trace::shim_event_fields(
@@ -468,7 +468,7 @@ mod tests {
     }
 
     #[test]
-    fn active_codex_turn_projects_deepest_defra_steering_tail() {
+    fn active_codex_turn_projects_deepest_gents_steering_tail() {
         let rows = vec![
             row("turn-1", "processing", None),
             row("steer-1", "pending", Some("turn-1")),

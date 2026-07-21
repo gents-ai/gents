@@ -67,7 +67,7 @@ async fn create_processing_request(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
-                agent_did: "did:defra-agent:test",
+                agent_did: "did:test:test",
                 behavior_id: "general",
                 session_id: "{session_id}",
                 retry_parent_request: "",
@@ -236,7 +236,7 @@ fn build_finalize_mutation_clears_tail_without_buffer() {
         None,
         None,
         RequestFinalizeMode::UpdateRequest,
-        "did:defra-agent:test",
+        "did:test:test",
         false,
     );
 
@@ -280,7 +280,7 @@ fn build_error_finalize_atomically_carries_response_and_request_reason() {
         None,
         Some("provider failed"),
         RequestFinalizeMode::UpdateRequest,
-        "did:defra-agent:test",
+        "did:test:test",
         false,
     );
 
@@ -288,7 +288,7 @@ fn build_error_finalize_atomically_carries_response_and_request_reason() {
     assert!(mutation.contains(r#"error_message: "provider failed""#));
     assert!(mutation.contains(r#"lifecycle_state: "failed""#));
     assert!(mutation.contains(r#"failure_reason: "provider failed""#));
-    assert!(mutation.contains(r#"agent_did: { _eq: "did:defra-agent:test" }"#));
+    assert!(mutation.contains(r#"agent_did: { _eq: "did:test:test" }"#));
     assert!(
         !mutation.contains("interrupted_at:"),
         "a plain error finalize must never stamp the interrupt marker"
@@ -298,11 +298,7 @@ fn build_error_finalize_atomically_carries_response_and_request_reason() {
 #[tokio::test]
 async fn finalize_removes_buffer_after_successful_mutation() {
     let (node, data_path) = build_test_node("finalize-success").await;
-    let writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_secs(60),
-    );
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     let request_id = uuid::Uuid::new_v4().to_string();
     create_processing_request(&node, &request_id, "session-1").await;
     let doc_id = writer
@@ -362,11 +358,7 @@ async fn finalize_removes_buffer_after_successful_mutation() {
 #[tokio::test]
 async fn finalize_treats_matching_terminal_observation_as_idempotent() {
     let (node, data_path) = build_test_node("finalize-idempotent-terminal").await;
-    let writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_secs(60),
-    );
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     let request_id = uuid::Uuid::new_v4().to_string();
     create_processing_request(&node, &request_id, "session-1").await;
     let doc_id = writer
@@ -421,11 +413,7 @@ async fn finalize_treats_matching_terminal_observation_as_idempotent() {
 #[tokio::test]
 async fn finalize_keeps_buffer_when_mutation_fails() {
     let (node, data_path) = build_test_node("finalize-failure").await;
-    let writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_secs(60),
-    );
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     let invalid_doc_id = r#"doc"broken"#.to_string();
 
     writer.buffers.lock().await.insert(
@@ -452,11 +440,7 @@ async fn finalize_keeps_buffer_when_mutation_fails() {
 #[tokio::test]
 async fn finalize_without_buffer_uses_fallback_mutation() {
     let (node, data_path) = build_test_node("finalize-fallback").await;
-    let writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_secs(60),
-    );
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     let request_id = uuid::Uuid::new_v4().to_string();
     create_processing_request(&node, &request_id, "session-1").await;
     let doc_id = writer
@@ -507,11 +491,7 @@ async fn finalize_without_buffer_uses_fallback_mutation() {
 #[tokio::test]
 async fn error_message_persists_on_error_response() {
     let (node, data_path) = build_test_node("error-message").await;
-    let writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_secs(60),
-    );
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     let request_id = uuid::Uuid::new_v4().to_string();
     create_processing_request(&node, &request_id, "session-1").await;
     let doc_id = writer
@@ -544,11 +524,7 @@ async fn error_message_persists_on_error_response() {
 #[tokio::test]
 async fn write_tokens_fails_when_response_document_is_missing() {
     let (node, data_path) = build_test_node("missing-response-write").await;
-    let writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_millis(1),
-    );
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(1));
     let missing_doc_id = "missing-response-doc".to_string();
 
     writer.buffers.lock().await.insert(
@@ -575,11 +551,7 @@ async fn write_tokens_fails_when_response_document_is_missing() {
 #[tokio::test]
 async fn finalize_rejects_conflicting_terminal_state() {
     let (node, data_path) = build_test_node("finalize-conflict").await;
-    let writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_secs(60),
-    );
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     let request_id = uuid::Uuid::new_v4().to_string();
     create_processing_request(&node, &request_id, "session-1").await;
     let doc_id = writer
@@ -615,11 +587,7 @@ async fn finalize_rejects_conflicting_terminal_state() {
 #[tokio::test]
 async fn write_reasoning_persists_on_response() {
     let (node, data_path) = build_test_node("reasoning-write").await;
-    let writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_millis(1),
-    );
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(1));
     let request_id = uuid::Uuid::new_v4().to_string();
     create_processing_request(&node, &request_id, "session-1").await;
     let doc_id = writer
@@ -649,11 +617,7 @@ async fn write_reasoning_persists_on_response() {
 #[tokio::test]
 async fn write_reasoning_advances_progress_when_preview_is_unchanged() {
     let (node, data_path) = build_test_node("reasoning-progress-seq").await;
-    let writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_millis(0),
-    );
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
     let request_id = uuid::Uuid::new_v4().to_string();
     create_processing_request(&node, &request_id, "session-1").await;
     let doc_id = writer
@@ -679,11 +643,7 @@ async fn write_reasoning_advances_progress_when_preview_is_unchanged() {
 #[tokio::test]
 async fn begin_rejects_existing_response_document() {
     let (node, data_path) = build_test_node("begin-existing-response").await;
-    let writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_secs(60),
-    );
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     let request_id = uuid::Uuid::new_v4().to_string();
     create_processing_request(&node, &request_id, "session-1").await;
 
@@ -708,21 +668,14 @@ async fn finalize_existing_request_error_terminalizes_streaming_response_without
     let request_id = uuid::Uuid::new_v4().to_string();
     create_processing_request(&node, &request_id, "session-1").await;
 
-    let writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_secs(60),
-    );
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     let doc_id = writer
         .begin("session-1", &request_id, "general")
         .await
         .unwrap();
 
-    let recovery_writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_secs(60),
-    );
+    let recovery_writer =
+        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     let finalized = recovery_writer
         .finalize_existing_request_error(&request_id, "shutdown requested during inference stream")
         .await
@@ -758,11 +711,7 @@ async fn finalize_existing_request_error_terminalizes_streaming_response_without
 #[tokio::test]
 async fn finalize_interrupted_response_does_not_rewrite_request_failed() {
     let (node, data_path) = build_test_node("finalize-interrupted-response").await;
-    let writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_secs(60),
-    );
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     let request_id = uuid::Uuid::new_v4().to_string();
     create_processing_request(&node, &request_id, "session-1").await;
     let doc_id = writer
@@ -836,11 +785,7 @@ async fn finalize_interrupted_response_does_not_rewrite_request_failed() {
 #[tokio::test]
 async fn finalize_interrupted_response_stamps_missing_interrupted_at() {
     let (node, data_path) = build_test_node("finalize-interrupted-stamp").await;
-    let writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:defra-agent:test",
-        Duration::from_secs(60),
-    );
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     let request_id = uuid::Uuid::new_v4().to_string();
     create_processing_request(&node, &request_id, "session-1").await;
     let doc_id = writer
@@ -873,11 +818,8 @@ async fn finalize_interrupted_response_stamps_missing_interrupted_at() {
 #[tokio::test]
 async fn reset_tail_clears_response_content_and_reasoning() {
     let (node, data_path) = build_test_node("reset-tail").await;
-    let writer = DefraStreamWriter::new(
-        Arc::clone(&node),
-        "did:defra-agent:test",
-        Duration::from_millis(0),
-    );
+    let writer =
+        DefraStreamWriter::new(Arc::clone(&node), "did:test:test", Duration::from_millis(0));
     let _request_doc = create_processing_request(&node, "req-reset", "session-reset").await;
 
     let doc_id = writer
@@ -917,11 +859,8 @@ async fn reset_tail_clears_response_content_and_reasoning() {
 #[tokio::test]
 async fn finalize_complete_clears_tail() {
     let (node, data_path) = build_test_node("finalize-tail").await;
-    let writer = DefraStreamWriter::new(
-        Arc::clone(&node),
-        "did:defra-agent:test",
-        Duration::from_millis(0),
-    );
+    let writer =
+        DefraStreamWriter::new(Arc::clone(&node), "did:test:test", Duration::from_millis(0));
     let _ = create_processing_request(&node, "req-fin", "session-fin").await;
     let doc_id = writer
         .begin("session-fin", "req-fin", "general")

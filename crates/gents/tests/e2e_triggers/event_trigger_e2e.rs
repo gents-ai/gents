@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use gents::{AgentIdentity, Gents, DocumentRuntimeOptions, ToolCeiling};
+use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
 use serde::Deserialize;
 use serde_json::Value;
 

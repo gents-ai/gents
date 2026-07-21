@@ -95,14 +95,9 @@ mod tests {
 
     #[test]
     fn leading_option_values_are_skipped() {
-        let warning = deprecation_warning(&argv(&[
-            "gents",
-            "--home",
-            "local-home",
-            "config",
-            "task",
-        ]))
-        .expect("expected warning after leading option");
+        let warning =
+            deprecation_warning(&argv(&["gents", "--home", "local-home", "config", "task"]))
+                .expect("expected warning after leading option");
         assert_eq!(
             warning,
             "warning: `gents config task` is deprecated; use `gents task`"
@@ -135,9 +130,8 @@ mod tests {
 
     #[test]
     fn p2p_pair_warns() {
-        let warning =
-            deprecation_warning(&argv(&["gents", "p2p", "pair", "--peer", "peer-1"]))
-                .expect("expected p2p pair warning");
+        let warning = deprecation_warning(&argv(&["gents", "p2p", "pair", "--peer", "peer-1"]))
+            .expect("expected p2p pair warning");
         assert_eq!(
             warning,
             "warning: `gents p2p pair` is deprecated; use `gents p2p pairings set`"
@@ -146,9 +140,8 @@ mod tests {
 
     #[test]
     fn p2p_unpair_warns() {
-        let warning =
-            deprecation_warning(&argv(&["gents", "p2p", "unpair", "--peer", "peer-1"]))
-                .expect("expected p2p unpair warning");
+        let warning = deprecation_warning(&argv(&["gents", "p2p", "unpair", "--peer", "peer-1"]))
+            .expect("expected p2p unpair warning");
         assert_eq!(
             warning,
             "warning: `gents p2p unpair` is deprecated; use `gents p2p pairings rm`"
@@ -161,12 +154,7 @@ mod tests {
         // spelling — it must parse silently.
         assert_eq!(
             deprecation_warning(&argv(&[
-                "gents",
-                "p2p",
-                "pairings",
-                "unpair",
-                "--peer",
-                "peer-1",
+                "gents", "p2p", "pairings", "unpair", "--peer", "peer-1",
             ])),
             None
         );
@@ -176,12 +164,7 @@ mod tests {
     fn trailing_option_values_are_skipped() {
         assert_eq!(
             command_words(&argv(&[
-                "gents",
-                "p2p",
-                "pairings",
-                "remove",
-                "--peer",
-                "peer-1",
+                "gents", "p2p", "pairings", "remove", "--peer", "peer-1",
             ])),
             vec!["p2p", "pairings", "remove"]
         );

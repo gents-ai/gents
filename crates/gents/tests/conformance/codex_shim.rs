@@ -316,7 +316,7 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
                 .projected_events
                 .iter()
                 .any(|event| event == "summaryTextDelta"),
-            "{}: raw DEFRA reasoning must not be promoted to a summary",
+            "{}: raw GENTS reasoning must not be promoted to a summary",
             case.witness
         );
     }

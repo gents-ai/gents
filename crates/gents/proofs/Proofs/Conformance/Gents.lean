@@ -26,7 +26,7 @@ transition machine has no writer path into that state today.
 -/
 
 /-- gents's local lifecycle states (from lifecycle.rs). -/
-inductive DefraLifecycleState where
+inductive GentsLifecycleState where
   | pending
   | claimed
   | streaming
@@ -37,12 +37,12 @@ inductive DefraLifecycleState where
   | interrupted
   deriving DecidableEq, Repr
 
-namespace DefraLifecycleState
+namespace GentsLifecycleState
 
 /-- Map gents's local in-process state to the ideal request state.
     Key: local `claimed` refines to persisted `claimed / waiting|acquired`;
     local `streaming` refines to persisted `processing / executing`. -/
-def toIdeal : DefraLifecycleState → RequestState
+def toIdeal : GentsLifecycleState → RequestState
   | .pending => .pending
   | .claimed => .claimed
   | .streaming => .processing
@@ -53,15 +53,15 @@ def toIdeal : DefraLifecycleState → RequestState
   | .interrupted => .interrupted
 
 /-- The mapping preserves terminal status. -/
-theorem toIdeal_preserves_terminal (s : DefraLifecycleState) :
+theorem toIdeal_preserves_terminal (s : GentsLifecycleState) :
     isTerminal s.toIdeal ↔
     (s = .completed ∨ s = .failed ∨ s = .superseded ∨ s = .dead ∨ s = .interrupted) := by
   cases s <;> simp [toIdeal, HasTerminal.isTerminal, RequestState.instHasTerminal]
 
-end DefraLifecycleState
+end GentsLifecycleState
 
 /-- gents's persisted `AgentRuntime.process_state` values. -/
-inductive DefraProcessState where
+inductive GentsProcessState where
   | uninitialized
   | recovering
   | ready
@@ -69,10 +69,10 @@ inductive DefraProcessState where
   | shutdown
   deriving DecidableEq, Repr
 
-namespace DefraProcessState
+namespace GentsProcessState
 
 /-- Map persisted Rust runtime states to the Lean process state vocabulary. -/
-def toIdeal : DefraProcessState → ProcessState
+def toIdeal : GentsProcessState → ProcessState
   | .uninitialized => .uninitialized
   | .recovering => .recovering
   | .ready => .ready
@@ -80,7 +80,7 @@ def toIdeal : DefraProcessState → ProcessState
   | .shutdown => .shutdown
 
 /-- Persisted string values for `AgentRuntime.process_state`. -/
-def toDefraDB : DefraProcessState → String
+def toDefraDB : GentsProcessState → String
   | .uninitialized => "uninitialized"
   | .recovering => "recovering"
   | .ready => "ready"
@@ -88,7 +88,7 @@ def toDefraDB : DefraProcessState → String
   | .shutdown => "shutdown"
 
 /-- The Rust/DefraDB mapping preserves process terminal status. -/
-theorem toIdeal_preserves_terminal (s : DefraProcessState) :
+theorem toIdeal_preserves_terminal (s : GentsProcessState) :
     isTerminal s.toIdeal ↔ s = .shutdown := by
   cases s <;> simp [toIdeal, HasTerminal.isTerminal, ProcessState.instHasTerminal]
 
@@ -97,10 +97,10 @@ theorem recovering_blocks_work :
     ¬ (toIdeal .recovering).acceptsWork := by
   simp [toIdeal, ProcessState.acceptsWork]
 
-end DefraProcessState
+end GentsProcessState
 
 /-- gents's persisted `InferenceCall.call_state` values. -/
-inductive DefraInferenceCallState where
+inductive GentsInferenceCallState where
   | queued
   | running
   | cancelled
@@ -108,10 +108,10 @@ inductive DefraInferenceCallState where
   | failed
   deriving DecidableEq, Repr
 
-namespace DefraInferenceCallState
+namespace GentsInferenceCallState
 
 /-- Map persisted Rust call states to the Lean call state vocabulary. -/
-def toIdeal : DefraInferenceCallState → InferenceCallState
+def toIdeal : GentsInferenceCallState → InferenceCallState
   | .queued => .queued
   | .running => .running
   | .cancelled => .cancelled
@@ -119,7 +119,7 @@ def toIdeal : DefraInferenceCallState → InferenceCallState
   | .failed => .failed
 
 /-- Persisted string values for `InferenceCall.call_state`. -/
-def toDefraDB : DefraInferenceCallState → String
+def toDefraDB : GentsInferenceCallState → String
   | .queued => "queued"
   | .running => "running"
   | .cancelled => "cancelled"
@@ -127,9 +127,9 @@ def toDefraDB : DefraInferenceCallState → String
   | .failed => "failed"
 
 /-- The Rust/DefraDB mapping preserves terminal call states. -/
-theorem toIdeal_preserves_terminal (s : DefraInferenceCallState) :
+theorem toIdeal_preserves_terminal (s : GentsInferenceCallState) :
     isTerminal s.toIdeal ↔
     (s = .cancelled ∨ s = .completed ∨ s = .failed) := by
   cases s <;> simp [toIdeal, HasTerminal.isTerminal, InferenceCallState.instHasTerminal]
 
-end DefraInferenceCallState
+end GentsInferenceCallState

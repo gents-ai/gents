@@ -14,8 +14,7 @@ pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
     let agent_did = resolve_agent_did(Some(&home_dir), args.agent_did.as_deref())?;
     let provider = gents::chatgpt_codex::normalize_provider(&args.provider);
-    let synthetic_home =
-        std::env::temp_dir().join(format!("gents-codex-login-{}", Uuid::new_v4()));
+    let synthetic_home = std::env::temp_dir().join(format!("gents-codex-login-{}", Uuid::new_v4()));
     let mut opts = ServerOptions::new(
         synthetic_home.clone(),
         args.client_id.unwrap_or_else(|| CLIENT_ID.to_string()),
@@ -73,8 +72,7 @@ pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
     );
     let mutation = gents::chatgpt_codex::oauth_credential_upsert_mutation(&credential);
     let response = access.execute(&mutation).await?;
-    let doc_id =
-        gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
+    let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
 
     print_json(&json!({
         "doc_id": doc_id,

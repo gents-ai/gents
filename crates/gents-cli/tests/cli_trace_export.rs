@@ -561,7 +561,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         home,
         "openai-codex",
         "full",
-        &["--scope-agent-did", "did:defra-agent:amy"],
+        &["--scope-agent-did", "did:test:amy"],
     )?;
     let scoped_openai_serialized = serde_json::to_string(&scoped_openai)?;
     assert!(
@@ -588,7 +588,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
             "--projection",
             "openai-codex",
             "--scope-agent-did",
-            "did:defra-agent:reviewer",
+            "did:test:reviewer",
         ],
     )?;
     assert!(
@@ -740,7 +740,7 @@ async fn trace_project_graphql_enforces_acp_read_filter_with_real_cli() -> Resul
                 "--redaction",
                 "full",
                 "--actor-did",
-                "did:defra-agent:projection-reader",
+                "did:test:projection-reader",
                 "--acp-policy-id",
                 "projection-policy",
             ],
@@ -759,7 +759,7 @@ async fn trace_project_graphql_enforces_acp_read_filter_with_real_cli() -> Resul
         projection
             .pointer("/provenance/actor_did")
             .and_then(Value::as_str),
-        Some("did:defra-agent:projection-reader")
+        Some("did:test:projection-reader")
     );
 
     let serialized = serde_json::to_string(&projection)?;
@@ -844,7 +844,7 @@ fn trace_project_json_with_extra_args(
         "--redaction",
         redaction,
         "--actor-did",
-        "did:defra-agent:test-viewer",
+        "did:test:test-viewer",
     ];
     args.extend_from_slice(extra_args);
     let output = run_cli_text(cwd, &args)?;
@@ -873,7 +873,7 @@ fn trace_project_jsonl_lines(
             "--format",
             "jsonl",
             "--actor-did",
-            "did:defra-agent:test-viewer",
+            "did:test:test-viewer",
         ],
     )?;
     output
@@ -904,7 +904,7 @@ fn trace_project_eval_jsonl_lines(
             "--format",
             "eval-jsonl",
             "--actor-did",
-            "did:defra-agent:test-viewer",
+            "did:test:test-viewer",
         ],
     )?;
     output
@@ -921,7 +921,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         r#"mutation {
             create_AgentBehavior(input: {
                 behavior_id: "amy",
-                agent_did: "did:defra-agent:amy",
+                agent_did: "did:test:amy",
                 display_name: "Amy",
                 system_prompt: "baseline",
                 backend_id: "studios-cluster",
@@ -953,7 +953,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentConversation(input: {
                 session_id: "session-1",
                 agent_name: "Amy",
-                agent_did: "did:defra-agent:amy",
+                agent_did: "did:test:amy",
                 behavior_id: "amy",
                 title: "Trace export test",
                 title_source: "test",
@@ -971,7 +971,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         r#"mutation {
             create_AgentRequest(input: {
                 request_id: "req-1",
-                agent_did: "did:defra-agent:amy",
+                agent_did: "did:test:amy",
                 behavior_id: "amy",
                 session_id: "session-1",
                 content: "Inspect the repo and show README.md",
@@ -991,7 +991,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         r#"mutation {
             create_AgentRequest(input: {
                 request_id: "req-child",
-                agent_did: "did:defra-agent:reviewer",
+                agent_did: "did:test:reviewer",
                 behavior_id: "reviewer",
                 session_id: "session-child",
                 content: "Review the README finding",
@@ -1027,7 +1027,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentConversation(input: {
                 session_id: "session-child",
                 agent_name: "Reviewer",
-                agent_did: "did:defra-agent:reviewer",
+                agent_did: "did:test:reviewer",
                 behavior_id: "reviewer",
                 title: "Child trace export test",
                 title_source: "test",
@@ -1046,7 +1046,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentResponse(input: {
                 response_key: "req-1",
                 request_id: "req-1",
-                agent_did: "did:defra-agent:amy",
+                agent_did: "did:test:amy",
                 behavior_id: "amy",
                 session_id: "session-1",
                 content: "done",
@@ -1069,7 +1069,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentResponse(input: {
                 response_key: "req-child",
                 request_id: "req-child",
-                agent_did: "did:defra-agent:reviewer",
+                agent_did: "did:test:reviewer",
                 behavior_id: "reviewer",
                 session_id: "session-child",
                 content: "reviewer private child response",
@@ -1110,7 +1110,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         json!({"command":"grep","args":["-P","amy","README.md"]}),
     )?;
     let failed_result = format!(
-        "defra_exec: {}\nstdout:\n(empty)\nstderr:\ngrep: invalid option -- P",
+        "gents_exec: {}\nstdout:\n(empty)\nstderr:\ngrep: invalid option -- P",
         json!({
             "ok": false,
             "status": "exit_nonzero",
@@ -1287,7 +1287,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentConversation(input: {
                 session_id: "session-2",
                 agent_name: "Amy",
-                agent_did: "did:defra-agent:amy",
+                agent_did: "did:test:amy",
                 behavior_id: "amy",
                 title: "Trace export deadline test",
                 title_source: "test",
@@ -1305,7 +1305,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         r#"mutation {
             create_AgentRequest(input: {
                 request_id: "req-deadline",
-                agent_did: "did:defra-agent:amy",
+                agent_did: "did:test:amy",
                 behavior_id: "amy",
                 session_id: "session-2",
                 content: "Read README.md but the request later times out",
@@ -1326,7 +1326,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentResponse(input: {
                 response_key: "req-deadline",
                 request_id: "req-deadline",
-                agent_did: "did:defra-agent:amy",
+                agent_did: "did:test:amy",
                 behavior_id: "amy",
                 session_id: "session-2",
                 content: "",
@@ -1490,7 +1490,7 @@ async fn projection_acp_mock(
     State(state): State<ProjectionGraphqlAcpState>,
     Json(body): Json<ProjectionAcpDecisionRequest>,
 ) -> (StatusCode, Json<Value>) {
-    if body.actor != "did:defra-agent:projection-reader"
+    if body.actor != "did:test:projection-reader"
         || body.permission != "read"
         || body.policy_id != "projection-policy"
     {
@@ -1524,7 +1524,7 @@ fn projection_mock_root_request() -> Value {
     json!({
         "_docID": "doc-request-root",
         "request_id": "req-acp",
-        "agent_did": "did:defra-agent:amy",
+        "agent_did": "did:test:amy",
         "behavior_id": "amy",
         "session_id": "session-acp",
         "content": "root visible request",
@@ -1545,7 +1545,7 @@ fn projection_mock_child_request() -> Value {
     json!({
         "_docID": "doc-request-child",
         "request_id": "req-acp-child",
-        "agent_did": "did:defra-agent:reviewer",
+        "agent_did": "did:test:reviewer",
         "behavior_id": "reviewer",
         "session_id": "session-acp",
         "content": "child private request",
@@ -1624,7 +1624,7 @@ fn projection_mock_agent_responses() -> Value {
         {
             "_docID": "doc-response-root",
             "request_id": "req-acp",
-            "agent_did": "did:defra-agent:amy",
+            "agent_did": "did:test:amy",
             "behavior_id": "amy",
             "session_id": "session-acp",
             "content": "root visible response",
@@ -1642,7 +1642,7 @@ fn projection_mock_agent_responses() -> Value {
         {
             "_docID": "doc-response-child",
             "request_id": "req-acp-child",
-            "agent_did": "did:defra-agent:reviewer",
+            "agent_did": "did:test:reviewer",
             "behavior_id": "reviewer",
             "session_id": "session-acp",
             "content": "child private response",
@@ -1677,7 +1677,7 @@ fn projection_mock_conversation() -> Value {
         "_docID": "doc-conversation",
         "session_id": "session-acp",
         "agent_name": "Amy",
-        "agent_did": "did:defra-agent:amy",
+        "agent_did": "did:test:amy",
         "behavior_id": "amy",
         "title": "ACP projection test",
         "title_source": "test",

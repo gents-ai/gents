@@ -51,13 +51,13 @@
   "projection_id": "openai_codex_run_trace",
   "projection_version": "v1",
   "provenance": {
-    "actor_did": "did:defra-agent:fixture-reader",
+    "actor_did": "did:test:fixture-reader",
     "runtime": "gents",
     "source_projection_id": "run_timeline",
     "source_projection_version": "v1"
   },
   "redaction_mode": "training_safe",
-  "source_agent_did": "did:defra-agent:planner",
+  "source_agent_did": "did:test:planner",
   "source_behavior_id": "planner",
   "source_request_id": "req-codex-1",
   "source_session_id": "thread-codex-1"

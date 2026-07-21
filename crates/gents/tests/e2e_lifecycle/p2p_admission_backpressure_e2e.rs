@@ -20,7 +20,7 @@ use serde::Deserialize;
 
 use crate::support::{test_p2p_db_with_admission, TestP2pAdmission};
 
-const OWNER_DID: &str = "did:defra-agent:admission-p2p-owner";
+const OWNER_DID: &str = "did:test:admission-p2p-owner";
 const BEHAVIOR_ID: &str = "admission-p2p-behavior";
 
 #[derive(Debug, Clone, Deserialize)]

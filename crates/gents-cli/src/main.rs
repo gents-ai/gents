@@ -581,7 +581,7 @@ pub(crate) async fn resolve_config_access(
                 .build()
                 .await
                 .with_context(|| {
-                    format!("building embedded defra node from {}", data_dir.display())
+                    format!("building embedded DefraDB node from {}", data_dir.display())
                 })?,
         );
         if ensure_local_schemas {
@@ -717,7 +717,7 @@ mod tests {
             &path,
             serde_json::to_string(&serde_json::json!({
                 "format": CONFIG_EXPORT_FORMAT_V1,
-                "agent_did": "did:defra-agent:test",
+                "agent_did": "did:test:test",
                 "exported_at": "2026-04-15T00:00:00Z",
                 "access_mode": "local",
                 "agent_principal": null,

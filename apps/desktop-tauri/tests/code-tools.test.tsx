@@ -20,8 +20,8 @@ function detail(rawText: string) {
   return { rawText, fields: [] };
 }
 
-// Result fixtures mirror the runtime's envelopes exactly: `defra_fs: {json}` +
-// a human body line (toolset/file_tools.rs) and `defra_exec: {json}` +
+// Result fixtures mirror the runtime's envelopes exactly: `gents_fs: {json}` +
+// a human body line (toolset/file_tools.rs) and `gents_exec: {json}` +
 // `stdout:\n…\nstderr:\n…` framing (toolset/shared/command.rs).
 describe("toCodeToolView", () => {
   it("projects edit_file into a replacement diff", () => {
@@ -36,7 +36,7 @@ describe("toCodeToolView", () => {
           }),
         ),
         result: detail(
-          'defra_fs: {"ok":true,"status":"success","tool":"edit_file","path":"src/main.rs","returned_count":1,"total_count":1,"truncated":false,"replacements_applied":1,"replace_all":false,"bytes_written":10}\nedit_file: edited src/main.rs (1 replacement)',
+          'gents_fs: {"ok":true,"status":"success","tool":"edit_file","path":"src/main.rs","returned_count":1,"total_count":1,"truncated":false,"replacements_applied":1,"replace_all":false,"bytes_written":10}\nedit_file: edited src/main.rs (1 replacement)',
         ),
       }),
     );
@@ -66,7 +66,7 @@ describe("toCodeToolView", () => {
           }),
         ),
         result: detail(
-          'defra_fs: {"ok":true,"status":"success","tool":"edit_file","path":"src/lib.rs","returned_count":12,"total_count":12,"truncated":false,"replacements_applied":12,"replace_all":true,"bytes_written":240}\nedit_file: edited src/lib.rs (12 replacements)',
+          'gents_fs: {"ok":true,"status":"success","tool":"edit_file","path":"src/lib.rs","returned_count":12,"total_count":12,"truncated":false,"replacements_applied":12,"replace_all":true,"bytes_written":240}\nedit_file: edited src/lib.rs (12 replacements)',
         ),
       }),
     );
@@ -82,7 +82,7 @@ describe("toCodeToolView", () => {
       toolCall({
         ...base,
         result: detail(
-          'defra_fs: {"ok":true,"status":"success","tool":"write_file","path":"README.md","returned_count":0,"total_count":0,"truncated":false,"bytes_written":14,"created":true}\nwrite_file: wrote 14 bytes to README.md',
+          'gents_fs: {"ok":true,"status":"success","tool":"write_file","path":"README.md","returned_count":0,"total_count":0,"truncated":false,"bytes_written":14,"created":true}\nwrite_file: wrote 14 bytes to README.md',
         ),
       }),
     );
@@ -100,7 +100,7 @@ describe("toCodeToolView", () => {
       toolCall({
         ...base,
         result: detail(
-          'defra_fs: {"ok":true,"status":"success","tool":"write_file","path":"README.md","returned_count":0,"total_count":0,"truncated":false,"bytes_written":14,"created":false}\nwrite_file: wrote 14 bytes to README.md',
+          'gents_fs: {"ok":true,"status":"success","tool":"write_file","path":"README.md","returned_count":0,"total_count":0,"truncated":false,"bytes_written":14,"created":false}\nwrite_file: wrote 14 bytes to README.md',
         ),
       }),
     );
@@ -118,7 +118,7 @@ describe("toCodeToolView", () => {
         // Exec-style: the raw arg carries only the executable.
         args: detail(JSON.stringify({ command: "cargo", args: ["test", "--release"] })),
         result: detail(
-          'defra_exec: {"ok":true,"status":"success","command":"cargo test --release","exit_code":0,"timed_out":false,"execution_mode":"read_only","network_mode":"disabled"}\nstdout:\ntest result: ok. 3 passed\nstderr:\n(empty)',
+          'gents_exec: {"ok":true,"status":"success","command":"cargo test --release","exit_code":0,"timed_out":false,"execution_mode":"read_only","network_mode":"disabled"}\nstdout:\ntest result: ok. 3 passed\nstderr:\n(empty)',
         ),
       }),
     );
@@ -164,7 +164,7 @@ describe("toCodeToolView", () => {
       toolCall({
         toolName: "bash",
         args: detail(JSON.stringify({ command: "grep -r stderr logs/" })),
-        result: detail(`defra_exec: ${meta}\nstdout:\n${stdout}\nstderr:\n(empty)`),
+        result: detail(`gents_exec: ${meta}\nstdout:\n${stdout}\nstderr:\n(empty)`),
       }),
     );
     expect(view).toMatchObject({
@@ -204,7 +204,7 @@ describe("toCodeToolView", () => {
         toolName: "bash",
         args: detail(JSON.stringify({ command: "make build" })),
         result: detail(
-          `defra_exec: ${meta}\nstdout:\n${renderedStdout}\nstderr:\n${stderr}`,
+          `gents_exec: ${meta}\nstdout:\n${renderedStdout}\nstderr:\n${stderr}`,
         ),
       }),
     );
@@ -222,7 +222,7 @@ describe("toCodeToolView", () => {
         toolName: "bash",
         args: detail(JSON.stringify({ command: "cargo build" })),
         result: detail(
-          'defra_exec: {"ok":false,"status":"exit_nonzero","command":"cargo build","exit_code":101,"timed_out":false}\nstdout:\n(empty)\nstderr:\nerror[E0425]',
+          'gents_exec: {"ok":false,"status":"exit_nonzero","command":"cargo build","exit_code":101,"timed_out":false}\nstdout:\n(empty)\nstderr:\nerror[E0425]',
         ),
       }),
     );
@@ -244,7 +244,7 @@ describe("toCodeToolView", () => {
         statusKind: "success",
         args: detail(JSON.stringify({ command: "sleep 999" })),
         result: detail(
-          'defra_exec: {"ok":false,"status":"timeout","command":"sleep 999","exit_code":null,"timed_out":true}\nstdout:\n(empty)\nstderr:\n(empty)',
+          'gents_exec: {"ok":false,"status":"timeout","command":"sleep 999","exit_code":null,"timed_out":true}\nstdout:\n(empty)\nstderr:\n(empty)',
         ),
       }),
     );
@@ -256,7 +256,7 @@ describe("toCodeToolView", () => {
     });
   });
 
-  it("marks a raw_json non-zero exit as failed (no defra_exec envelope)", () => {
+  it("marks a raw_json non-zero exit as failed (no gents_exec envelope)", () => {
     // raw_json=true makes render_command_output emit the bare CommandOutput
     // JSON — flattened metadata plus stdout/stderr fields, no envelope head —
     // while the call still completes (statusKind success). The failure signal
@@ -338,7 +338,7 @@ describe("toCodeToolView", () => {
   });
 
   it("keeps the generic disclosure when the envelope was truncated away", () => {
-    // Tail truncation for bash keeps the LAST lines, dropping the defra_exec
+    // Tail truncation for bash keeps the LAST lines, dropping the gents_exec
     // head; without trustworthy metadata the call must not project (a nonzero
     // exit would otherwise badge ok).
     const view = toCodeToolView(

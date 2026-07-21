@@ -387,7 +387,7 @@ mod tests {
         let mutation = build_create_manual_request_mutation(CreateManualRequestInput {
             request_id: "req-1",
             session_id: "sess-1",
-            agent_did: "did:defra-agent:test",
+            agent_did: "did:test:test",
             behavior_id: "behavior-1",
             content: "hello Amy",
             metadata: None,
@@ -409,7 +409,7 @@ mod tests {
         let mutation = build_create_manual_request_mutation(CreateManualRequestInput {
             request_id: "req-1",
             session_id: "sess-1",
-            agent_did: "did:defra-agent:test",
+            agent_did: "did:test:test",
             behavior_id: "behavior-1",
             content: "/vuln-scan /work",
             metadata: Some(r#"{"selected_skill_ids":["vuln-scan"]}"#),

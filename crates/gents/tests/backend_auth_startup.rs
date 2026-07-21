@@ -6,8 +6,8 @@ use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::{
-    ensure_runtime_schemas, AgentIdentity, Gents, DocumentRuntimeOptions,
-    ProcessLifecycleObserver, ProcessLifecycleState, ToolCeiling,
+    ensure_runtime_schemas, AgentIdentity, DocumentRuntimeOptions, Gents, ProcessLifecycleObserver,
+    ProcessLifecycleState, ToolCeiling,
 };
 use serde_json::Value;
 use tokio::sync::watch;
@@ -148,8 +148,7 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
     behavior.backend_api_key = Some("openrouter-key".to_string());
     behavior.model_name = "openai/gpt-4o-mini".to_string();
 
-    let result =
-        gents::run_openai_oneshot(node, &behavior, "Say hello in one sentence.").await?;
+    let result = gents::run_openai_oneshot(node, &behavior, "Say hello in one sentence.").await?;
     assert_eq!(result.response_text, "mock response");
 
     let completion_request = mock_endpoint

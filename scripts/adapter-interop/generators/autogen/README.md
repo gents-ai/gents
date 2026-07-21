@@ -2,7 +2,7 @@
 
 This generator executes real AutoGen AgentChat teams with deterministic custom
 `BaseChatAgent` participants. It captures native `TaskResult` values and writes
-wrapped Defra Agent `multi_agent_task` adapter projection fixtures.
+wrapped Gents `multi_agent_task` adapter projection fixtures.
 
 It emits:
 

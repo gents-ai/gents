@@ -714,9 +714,7 @@ mod tests {
         let entries = expand_subagent_target_value(&raw).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(
-            gents::SubagentTarget::parse(&entries[0])
-                .unwrap()
-                .name,
+            gents::SubagentTarget::parse(&entries[0]).unwrap().name,
             "worker"
         );
     }

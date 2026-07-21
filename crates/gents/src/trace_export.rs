@@ -492,9 +492,9 @@ fn native_tool_output_object(
 ) -> Option<serde_json::Map<String, Value>> {
     let trimmed = result.trim_start();
     let prefix = if is_native_filesystem_tool(tool_name) {
-        "defra_fs: "
+        "gents_fs: "
     } else if is_native_command_tool(tool_name) {
-        "defra_exec: "
+        "gents_exec: "
     } else {
         return None;
     };

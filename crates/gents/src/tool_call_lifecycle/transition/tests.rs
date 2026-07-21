@@ -23,7 +23,7 @@ async fn subagent_lc_in_running() -> ToolCallLifecycle {
         node,
         "request-1".to_string(),
         "session-1".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tcid-1".to_string(),
         0,
         "spawn_agent".to_string(),
@@ -32,7 +32,7 @@ async fn subagent_lc_in_running() -> ToolCallLifecycle {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "child-req-1".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lc.set_state(ToolCallState::Running);
     lc.set_doc_id(Some("fake-doc-id".to_string()));
@@ -77,7 +77,7 @@ async fn background_rejects_already_background() {
         node,
         "req-bg-2".to_string(),
         "sess-bg-2".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-bg-2".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -86,7 +86,7 @@ async fn background_rejects_already_background() {
         AwaitMode::Background, // start already in Background
         CancelPolicy::Cascade,
         "child-req-bg-2".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lc.set_state(ToolCallState::Running);
     lc.set_doc_id(Some("fake-doc-id-bg-2".to_string()));
@@ -109,7 +109,7 @@ async fn background_rejects_pending_state() {
         node,
         "req-bg-3".to_string(),
         "sess-bg-3".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-bg-3".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -135,7 +135,7 @@ async fn foreground_rejects_already_foreground() {
         node,
         "req-fg-1".to_string(),
         "sess-fg-1".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-fg-1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -144,7 +144,7 @@ async fn foreground_rejects_already_foreground() {
         AwaitMode::Foreground, // start already in Foreground
         CancelPolicy::Cascade,
         "child-req-fg-1".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lc.set_state(ToolCallState::Running);
     lc.set_doc_id(Some("fake-doc-id-fg-1".to_string()));
@@ -167,7 +167,7 @@ async fn foreground_rejects_pending_state() {
         node,
         "req-fg-2".to_string(),
         "sess-fg-2".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-fg-2".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -193,7 +193,7 @@ async fn detach_rejects_already_detach() {
         node,
         "req-detach-1".to_string(),
         "sess-detach-1".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-detach-1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -202,7 +202,7 @@ async fn detach_rejects_already_detach() {
         AwaitMode::Foreground,
         CancelPolicy::Detach, // already in Detach policy
         "child-req-detach-1".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lc.set_state(ToolCallState::Running);
     lc.set_doc_id(Some("fake-doc-id-detach-1".to_string()));
@@ -225,7 +225,7 @@ async fn detach_rejects_terminal_state() {
         node,
         "req-detach-2".to_string(),
         "sess-detach-2".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-detach-2".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -234,7 +234,7 @@ async fn detach_rejects_terminal_state() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "child-req-detach-2".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lc.set_state(ToolCallState::Cancelled); // terminal state
     lc.set_doc_id(Some("fake-doc-id-detach-2".to_string()));
@@ -258,7 +258,7 @@ async fn bridge_failure_rejects_native_tool() {
         node,
         "req-bf-1".to_string(),
         "sess-bf-1".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-bf-1".to_string(),
         0,
         "native_tool".to_string(),
@@ -290,7 +290,7 @@ async fn bridge_failure_rejects_pending_state() {
         node,
         "req-bf-2".to_string(),
         "sess-bf-2".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-bf-2".to_string(),
         0,
         "spawn_agent".to_string(),
@@ -299,7 +299,7 @@ async fn bridge_failure_rejects_pending_state() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "child-1".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     // Leave state as Pending (default); do not call start_running.
     let mut lc = lc_base;
@@ -352,7 +352,7 @@ async fn bridge_complete_rejects_native_tool() {
         node,
         "req-bc-1".to_string(),
         "sess-bc-1".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-bc-1".to_string(),
         0,
         "native_tool".to_string(),
@@ -381,7 +381,7 @@ async fn bridge_complete_rejects_pending_state() {
         node,
         "req-bc-2".to_string(),
         "sess-bc-2".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-bc-2".to_string(),
         0,
         "spawn_agent".to_string(),
@@ -390,7 +390,7 @@ async fn bridge_complete_rejects_pending_state() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "child-1".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     // Leave state as Pending (default); do not call start_running.
     let mut lc = lc_base;
@@ -412,7 +412,7 @@ async fn bridge_cancel_cascade_returns_intent_for_cascade_subagent() {
         node,
         "req-cas-1".to_string(),
         "sess-cas-1".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-cas-1".to_string(),
         0,
         "spawn_agent".to_string(),
@@ -421,7 +421,7 @@ async fn bridge_cancel_cascade_returns_intent_for_cascade_subagent() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "child-cas-1".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lc.set_state(ToolCallState::Cancelled);
 
@@ -437,7 +437,7 @@ async fn bridge_cancel_cascade_returns_none_for_detached() {
         node,
         "req-cas-2".to_string(),
         "sess-cas-2".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-cas-2".to_string(),
         0,
         "spawn_agent".to_string(),
@@ -446,7 +446,7 @@ async fn bridge_cancel_cascade_returns_none_for_detached() {
         AwaitMode::Foreground,
         CancelPolicy::Detach,
         "child-cas-2".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lc.set_state(ToolCallState::Cancelled);
 
@@ -461,7 +461,7 @@ async fn bridge_cancel_cascade_returns_none_for_native() {
         node,
         "req-cas-3".to_string(),
         "sess-cas-3".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-cas-3".to_string(),
         0,
         "native_tool".to_string(),
@@ -484,7 +484,7 @@ async fn bridge_cancel_cascade_rejects_non_cancelled_state() {
         node,
         "req-cas-4".to_string(),
         "sess-cas-4".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-cas-4".to_string(),
         0,
         "spawn_agent".to_string(),
@@ -493,7 +493,7 @@ async fn bridge_cancel_cascade_rejects_non_cancelled_state() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "child-cas-4".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lc.set_state(ToolCallState::Running);
 

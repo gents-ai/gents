@@ -8,10 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use defra_agent_desktop_core::client::ClientCore;
 use gents::backend_registry::{derive_display_state, list_all_backends};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use defra_agent_desktop_core::client::ClientCore;
 #[cfg(test)]
 use reqwest::Url;
 use tauri::State;

@@ -11,7 +11,7 @@ use gents::tool_call_lifecycle::{
     AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ToolCallLifecycle,
 };
 use gents::{
-    default_behavior_id_for_agent, AgentIdentity, Gents, DocumentRuntimeOptions, ToolCeiling,
+    default_behavior_id_for_agent, AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling,
 };
 use serde::Deserialize;
 use serde_json::json;

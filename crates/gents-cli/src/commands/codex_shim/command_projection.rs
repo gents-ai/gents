@@ -5,7 +5,7 @@ use codex_app_server_protocol as codex;
 use serde_json::Value;
 
 use super::progress::{
-    defra_exec_metadata, defra_tool_call_status, tool_duration_ms, DefraToolCallProgress,
+    gents_exec_metadata, gents_tool_call_status, tool_duration_ms, GentsToolCallProgress,
 };
 use super::subagent_projection::{collab_projection, is_subagent_control_tool, CollabProjection};
 
@@ -32,16 +32,16 @@ impl ToolProjectionStatus {
     }
 }
 
-pub(super) fn tool_projection_status(tool: &DefraToolCallProgress) -> ToolProjectionStatus {
+pub(super) fn tool_projection_status(tool: &GentsToolCallProgress) -> ToolProjectionStatus {
     tool_projection_status_with_settled(tool, false, false)
 }
 
 pub(super) fn tool_projection_status_with_settled(
-    tool: &DefraToolCallProgress,
+    tool: &GentsToolCallProgress,
     projection_settled: bool,
     link_settle_expired: bool,
 ) -> ToolProjectionStatus {
-    let status = defra_tool_call_status(tool);
+    let status = gents_tool_call_status(tool);
     if is_subagent_control_tool(&tool.tool_name) {
         if let Some(projection) = collab_projection(tool) {
             ToolProjectionStatus::Collab(projection)
@@ -62,7 +62,7 @@ pub(super) fn tool_projection_status_with_settled(
             // that window; the live projection retries these rows.
             ToolProjectionStatus::DeferredCollab
         }
-    } else if is_defra_file_change_tool(tool) {
+    } else if is_gents_file_change_tool(tool) {
         if file_update_change(tool).is_none() {
             ToolProjectionStatus::DeferredFileChange
         } else {
@@ -83,24 +83,24 @@ fn patch_status_from_mcp_status(status: codex::McpToolCallStatus) -> codex::Patc
     }
 }
 
-fn is_defra_file_change_tool(tool: &DefraToolCallProgress) -> bool {
+fn is_gents_file_change_tool(tool: &GentsToolCallProgress) -> bool {
     matches!(tool.tool_name.as_str(), "write_file" | "edit_file")
 }
 
-fn should_project_as_command_execution(tool: &DefraToolCallProgress) -> bool {
-    is_defra_background_tool(tool)
+fn should_project_as_command_execution(tool: &GentsToolCallProgress) -> bool {
+    is_gents_background_tool(tool)
         || matches!(tool.tool_name.as_str(), "bash" | "bash_unrestricted")
-        || is_defra_fs_command_tool(tool)
+        || is_gents_fs_command_tool(tool)
 }
 
-fn is_defra_background_tool(tool: &DefraToolCallProgress) -> bool {
+fn is_gents_background_tool(tool: &GentsToolCallProgress) -> bool {
     tool.await_mode
         .as_deref()
         .map(str::trim)
         .is_some_and(|value| value == "background")
 }
 
-fn is_defra_fs_command_tool(tool: &DefraToolCallProgress) -> bool {
+fn is_gents_fs_command_tool(tool: &GentsToolCallProgress) -> bool {
     matches!(
         tool.tool_name.as_str(),
         "read_file" | "list_files" | "glob" | "grep"
@@ -119,12 +119,12 @@ fn command_status_from_mcp_status(
 
 pub(super) fn update_running_background_tools(
     running: &mut BTreeMap<String, codex::CommandExecutionStatus>,
-    tool: &DefraToolCallProgress,
+    tool: &GentsToolCallProgress,
     status: &ToolProjectionStatus,
 ) {
     match status {
         ToolProjectionStatus::Command(codex::CommandExecutionStatus::InProgress)
-            if is_defra_background_tool(tool) =>
+            if is_gents_background_tool(tool) =>
         {
             running.insert(
                 tool.tool_call_key.clone(),
@@ -143,7 +143,7 @@ pub(super) fn update_running_background_tools(
 }
 
 pub(super) fn file_change_item(
-    tool: &DefraToolCallProgress,
+    tool: &GentsToolCallProgress,
     status: codex::PatchApplyStatus,
 ) -> Option<codex::ThreadItem> {
     Some(codex::ThreadItem::FileChange {
@@ -153,7 +153,7 @@ pub(super) fn file_change_item(
     })
 }
 
-fn file_update_change(tool: &DefraToolCallProgress) -> Option<codex::FileUpdateChange> {
+fn file_update_change(tool: &GentsToolCallProgress) -> Option<codex::FileUpdateChange> {
     let args = serde_json::from_str::<Value>(tool.args.trim()).ok()?;
     let path = args.get("path")?.as_str()?.trim();
     if path.is_empty() {
@@ -163,8 +163,8 @@ fn file_update_change(tool: &DefraToolCallProgress) -> Option<codex::FileUpdateC
     match tool.tool_name.as_str() {
         "write_file" => {
             let content = args.get("content")?.as_str()?.to_string();
-            let metadata = defra_fs_metadata(&tool.result);
-            if defra_tool_call_status(tool) == codex::McpToolCallStatus::InProgress
+            let metadata = gents_fs_metadata(&tool.result);
+            if gents_tool_call_status(tool) == codex::McpToolCallStatus::InProgress
                 && metadata.is_none()
             {
                 return None;
@@ -199,7 +199,7 @@ fn file_update_change(tool: &DefraToolCallProgress) -> Option<codex::FileUpdateC
     }
 }
 
-fn defra_fs_metadata(result: &str) -> Option<Value> {
+fn gents_fs_metadata(result: &str) -> Option<Value> {
     let trimmed = result.trim();
     if trimmed.is_empty() {
         return None;
@@ -207,7 +207,7 @@ fn defra_fs_metadata(result: &str) -> Option<Value> {
     if let Some(raw) = result
         .lines()
         .next()
-        .and_then(|line| line.trim().strip_prefix("defra_fs:"))
+        .and_then(|line| line.trim().strip_prefix("gents_fs:"))
     {
         return serde_json::from_str(raw.trim()).ok();
     }
@@ -264,18 +264,18 @@ fn unified_range(start: usize, count: usize) -> String {
 
 pub(super) fn command_execution_item(
     cwd: &Path,
-    tool: &DefraToolCallProgress,
+    tool: &GentsToolCallProgress,
     status: codex::CommandExecutionStatus,
 ) -> codex::ThreadItem {
     let aggregated_output = command_output_payload(tool);
     let command = command_execution_display(tool);
     let command_actions = command_actions_for_tool(cwd, tool, &command);
     let exit_code = match status {
-        codex::CommandExecutionStatus::Completed => defra_exec_exit_code(&tool.result).or(Some(0)),
-        codex::CommandExecutionStatus::Failed => defra_exec_exit_code(&tool.result).or(Some(1)),
+        codex::CommandExecutionStatus::Completed => gents_exec_exit_code(&tool.result).or(Some(0)),
+        codex::CommandExecutionStatus::Failed => gents_exec_exit_code(&tool.result).or(Some(1)),
         codex::CommandExecutionStatus::InProgress | codex::CommandExecutionStatus::Declined => None,
     };
-    let is_background = is_defra_background_tool(tool);
+    let is_background = is_gents_background_tool(tool);
     codex::ThreadItem::CommandExecution {
         id: tool.tool_call_key.clone(),
         command,
@@ -297,7 +297,7 @@ pub(super) fn command_execution_item(
     }
 }
 
-fn command_execution_display(tool: &DefraToolCallProgress) -> String {
+fn command_execution_display(tool: &GentsToolCallProgress) -> String {
     if let Some(child_request_id) = tool.child_request_id.as_deref() {
         return format!("spawn_subagent {child_request_id}");
     }
@@ -312,7 +312,7 @@ fn command_execution_display(tool: &DefraToolCallProgress) -> String {
 
 fn command_actions_for_tool(
     cwd: &Path,
-    tool: &DefraToolCallProgress,
+    tool: &GentsToolCallProgress,
     command: &str,
 ) -> Vec<codex::CommandAction> {
     let Some(args) = serde_json::from_str::<Value>(tool.args.trim()).ok() else {
@@ -394,12 +394,12 @@ fn shell_command_from_tool_args(raw_args: &str) -> Option<String> {
     Some(shell_join(&argv))
 }
 
-pub(super) fn command_output_payload(tool: &DefraToolCallProgress) -> Option<String> {
+pub(super) fn command_output_payload(tool: &GentsToolCallProgress) -> Option<String> {
     let trimmed = tool.result.trim();
     if trimmed.is_empty() {
         return None;
     }
-    if trimmed.starts_with("defra_exec:") {
+    if trimmed.starts_with("gents_exec:") {
         let mut lines = tool.result.lines();
         let _metadata = lines.next();
         let rest = lines.collect::<Vec<_>>().join("\n");
@@ -410,8 +410,8 @@ pub(super) fn command_output_payload(tool: &DefraToolCallProgress) -> Option<Str
     Some(tool.result.clone())
 }
 
-fn defra_exec_exit_code(result: &str) -> Option<i32> {
-    let metadata = defra_exec_metadata(result)?;
+fn gents_exec_exit_code(result: &str) -> Option<i32> {
+    let metadata = gents_exec_metadata(result)?;
     metadata
         .get("exit_code")
         .and_then(Value::as_i64)
@@ -565,12 +565,12 @@ mod tests {
     }
 
     #[test]
-    fn defra_exec_exit_nonzero_projects_as_failed_command_execution() {
+    fn gents_exec_exit_nonzero_projects_as_failed_command_execution() {
         let tool = test_tool("bash_unrestricted", "completed", r#"{"command":"false"}"#)
-            .with_result(r#"defra_exec: {"ok":false,"status":"exit_nonzero","exit_code":42}"#);
+            .with_result(r#"gents_exec: {"ok":false,"status":"exit_nonzero","exit_code":42}"#);
 
         assert_eq!(
-            defra_tool_call_status(&tool),
+            gents_tool_call_status(&tool),
             codex::McpToolCallStatus::Failed
         );
 
@@ -676,7 +676,7 @@ mod tests {
             r###"{"path":"README.md","content":"## Summary\n\nThe CodexShim projection"}"###,
         )
         .with_result(
-            r#"defra_fs: {"ok":true,"status":"success","tool":"write_file","path":"README.md","created":true}"#,
+            r#"gents_fs: {"ok":true,"status":"success","tool":"write_file","path":"README.md","created":true}"#,
         );
 
         assert_eq!(
@@ -705,7 +705,7 @@ mod tests {
             r#"{"path":"README.md","content":"replacement\n"}"#,
         )
         .with_result(
-            r#"defra_fs: {"ok":true,"status":"success","tool":"write_file","path":"README.md","created":false}"#,
+            r#"gents_fs: {"ok":true,"status":"success","tool":"write_file","path":"README.md","created":false}"#,
         );
         let overwrite_item = file_change_item(&overwrite, codex::PatchApplyStatus::Completed)
             .expect("file change item");
@@ -757,8 +757,8 @@ mod tests {
         ));
     }
 
-    fn test_tool(tool_name: &str, status: &str, args: &str) -> DefraToolCallProgress {
-        DefraToolCallProgress {
+    fn test_tool(tool_name: &str, status: &str, args: &str) -> GentsToolCallProgress {
+        GentsToolCallProgress {
             tool_call_key: "session:call".to_string(),
             tool_name: tool_name.to_string(),
             status: status.to_string(),
@@ -777,7 +777,7 @@ mod tests {
         fn with_result(self, result: &str) -> Self;
     }
 
-    impl ToolTestExt for DefraToolCallProgress {
+    impl ToolTestExt for GentsToolCallProgress {
         fn with_await_mode(mut self, await_mode: &str) -> Self {
             self.await_mode = Some(await_mode.to_string());
             self

@@ -245,11 +245,11 @@ pub(super) fn should_ignore_path(traversal_root: &Path, path: &Path) -> bool {
 }
 
 fn sorted_children_block_for_test(dir: &Path) -> Option<std::time::Duration> {
-    let target = std::env::var("DEFRA_NATIVE_FS_RUNNER_BLOCK_DIR").ok()?;
+    let target = std::env::var("GENTS_FS_RUNNER_BLOCK_DIR").ok()?;
     if Path::new(&target) != dir {
         return None;
     }
-    let millis = std::env::var("DEFRA_NATIVE_FS_RUNNER_BLOCK_MS")
+    let millis = std::env::var("GENTS_FS_RUNNER_BLOCK_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(0);
@@ -269,7 +269,7 @@ mod tests {
 
     fn test_context_and_dir(entries: usize) -> (RunnerContext, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!(
-            "defra-fs-common-{}-{:?}",
+            "gents-fs-common-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));

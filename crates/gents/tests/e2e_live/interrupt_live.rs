@@ -45,8 +45,8 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
 
     let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
         .unwrap_or_else(|_| DEFAULT_LIVE_ENDPOINT.to_string());
-    let model = std::env::var("GENTS_LIVE_OPENAI_MODEL")
-        .unwrap_or_else(|_| DEFAULT_LIVE_MODEL.to_string());
+    let model =
+        std::env::var("GENTS_LIVE_OPENAI_MODEL").unwrap_or_else(|_| DEFAULT_LIVE_MODEL.to_string());
     let api_key = std::env::var("GENTS_LIVE_OPENAI_API_KEY").unwrap_or_default();
 
     let db = crate::support::test_db("live-openai-interrupt").await;

@@ -111,8 +111,8 @@ pub use adapter_projection::{
 pub use admission::BackendAdmissionConfig;
 pub use admission::{InferenceCall, InferenceCallRecoveryReport};
 pub use agent::{
-    BehaviorBuilder, Gents, GentsBuilder, DocumentRuntimeOptions,
-    ProcessLifecycleObserver, ProcessLifecycleState, RuntimeSnapshotObserver,
+    BehaviorBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
+    ProcessLifecycleState, RuntimeSnapshotObserver,
 };
 pub use backend_health::{
     probe_backends_cycle, run_backend_probe_cycle, spawn_backend_prober, BackendHealthMap,
@@ -126,7 +126,6 @@ pub use config::{
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
     DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
-pub use gents_protocol::client_protocol;
 pub use defra_node;
 pub use desired_fields::{DesiredFields, LiveFields};
 pub use document_config::{
@@ -143,6 +142,7 @@ pub use external_adapter_capture::{
     import_external_adapter_capture_to_timeline_rows, ExternalAdapterCapture,
     ExternalAdapterImport, ExternalAdapterMapping, ExternalAdapterSource,
 };
+pub use gents_protocol::client_protocol;
 pub use health_checker::{
     run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,
     HealthStatus, MCPServiceHealthSnapshot, McpHealthCheckService, ServiceHealth, ServiceHealthMap,

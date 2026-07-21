@@ -286,7 +286,7 @@ mod tests {
     fn did_from_lean_case(value: &str, case: &LeanIdentityPermissionCase, field: &str) -> Did {
         Did::new(value).unwrap_or_else(|error| {
             panic!(
-                "case {:?}: {field} {:?} is not a valid Defra identity DID: {error}",
+                "case {:?}: {field} {:?} is not a valid DefraDB identity DID: {error}",
                 case.name, value
             )
         })

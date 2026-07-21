@@ -7,5 +7,5 @@ import Proofs.CodexShim.LocalInterrupt
 # Codex Shim Contracts
 
 Small adapter-level projection contracts for the stock Codex app-server
-protocol surface exposed by the DEFRA Codex shim.
+protocol surface exposed by the GENTS Codex shim.
 -/

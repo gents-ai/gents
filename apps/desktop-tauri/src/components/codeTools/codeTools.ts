@@ -2,7 +2,7 @@ import type { RenderedToolCallView } from "../../lib/types";
 
 // Code-aware projection of the agent's file/command tool calls. Everything is
 // derived client-side from the tool args (raw JSON) + the runtime's result
-// envelopes (`defra_exec: {json}` / `defra_fs: {json}` head line) that the
+// envelopes (`gents_exec: {json}` / `gents_fs: {json}` head line) that the
 // transcript already carries — no bridge changes. File edits become diffs;
 // bash calls become terminal blocks. The agent runs these ON ITS host, inside
 // its tool-root/sandbox. Only successful, uncancelled calls are projected —
@@ -125,7 +125,7 @@ function bareJsonMeta(result: string): Record<string, unknown> | null {
 }
 
 /**
- * Split a `<prefix>{json}\n<body>` metadata envelope (defra_exec / defra_fs)
+ * Split a `<prefix>{json}\n<body>` metadata envelope (gents_exec / gents_fs)
  * into its parsed JSON head and the remaining output body.
  */
 function splitEnvelope(
@@ -288,7 +288,7 @@ function toFileReadView(
   tool: RenderedToolCallView,
   name: FileReadTool,
 ): FileReadView | null {
-  const { meta, body } = splitEnvelope(tool.result?.rawText ?? "", "defra_fs: ");
+  const { meta, body } = splitEnvelope(tool.result?.rawText ?? "", "gents_fs: ");
   // Same honesty rule as edits/commands: no parseable metadata → keep the
   // generic disclosure instead of projecting a fabricated read result.
   if (!meta) {
@@ -318,7 +318,7 @@ function toFileEditView(tool: RenderedToolCallView, name: string): FileEditView 
     return null;
   }
   const raw = tool.result?.rawText ?? "";
-  const meta = splitEnvelope(raw, "defra_fs: ").meta ?? bareJsonMeta(raw);
+  const meta = splitEnvelope(raw, "gents_fs: ").meta ?? bareJsonMeta(raw);
   // No trustworthy metadata (missing, malformed, or truncated away): keep the
   // generic disclosure rather than guess at what was applied.
   if (!meta || meta["ok"] === false) {
@@ -345,7 +345,7 @@ function toFileEditView(tool: RenderedToolCallView, name: string): FileEditView 
 function toCommandRunView(tool: RenderedToolCallView): CommandRunView | null {
   const args = safeJsonObject(tool.args?.rawText);
   const raw = tool.result?.rawText ?? "";
-  const envelope = splitEnvelope(raw, "defra_exec: ");
+  const envelope = splitEnvelope(raw, "gents_exec: ");
   let meta = envelope.meta;
   let streams: { stdout: string; stderr: string };
   if (meta) {

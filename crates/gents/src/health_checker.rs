@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents_protocol::graphql::escape_graphql_string;
 use defra_node::EmbeddedNode;
+use gents_protocol::graphql::escape_graphql_string;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;

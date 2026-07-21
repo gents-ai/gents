@@ -32,8 +32,8 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity, Gents,
-    DocumentRuntimeOptions, ToolCeiling,
+    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity,
+    DocumentRuntimeOptions, Gents, ToolCeiling,
 };
 use serde::Deserialize;
 
@@ -450,9 +450,7 @@ impl Drop for LiveTopologyGuard {
 #[ignore = "live: set GENTS_LIVE_P2P_ADMISSION=1 and pass --ignored"]
 async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Result<()> {
     if !live_enabled() {
-        eprintln!(
-            "GENTS_LIVE_P2P_ADMISSION is not 1; skipping concurrent multi-wave live e2e"
-        );
+        eprintln!("GENTS_LIVE_P2P_ADMISSION is not 1; skipping concurrent multi-wave live e2e");
         return Ok(());
     }
 

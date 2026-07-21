@@ -7,7 +7,7 @@ import Proofs.CodexShim.Binding
 # Codex Shim Contract JSON
 
 Finite adapter projection vectors for the stock Codex app-server surface
-exposed by the DEFRA Codex shim.
+exposed by the GENTS Codex shim.
 -/
 
 namespace Conformance.Contracts
@@ -927,7 +927,7 @@ structure CodexShimToolMetadataCase where
 def codexShimToolMetadataCase
     (witness : String)
     (leanTheorems : List String)
-    (fallbackServer : String := "defra")
+    (fallbackServer : String := "gents")
     (selectedServer : Option String := none)
     (fallbackTool : String := "tool")
     (selectedTool : Option String := none)

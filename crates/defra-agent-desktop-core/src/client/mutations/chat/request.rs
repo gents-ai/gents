@@ -1,8 +1,8 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
+use defra_node::EmbeddedNode;
 use gents::skills::prompt_slash_skill_selection;
 use gents_protocol::row::AgentRequestRow;
-use defra_node::EmbeddedNode;
 use serde_json::{Map, Value};
 use uuid::Uuid;
 

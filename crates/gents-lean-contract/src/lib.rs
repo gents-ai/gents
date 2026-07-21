@@ -5,8 +5,8 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use serde::de::DeserializeOwned;
 
-pub const CONTRACT_JSON_BEGIN: &str = "---BEGIN DEFRA LEAN CONTRACT JSON---";
-pub const CONTRACT_JSON_END: &str = "---END DEFRA LEAN CONTRACT JSON---";
+pub const CONTRACT_JSON_BEGIN: &str = "---BEGIN GENTS LEAN CONTRACT JSON---";
+pub const CONTRACT_JSON_END: &str = "---END GENTS LEAN CONTRACT JSON---";
 
 // Build only the module artifact needed by `lake env lean --run`; the broader
 // target can pull package extra artifacts such as ProofWidgets' widget bundle.

@@ -9,8 +9,8 @@ use std::collections::{HashMap, HashSet};
 use crate::llm::message::{AssistantContent, Message, Text, UserContent};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
-use gents_protocol::transcript::{decode_persisted_message, present_persisted_message};
 use defra_node::EmbeddedNode;
+use gents_protocol::transcript::{decode_persisted_message, present_persisted_message};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -1442,7 +1442,7 @@ fn parse_native_command_output_streams(
 
     let trimmed = result.trim_start();
     let (metadata_line, body) = trimmed.split_once('\n')?;
-    let metadata = metadata_line.trim().strip_prefix("defra_exec: ")?;
+    let metadata = metadata_line.trim().strip_prefix("gents_exec: ")?;
     let metadata = serde_json::from_str::<Value>(metadata).ok()?;
     let body = body.strip_prefix("stdout:\n")?;
     let (stdout, stderr) = body.rsplit_once("\nstderr:\n")?;

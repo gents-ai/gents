@@ -3,9 +3,7 @@ use crate::{BackendProviderKind, OpenAiWireApi};
 use anyhow::Result;
 
 use super::{mint_recreate_identity_timestamp, ConfigAccess};
-use gents_protocol::graphql::{
-    graphql_bool_literal, nullable_string_field, string_list_field,
-};
+use gents_protocol::graphql::{graphql_bool_literal, nullable_string_field, string_list_field};
 
 #[derive(Debug, Clone)]
 pub struct InferenceBackendUpsertDocument {

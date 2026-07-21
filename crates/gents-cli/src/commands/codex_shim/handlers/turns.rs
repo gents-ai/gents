@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::super::protocol::{send_error, send_result};
 use super::super::thread_projection::load_codex_thread;
-use super::super::turn::{interrupt_active_turn, start_defra_turn, steer_defra_turn};
+use super::super::turn::{interrupt_active_turn, start_gents_turn, steer_gents_turn};
 use super::super::{trace, ConnectionState, Outbound, ShimState, JSONRPC_INVALID_PARAMS};
 
 pub(super) async fn handle_turn_request(
@@ -20,7 +20,7 @@ pub(super) async fn handle_turn_request(
             let connection = connection.clone();
             let state = state.clone();
             tokio::spawn(async move {
-                if let Err(err) = start_defra_turn(
+                if let Err(err) = start_gents_turn(
                     &connection,
                     &state,
                     request_id,
@@ -29,14 +29,14 @@ pub(super) async fn handle_turn_request(
                 )
                 .await
                 {
-                    tracing::warn!(%err, "Codex shim DEFRA turn task failed");
+                    tracing::warn!(%err, "Codex shim GENTS turn task failed");
                 }
             });
             Ok(())
         }
         codex::ClientRequest::TurnSteer {
             request_id, params, ..
-        } => steer_defra_turn(connection, state, request_id, params).await,
+        } => steer_gents_turn(connection, state, request_id, params).await,
         codex::ClientRequest::TurnInterrupt {
             request_id, params, ..
         } => {
@@ -48,7 +48,7 @@ pub(super) async fn handle_turn_request(
                     outbound,
                     request_id,
                     JSONRPC_INVALID_PARAMS,
-                    "linked DEFRA subagent threads are read-only; interrupt them from the parent thread"
+                    "linked GENTS subagent threads are read-only; interrupt them from the parent thread"
                         .to_string(),
                 )
                 .await;

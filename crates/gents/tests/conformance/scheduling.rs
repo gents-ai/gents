@@ -66,7 +66,7 @@ use std::time::Duration;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use gents::graphql::escape_graphql_string;
 use gents::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
-use gents::{AgentIdentity, Gents, DocumentRuntimeOptions, KeyIdentity, ToolCeiling};
+use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, ToolCeiling};
 use serde_json::Value;
 
 use crate::support::fixtures::bind_default_behavior_backend;
@@ -1227,7 +1227,7 @@ async fn generation_bump_reconfigures_active_schedules() {
 #[tokio::test]
 async fn serial_gate_is_scoped_by_agent_did() {
     let db = test_db("schedule-conformance-serial-did-scope").await;
-    const FOREIGN_DID: &str = "did:defra-agent:conformance-foreign-steward";
+    const FOREIGN_DID: &str = "did:test:conformance-foreign-steward";
 
     let lineage = TriggerLineage {
         trigger_id: Some("host-check".to_string()),
@@ -1344,7 +1344,7 @@ async fn serial_gate_ignores_expired_claims() {
 #[tokio::test]
 async fn supersede_only_touches_own_agent_requests() {
     let db = test_db("schedule-conformance-supersede-did-scope").await;
-    const FOREIGN_DID: &str = "did:defra-agent:conformance-foreign-steward";
+    const FOREIGN_DID: &str = "did:test:conformance-foreign-steward";
 
     for (name, did, content) in [
         (AGENT_NAME, AGENT_DID, "own in-flight"),

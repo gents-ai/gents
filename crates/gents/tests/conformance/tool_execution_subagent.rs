@@ -230,7 +230,7 @@ async fn integration_load_round_trip_preserves_subagent_fields() {
         db.node.clone(),
         "req-load-rt-1".to_string(),
         "sess-load-rt-1".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-load-rt-1".to_string(),
         3,
         "spawn_subagent".to_string(),
@@ -239,7 +239,7 @@ async fn integration_load_round_trip_preserves_subagent_fields() {
         AwaitMode::Background,
         CancelPolicy::Detach,
         "child-req-load-rt-1".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lc.start_running().await.unwrap();
 
@@ -303,7 +303,7 @@ async fn integration_load_round_trip_foreground_cascade_also_preserved() {
         db.node.clone(),
         "req-load-rt-2".to_string(),
         "sess-load-rt-2".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-load-rt-2".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -312,7 +312,7 @@ async fn integration_load_round_trip_foreground_cascade_also_preserved() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "child-req-load-rt-2".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lc.start_running().await.unwrap();
 
@@ -355,7 +355,7 @@ async fn integration_load_round_trip_native_tool_has_no_child_request_id() {
         db.node.clone(),
         "req-load-rt-3".to_string(),
         "sess-load-rt-3".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-load-rt-3".to_string(),
         0,
         "echo".to_string(),
@@ -406,7 +406,7 @@ async fn integration_background_then_foreground_persists_round_trip() {
         db.node.clone(),
         "req-int-1".to_string(),
         "sess-int-1".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-int-1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -415,7 +415,7 @@ async fn integration_background_then_foreground_persists_round_trip() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "child-req-int-1".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lc.start_running().await.unwrap();
 
@@ -474,7 +474,7 @@ async fn integration_mode_flips_tolerate_stale_same_target_owner() {
         db.node.clone(),
         "req-mode-cas-1".to_string(),
         "sess-mode-cas-1".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-mode-cas-1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -483,7 +483,7 @@ async fn integration_mode_flips_tolerate_stale_same_target_owner() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "child-req-mode-cas-1".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lc.start_running().await.unwrap();
 
@@ -525,7 +525,7 @@ async fn integration_detach_one_way_persists() {
         db.node.clone(),
         "req-det-1".to_string(),
         "sess-det-1".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-det-1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -534,7 +534,7 @@ async fn integration_detach_one_way_persists() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "child-req-det-1".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lc.start_running().await.unwrap();
 
@@ -616,7 +616,7 @@ async fn integration_detach_rejects_native_tool() {
         db.node.clone(),
         "req-det-native-1".to_string(),
         "sess-det-native-1".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-det-native-1".to_string(),
         0,
         "echo".to_string(),
@@ -787,7 +787,7 @@ async fn integration_bridge_complete_with_real_child() {
         db.node.clone(),
         "parent-req-bc1".to_string(),
         "sess-bc1".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-bc1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -796,7 +796,7 @@ async fn integration_bridge_complete_with_real_child() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     bridge.start_running().await.unwrap();
 
@@ -865,7 +865,7 @@ async fn integration_bridge_complete_does_not_overwrite_externally_terminal_brid
         db.node.clone(),
         "parent-req-bc-cas1".to_string(),
         "sess-bc-cas1".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-bc-cas1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -874,7 +874,7 @@ async fn integration_bridge_complete_does_not_overwrite_externally_terminal_brid
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     bridge.start_running().await.unwrap();
     let mut external = ToolCallLifecycle::load(db.node.clone(), "sess-bc-cas1", "tc-bc-cas1")
@@ -930,7 +930,7 @@ async fn run_bridge_failure_case(
         db.node.clone(),
         parent_req.clone(),
         session.clone(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         tc_id.clone(),
         1,
         "spawn_subagent".to_string(),
@@ -939,7 +939,7 @@ async fn run_bridge_failure_case(
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         child_id,
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     bridge.start_running().await.unwrap();
     let transitioned = bridge.bridge_failure(child_terminal).await.unwrap();
@@ -991,7 +991,7 @@ async fn integration_bridge_failure_does_not_overwrite_externally_terminal_bridg
         db.node.clone(),
         "parent-req-bf-cas1".to_string(),
         "sess-bf-cas1".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-bf-cas1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -1000,7 +1000,7 @@ async fn integration_bridge_failure_does_not_overwrite_externally_terminal_bridg
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         child_id.to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     bridge.start_running().await.unwrap();
     let mut external = ToolCallLifecycle::load(db.node.clone(), "sess-bf-cas1", "tc-bf-cas1")
@@ -1077,7 +1077,7 @@ async fn integration_cascade_intent_for_cascade_subagent_returns_some() {
         db.node.clone(),
         "req-cas-1".to_string(),
         "sess-cas-1".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-cas-1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -1086,7 +1086,7 @@ async fn integration_cascade_intent_for_cascade_subagent_returns_some() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "child-req-cas-1".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lc.start_running().await.unwrap();
     lc.cancel_during_run(CancelCause::Interrupted)
@@ -1104,7 +1104,7 @@ async fn integration_cascade_intent_for_detached_subagent_returns_none() {
         db.node.clone(),
         "req-cas-2".to_string(),
         "sess-cas-2".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-cas-2".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -1113,7 +1113,7 @@ async fn integration_cascade_intent_for_detached_subagent_returns_none() {
         AwaitMode::Foreground,
         CancelPolicy::Detach,
         "child-req-cas-2".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lc.start_running().await.unwrap();
     lc.cancel_during_run(CancelCause::Interrupted)
@@ -1130,7 +1130,7 @@ async fn integration_cascade_intent_for_native_returns_none() {
         db.node.clone(),
         "req-cas-3".to_string(),
         "sess-cas-3".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tc-cas-3".to_string(),
         1,
         "echo".to_string(),

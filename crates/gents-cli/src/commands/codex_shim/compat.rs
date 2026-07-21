@@ -11,7 +11,7 @@ use super::{trace, Outbound, ShimState, JSONRPC_METHOD_NOT_FOUND};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CompatDifficulty {
     LocalStateProjection,
-    DefraBackedWorkflow,
+    GentsBackedWorkflow,
     HostRuntimeIntegration,
     ExternalOrLargeFeature,
 }
@@ -20,7 +20,7 @@ impl CompatDifficulty {
     fn label(self) -> &'static str {
         match self {
             Self::LocalStateProjection => "medium: local Codex state projection",
-            Self::DefraBackedWorkflow => "medium-hard: DEFRA-backed workflow",
+            Self::GentsBackedWorkflow => "medium-hard: GENTS-backed workflow",
             Self::HostRuntimeIntegration => "hard: host runtime integration",
             Self::ExternalOrLargeFeature => "hard: external or large Codex feature",
         }
@@ -166,25 +166,25 @@ pub(super) fn compat_gap_for_request(request: &codex::ClientRequest) -> Option<C
         codex::ClientRequest::ThreadRollback { .. } => Some(CompatGap {
             difficulty: CompatDifficulty::LocalStateProjection,
             area: "thread/session projection",
-            plan: "keep same-thread rollback unsupported; if needed, expose Codex rollback UX as a DEFRA-backed fork-at-turn workflow",
+            plan: "keep same-thread rollback unsupported; if needed, expose Codex rollback UX as a GENTS-backed fork-at-turn workflow",
         }),
 
         codex::ClientRequest::ThreadCompactStart { .. } => Some(CompatGap {
-            difficulty: CompatDifficulty::DefraBackedWorkflow,
+            difficulty: CompatDifficulty::GentsBackedWorkflow,
             area: "thread compaction workflow",
-            plan: "manual Codex compaction remains unsupported; automatic DEFRA compaction lifecycle is projected as native contextCompaction items. The pinned protocol has no failed-item event, so clients showing an in-progress compaction must clear it at turn end when no completion arrives",
+            plan: "manual Codex compaction remains unsupported; automatic GENTS compaction lifecycle is projected as native contextCompaction items. The pinned protocol has no failed-item event, so clients showing an in-progress compaction must clear it at turn end when no completion arrives",
         }),
 
         codex::ClientRequest::ReviewStart { .. } => Some(CompatGap {
-            difficulty: CompatDifficulty::DefraBackedWorkflow,
+            difficulty: CompatDifficulty::GentsBackedWorkflow,
             area: "turn workflow",
-            plan: "leave unsupported unless stock Codex starts requiring it; DEFRA has its own review policy primitives",
+            plan: "leave unsupported unless stock Codex starts requiring it; GENTS has its own review policy primitives",
         }),
 
         codex::ClientRequest::ThreadInjectItems { .. } => Some(CompatGap {
-            difficulty: CompatDifficulty::DefraBackedWorkflow,
+            difficulty: CompatDifficulty::GentsBackedWorkflow,
             area: "thread transcript",
-            plan: "future work: persist raw model-visible context as DEFRA transcript/context documents, not Codex-local rollout items",
+            plan: "future work: persist raw model-visible context as GENTS transcript/context documents, not Codex-local rollout items",
         }),
 
         codex::ClientRequest::FsReadFile { .. }
@@ -198,14 +198,14 @@ pub(super) fn compat_gap_for_request(request: &codex::ClientRequest) -> Option<C
         | codex::ClientRequest::FsUnwatch { .. } => Some(CompatGap {
             difficulty: CompatDifficulty::HostRuntimeIntegration,
             area: "filesystem host runtime",
-            plan: "intentionally unsupported; model filesystem activity must run through DEFRA tool-call documents and be projected into Codex thread items",
+            plan: "intentionally unsupported; model filesystem activity must run through GENTS tool-call documents and be projected into Codex thread items",
         }),
 
         codex::ClientRequest::OneOffCommandExec { .. }
         | codex::ClientRequest::ProcessSpawn { .. } => Some(CompatGap {
             difficulty: CompatDifficulty::HostRuntimeIntegration,
             area: "host process runtime",
-            plan: "unsupported until execution and cancellation route through DEFRA tool-call and managed-exec state machines",
+            plan: "unsupported until execution and cancellation route through GENTS tool-call and managed-exec state machines",
         }),
 
         codex::ClientRequest::ThreadShellCommand { .. }
@@ -215,7 +215,7 @@ pub(super) fn compat_gap_for_request(request: &codex::ClientRequest) -> Option<C
         | codex::ClientRequest::ProcessResizePty { .. } => Some(CompatGap {
             difficulty: CompatDifficulty::HostRuntimeIntegration,
             area: "interactive host process runtime",
-            plan: "intentionally unsupported for now; stdin and PTY control need DEFRA managed-exec documents before the shim can expose them",
+            plan: "intentionally unsupported for now; stdin and PTY control need GENTS managed-exec documents before the shim can expose them",
         }),
 
         codex::ClientRequest::PluginRead { .. }
@@ -237,7 +237,7 @@ pub(super) fn compat_gap_for_request(request: &codex::ClientRequest) -> Option<C
         | codex::ClientRequest::WindowsSandboxSetupStart { .. } => Some(CompatGap {
             difficulty: CompatDifficulty::ExternalOrLargeFeature,
             area: "extended Codex feature",
-            plan: "explicitly unavailable in the DEFRA shim unless we later map it onto DEFRA-native P2P, MCP, or platform support",
+            plan: "explicitly unavailable in the GENTS shim unless we later map it onto GENTS-native P2P, MCP, or platform support",
         }),
     }
 }
@@ -253,8 +253,8 @@ mod tests {
             "medium: local Codex state projection"
         );
         assert_eq!(
-            CompatDifficulty::DefraBackedWorkflow.label(),
-            "medium-hard: DEFRA-backed workflow"
+            CompatDifficulty::GentsBackedWorkflow.label(),
+            "medium-hard: GENTS-backed workflow"
         );
         assert_eq!(
             CompatDifficulty::HostRuntimeIntegration.label(),

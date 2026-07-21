@@ -15,8 +15,8 @@ use super::command_projection::{
     command_execution_item, command_output_payload, tool_projection_status, ToolProjectionStatus,
 };
 use super::progress::{
-    decode_defra_tool_call_progress, defra_tool_progress_query, tool_completed_at_ms,
-    DefraToolCallProgress,
+    decode_gents_tool_call_progress, gents_tool_progress_query, tool_completed_at_ms,
+    GentsToolCallProgress,
 };
 use super::protocol::{now_millis, send_notification};
 use super::store::query_node_json;
@@ -62,7 +62,7 @@ fn spawn_background_tool_watcher_handle(
 
             let response = match query_node_json(
                 state.node.as_ref(),
-                &defra_tool_progress_query(&request_id, &session_id),
+                &gents_tool_progress_query(&request_id, &session_id),
             )
             .await
             {
@@ -83,7 +83,7 @@ fn spawn_background_tool_watcher_handle(
                 .unwrap_or_default();
             let current_tools = tool_rows
                 .iter()
-                .filter_map(decode_defra_tool_call_progress)
+                .filter_map(decode_gents_tool_call_progress)
                 .map(|tool| (tool.tool_call_key.clone(), tool))
                 .collect::<BTreeMap<_, _>>();
 
@@ -169,7 +169,7 @@ async fn send_background_tool_completion(
     state: &ShimState,
     thread_id: &str,
     turn_id: &str,
-    tool: &DefraToolCallProgress,
+    tool: &GentsToolCallProgress,
     status: codex::CommandExecutionStatus,
     cwd: &Path,
 ) -> Result<()> {
@@ -220,7 +220,7 @@ pub(super) async fn cancel_projected_background_tool_key(
     tool_call_key: &str,
 ) -> Result<CancelBackgroundToolCallOutcome> {
     let Some((session_id, tool_call_id)) = tool_call_key.split_once(':') else {
-        anyhow::bail!("Codex process id `{tool_call_key}` is not a DEFRA background tool key");
+        anyhow::bail!("Codex process id `{tool_call_key}` is not a GENTS background tool key");
     };
     let outcome = gents::cancel_background_tool_call(
         state.node.clone(),
@@ -234,10 +234,10 @@ pub(super) async fn cancel_projected_background_tool_key(
         CancelBackgroundToolCallOutcome::Cancelled { .. }
         | CancelBackgroundToolCallOutcome::AlreadyTerminal { .. } => Ok(outcome),
         CancelBackgroundToolCallOutcome::NotFound => {
-            anyhow::bail!("unknown DEFRA background tool `{tool_call_key}`")
+            anyhow::bail!("unknown GENTS background tool `{tool_call_key}`")
         }
         CancelBackgroundToolCallOutcome::NotBackground => {
-            anyhow::bail!("DEFRA tool `{tool_call_key}` is not a background tool")
+            anyhow::bail!("GENTS tool `{tool_call_key}` is not a background tool")
         }
     }
 }
@@ -354,8 +354,8 @@ mod tests {
             node,
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
             graphql: Arc::from("http://127.0.0.1/graphql"),
-            agent_did: Arc::from("did:defra-agent:background-disconnect-test"),
-            behavior_id: Arc::from("did:defra-agent:background-disconnect-test:default"),
+            agent_did: Arc::from("did:test:background-disconnect-test"),
+            behavior_id: Arc::from("did:test:background-disconnect-test:default"),
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),
             poll_interval: Duration::from_secs(60),

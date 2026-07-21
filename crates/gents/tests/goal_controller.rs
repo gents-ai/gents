@@ -242,7 +242,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
             call_seq: 1,
             backend_id: "backend-test",
             behavior_id: "test",
-            agent_did: "did:defra-agent:test",
+            agent_did: "did:test:test",
             call_kind: "inference",
             attempt: 1,
             call_state: "completed",

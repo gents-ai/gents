@@ -2,11 +2,11 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use chrono::Utc;
+use defra_agent_desktop_core::client::ClientCore;
 use gents::graphql::escape_graphql_string;
 use gents::{
     run_health_check_cycle, HealthCheckerOptions, McpHealthCheckService, McpPool, ServiceHealthMap,
 };
-use defra_agent_desktop_core::client::ClientCore;
 use gents_protocol::row::{ToolServiceHealthStateRow, ToolServiceRegistryRow};
 
 use super::super::types::{MCPServiceHealthView, McpServiceProbeResult};

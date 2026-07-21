@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use gents::{BehaviorToolConfig, ToolCeiling, ToolPolicyVersion, ToolSelection};
 use defra_agent_desktop_core::local_runtime::default_agent_home;
+use gents::{BehaviorToolConfig, ToolCeiling, ToolPolicyVersion, ToolSelection};
 use serde_json::{json, Value};
 use tauri::State;
 

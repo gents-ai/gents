@@ -160,8 +160,7 @@ pub fn test_behavior(
             gents::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(gents::config::DEFAULT_DEADLINE_DURATION_SECS),
-        completion_retry:
-            gents::agent::completion_retry::CompletionRetryProfileFields::default(),
+        completion_retry: gents::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: gents::config::SamplingConfig::default(),
     }
 }
@@ -200,8 +199,7 @@ pub fn test_behavior_for_principal(
             gents::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(gents::config::DEFAULT_DEADLINE_DURATION_SECS),
-        completion_retry:
-            gents::agent::completion_retry::CompletionRetryProfileFields::default(),
+        completion_retry: gents::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: gents::config::SamplingConfig::default(),
     }
 }

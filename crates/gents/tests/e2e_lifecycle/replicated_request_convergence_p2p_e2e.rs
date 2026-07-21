@@ -36,8 +36,8 @@ use serde::Deserialize;
 
 use crate::support::test_p2p_db;
 
-const OWNER_DID: &str = "did:defra-agent:convergence-p2p-owner";
-const PEER_DID: &str = "did:defra-agent:convergence-p2p-peer";
+const OWNER_DID: &str = "did:test:convergence-p2p-owner";
+const PEER_DID: &str = "did:test:convergence-p2p-peer";
 const BEHAVIOR_ID: &str = "convergence-p2p-behavior";
 
 #[derive(Debug, Clone, Deserialize)]

@@ -14,7 +14,7 @@ use super::subagent_projection::{
     load_authorized_subagent_threads_for_root, LinkedSubagentThread, SubagentProjectionUpdateFilter,
 };
 use super::thread_projection::CodexThreadRecord;
-use super::turn::{stream_defra_turn, TurnStreamOptions};
+use super::turn::{stream_gents_turn, TurnStreamOptions};
 use super::turn_projection::TurnProjection;
 use super::{ConnectionState, ShimState};
 use crate::SubmittedRequest;
@@ -28,7 +28,7 @@ pub(super) async fn ensure_loaded_subagent_stream(
     let Some(link) = record.subagent.clone() else {
         return;
     };
-    let watcher_id = state.next_id("defra-child-stream");
+    let watcher_id = state.next_id("gents-child-stream");
     let task_connection = connection.clone();
     let task_state = state.clone();
     let task_watcher_id = watcher_id.clone();
@@ -198,7 +198,7 @@ async fn project_child_request(
     let cwd = state.thread_cwd(&link.session_id).await;
     let mut projection = TurnProjection::new(state, &link.session_id, &turn_id, cwd, started_at);
     let (_cancel_tx, cancel_rx) = watch::channel(false);
-    stream_defra_turn(
+    stream_gents_turn(
         connection,
         state,
         &submitted,

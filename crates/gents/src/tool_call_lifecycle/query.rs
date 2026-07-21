@@ -255,14 +255,14 @@ mod tests {
             node.clone(),
             "request-routed".to_string(),
             "session-routed".to_string(),
-            "did:defra-agent:host".to_string(),
+            "did:test:host".to_string(),
             "tool-call-routed".to_string(),
             1,
             "test_tool".to_string(),
             "{}".to_string(),
             chrono::Utc::now() + chrono::Duration::minutes(5),
         )
-        .with_requester_did(Some("did:defra-agent:coordinator".to_string()));
+        .with_requester_did(Some("did:test:coordinator".to_string()));
         lifecycle.start_running().await.expect("persist tool call");
 
         let loaded = ToolCallLifecycle::load(node.clone(), "session-routed", "tool-call-routed")
@@ -272,7 +272,7 @@ mod tests {
 
         assert_eq!(
             loaded.requester_did.as_deref(),
-            Some("did:defra-agent:coordinator")
+            Some("did:test:coordinator")
         );
         node.shutdown().await;
     }

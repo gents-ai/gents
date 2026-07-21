@@ -11,7 +11,7 @@ use serde_json::Value;
 /// parallel suite: process and thread ids are baked into the name).
 pub fn unique_root(tag: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!(
-        "defra-fs-{tag}-{}-{:?}",
+        "gents-fs-{tag}-{}-{:?}",
         std::process::id(),
         std::thread::current().id()
     ));

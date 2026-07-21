@@ -126,7 +126,7 @@ pub(super) fn backend_model_summary(
         "upgradeInfo": null,
         "availabilityNux": null,
         "displayName": model_name,
-        "description": format!("DEFRA backend: {backend_label}"),
+        "description": format!("GENTS backend: {backend_label}"),
         "hidden": false,
         "supportedReasoningEfforts": [],
         "defaultReasoningEffort": "medium",
@@ -153,7 +153,7 @@ pub(super) fn thread_json(
         "forkedFromId": null,
         "preview": preview.unwrap_or(""),
         "ephemeral": false,
-        "modelProvider": "defra",
+        "modelProvider": "gents",
         "createdAt": now,
         "updatedAt": now,
         "status": status,
@@ -248,7 +248,7 @@ pub(super) async fn send_committed_user_message(
         state,
         codex::ServerNotification::ItemCompleted(codex::ItemCompletedNotification {
             item: codex::ThreadItem::UserMessage {
-                id: state.next_id("defra-user-message"),
+                id: state.next_id("gents-user-message"),
                 content: input.to_vec(),
             },
             thread_id: thread_id.to_string(),
@@ -289,7 +289,7 @@ pub(super) fn user_text_from_input(input: &[codex::UserInput]) -> String {
 }
 
 /// Skill ids for explicitly-selected skills (the Codex "pill"), extracted as a
-/// REFERENCE only. The synthetic path `/defra/skills/<skill_id>` carries the id
+/// REFERENCE only. The synthetic path `/gents/skills/<skill_id>` carries the id
 /// in its last segment; fall back to the display name. No DB access, no
 /// resolution — the runtime resolves the body against the behavior's effective
 /// set and injects it (see `LayeredPromptBuilder::selected_skill_reminders`).
@@ -419,7 +419,7 @@ mod tests {
             },
             codex::UserInput::Skill {
                 name: "Deep Research".to_string(),
-                path: std::path::PathBuf::from("/defra/skills/research"),
+                path: std::path::PathBuf::from("/gents/skills/research"),
             },
         ];
         assert_eq!(user_text_from_input(&input), "summarize this");
@@ -434,7 +434,7 @@ mod tests {
             },
             codex::UserInput::Skill {
                 name: "Deep Research".to_string(),
-                path: std::path::PathBuf::from("/defra/skills/research"),
+                path: std::path::PathBuf::from("/gents/skills/research"),
             },
         ];
         // The id comes from the synthetic path's last segment, not the body.

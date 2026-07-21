@@ -56,8 +56,8 @@ fn build_stub_behavior_factory(
             deadline_duration: std::time::Duration::from_secs(
                 gents::DEFAULT_DEADLINE_DURATION_SECS,
             ),
-            completion_retry:
-                gents::agent::completion_retry::CompletionRetryProfileFields::default(),
+            completion_retry: gents::agent::completion_retry::CompletionRetryProfileFields::default(
+            ),
             sampling: gents::SamplingConfig::default(),
         })
     })

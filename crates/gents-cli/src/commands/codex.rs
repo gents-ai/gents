@@ -4,7 +4,7 @@
 //! workspace alongside the other `codex-*` crates). Running it in-process
 //! means the user never installs or configures Codex: we construct the TUI's
 //! CLI state directly and hand it the shim's WebSocket endpoint. Approvals
-//! and sandboxing are bypassed on the Codex side because the Defra runtime
+//! and sandboxing are bypassed on the Codex side because the Gents runtime
 //! owns tool gating — the tool preset chosen at `init` is the real
 //! permission boundary.
 
@@ -77,9 +77,9 @@ fn build_tui_cli(args: &CodexArgs) -> CodexTuiCli {
     cli.dangerously_bypass_approvals_and_sandbox = true;
     cli.no_alt_screen = args.no_alt_screen;
     cli.prompt = args.prompt.clone();
-    // DEFRA persists provider reasoning as raw reasoning text. Stock Codex
+    // GENTS persists provider reasoning as raw reasoning text. Stock Codex
     // already has the correct presentation gate; enable it for the embedded
-    // DEFRA TUI without relabeling raw text as a reasoning summary on the wire.
+    // GENTS TUI without relabeling raw text as a reasoning summary on the wire.
     cli.config_overrides
         .raw_overrides
         .push("show_raw_agent_reasoning=true".to_string());
@@ -94,12 +94,12 @@ async fn probe_shim(endpoint: &RemoteAppServerEndpoint) -> Result<()> {
     let connect = TcpStream::connect(&authority);
     match tokio::time::timeout(SHIM_PROBE_TIMEOUT, connect).await {
         Ok(Ok(_)) => Ok(()),
-        Ok(Err(error)) => bail!(
-            "no Codex shim listening at {authority} ({error}); start `gents server` first"
-        ),
-        Err(_) => bail!(
-            "timed out reaching the Codex shim at {authority}; start `gents server` first"
-        ),
+        Ok(Err(error)) => {
+            bail!("no Codex shim listening at {authority} ({error}); start `gents server` first")
+        }
+        Err(_) => {
+            bail!("timed out reaching the Codex shim at {authority}; start `gents server` first")
+        }
     }
 }
 

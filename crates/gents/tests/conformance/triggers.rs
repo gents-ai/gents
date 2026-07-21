@@ -62,7 +62,7 @@ use std::time::Duration;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
-use gents::{AgentIdentity, Gents, DocumentRuntimeOptions, ToolCeiling};
+use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
 use serde_json::Value;
 
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};

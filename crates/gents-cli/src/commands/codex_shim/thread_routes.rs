@@ -28,7 +28,7 @@ pub(super) async fn fork_thread_response(
 ) -> std::result::Result<(CodexThreadRecord, Value), ThreadRouteError> {
     if params.path.is_some() {
         return Err(invalid_params(
-            "thread/fork by rollout path is unavailable for DEFRA-backed Codex threads",
+            "thread/fork by rollout path is unavailable for GENTS-backed Codex threads",
         ));
     }
     if params.sandbox.is_some() && params.permissions.is_some() {
@@ -88,7 +88,7 @@ pub(super) async fn list_threads_response(
     let include_cli = source_filter_allows_cli(params.source_kinds.as_deref());
     let include_subagents = source_filter_allows_spawned_subagent(params.source_kinds.as_deref());
     if (!include_cli && !include_subagents)
-        || !model_provider_filter_allows_defra(params.model_providers.as_deref())
+        || !model_provider_filter_allows_gents(params.model_providers.as_deref())
     {
         return Ok(json!({
             "data": [],
@@ -225,10 +225,10 @@ pub(super) async fn search_threads_response(
     }))
 }
 
-fn model_provider_filter_allows_defra(model_providers: Option<&[String]>) -> bool {
+fn model_provider_filter_allows_gents(model_providers: Option<&[String]>) -> bool {
     model_providers
         .filter(|providers| !providers.is_empty())
-        .is_none_or(|providers| providers.iter().any(|provider| provider == "defra"))
+        .is_none_or(|providers| providers.iter().any(|provider| provider == "gents"))
 }
 
 fn cwd_filter_values(filter: &codex::ThreadListCwdFilter) -> Vec<&str> {
@@ -470,7 +470,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn source_filters_classify_defra_spawned_children() {
+    fn source_filters_classify_gents_spawned_children() {
         assert!(source_filter_allows_cli(None));
         assert!(source_filter_allows_cli(Some(&[])));
         assert!(!source_filter_allows_spawned_subagent(None));

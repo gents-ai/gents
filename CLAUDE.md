@@ -14,13 +14,13 @@ This project is built upward from a formal foundation, and every substantive cha
 
 **Lean models → conformance tests → implementation.**
 
-1. **Start in the Lean spec** (`crates/defra-agent/proofs/`). Understand the current model. Make the change there first, and prove it doesn't break the safety/liveness properties you care about. Zero `sorry`s is the standard.
+1. **Start in the Lean spec** (`crates/gents/proofs/`). Understand the current model. Make the change there first, and prove it doesn't break the safety/liveness properties you care about. Zero `sorry`s is the standard.
 2. **Drive the conformance tests from the spec.** The spec change defines what the tests expect; the tests are the fence between the model and the code.
 3. **Make the Rust satisfy the tests.** Then make it clean — the code on top of this foundation is meant to read as well as it verifies.
 
 Not every change touches the spec — plumbing, tooling, and infrastructure don't. But anything that changes *what transitions are legal*, *what invariants hold*, or *what the model feeds the provider* starts in Lean. When a proof obligation is hard to discharge, treat that as information: sketching the soundness argument has caught real bugs here before the code existed.
 
-The proven core (see `crates/defra-agent/proofs/README.md` for the full map): request/process/persistence lifecycles, tool-call and subagent lifecycles, scheduler and fleet slot accounting, recovery convergence, trigger dispatch, transcript reduction and compaction, and provider-input assembly (sanitization soundness, idempotence, split-stability).
+The proven core (see `crates/gents/proofs/README.md` for the full map): request/process/persistence lifecycles, tool-call and subagent lifecycles, scheduler and fleet slot accounting, recovery convergence, trigger dispatch, transcript reduction and compaction, and provider-input assembly (sanitization soundness, idempotence, split-stability).
 
 ## The system, held in your head
 

@@ -966,7 +966,7 @@ fn error_chat_history(history: &[Message], new_messages: &[Message]) -> Vec<Mess
 /// otherwise the most recent user-text message across `history` + `prior`. A
 /// tool-result turn's prompt carries no text, so without the fallback a
 /// prompt-aware tool would lose the task/subagent/manual prompt the provider
-/// still sees. Built-in Defra tools ignore it; this preserves parity for custom
+/// still sees. Built-in Gents tools ignore it; this preserves parity for custom
 /// or embedding tools.
 fn current_rag_text(prompt: &Message, history: &[Message], prior: &[Message]) -> String {
     if let Some(text) = prompt.rag_text() {

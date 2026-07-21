@@ -16,7 +16,7 @@ function readCall(
     toolName,
     statusKind: "success",
     args: { rawText: JSON.stringify(argsJson), fields: [] },
-    result: { rawText: `defra_fs: ${JSON.stringify(meta)}\n${body}`, fields: [] },
+    result: { rawText: `gents_fs: ${JSON.stringify(meta)}\n${body}`, fields: [] },
   } as unknown as RenderedToolCallView;
 }
 

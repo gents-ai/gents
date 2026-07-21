@@ -604,9 +604,9 @@ fn signing_key_type_to_crypto_key_type(key_type: SigningKeyType) -> Result<crypt
         SigningKeyType::Ed25519 => Ok(crypto::KeyType::Ed25519),
         SigningKeyType::Secp256k1 => Ok(crypto::KeyType::Secp256k1),
         SigningKeyType::Secp256r1 => Ok(crypto::KeyType::Secp256r1),
-        SigningKeyType::Bls => anyhow::bail!(
-            "BLS registered identities cannot be used as gents runtime identities"
-        ),
+        SigningKeyType::Bls => {
+            anyhow::bail!("BLS registered identities cannot be used as gents runtime identities")
+        }
         other => anyhow::bail!(
             "registered identity key type {other} cannot be used as a gents runtime identity"
         ),

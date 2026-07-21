@@ -1630,7 +1630,7 @@ mod tests {
         State(allowed): State<Arc<BTreeMap<(String, String), bool>>>,
         Json(body): Json<MockAcpDecisionRequest>,
     ) -> (StatusCode, Json<Value>) {
-        if body.actor != "did:defra-agent:projection-reader"
+        if body.actor != "did:test:projection-reader"
             || body.permission != "read"
             || body.policy_id != "projection-policy"
         {
@@ -1658,7 +1658,7 @@ mod tests {
             let _ = axum::serve(listener, router).await;
         });
         Ok(ProjectionAcpReadScope {
-            actor_did: "did:defra-agent:projection-reader".to_string(),
+            actor_did: "did:test:projection-reader".to_string(),
             policy_id: "projection-policy".to_string(),
             api_base: format!("http://{addr}/api/v0"),
             resource_names: BTreeMap::new(),
@@ -1730,23 +1730,23 @@ mod tests {
     fn projection_acp_binding_selects_most_specific_matching_row() -> Result<()> {
         let request = TimelineRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:defra-agent:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             behavior_id: Some("amy:default".to_string()),
             ..TimelineRequestRow::default()
         };
         let selected = select_projection_acp_binding(
             vec![
                 projection_binding("global", None, None, None),
-                projection_binding("agent", Some("did:defra-agent:amy"), None, None),
+                projection_binding("agent", Some("did:test:amy"), None, None),
                 projection_binding(
                     "exact",
-                    Some("did:defra-agent:amy"),
+                    Some("did:test:amy"),
                     Some("amy:default"),
                     Some("openai_codex_run_trace"),
                 ),
                 projection_binding(
                     "other-projection",
-                    Some("did:defra-agent:amy"),
+                    Some("did:test:amy"),
                     Some("amy:default"),
                     Some("langgraph_state_history"),
                 ),
@@ -1764,13 +1764,13 @@ mod tests {
     fn projection_acp_binding_rejects_ambiguous_rows() {
         let request = TimelineRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:defra-agent:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             ..TimelineRequestRow::default()
         };
         let error = select_projection_acp_binding(
             vec![
-                projection_binding("first", Some("did:defra-agent:amy"), None, None),
-                projection_binding("second", Some("did:defra-agent:amy"), None, None),
+                projection_binding("first", Some("did:test:amy"), None, None),
+                projection_binding("second", Some("did:test:amy"), None, None),
             ],
             AdapterProjectionKind::OpenAiCodexRunTrace,
             &request,
@@ -1789,21 +1789,16 @@ mod tests {
     fn projection_acp_binding_rejects_incomparable_matching_scopes() {
         let request = TimelineRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:defra-agent:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             behavior_id: Some("amy:default".to_string()),
             ..TimelineRequestRow::default()
         };
         let error = select_projection_acp_binding(
             vec![
-                projection_binding(
-                    "behavior",
-                    Some("did:defra-agent:amy"),
-                    Some("amy:default"),
-                    None,
-                ),
+                projection_binding("behavior", Some("did:test:amy"), Some("amy:default"), None),
                 projection_binding(
                     "projection",
-                    Some("did:defra-agent:amy"),
+                    Some("did:test:amy"),
                     None,
                     Some("openai_codex_run_trace"),
                 ),
@@ -1825,13 +1820,13 @@ mod tests {
     fn projection_acp_binding_ignores_unscoped_rows() -> Result<()> {
         let request = TimelineRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:defra-agent:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             ..TimelineRequestRow::default()
         };
         let selected = select_projection_acp_binding(
             vec![
                 projection_binding("global", None, None, Some("openai_codex_run_trace")),
-                projection_binding("agent", Some("did:defra-agent:amy"), None, None),
+                projection_binding("agent", Some("did:test:amy"), None, None),
             ],
             AdapterProjectionKind::OpenAiCodexRunTrace,
             &request,
@@ -1846,10 +1841,10 @@ mod tests {
     fn projection_acp_binding_rejects_enabled_non_operational_status() {
         let request = TimelineRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:defra-agent:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             ..TimelineRequestRow::default()
         };
-        let mut binding = projection_binding("draft", Some("did:defra-agent:amy"), None, None);
+        let mut binding = projection_binding("draft", Some("did:test:amy"), None, None);
         binding.publication_status = Some("draft".to_string());
 
         let error = select_projection_acp_binding(

@@ -11,7 +11,7 @@ use gents::agent::p2p_reconcile::{GraphqlNetworkStore, NetworkStore};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::retry::execute_graphql_with_conflict_retry;
-use gents::{AgentIdentity, Gents, DocumentRuntimeOptions, ToolCeiling};
+use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
 use gents_protocol::network_token::{
     derive_membership_key, EndpointRecord, MembershipRecord, NetworkRecord,
 };

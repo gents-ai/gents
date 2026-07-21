@@ -238,7 +238,7 @@ where
 }
 
 fn append_json(default_path: &Path, value: Value) {
-    let path = std::env::var_os("DEFRA_CODEX_SHIM_TRACE")
+    let path = std::env::var_os("GENTS_CODEX_SHIM_TRACE")
         .map(PathBuf::from)
         .unwrap_or_else(|| default_path.to_path_buf());
     let _guard = match TRACE_APPEND_LOCK.lock() {

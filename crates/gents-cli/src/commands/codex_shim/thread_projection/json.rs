@@ -147,7 +147,7 @@ pub(in crate::commands::codex_shim) fn thread_response_json(
     json!({
         "thread": thread,
         "model": bound_model_id,
-        "modelProvider": "defra",
+        "modelProvider": "gents",
         "serviceTier": null,
         "cwd": absolute_path(&record.cwd),
         "runtimeWorkspaceRoots": [],

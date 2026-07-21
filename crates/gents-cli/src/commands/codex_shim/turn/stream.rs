@@ -14,9 +14,9 @@ use super::super::bound_behavior::load_bound_context_window;
 use super::super::command_projection::{
     tool_projection_status_with_settled, update_running_background_tools, ToolProjectionStatus,
 };
-use super::super::compaction_projection::decode_defra_compaction_progress;
+use super::super::compaction_projection::decode_gents_compaction_progress;
 use super::super::progress::{
-    content_delta, decode_defra_tool_call_progress, defra_turn_progress_query,
+    content_delta, decode_gents_tool_call_progress, gents_turn_progress_query,
     response_field_is_blank, terminal_error_message, terminal_turn_status, timestamp_millis,
 };
 use super::super::protocol::{
@@ -160,7 +160,7 @@ impl TurnStreamOptions {
     }
 }
 
-pub(in crate::commands::codex_shim) async fn stream_defra_turn(
+pub(in crate::commands::codex_shim) async fn stream_gents_turn(
     connection: &ConnectionState,
     state: &ShimState,
     submitted: &SubmittedRequest,
@@ -212,7 +212,7 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
             .await;
         }
 
-        let progress_query = defra_turn_progress_query(&current.request_id, &current.session_id);
+        let progress_query = gents_turn_progress_query(&current.request_id, &current.session_id);
         let response = tokio::select! {
             response = query_node_json(state.node.as_ref(), &progress_query) => response?,
             changed = cancel_rx.changed() => {
@@ -275,7 +275,7 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
         }
 
         for row in inference_call_rows {
-            let Some(compaction) = decode_defra_compaction_progress(row) else {
+            let Some(compaction) = decode_gents_compaction_progress(row) else {
                 continue;
             };
             let previous_state = known_compaction_states
@@ -336,7 +336,7 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
         }
         let unresolved_terminal_control = projection_settled
             && tool_rows.iter().any(|row| {
-                let Some(mut tool) = decode_defra_tool_call_progress(row) else {
+                let Some(mut tool) = decode_gents_tool_call_progress(row) else {
                     return false;
                 };
                 attach_subagent_link(&mut tool, &subagent_links);
@@ -390,7 +390,7 @@ pub(in crate::commands::codex_shim) async fn stream_defra_turn(
             {
                 continue;
             }
-            let Some(mut tool) = decode_defra_tool_call_progress(row) else {
+            let Some(mut tool) = decode_gents_tool_call_progress(row) else {
                 continue;
             };
             if has_subagent_control {
@@ -1026,9 +1026,9 @@ impl ReasoningCursor {
 
 fn reasoning_item_id(request_id: &str, segment: u64) -> String {
     if segment == 0 {
-        format!("defra-reasoning-{request_id}")
+        format!("gents-reasoning-{request_id}")
     } else {
-        format!("defra-reasoning-{request_id}-segment-{segment}")
+        format!("gents-reasoning-{request_id}-segment-{segment}")
     }
 }
 
@@ -1392,7 +1392,7 @@ mod tests {
             .observe("request-1", "inspect", Some("1".to_string()))
             .delta
             .expect("first reasoning delta");
-        assert_eq!(first.item_id, "defra-reasoning-request-1");
+        assert_eq!(first.item_id, "gents-reasoning-request-1");
         assert_eq!(first.text, "inspect");
 
         let appended = cursor
@@ -1418,14 +1418,14 @@ mod tests {
             .observe("request-1", "middle last", Some("1".to_string()))
             .delta
             .expect("rolled reasoning delta");
-        assert_eq!(rolled.item_id, "defra-reasoning-request-1");
+        assert_eq!(rolled.item_id, "gents-reasoning-request-1");
         assert_eq!(rolled.text, " last");
     }
 
     #[test]
     fn reasoning_cursor_primes_resume_without_replay() {
         let mut cursor = ReasoningCursor::default();
-        cursor.prime("defra-reasoning-request-1".to_string(), "already visible");
+        cursor.prime("gents-reasoning-request-1".to_string(), "already visible");
         assert!(cursor
             .observe("request-1", "already visible", Some("1".to_string()))
             .delta
@@ -1446,7 +1446,7 @@ mod tests {
         let turn = codex::Turn {
             id: "request-2".to_string(),
             items: vec![codex::ThreadItem::Reasoning {
-                id: "defra-reasoning-message-1".to_string(),
+                id: "gents-reasoning-message-1".to_string(),
                 summary: Vec::new(),
                 content: vec!["reasoning from an earlier model turn".to_string()],
             }],
@@ -1457,7 +1457,7 @@ mod tests {
             completed_at: None,
             duration_ms: None,
         };
-        assert!(resumable_reasoning_item(&turn, "defra-reasoning-request-2").is_none());
+        assert!(resumable_reasoning_item(&turn, "gents-reasoning-request-2").is_none());
     }
 
     #[test]
@@ -1471,7 +1471,7 @@ mod tests {
             .observe("request-1", "entirely new preview", Some("1".to_string()))
             .delta
             .expect("replacement reasoning delta");
-        assert_eq!(replacement.item_id, "defra-reasoning-request-1-segment-1");
+        assert_eq!(replacement.item_id, "gents-reasoning-request-1-segment-1");
         assert_eq!(replacement.text, "entirely new preview");
     }
 
@@ -1486,7 +1486,7 @@ mod tests {
         let boundary = cursor.observe("request-1", "", Some("2".to_string()));
         assert_eq!(
             boundary.completed_item_id.as_deref(),
-            Some("defra-reasoning-request-1")
+            Some("gents-reasoning-request-1")
         );
         assert!(boundary.delta.is_none());
 
@@ -1494,7 +1494,7 @@ mod tests {
             .observe("request-1", "second turn", Some("2".to_string()))
             .delta
             .expect("second reasoning delta");
-        assert_eq!(next.item_id, "defra-reasoning-request-1-segment-1");
+        assert_eq!(next.item_id, "gents-reasoning-request-1-segment-1");
         assert_eq!(next.text, "second turn");
     }
 
@@ -1513,10 +1513,10 @@ mod tests {
         );
         assert_eq!(
             next.completed_item_id.as_deref(),
-            Some("defra-reasoning-request-1")
+            Some("gents-reasoning-request-1")
         );
         let delta = next.delta.expect("next-turn reasoning delta");
-        assert_eq!(delta.item_id, "defra-reasoning-request-1-segment-1");
+        assert_eq!(delta.item_id, "gents-reasoning-request-1-segment-1");
         assert_eq!(delta.text, "shared but belongs to the next turn");
     }
 

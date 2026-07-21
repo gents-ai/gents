@@ -958,7 +958,7 @@ async fn ordering_response_interrupted_at_before_request_lifecycle_flip() {
 #[test]
 fn conformance_mapping_all_9_lifecycle_states_round_trip() {
     // Per `Proofs/Conformance/Gents.lean::toIdeal`, every
-    // `DefraLifecycleState` maps to a specific `RequestState`. The Rust
+    // `GentsLifecycleState` maps to a specific `RequestState`. The Rust
     // `RequestLifecycleState` enum in `gents-protocol::client_protocol`
     // mirrors the Lean-generated RequestState vocabulary. Assert every Lean
     // string form parses and round-trips, and that unknown strings reject.

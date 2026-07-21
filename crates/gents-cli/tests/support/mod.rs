@@ -44,7 +44,7 @@ pub fn agent_did_from_init(init: &serde_json::Value) -> anyhow::Result<String> {
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("init output missing agent_did: {init}"))?;
     anyhow::ensure!(
-        !agent_did.starts_with("did:defra-agent:"),
+        !agent_did.starts_with("did:test:"),
         "init returned a name-derived DID placeholder: {agent_did}"
     );
     Ok(agent_did.to_string())

@@ -622,7 +622,7 @@ async fn create_remote_terminal_parent(node: &EmbeddedNode, request_id: &str) {
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
-                agent_did: "did:defra-agent:remote-deployment",
+                agent_did: "did:test:remote-deployment",
                 behavior_id: "{AGENT_NAME}",
                 session_id: "{escaped_request_id}-session",
                 retry_parent_request: "",
@@ -662,7 +662,7 @@ async fn start_running_background_bridge(
         node,
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         tool_call_id.to_string(),
         sequence,
         "spawn_subagent".to_string(),
@@ -671,7 +671,7 @@ async fn start_running_background_bridge(
         AwaitMode::Background,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     bridge.start_running().await.unwrap();
 }
@@ -978,7 +978,7 @@ async fn seed_tool_parent_and_row(
                 node.clone(),
                 parent_request_id.to_string(),
                 parent_session_id.to_string(),
-                "did:defra-agent:test".to_string(),
+                "did:test:test".to_string(),
                 tool_call_id.to_string(),
                 1,
                 "spawn_process".to_string(),
@@ -1003,7 +1003,7 @@ async fn seed_tool_parent_and_row(
                 node.clone(),
                 parent_request_id.to_string(),
                 parent_session_id.to_string(),
-                "did:defra-agent:test".to_string(),
+                "did:test:test".to_string(),
                 tool_call_id.to_string(),
                 1,
                 "spawn_subagent".to_string(),
@@ -1012,7 +1012,7 @@ async fn seed_tool_parent_and_row(
                 AwaitMode::Foreground,
                 CancelPolicy::Cascade,
                 child_request_id,
-                "did:defra-agent:target".to_string(),
+                "did:test:target".to_string(),
             )
         }
         "detached_bridge_child_completed_to_completed"
@@ -1036,7 +1036,7 @@ async fn seed_tool_parent_and_row(
                 node.clone(),
                 parent_request_id.to_string(),
                 parent_session_id.to_string(),
-                "did:defra-agent:test".to_string(),
+                "did:test:test".to_string(),
                 tool_call_id.to_string(),
                 1,
                 "spawn_subagent".to_string(),
@@ -1049,14 +1049,14 @@ async fn seed_tool_parent_and_row(
                 AwaitMode::Background,
                 CancelPolicy::Detach,
                 child_request_id,
-                "did:defra-agent:target".to_string(),
+                "did:test:target".to_string(),
             )
         }
         "tool_running_deadline_exceeded_to_timed_out" => ToolCallLifecycle::new(
             node.clone(),
             parent_request_id.to_string(),
             parent_session_id.to_string(),
-            "did:defra-agent:test".to_string(),
+            "did:test:test".to_string(),
             tool_call_id.to_string(),
             1,
             "slow_tool".to_string(),
@@ -1070,7 +1070,7 @@ async fn seed_tool_parent_and_row(
                 node.clone(),
                 parent_request_id.to_string(),
                 parent_session_id.to_string(),
-                "did:defra-agent:test".to_string(),
+                "did:test:test".to_string(),
                 tool_call_id.to_string(),
                 1,
                 "slow_tool".to_string(),
@@ -1084,7 +1084,7 @@ async fn seed_tool_parent_and_row(
                 node.clone(),
                 parent_request_id.to_string(),
                 parent_session_id.to_string(),
-                "did:defra-agent:test".to_string(),
+                "did:test:test".to_string(),
                 tool_call_id.to_string(),
                 1,
                 "slow_tool".to_string(),
@@ -1098,7 +1098,7 @@ async fn seed_tool_parent_and_row(
                 node.clone(),
                 parent_request_id.to_string(),
                 parent_session_id.to_string(),
-                "did:defra-agent:test".to_string(),
+                "did:test:test".to_string(),
                 tool_call_id.to_string(),
                 1,
                 "spawn_subagent".to_string(),
@@ -1107,7 +1107,7 @@ async fn seed_tool_parent_and_row(
                 AwaitMode::Background,
                 CancelPolicy::Cascade,
                 child_request_id,
-                "did:defra-agent:target".to_string(),
+                "did:test:target".to_string(),
             )
         }
         other => panic!("unhandled tool recovery case {other}"),

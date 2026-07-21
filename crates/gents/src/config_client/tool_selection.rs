@@ -3,9 +3,7 @@ use crate::ToolSelectionDocument;
 use anyhow::Result;
 
 use super::{mint_recreate_identity_timestamp, ConfigAccess};
-use gents_protocol::graphql::{
-    optional_bool_field, optional_string_field, string_list_field,
-};
+use gents_protocol::graphql::{optional_bool_field, optional_string_field, string_list_field};
 
 pub async fn write_tool_selection_document(
     access: &ConfigAccess,

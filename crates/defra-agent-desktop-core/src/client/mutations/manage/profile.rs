@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
-use gents_protocol::row::InferenceProfileRow;
 use defra_node::EmbeddedNode;
+use gents_protocol::row::InferenceProfileRow;
 use serde_json::Value;
 
 use super::super::graphql::{

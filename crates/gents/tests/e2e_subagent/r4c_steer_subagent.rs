@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use crate::support::fixtures::spawn_subagent_source;
 use crate::support::test_db;
 
-const AGENT_DID: &str = "did:defra-agent:r4c-steer";
+const AGENT_DID: &str = "did:test:r4c-steer";
 const PARENT_BEHAVIOR_ID: &str = "r4c-parent";
 const CHILD_BEHAVIOR_ID: &str = "r4c-child";
 
@@ -683,7 +683,7 @@ async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
         db.node.clone(),
         child_request_id.clone(),
         child_session_id.clone(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "internal-steer-descendant".to_string(),
         1,
         "spawn_subagent".to_string(),

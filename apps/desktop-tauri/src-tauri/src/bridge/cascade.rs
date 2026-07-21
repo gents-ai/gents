@@ -8,9 +8,9 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use defra_agent_desktop_core::client::ClientCore;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use defra_agent_desktop_core::client::ClientCore;
 use serde_json::Value;
 
 use crate::bridge::snapshot::{

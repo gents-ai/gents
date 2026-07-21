@@ -3200,7 +3200,7 @@ mod patch_kind_tests {
                 r#"mutation {
                     create_PeerPairingDesired(input: {
                         peer_id: "peer-b",
-                        agent_did: "did:defra-agent:peer-b",
+                        agent_did: "did:test:peer-b",
                         collections: ["AgentRequest"],
                         replicator_addresses: ["/ip4/127.0.0.1/tcp/4101/p2p/peer-b"],
                         created_at: "2026-06-12T00:00:00Z",
@@ -3294,7 +3294,7 @@ mod patch_kind_tests {
                 r#"mutation {
                     legacy: create_PeerPairingDesired(input: {
                         peer_id: "peer-reg",
-                        agent_did: "did:defra-agent:peer-reg",
+                        agent_did: "did:test:peer-reg",
                         collections: ["AgentNetwork"],
                         replicator_addresses: ["/ip4/127.0.0.1/tcp/5101/p2p/peer-reg"],
                         source: "registry",
@@ -3302,7 +3302,7 @@ mod patch_kind_tests {
                     }) { _docID }
                     blank: create_PeerPairingDesired(input: {
                         peer_id: "peer-blank",
-                        agent_did: "did:defra-agent:peer-blank",
+                        agent_did: "did:test:peer-blank",
                         collections: ["AgentRequest"],
                         replicator_addresses: ["/ip4/127.0.0.1/tcp/5102/p2p/peer-blank"]
                     }) { _docID }
@@ -3548,8 +3548,8 @@ mod patch_kind_tests {
                 r#"mutation {
                     create_AgentRequest(input: {
                         request_id: "requester-route-key",
-                        agent_did: "did:defra-agent:host",
-                        requester_did: "did:defra-agent:coordinator",
+                        agent_did: "did:test:host",
+                        requester_did: "did:test:coordinator",
                         session_id: "requester-route-session",
                         content: "hello",
                         status: "pending",
@@ -3570,7 +3570,7 @@ mod patch_kind_tests {
                 r#"mutation {
                     update_AgentRequest(
                         filter: { request_id: { _eq: "requester-route-key" } },
-                        input: { requester_did: "did:defra-agent:other" }
+                        input: { requester_did: "did:test:other" }
                     ) { _docID }
                 }"#,
             )
@@ -3655,7 +3655,7 @@ mod patch_kind_tests {
                 r#"mutation {
                     owner: create_AgentRequest(input: {
                         request_id: "terminal-migration-owner",
-                        agent_did: "did:defra-agent:terminal-migration",
+                        agent_did: "did:test:terminal-migration",
                         session_id: "terminal-migration-session",
                         content: "done",
                         status: "completed",
@@ -3665,7 +3665,7 @@ mod patch_kind_tests {
                     }) { _docID }
                     foreign: create_AgentRequest(input: {
                         request_id: "terminal-migration-foreign",
-                        agent_did: "did:defra-agent:foreign",
+                        agent_did: "did:test:foreign",
                         session_id: "terminal-migration-foreign-session",
                         content: "done",
                         status: "completed",
@@ -3683,18 +3683,12 @@ mod patch_kind_tests {
         ensure_agent_request_terminal_durability_migrations(node.clone())
             .await
             .unwrap();
-        backfill_agent_request_terminal_durability(
-            node.as_ref(),
-            "did:defra-agent:terminal-migration",
-        )
-        .await
-        .unwrap();
-        backfill_agent_request_terminal_durability(
-            node.as_ref(),
-            "did:defra-agent:terminal-migration",
-        )
-        .await
-        .unwrap();
+        backfill_agent_request_terminal_durability(node.as_ref(), "did:test:terminal-migration")
+            .await
+            .unwrap();
+        backfill_agent_request_terminal_durability(node.as_ref(), "did:test:terminal-migration")
+            .await
+            .unwrap();
 
         let collection = node
             .get_collection("AgentRequest")
@@ -3821,7 +3815,7 @@ mod patch_kind_tests {
                     args: "{}",
                     status: "called",
                     lifecycle_state: "running",
-                    spawn_target_did: "did:defra-agent:host-a"
+                    spawn_target_did: "did:test:host-a"
                 }) { _docID } }"#,
             )
             .await;
@@ -3836,7 +3830,7 @@ mod patch_kind_tests {
                 r#"mutation {
                     update_AgentToolCall(
                         filter: { tool_call_key: { _eq: "spawn-target-mig:tool-1" } },
-                        input: { spawn_target_did: "did:defra-agent:host-b" }
+                        input: { spawn_target_did: "did:test:host-b" }
                     ) { _docID }
                 }"#,
             )
@@ -3932,7 +3926,7 @@ mod patch_kind_tests {
             .execute(
                 r#"mutation { create_AgentMessage(input: {
                     message_key: "mig-m1", session_id: "mig-s1",
-                    agent_did: "did:defra-agent:alice", role: "user", content: "hi"
+                    agent_did: "did:test:alice", role: "user", content: "hi"
                 }) { _docID } }"#,
             )
             .await;
@@ -3945,8 +3939,8 @@ mod patch_kind_tests {
             .execute(
                 r#"mutation {
                     update_AgentMessage(
-                        filter: { agent_did: { _eq: "did:defra-agent:alice" } },
-                        input: { agent_did: "did:defra-agent:mallory" }
+                        filter: { agent_did: { _eq: "did:test:alice" } },
+                        input: { agent_did: "did:test:mallory" }
                     ) { _docID }
                 }"#,
             )
@@ -3983,7 +3977,7 @@ mod patch_kind_tests {
         for mutation in [
             r#"mutation { create_AgentRequest(input: {
                 request_id: "req-1", session_id: "s-alice",
-                agent_did: "did:defra-agent:alice", content: "hi", status: "done",
+                agent_did: "did:test:alice", content: "hi", status: "done",
                 lifecycle_state: "terminal", created_at: "2026-06-12T00:00:00Z"
             }) { _docID } }"#,
             r#"mutation { create_AgentSession(input: {
@@ -4034,7 +4028,7 @@ mod patch_kind_tests {
                 .unwrap();
         }
 
-        // First run. The owner map resolves "s-alice" → did:defra-agent:alice
+        // First run. The owner map resolves "s-alice" → did:test:alice
         // from the AgentRequest lineage and offers each null row a first write.
         // On the current defradb pin that write is REJECTED ("immutable field
         // 'agent_did' cannot be changed"), so every legacy row — resolvable or
@@ -4286,7 +4280,7 @@ mod patch_kind_tests {
                 r#"mutation {
                     create_AgentRequest(input: {
                         request_id: "scope-guard-req",
-                        agent_did: "did:defra-agent:alice",
+                        agent_did: "did:test:alice",
                         session_id: "scope-guard-session",
                         content: "hi",
                         status: "pending",
@@ -4309,7 +4303,7 @@ mod patch_kind_tests {
                 r#"mutation {
                     update_AgentRequest(
                         filter: { request_id: { _eq: "scope-guard-req" } },
-                        input: { agent_did: "did:defra-agent:mallory" }
+                        input: { agent_did: "did:test:mallory" }
                     ) { _docID }
                 }"#,
             )
@@ -4341,7 +4335,7 @@ mod patch_kind_tests {
             .and_then(|v| v.as_str());
         assert_eq!(
             stored,
-            Some("did:defra-agent:alice"),
+            Some("did:test:alice"),
             "immutable agent_did scope key must survive a rewrite attempt \
              (rewrite errors={:?})",
             rewrite.errors
@@ -4871,7 +4865,7 @@ mod patch_kind_tests {
                     create_AgentResponse(input: {
                         response_key: "scalar-write",
                         request_id: "scalar-write",
-                        agent_did: "did:defra-agent:migration-test",
+                        agent_did: "did:test:migration-test",
                         session_id: "scalar-write",
                         content: "",
                         reasoning_progress_seq: 0,
@@ -4904,7 +4898,7 @@ mod patch_kind_tests {
                     create_AgentResponse(input: {
                         response_key: "legacy-before-kind-repair",
                         request_id: "legacy-before-kind-repair",
-                        agent_did: "did:defra-agent:migration-test",
+                        agent_did: "did:test:migration-test",
                         session_id: "legacy-before-kind-repair",
                         content: "preserve me",
                         progress_seq: 1,
@@ -4971,7 +4965,7 @@ mod patch_kind_tests {
                     create_AgentResponse(input: {
                         response_key: "repaired-scalar-write",
                         request_id: "repaired-scalar-write",
-                        agent_did: "did:defra-agent:migration-test",
+                        agent_did: "did:test:migration-test",
                         session_id: "repaired-scalar-write",
                         content: "",
                         reasoning_progress_seq: 0,
@@ -5009,7 +5003,7 @@ mod patch_kind_tests {
                     create_AgentResponse(input: {
                         response_key: "pre-migration-response",
                         request_id: "pre-migration-request",
-                        agent_did: "did:defra-agent:migration-test",
+                        agent_did: "did:test:migration-test",
                         session_id: "pre-migration-session",
                         content: "pre-migration content",
                         created_at: "2026-07-07T12:00:00Z"

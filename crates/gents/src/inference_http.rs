@@ -366,7 +366,7 @@ mod tests {
         let bodies = inner.bodies();
         assert_eq!(bodies.len(), 1);
         assert_eq!(bodies[0]["input"][0]["type"], "message");
-        assert_eq!(bodies[0]["input"][0]["id"], "msg_defra_0");
+        assert_eq!(bodies[0]["input"][0]["id"], "msg_gents_0");
         assert_eq!(bodies[0]["input"][0]["status"], "completed");
         assert_eq!(
             bodies[0]["input"][0]["content"][0]["annotations"],
@@ -392,7 +392,7 @@ mod tests {
         let bodies = inner.bodies();
         assert_eq!(bodies.len(), 1);
         assert_eq!(bodies[0]["input"][0]["type"], "message");
-        assert_eq!(bodies[0]["input"][0]["id"], "msg_defra_0");
+        assert_eq!(bodies[0]["input"][0]["id"], "msg_gents_0");
         assert_eq!(bodies[0]["input"][0]["status"], "completed");
         assert_eq!(
             bodies[0]["input"][0]["content"][0]["annotations"],

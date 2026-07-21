@@ -1,8 +1,8 @@
 use std::fs::OpenOptions;
 use std::path::Path;
 
-use gents::log_rate::{RateLimitConfig, RateLimitFilter};
 use defra_agent_desktop_core::client::DesktopPaths;
+use gents::log_rate::{RateLimitConfig, RateLimitFilter};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 /// Per-callsite log-rate ceiling: no code path may flood the desktop log

@@ -175,10 +175,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         version.get("service").and_then(Value::as_str),
         Some("gents")
     );
-    assert_eq!(
-        version.get("binary").and_then(Value::as_str),
-        Some("gents")
-    );
+    assert_eq!(version.get("binary").and_then(Value::as_str), Some("gents"));
     assert_eq!(
         version.get("package").and_then(Value::as_str),
         Some("gents-cli")
@@ -207,10 +204,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .context("reading /healthz body")?;
     assert_eq!(health.get("ok").and_then(Value::as_bool), Some(true));
     assert_eq!(health.get("status").and_then(Value::as_str), Some("ok"));
-    assert_eq!(
-        health.get("service").and_then(Value::as_str),
-        Some("gents")
-    );
+    assert_eq!(health.get("service").and_then(Value::as_str), Some("gents"));
     assert_eq!(
         health
             .pointer("/checks/runtime/ready")

@@ -26,7 +26,7 @@ use serde_json::json;
 use crate::support::fixtures::spawn_subagent_source;
 use crate::support::{first_row, test_db};
 
-const AGENT_DID: &str = "did:defra-agent:r4-subagent-completion";
+const AGENT_DID: &str = "did:test:r4-subagent-completion";
 const PARENT_BEHAVIOR_ID: &str = "r4-completion-parent";
 const CHILD_BEHAVIOR_ID: &str = "r4-completion-child";
 const WAKE_PROMPT: &str =
@@ -218,7 +218,7 @@ async fn create_child_and_bridge(
         node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         tool_call_id.to_string(),
         message_sequence,
         "spawn_subagent".to_string(),

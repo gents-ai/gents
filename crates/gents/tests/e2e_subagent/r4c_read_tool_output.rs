@@ -198,7 +198,7 @@ async fn create_foreground_tool_call(
         db.node.clone(),
         request_id.to_string(),
         session_id.to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         tool_call_id.clone(),
         99,
         "foreground_tool".to_string(),
@@ -339,7 +339,7 @@ async fn read_tool_output_terminal_reads_persisted_result() {
 #[tokio::test]
 async fn read_tool_output_terminal_parses_native_command_streams() {
     let persisted = concat!(
-        "defra_exec: {\"ok\":false,\"status\":\"exit_nonzero\",",
+        "gents_exec: {\"ok\":false,\"status\":\"exit_nonzero\",",
         "\"command\":\"grep -P foo README.md\",\"argv\":[\"grep\",\"-P\",\"foo\",\"README.md\"],",
         "\"cwd\":\".\",\"exit_code\":2,\"timed_out\":false,\"duration_ms\":4,",
         "\"timeout_ms\":10000,\"execution_mode\":\"read_only\",",
@@ -571,15 +571,15 @@ async fn read_process_stdout_and_stderr_paging_across_boundary_is_gap_free() {
     //   - the full reassembly equals the combined string byte-for-byte.
     // The native result format is detected by the `persisted_tool_output_streams`
     // parser; we use the plain (non-native) path by returning a string that
-    // does NOT start with "defra_exec: " — in that case stdout == result and
+    // does NOT start with "gents_exec: " — in that case stdout == result and
     // stderr == "".  To exercise the stdout+stderr path we need the native
     // format.  The native format is:
-    //   defra_exec: <json>\nstdout:\n<stdout>\nstderr:\n<stderr>
+    //   gents_exec: <json>\nstdout:\n<stdout>\nstderr:\n<stderr>
     let stdout_body = "A".repeat(200);
     let stderr_body = "B".repeat(200);
     let native_result = format!(
         concat!(
-            "defra_exec: {{\"ok\":true,\"status\":\"success\",",
+            "gents_exec: {{\"ok\":true,\"status\":\"success\",",
             "\"command\":\"echo\",\"argv\":[\"echo\"],",
             "\"cwd\":\".\",\"exit_code\":0,\"timed_out\":false,\"duration_ms\":1,",
             "\"timeout_ms\":10000,\"execution_mode\":\"read_only\",",

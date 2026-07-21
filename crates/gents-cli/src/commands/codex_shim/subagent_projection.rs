@@ -9,7 +9,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::bound_behavior::model_selection_id;
-use super::progress::{defra_tool_call_status, DefraToolCallProgress};
+use super::progress::{gents_tool_call_status, GentsToolCallProgress};
 use super::store::query_node_json;
 use super::ShimState;
 
@@ -735,7 +735,7 @@ fn collab_tool(tool_name: &str) -> Option<codex::CollabAgentTool> {
 }
 
 pub(super) fn attach_subagent_link(
-    tool: &mut DefraToolCallProgress,
+    tool: &mut GentsToolCallProgress,
     links: &[LinkedSubagentThread],
 ) {
     let Some(child_request_id) = tool_child_request_id(tool) else {
@@ -747,7 +747,7 @@ pub(super) fn attach_subagent_link(
         .cloned();
 }
 
-fn tool_child_request_id(tool: &DefraToolCallProgress) -> Option<String> {
+fn tool_child_request_id(tool: &GentsToolCallProgress) -> Option<String> {
     nonempty(tool.child_request_id.as_deref())
         .map(ToOwned::to_owned)
         .or_else(|| {
@@ -760,14 +760,14 @@ fn tool_child_request_id(tool: &DefraToolCallProgress) -> Option<String> {
         })
 }
 
-pub(super) fn collab_projection(tool: &DefraToolCallProgress) -> Option<CollabProjection> {
+pub(super) fn collab_projection(tool: &GentsToolCallProgress) -> Option<CollabProjection> {
     let collab_tool = collab_tool(&tool.tool_name)?;
     let link = tool.subagent_link.as_ref()?;
-    let runtime_status = defra_tool_call_status(tool);
+    let runtime_status = gents_tool_call_status(tool);
     let status = match (&collab_tool, runtime_status) {
         (_, codex::McpToolCallStatus::Failed) => codex::CollabAgentToolCallStatus::Failed,
         (codex::CollabAgentTool::SpawnAgent, _) => {
-            // The reciprocal edge proves the spawn operation succeeded. DEFRA
+            // The reciprocal edge proves the spawn operation succeeded. GENTS
             // deliberately keeps the bridge row running while a background
             // child works; Codex represents that child lifecycle separately
             // in agentsStates, so the collaboration operation is complete.
@@ -799,7 +799,7 @@ pub(super) fn collab_agent_status(lifecycle_state: &str) -> codex::CollabAgentSt
 
 pub(super) fn collab_tool_item(
     sender_thread_id: &str,
-    tool: &DefraToolCallProgress,
+    tool: &GentsToolCallProgress,
     projection: &CollabProjection,
 ) -> codex::ThreadItem {
     let prompt = serde_json::from_str::<Value>(&tool.args)
@@ -1073,7 +1073,7 @@ mod tests {
     #[test]
     fn spawn_item_uses_child_session_as_receiver_thread() {
         let child_session_id = Uuid::new_v4().to_string();
-        let mut tool = DefraToolCallProgress {
+        let mut tool = GentsToolCallProgress {
             tool_call_key: "parent:spawn-call".to_string(),
             tool_name: "spawn_subagent".to_string(),
             status: "running".to_string(),

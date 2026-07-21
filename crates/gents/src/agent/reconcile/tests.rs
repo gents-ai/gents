@@ -122,7 +122,7 @@ fn background_child_request(index: usize, behavior_id: &str) -> AgentRequest {
     AgentRequest {
         doc_id: format!("child-doc-{index}"),
         request_id: format!("child-request-{index}"),
-        agent_did: "did:defra-agent:background-fanout-test".to_string(),
+        agent_did: "did:test:background-fanout-test".to_string(),
         requester_did: None,
         behavior_id: Some(behavior_id.to_string()),
         session_id: format!("child-session-{index}"),
@@ -571,7 +571,7 @@ async fn behavior_slot_fans_out_background_children_to_backend_capacity() {
 async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_did = "did:defra-agent:reconcile-capacity-test";
+    let agent_did = "did:test:reconcile-capacity-test";
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did);
 
     let mut behavior = PendingAgentBehavior::new("general")
@@ -725,7 +725,7 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_did = "did:defra-agent:reconcile-test";
+    let agent_did = "did:test:reconcile-test";
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did);
 
     let starts = Arc::new(StdMutex::new(HashMap::<String, usize>::new()));
@@ -875,7 +875,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_did = "did:defra-agent:reconcile-failure-test";
+    let agent_did = "did:test:reconcile-failure-test";
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did);
 
     let initial_behavior = PendingAgentBehavior::new("general")
@@ -976,7 +976,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
 async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_did = "did:defra-agent:reconcile-tool-surface-test";
+    let agent_did = "did:test:reconcile-tool-surface-test";
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did);
     let identity = Arc::new(test_identity("tool-surface-general"));
     let principal = Arc::new(AgentPrincipal {

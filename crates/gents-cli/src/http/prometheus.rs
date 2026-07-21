@@ -553,10 +553,7 @@ fn render_p2p_metrics(lines: &mut Vec<String>, p2p: Option<&P2pMetricsSnapshot>)
     }
 }
 
-fn render_p2p_sync_metrics(
-    lines: &mut Vec<String>,
-    status: Option<&gents::P2pSyncStatusSnapshot>,
-) {
+fn render_p2p_sync_metrics(lines: &mut Vec<String>, status: Option<&gents::P2pSyncStatusSnapshot>) {
     push_metric_prelude(
         lines,
         "gents_p2p_sync_status_available",
@@ -801,18 +798,9 @@ fn render_p2p_sync_metrics(
     for peer in &backlog.per_peer {
         let labels = &[("peer_id", peer.peer_id.clone())];
         for (name, value) in [
-            (
-                "gents_p2p_peer_push_queue_items",
-                peer.queued_items as u64,
-            ),
-            (
-                "gents_p2p_peer_push_queue_bytes",
-                peer.queued_bytes as u64,
-            ),
-            (
-                "gents_p2p_peer_push_active_jobs",
-                peer.active_jobs as u64,
-            ),
+            ("gents_p2p_peer_push_queue_items", peer.queued_items as u64),
+            ("gents_p2p_peer_push_queue_bytes", peer.queued_bytes as u64),
+            ("gents_p2p_peer_push_active_jobs", peer.active_jobs as u64),
             (
                 "gents_p2p_peer_consecutive_failures",
                 peer.consecutive_failures as u64,
@@ -1173,8 +1161,7 @@ pub(crate) async fn load_metrics_query_data(
 }
 
 pub(crate) fn with_local_native_executors(mut data: MetricsQueryData) -> MetricsQueryData {
-    data.liveness =
-        with_active_native_executors(data.liveness, gents::active_native_executors());
+    data.liveness = with_active_native_executors(data.liveness, gents::active_native_executors());
     data
 }
 
@@ -1395,13 +1382,11 @@ mod tests {
         assert!(rendered.contains(&format!(
             r#"gents_backend_last_probe_seconds{{backend_id="workstation-1"}} {measured_last_probe}"#
         )));
-        assert!(rendered.contains(
-            r#"gents_backend_probe_status{backend_id="spark-2",status="degraded"} 0"#
-        ));
+        assert!(rendered
+            .contains(r#"gents_backend_probe_status{backend_id="spark-2",status="degraded"} 0"#));
         // Doc fallback: measured absent.
-        assert!(rendered.contains(
-            r#"gents_backend_probe_status{backend_id="codex",status="healthy"} 1"#
-        ));
+        assert!(rendered
+            .contains(r#"gents_backend_probe_status{backend_id="codex",status="healthy"} 1"#));
         let doc_last_probe = chrono::DateTime::parse_from_rfc3339("2026-07-06T00:00:00Z")
             .unwrap()
             .timestamp();
@@ -1519,12 +1504,9 @@ mod tests {
         assert!(rendered.contains("gents_p2p_already_merged_fast_path_total 53"));
         assert!(rendered.contains("gents_p2p_pending_dag_terminal_quarantined_total 73"));
         assert!(rendered.contains(r#"gents_p2p_push_cid_retry_count{cid="bafy-retry"} 19"#));
-        assert!(
-            rendered.contains(r#"gents_p2p_peer_consecutive_failures{peer_id="peer-a"} 3"#)
-        );
-        assert!(rendered.contains(
-            r#"gents_p2p_peer_cooldown_remaining_milliseconds{peer_id="peer-a"} 750"#
-        ));
+        assert!(rendered.contains(r#"gents_p2p_peer_consecutive_failures{peer_id="peer-a"} 3"#));
+        assert!(rendered
+            .contains(r#"gents_p2p_peer_cooldown_remaining_milliseconds{peer_id="peer-a"} 750"#));
     }
 
     #[test]

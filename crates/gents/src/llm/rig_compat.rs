@@ -1,4 +1,4 @@
-//! Converters between Defra-native [`crate::llm`] types and rig's, used only at
+//! Converters between Gents-native [`crate::llm`] types and rig's, used only at
 //! the provider/parsing boundary (Layer A). Deleted once Layer A is owned.
 //!
 //! These are free functions rather than `From` impls: rig's types are foreign,

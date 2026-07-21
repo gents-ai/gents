@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use defra_node::EmbeddedNode;
+use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use serde_json::Value;
 
 use super::retry::log_mutation_timing;

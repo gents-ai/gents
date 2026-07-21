@@ -6,6 +6,7 @@
 //! and `ensure_runtime_schemas`.
 
 use anyhow::Result;
+use defra_node::EmbeddedNode;
 #[cfg(feature = "agent-memory")]
 pub use gents_protocol::schemas::AGENT_MEMORY as AGENT_MEMORY_SCHEMA;
 #[cfg(not(feature = "agent-memory"))]
@@ -27,7 +28,6 @@ pub use gents_protocol::schemas::{
     TOOL_SERVICE_HEALTH_STATE as TOOL_SERVICE_HEALTH_STATE_SCHEMA,
     TOOL_SERVICE_REGISTRY as TOOL_SERVICE_REGISTRY_SCHEMA,
 };
-use defra_node::EmbeddedNode;
 
 pub const CONFIG_BOOTSTRAP: &[&str] = &[
     AGENT_PRINCIPAL_SCHEMA,

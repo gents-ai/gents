@@ -153,7 +153,7 @@ mod tests {
                         tool_call_key: "session-client:call-client",
                         request_id: "req-client",
                         session_id: "session-client",
-                        agent_did: "did:defra-agent:general",
+                        agent_did: "did:test:general",
                         message_sequence: 1,
                         tool_name: "guarded",
                         tool_call_id: "call-client",
@@ -169,7 +169,7 @@ mod tests {
             .await
             .unwrap();
 
-        let held = list_held_tool_calls(&access, Some("did:defra-agent:general"))
+        let held = list_held_tool_calls(&access, Some("did:test:general"))
             .await
             .unwrap();
         assert_eq!(held.len(), 1);
@@ -180,7 +180,7 @@ mod tests {
             &access,
             &ToolApprovalVerdict {
                 tool_call_id: "call-client".to_string(),
-                agent_did: "did:defra-agent:general".to_string(),
+                agent_did: "did:test:general".to_string(),
                 request_id: Some("req-client".to_string()),
                 approve: false,
                 approver_did: "did:key:operator".to_string(),

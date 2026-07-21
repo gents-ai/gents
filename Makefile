@@ -14,7 +14,7 @@ FUZZ_TIME ?= 30s
 help:
 	@echo "Build:"
 	@echo "  make build                 Build default Rust workspace members"
-	@echo "  make build-cli             Build the defra-agent CLI"
+	@echo "  make build-cli             Build the Gents CLI"
 	@echo "  make build-cli-headless    Build CLI without embedded Codex TUI"
 	@echo "  make build-desktop         Build the Tauri Rust shell"
 	@echo "  make build-desktop-ui      Build the desktop frontend"
@@ -32,7 +32,7 @@ help:
 	@echo
 	@echo "Tests:"
 	@echo "  make test                  Run core Rust and CLI tests"
-	@echo "  make test-agent            Run defra-agent tests"
+	@echo "  make test-agent            Run Gents runtime tests"
 	@echo "  make test-agent-conformance  Run runtime conformance tests"
 	@echo "  make test-agent-e2e        Run deterministic agent E2E tests"
 	@echo "  make test-cli              Run CLI tests"
@@ -63,10 +63,10 @@ build:
 	$(CARGO) build
 
 build-cli:
-	$(CARGO) build -p defra-agent-cli
+	$(CARGO) build -p gents-cli
 
 build-cli-headless:
-	$(CARGO) build -p defra-agent-cli --no-default-features
+	$(CARGO) build -p gents-cli --no-default-features
 
 build-desktop:
 	$(CARGO) build -p defra-agent-desktop-tauri
@@ -89,10 +89,10 @@ RELEASE_ARTIFACT := defra-agent-$(TARGET_TRIPLE)
 
 .PHONY: release-cli release-cli-headless dist-cli
 release-cli:
-	$(CARGO) build -p defra-agent-cli --release $(CARGO_TARGET_FLAG)
+	$(CARGO) build -p gents-cli --release $(CARGO_TARGET_FLAG)
 
 release-cli-headless:
-	$(CARGO) build -p defra-agent-cli --release --no-default-features $(CARGO_TARGET_FLAG)
+	$(CARGO) build -p gents-cli --release --no-default-features $(CARGO_TARGET_FLAG)
 
 dist-cli: release-cli
 	@rm -rf "$(DIST_DIR)/$(RELEASE_ARTIFACT)"
@@ -114,7 +114,7 @@ fmt-check:
 	$(NPM) --prefix $(DESKTOP_DIR) run format:check
 
 check-cli-headless:
-	$(CARGO) check -p defra-agent-cli --no-default-features
+	$(CARGO) check -p gents-cli --no-default-features
 
 proofs:
 	cd $(PROOFS_DIR) && $(LAKE) build
@@ -123,19 +123,19 @@ proofs:
 test: test-agent test-cli
 
 test-agent:
-	$(CARGO) test -p defra-agent
+	$(CARGO) test -p gents
 
 test-agent-conformance:
-	$(CARGO) test -p defra-agent --test conformance
+	$(CARGO) test -p gents --test conformance
 
 test-agent-e2e:
-	$(CARGO) test -p defra-agent --test e2e_lifecycle
-	$(CARGO) test -p defra-agent --test e2e_runtime
-	$(CARGO) test -p defra-agent --test e2e_subagent
-	$(CARGO) test -p defra-agent --test e2e_triggers
+	$(CARGO) test -p gents --test e2e_lifecycle
+	$(CARGO) test -p gents --test e2e_runtime
+	$(CARGO) test -p gents --test e2e_subagent
+	$(CARGO) test -p gents --test e2e_triggers
 
 test-cli:
-	$(CARGO) test -p defra-agent-cli -- --nocapture --test-threads=1
+	$(CARGO) test -p gents-cli -- --nocapture --test-threads=1
 
 .PHONY: desktop-ui desktop-ui-qa-sweep desktop-ui-unit desktop-ui-e2e desktop-ui-invariants desktop-ui-screenshots desktop-ui-fuzz desktop-ui-fuzz-long desktop-ui-visual desktop-ui-live-e2e desktop-ui-live-e2e-real desktop-native-preflight desktop-native-dev desktop-native-build
 desktop-ui:
@@ -182,10 +182,10 @@ desktop-native-build:
 
 .PHONY: live-cli live-agent live-desktop-smoke
 live-cli:
-	$(CARGO) test -p defra-agent-cli --test cli_live standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools -- --ignored --nocapture --test-threads=1
+	$(CARGO) test -p gents-cli --test cli_live standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools -- --ignored --nocapture --test-threads=1
 
 live-agent:
-	$(CARGO) test -p defra-agent --test e2e_live -- --ignored --nocapture --test-threads=1
+	$(CARGO) test -p gents --test e2e_live -- --ignored --nocapture --test-threads=1
 
 live-desktop-smoke:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:live:chat

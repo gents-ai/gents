@@ -7,7 +7,7 @@ async fn router_dispatches_first_request_after_snapshot_change_to_latest_generat
     let accept = lean_runtime_reconcile_case("accept_request_after_router_observe");
     assert!(accept.legal);
 
-    let agent_did = "did:defra-agent:router-latest-snapshot";
+    let agent_did = "did:test:router-latest-snapshot";
     let initial_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 1,
         principal: None,
@@ -102,7 +102,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_did = "did:defra-agent:router-observed-generation";
+    let agent_did = "did:test:router-observed-generation";
     let initial_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 1,
         principal: None,

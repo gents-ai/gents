@@ -29,11 +29,11 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
+use defra_node::{EmbeddedNode, EventName, QueryResponse};
 use gents_protocol::bearer_token::{
     bearer_signing_payload, check_bearer_freshness, decode_bearer, BearerClaimRecord,
 };
 use gents_protocol::network_token::{derive_membership_key, MembershipRecord};
-use defra_node::{EmbeddedNode, EventName, QueryResponse};
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 

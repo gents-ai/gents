@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::Utc;
-use gents_protocol::row::AgentPrincipalRow;
 use defra_node::EmbeddedNode;
+use gents_protocol::row::AgentPrincipalRow;
 
 use super::super::graphql::{
     escape_graphql_string, execute_mutation, execute_remote_mutation, graphql_optional_bool_field,

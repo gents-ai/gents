@@ -124,7 +124,7 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
     parent_deadline: chrono::DateTime<chrono::Utc>,
 ) -> SpawnFixture {
     let db = test_db(test_name).await;
-    let agent_did = format!("did:defra-agent:r4-{test_name}");
+    let agent_did = format!("did:test:r4-{test_name}");
 
     upsert_tool_selection(
         db.node.as_ref(),
@@ -137,12 +137,7 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
                 targets
                     .into_iter()
                     .map(|behavior_id| {
-                        gents::subagent_target_entry(
-                            behavior_id,
-                            &agent_did,
-                            behavior_id,
-                            None,
-                        )
+                        gents::subagent_target_entry(behavior_id, &agent_did, behavior_id, None)
                     })
                     .collect(),
             ),

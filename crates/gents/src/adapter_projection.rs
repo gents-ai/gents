@@ -1704,7 +1704,7 @@ fn build_langgraph_state_history(
     let mut projection = LangGraphStateHistoryProjection {
         thread_id: timeline.session_id.clone(),
         checkpoint_id: format!(
-            "defra:{}:{}",
+            "gents:{}:{}",
             timeline.request_id, ADAPTER_PROJECTION_VERSION
         ),
         root_request_id: timeline.request_id.clone(),
@@ -2123,7 +2123,7 @@ mod tests {
         build_run_timeline(RunTimelineRows {
             request: TimelineRequestRow {
                 request_id: "req-root".to_string(),
-                agent_did: Some("did:defra-agent:coordinator".to_string()),
+                agent_did: Some("did:test:coordinator".to_string()),
                 behavior_id: Some("coordinator".to_string()),
                 session_id: Some("session-root".to_string()),
                 content: Some("root private objective".to_string()),
@@ -2134,7 +2134,7 @@ mod tests {
             },
             requests: vec![TimelineRequestRow {
                 request_id: "req-review".to_string(),
-                agent_did: Some("did:defra-agent:reviewer".to_string()),
+                agent_did: Some("did:test:reviewer".to_string()),
                 behavior_id: Some("reviewer".to_string()),
                 session_id: Some("session-review".to_string()),
                 status: Some("completed".to_string()),
@@ -2225,7 +2225,7 @@ mod tests {
         redaction_mode: ProjectionRedactionMode,
     ) -> Vec<AdapterProjectionEnvelope> {
         let context = ProjectionContext {
-            actor_did: Some("did:defra-agent:projection-reader".to_string()),
+            actor_did: Some("did:test:projection-reader".to_string()),
             redaction_mode,
         };
         [
@@ -2386,11 +2386,11 @@ mod tests {
         let full = build_all_adapter_projections(&timeline, ProjectionRedactionMode::Full);
         let expected_participants = BTreeSet::from([
             ProjectionParticipant {
-                agent_did: Some("did:defra-agent:coordinator".to_string()),
+                agent_did: Some("did:test:coordinator".to_string()),
                 behavior_id: Some("coordinator".to_string()),
             },
             ProjectionParticipant {
-                agent_did: Some("did:defra-agent:reviewer".to_string()),
+                agent_did: Some("did:test:reviewer".to_string()),
                 behavior_id: Some("reviewer".to_string()),
             },
         ]);
@@ -2519,7 +2519,7 @@ mod tests {
         let timeline = build_run_timeline(RunTimelineRows {
             request: TimelineRequestRow {
                 request_id: "req-1".to_string(),
-                agent_did: Some("did:defra-agent:root".to_string()),
+                agent_did: Some("did:test:root".to_string()),
                 behavior_id: Some("root".to_string()),
                 session_id: Some("session-1".to_string()),
                 content: Some("sensitive prompt".to_string()),
@@ -2530,7 +2530,7 @@ mod tests {
             },
             requests: vec![TimelineRequestRow {
                 request_id: "child-1".to_string(),
-                agent_did: Some("did:defra-agent:child".to_string()),
+                agent_did: Some("did:test:child".to_string()),
                 behavior_id: Some("child".to_string()),
                 session_id: Some("session-1".to_string()),
                 status: Some("completed".to_string()),
@@ -2574,7 +2574,7 @@ mod tests {
             ..RunTimelineRows::default()
         });
         let context = ProjectionContext {
-            actor_did: Some("did:defra-agent:viewer".to_string()),
+            actor_did: Some("did:test:viewer".to_string()),
             redaction_mode: ProjectionRedactionMode::Public,
         };
 

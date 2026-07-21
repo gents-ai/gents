@@ -2,7 +2,7 @@
   "output": {
     "adapter": "langgraph_state_history",
     "projection": {
-      "checkpoint_id": "defra:req-langgraph-1:v1",
+      "checkpoint_id": "gents:req-langgraph-1:v1",
       "edges": [
         {
           "from": "request:req-langgraph-1",
@@ -63,7 +63,7 @@
       ],
       "thread_id": "thread-langgraph-1",
       "values": {
-        "agent_did": "did:defra-agent:graph-runner",
+        "agent_did": "did:test:graph-runner",
         "behavior_id": "graph-runner",
         "child_request_ids": [
           "req-langgraph-child-1"
@@ -83,7 +83,7 @@
     "source_projection_version": "v1"
   },
   "redaction_mode": "full",
-  "source_agent_did": "did:defra-agent:graph-runner",
+  "source_agent_did": "did:test:graph-runner",
   "source_behavior_id": "graph-runner",
   "source_request_id": "req-langgraph-1",
   "source_session_id": "thread-langgraph-1"

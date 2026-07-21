@@ -74,7 +74,7 @@ pub(super) fn file_mutation_lock_for(path: &Path) -> std::sync::Arc<tokio::sync:
     locks.entry(key).or_default().clone()
 }
 
-const OUTPUT_META_PREFIX: &str = "defra_fs: ";
+const OUTPUT_META_PREFIX: &str = "gents_fs: ";
 
 #[derive(Clone)]
 pub(super) struct ListFilesTool {
@@ -171,7 +171,7 @@ impl Tool for ListFilesTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
-                "List files and directories under the allowed root ({}). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact text with stable defra_fs metadata, skips common generated directories and paths ignored by in-tree .gitignore files by default, and reports walk stats; large walks stop at a budget with partial results (walk.budget_exhausted=true). Set raw_json=true for structured JSON.",
+                "List files and directories under the allowed root ({}). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact text with stable gents_fs metadata, skips common generated directories and paths ignored by in-tree .gitignore files by default, and reports walk stats; large walks stop at a budget with partial results (walk.budget_exhausted=true). Set raw_json=true for structured JSON.",
                 self.context.root().display()
             ),
             parameters: serde_json::json!({
@@ -232,7 +232,7 @@ impl Tool for ReadFileTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
-                "Read a UTF-8 text file under the allowed root ({}). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact line-numbered text with stable defra_fs metadata, including content_hash — the raw-byte identity of the whole file, usable as edit_file expected_content_hash to guard against concurrent changes. Set raw_json=true for structured JSON.",
+                "Read a UTF-8 text file under the allowed root ({}). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact line-numbered text with stable gents_fs metadata, including content_hash — the raw-byte identity of the whole file, usable as edit_file expected_content_hash to guard against concurrent changes. Set raw_json=true for structured JSON.",
                 self.context.root().display()
             ),
             parameters: serde_json::json!({
@@ -315,7 +315,7 @@ impl Tool for GlobTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Find files matching a glob pattern (supports *, ?, **, [..], and {a,b} alternation) under the allowed root. Relative paths resolve from the active request workspace when one is provided, otherwise from the root. The pattern is matched against the FULL path relative to that directory, so it must include every leading directory (or start with **/); check the search_dir_entries / pattern_prefix_exists fields on a zero-match result before retrying. Returns compact text with stable defra_fs metadata, skips common generated directories and paths ignored by in-tree .gitignore files by default, and reports walk stats; large walks stop at a budget with partial results (walk.budget_exhausted=true). Set raw_json=true for structured JSON.".to_string(),
+            description: "Find files matching a glob pattern (supports *, ?, **, [..], and {a,b} alternation) under the allowed root. Relative paths resolve from the active request workspace when one is provided, otherwise from the root. The pattern is matched against the FULL path relative to that directory, so it must include every leading directory (or start with **/); check the search_dir_entries / pattern_prefix_exists fields on a zero-match result before retrying. Returns compact text with stable gents_fs metadata, skips common generated directories and paths ignored by in-tree .gitignore files by default, and reports walk stats; large walks stop at a budget with partial results (walk.budget_exhausted=true). Set raw_json=true for structured JSON.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -373,7 +373,7 @@ impl Tool for GrepTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Search text files under the allowed root with a regular expression (Rust regex syntax, case-insensitive by default; a pattern that fails to parse as regex is used as a literal substring — the result metadata reports pattern_syntax accordingly). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. The path may be a directory or a single file; prefer passing the narrowest directory you can. Returns compact path:Lline matches with stable defra_fs metadata, skips common generated directories, paths ignored by in-tree .gitignore files, oversized files, and binary files by default, and reports walk stats; large walks stop at a budget with partial results (walk.budget_exhausted=true). Set raw_json=true for structured JSON.".to_string(),
+            description: "Search text files under the allowed root with a regular expression (Rust regex syntax, case-insensitive by default; a pattern that fails to parse as regex is used as a literal substring — the result metadata reports pattern_syntax accordingly). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. The path may be a directory or a single file; prefer passing the narrowest directory you can. Returns compact path:Lline matches with stable gents_fs metadata, skips common generated directories, paths ignored by in-tree .gitignore files, oversized files, and binary files by default, and reports walk stats; large walks stop at a budget with partial results (walk.budget_exhausted=true). Set raw_json=true for structured JSON.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

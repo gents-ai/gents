@@ -55,7 +55,7 @@ async fn compaction_entries_track_files_cumulatively() {
     save_compaction_entry(
         &node,
         "session-1",
-        "did:defra-agent:test",
+        "did:test:test",
         "First summary",
         &["/tmp/a.rs".to_string()],
         &["/tmp/b.rs".to_string()],
@@ -68,7 +68,7 @@ async fn compaction_entries_track_files_cumulatively() {
     save_compaction_entry(
         &node,
         "session-1",
-        "did:defra-agent:test",
+        "did:test:test",
         "Second summary",
         &["/tmp/c.rs".to_string(), "/tmp/a.rs".to_string()],
         &["/tmp/d.rs".to_string()],
@@ -99,7 +99,7 @@ async fn close_session_preserves_started_datetime() {
         .unwrap();
     ensure_schemas(&node).await.unwrap();
 
-    create_session_with_id(&node, "session-1", "deploy-test", "did:defra-agent:test")
+    create_session_with_id(&node, "session-1", "deploy-test", "did:test:test")
         .await
         .unwrap();
     close_session(&node, "session-1").await.unwrap();
@@ -167,10 +167,10 @@ async fn create_session_with_id_is_idempotent() {
         .unwrap();
     ensure_schemas(&node).await.unwrap();
 
-    create_session_with_id(&node, "session-1", "general", "did:defra-agent:test")
+    create_session_with_id(&node, "session-1", "general", "did:test:test")
         .await
         .unwrap();
-    create_session_with_id(&node, "session-1", "general", "did:defra-agent:test")
+    create_session_with_id(&node, "session-1", "general", "did:test:test")
         .await
         .unwrap();
 
@@ -412,25 +412,14 @@ async fn create_session_with_behavior_id_rejects_mismatched_existing_binding() {
         .unwrap();
     ensure_schemas(&node).await.unwrap();
 
-    create_session_with_behavior_id(
-        &node,
-        "session-1",
-        "general",
-        "did:defra-agent:test",
-        "general",
-    )
-    .await
-    .unwrap();
+    create_session_with_behavior_id(&node, "session-1", "general", "did:test:test", "general")
+        .await
+        .unwrap();
 
-    let error = create_session_with_behavior_id(
-        &node,
-        "session-1",
-        "general",
-        "did:defra-agent:test",
-        "code",
-    )
-    .await
-    .unwrap_err();
+    let error =
+        create_session_with_behavior_id(&node, "session-1", "general", "did:test:test", "code")
+            .await
+            .unwrap_err();
     assert!(error.to_string().contains("behavior mismatch"));
 
     let _ = std::fs::remove_dir_all(&data_path);

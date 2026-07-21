@@ -237,7 +237,7 @@ fn project_read_file_observation(raw_result: &str) -> Option<String> {
 
 fn project_read_file_compact_observation(raw_result: &str) -> Option<String> {
     let (first_line, body) = raw_result.split_once('\n')?;
-    let metadata = first_line.strip_prefix("defra_fs: ")?;
+    let metadata = first_line.strip_prefix("gents_fs: ")?;
     let metadata: serde_json::Value = serde_json::from_str(metadata).ok()?;
     if metadata.get("tool").and_then(|value| value.as_str()) != Some("read_file") {
         return None;
@@ -735,7 +735,7 @@ mod tests {
     #[test]
     fn read_file_compact_output_projects_to_model_observation() {
         let raw = concat!(
-            r#"defra_fs: {"ok":true,"status":"success","tool":"read_file","path":"notes.txt","returned_count":2,"total_count":3,"truncated":false,"start_line":2,"end_line":3}"#,
+            r#"gents_fs: {"ok":true,"status":"success","tool":"read_file","path":"notes.txt","returned_count":2,"total_count":3,"truncated":false,"start_line":2,"end_line":3}"#,
             "\ncontent:\nL2: beta\nL3: gamma\n"
         );
 

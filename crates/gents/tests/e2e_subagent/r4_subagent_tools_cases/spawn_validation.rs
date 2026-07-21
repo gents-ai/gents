@@ -11,7 +11,7 @@ const GHOST_BEHAVIOR_ID: &str = "r4-ghost-child";
 /// session started but was removed mid-session.
 async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
     let db = test_db(test_name).await;
-    let agent_did = format!("did:defra-agent:r4-{test_name}");
+    let agent_did = format!("did:test:r4-{test_name}");
 
     // Allow parent to spawn GHOST_BEHAVIOR_ID — but deliberately DO NOT
     // upsert an AgentBehaviorDocument for GHOST_BEHAVIOR_ID.

@@ -3,10 +3,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
-use gents_protocol::client_protocol::ClientTurnState;
-use gents_protocol::schemas::{AGENT_MESSAGE_NAME, AGENT_RESPONSE_NAME};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
+use gents_protocol::client_protocol::ClientTurnState;
+use gents_protocol::schemas::{AGENT_MESSAGE_NAME, AGENT_RESPONSE_NAME};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
@@ -338,12 +338,12 @@ mod tests {
     use std::sync::RwLock as StdRwLock;
 
     use async_trait::async_trait;
-    use gents_protocol::row::{AgentConversationRow, AgentRequestRow, AgentResponseRow};
     use defra_node::NodeBuilder;
     use defra_p2p_adapter::{
         ExplicitReplayCapabilityInput, P2PResult, P2pDocumentInfo, P2pDocumentRequest,
         ReplicationFilter, ReplicatorInfo,
     };
+    use gents_protocol::row::{AgentConversationRow, AgentRequestRow, AgentResponseRow};
 
     use super::*;
     use crate::client::schema::ensure_runtime_schemas;

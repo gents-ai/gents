@@ -197,7 +197,7 @@ async fn create_foreground_tool_call(
         db.node.clone(),
         request_id.to_string(),
         session_id.to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "foreground-call".to_string(),
         99,
         "foreground_tool".to_string(),

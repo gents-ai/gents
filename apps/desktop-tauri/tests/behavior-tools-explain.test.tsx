@@ -25,7 +25,7 @@ describe("behavior tool surface", () => {
       ceilingSource: "init_json",
       mcpServicesOnline: false,
       surface: {
-        tool_names: ["read_file", "defra_exec"],
+        tool_names: ["read_file", "gents_exec"],
         included: {},
         excluded: { write_file: ["ceiling is readonly"] },
         unavailable: { mcp_call: ["no MCP services online"] },

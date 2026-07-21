@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::UpdateSubscriptionSource;
 use events::{Bus, ChannelBus, EventName, Message, Subscription, Update};
+use gents::UpdateSubscriptionSource;
 use tokio::sync::Notify;
 
 #[derive(Clone)]

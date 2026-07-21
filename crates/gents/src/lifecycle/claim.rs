@@ -317,7 +317,7 @@ mod tests {
 
     use super::*;
 
-    const TEST_AGENT_DID: &str = "did:defra-agent:claim-order-test";
+    const TEST_AGENT_DID: &str = "did:test:claim-order-test";
     const TEST_BEHAVIOR_ID: &str = "general";
     const TEST_BACKEND_ID: &str = "backend-order";
 

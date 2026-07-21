@@ -10,7 +10,7 @@ use crate::support::test_db;
 #[tokio::test]
 async fn ensure_agent_principal_creates_and_reuses_default_behavior() {
     let db = test_db("principal-bootstrap-create").await;
-    let agent_did = "did:defra-agent:amy";
+    let agent_did = "did:test:amy";
 
     let created = ensure_agent_principal(db.node.as_ref(), agent_did)
         .await
@@ -65,7 +65,7 @@ async fn ensure_agent_principal_creates_and_reuses_default_behavior() {
 #[tokio::test]
 async fn ensure_agent_principal_backfills_missing_default_behavior() {
     let db = test_db("principal-bootstrap-backfill").await;
-    let agent_did = "did:defra-agent:backfill";
+    let agent_did = "did:test:backfill";
     insert_principal(db.node.as_ref(), agent_did, "").await;
 
     let bootstrap = ensure_agent_principal(db.node.as_ref(), agent_did)
@@ -90,7 +90,7 @@ async fn ensure_agent_principal_backfills_missing_default_behavior() {
 #[tokio::test]
 async fn ensure_agent_principal_rejects_missing_referenced_default_behavior() {
     let db = test_db("principal-bootstrap-missing-default").await;
-    let agent_did = "did:defra-agent:broken";
+    let agent_did = "did:test:broken";
     insert_principal(db.node.as_ref(), agent_did, "custom-behavior").await;
 
     let error = ensure_agent_principal(db.node.as_ref(), agent_did)
@@ -171,7 +171,7 @@ async fn profile_sampling_knobs_reach_the_behavior_and_provider_body() {
 #[tokio::test]
 async fn upsert_helpers_roundtrip_behavior_and_profile() {
     let db = test_db("document-config-upsert-roundtrip").await;
-    let agent_did = "did:defra-agent:roundtrip";
+    let agent_did = "did:test:roundtrip";
     let behavior_id = default_behavior_id_for_agent(agent_did);
 
     upsert_inference_profile(

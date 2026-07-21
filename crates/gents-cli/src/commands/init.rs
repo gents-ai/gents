@@ -150,7 +150,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         node_builder
             .build()
             .await
-            .context("building embedded defra node for init")?,
+            .context("building embedded DefraDB node for init")?,
     );
     ensure_config_bootstrap_schemas(node_arc.as_ref()).await?;
     // Single sanctioned migration entry point: run the FULL set BEFORE the first

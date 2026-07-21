@@ -12,7 +12,7 @@ function toolGroup(statusKind: string, tail: string | null): RenderedTimelineIte
     tools: [
       {
         itemKey: "t1",
-        toolName: "defra_exec",
+        toolName: "gents_exec",
         statusKind,
         status: statusKind,
         args: null,

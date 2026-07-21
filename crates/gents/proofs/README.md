@@ -212,8 +212,8 @@ lake build Proofs.Conformance.Contracts
 lake env lean --run Proofs/Conformance/Contracts.lean
 ```
 
-The emitted JSON is printed between `---BEGIN DEFRA LEAN CONTRACT JSON---` and
-`---END DEFRA LEAN CONTRACT JSON---` sentinel lines so Rust can reject unrelated
+The emitted JSON is printed between `---BEGIN GENTS LEAN CONTRACT JSON---` and
+`---END GENTS LEAN CONTRACT JSON---` sentinel lines so Rust can reject unrelated
 stdout. It is generated from Lean constructors, `toDefraDB` functions, terminal
 predicates, executable `step?` functions, and finite witness contexts. It
 currently covers:

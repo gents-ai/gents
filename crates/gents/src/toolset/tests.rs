@@ -509,16 +509,16 @@ fn native_fs_runner_binary_for_current_test() -> Option<PathBuf> {
 fn compact_meta(output: &str) -> serde_json::Value {
     let first_line = output.lines().next().expect("metadata line");
     let raw = first_line
-        .strip_prefix("defra_fs: ")
-        .unwrap_or_else(|| panic!("missing defra_fs metadata line in output:\n{output}"));
+        .strip_prefix("gents_fs: ")
+        .unwrap_or_else(|| panic!("missing gents_fs metadata line in output:\n{output}"));
     serde_json::from_str(raw).expect("metadata json")
 }
 
 fn compact_exec_meta(output: &str) -> serde_json::Value {
     let first_line = output.lines().next().expect("metadata line");
     let raw = first_line
-        .strip_prefix("defra_exec: ")
-        .unwrap_or_else(|| panic!("missing defra_exec metadata line in output:\n{output}"));
+        .strip_prefix("gents_exec: ")
+        .unwrap_or_else(|| panic!("missing gents_exec metadata line in output:\n{output}"));
     serde_json::from_str(raw).expect("metadata json")
 }
 
@@ -552,11 +552,8 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
     std::fs::write(root.join("second.txt"), "second request\n").unwrap();
     let context = ToolContext::new(root.clone(), false).unwrap();
 
-    let _block_dir = EnvVarGuard::set(
-        "DEFRA_NATIVE_FS_RUNNER_BLOCK_DIR",
-        context.root().as_os_str(),
-    );
-    let _block_ms = EnvVarGuard::set("DEFRA_NATIVE_FS_RUNNER_BLOCK_MS", "200");
+    let _block_dir = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_DIR", context.root().as_os_str());
+    let _block_ms = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_MS", "200");
     let blocking_tool = crate::tool_call_lifecycle::runtime::wrap_tool(Box::new(GlobTool::new(
         context.clone(),
         DEFAULT_MAX_MATCHES,

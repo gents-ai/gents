@@ -14,8 +14,8 @@ use super::command_projection::{
 };
 use super::compaction_projection::context_compaction_item;
 use super::progress::{
-    decode_defra_tool_call_progress, defra_tool_item, terminal_error_message, terminal_turn_status,
-    DefraToolCallProgress,
+    decode_gents_tool_call_progress, gents_tool_item, terminal_error_message, terminal_turn_status,
+    GentsToolCallProgress,
 };
 use super::protocol::{
     absolute_path, agent_message_item_with_phase, timestamp_seconds, turn_value,
@@ -74,7 +74,7 @@ struct ToolRow {
     request_id: String,
     message_sequence: i64,
     started_at: Option<String>,
-    progress: DefraToolCallProgress,
+    progress: GentsToolCallProgress,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -297,11 +297,11 @@ fn project_message_turns(messages: Vec<MessageRow>) -> Vec<codex::Turn> {
                 saw_assistant,
             );
             saw_assistant = false;
-            current_id = Some(format!("defra-message-turn-{}", message.sequence));
+            current_id = Some(format!("gents-message-turn-{}", message.sequence));
             let presentation = present_persisted_message(&message.role, &message.content);
             if !presentation.body_markdown.trim().is_empty() {
                 current_items.push(codex::ThreadItem::UserMessage {
-                    id: format!("defra-user-message-{}", message.sequence),
+                    id: format!("gents-user-message-{}", message.sequence),
                     content: vec![codex::UserInput::Text {
                         text: presentation.body_markdown,
                         text_elements: Vec::new(),
@@ -310,7 +310,7 @@ fn project_message_turns(messages: Vec<MessageRow>) -> Vec<codex::Turn> {
             }
         } else if role.eq_ignore_ascii_case("assistant") {
             if current_id.is_none() {
-                current_id = Some(format!("defra-message-turn-{}", message.sequence));
+                current_id = Some(format!("gents-message-turn-{}", message.sequence));
             }
             saw_assistant |= append_assistant_message_items(
                 &mut current_items,
@@ -497,11 +497,11 @@ pub(super) fn conversation_summary_json(state: &ShimState, record: &CodexThreadR
     json!({
         "summary": {
             "conversationId": record.session_id,
-            "path": absolute_path(&state.codex_home.join("defra-backed").join(&record.session_id)),
+            "path": absolute_path(&state.codex_home.join("gents-backed").join(&record.session_id)),
             "preview": preview,
             "timestamp": conversation.and_then(|conversation| conversation.created_at.clone()),
             "updatedAt": conversation.and_then(|conversation| conversation.updated_at.clone()),
-            "modelProvider": "defra",
+            "modelProvider": "gents",
             "cwd": absolute_path(&record.cwd),
             "cliVersion": env!("CARGO_PKG_VERSION"),
             "source": "cli",
@@ -609,7 +609,7 @@ fn append_request_items(
 
     if !request.content.trim().is_empty() {
         items.push(codex::ThreadItem::UserMessage {
-            id: format!("defra-user-{}", request.request_id),
+            id: format!("gents-user-{}", request.request_id),
             content: vec![codex::UserInput::Text {
                 text: request.content.clone(),
                 text_elements: Vec::new(),
@@ -654,7 +654,7 @@ fn append_request_items(
 
         if !rendered_materialized && !response.reasoning.trim().is_empty() {
             items.push(codex::ThreadItem::Reasoning {
-                id: format!("defra-reasoning-{}", request.request_id),
+                id: format!("gents-reasoning-{}", request.request_id),
                 summary: Vec::new(),
                 content: vec![response.reasoning.clone()],
             });
@@ -686,7 +686,7 @@ fn append_assistant_message_items(
         .filter(|value| !value.trim().is_empty())
     {
         items.push(codex::ThreadItem::Reasoning {
-            id: format!("defra-reasoning-message-{sequence}"),
+            id: format!("gents-reasoning-message-{sequence}"),
             summary: Vec::new(),
             content: vec![reasoning],
         });
@@ -710,11 +710,11 @@ fn append_assistant_message_items(
 
 fn project_tool(
     record: &CodexThreadRecord,
-    tool: &DefraToolCallProgress,
+    tool: &GentsToolCallProgress,
     projection_settled: bool,
 ) -> Option<codex::ThreadItem> {
     match tool_projection_status_with_settled(tool, projection_settled, true) {
-        ToolProjectionStatus::Mcp(status) => Some(defra_tool_item(tool, status)),
+        ToolProjectionStatus::Mcp(status) => Some(gents_tool_item(tool, status)),
         ToolProjectionStatus::Command(status) => {
             Some(command_execution_item(&record.cwd, tool, status))
         }
@@ -807,7 +807,7 @@ fn decode_tool_rows(response: &Value) -> Result<Vec<ToolRow>> {
                 .get("started_at")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned);
-            let progress = decode_defra_tool_call_progress(&row)
+            let progress = decode_gents_tool_call_progress(&row)
                 .with_context(|| format!("decoding AgentToolCall progress row: {row}"))?;
             Ok(ToolRow {
                 request_id,
@@ -1064,7 +1064,7 @@ mod tests {
             request_id: request.request_id.clone(),
             message_sequence: 2,
             started_at: None,
-            progress: DefraToolCallProgress {
+            progress: GentsToolCallProgress {
                 tool_call_key: "thread-1:call-1".to_string(),
                 tool_name: "list_files".to_string(),
                 status: "completed".to_string(),
@@ -1081,7 +1081,7 @@ mod tests {
             request_id: request.request_id.clone(),
             message_sequence: 2,
             started_at: Some("2026-06-02T00:00:01Z".to_string()),
-            progress: DefraToolCallProgress {
+            progress: GentsToolCallProgress {
                 tool_call_key: "thread-1:call-2".to_string(),
                 tool_name: "read_file".to_string(),
                 status: "completed".to_string(),

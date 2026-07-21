@@ -153,7 +153,7 @@ mod tests {
         RuntimeHttpState {
             graphql: "http://localhost:9181/api/v0/graphql".to_string(),
             agent_name: "test-agent".to_string(),
-            agent_did: "did:defra-agent:test".to_string(),
+            agent_did: "did:test:test".to_string(),
             started_at: "2026-05-13T12:00:00Z".to_string(),
             started_instant: Instant::now(),
             backend_health: None,
@@ -166,10 +166,8 @@ mod tests {
 
     fn ready_runtime() -> MetricsRuntimeRow {
         MetricsRuntimeRow {
-            agent_did: "did:defra-agent:test".to_string(),
-            process_state: gents::ProcessLifecycleState::Ready
-                .as_str()
-                .to_string(),
+            agent_did: "did:test:test".to_string(),
+            process_state: gents::ProcessLifecycleState::Ready.as_str().to_string(),
             reconcile_phase: "idle".to_string(),
             active_generation: 1,
             router_generation: 1,

@@ -71,13 +71,7 @@ pub fn desktop_bin() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("unable to resolve workspace root from CARGO_MANIFEST_DIR"))?;
     let status = Command::new("cargo")
         .current_dir(workspace_root)
-        .args([
-            "build",
-            "-p",
-            "gents-desktop",
-            "--bin",
-            "gents-desktop",
-        ])
+        .args(["build", "-p", "gents-desktop", "--bin", "gents-desktop"])
         .status()
         .context("building gents-desktop binary for demo e2e")?;
     if !status.success() {
@@ -149,12 +143,8 @@ pub fn spawn_server_with_ready_json(
     // line-buffered even when redirected to a file, so the line lands promptly.
     let stdout_log = tempfile::NamedTempFile::new().context("creating gents stdout log")?;
     let stderr_log = tempfile::NamedTempFile::new().context("creating gents stderr log")?;
-    let stdout = stdout_log
-        .reopen()
-        .context("opening gents stdout log")?;
-    let stderr = stderr_log
-        .reopen()
-        .context("opening gents stderr log")?;
+    let stdout = stdout_log.reopen().context("opening gents stdout log")?;
+    let stderr = stderr_log.reopen().context("opening gents stderr log")?;
     let mut command = Command::new(cli_bin());
     command
         .env("HOME", home_dir)
@@ -226,12 +216,8 @@ pub fn spawn_server_with_env(
 ) -> Result<ServeProcess> {
     let stdout_log = tempfile::NamedTempFile::new().context("creating gents stdout log")?;
     let stderr_log = tempfile::NamedTempFile::new().context("creating gents stderr log")?;
-    let stdout = stdout_log
-        .reopen()
-        .context("opening gents stdout log")?;
-    let stderr = stderr_log
-        .reopen()
-        .context("opening gents stderr log")?;
+    let stdout = stdout_log.reopen().context("opening gents stdout log")?;
+    let stderr = stderr_log.reopen().context("opening gents stderr log")?;
     let mut command = Command::new(cli_bin());
     command
         .env("HOME", home_dir)

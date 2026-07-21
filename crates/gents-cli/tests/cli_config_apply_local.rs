@@ -441,7 +441,7 @@ async fn config_apply_prunes_live_only_tasks_and_schedules_when_requested_locall
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_apply_rebinds_placeholder_manifest_to_home_identity_locally() -> Result<()> {
+async fn config_apply_force_rebinds_concrete_manifest_to_home_identity_locally() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let source_home_env = tempdir.path().join("source-home-env");
     let target_home_env = tempdir.path().join("target-home-env");
@@ -454,7 +454,7 @@ async fn config_apply_rebinds_placeholder_manifest_to_home_identity_locally() ->
     fs::create_dir_all(&source_home_env)?;
     fs::create_dir_all(&target_home_env)?;
 
-    let placeholder_did = "did:defra-agent:mini-1-steward";
+    let concrete_manifest_did = "did:test:mini-1-steward";
     let agent_name = "mini-1-steward";
     let model_name = format!("mock-rebind-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
@@ -470,7 +470,7 @@ async fn config_apply_rebinds_placeholder_manifest_to_home_identity_locally() ->
         ],
     )?;
     let source_agent_did = agent_did_from_init(&source_init)?;
-    assert_ne!(source_agent_did, placeholder_did);
+    assert_ne!(source_agent_did, concrete_manifest_did);
 
     run_cli_text(
         &source_home_env,
@@ -481,14 +481,14 @@ async fn config_apply_rebinds_placeholder_manifest_to_home_identity_locally() ->
             root.to_str().expect("utf-8 root"),
         ],
     )?;
-    rewrite_manifest_agent_dids(&root, placeholder_did)?;
+    rewrite_manifest_agent_dids(&root, concrete_manifest_did)?;
 
     let target_init = run_init_json(
         &target_home_env,
         &["--identity-only", "--agent-name", agent_name],
     )?;
     let target_agent_did = agent_did_from_init(&target_init)?;
-    assert_ne!(target_agent_did, placeholder_did);
+    assert_ne!(target_agent_did, concrete_manifest_did);
     assert_ne!(target_agent_did, source_agent_did);
     let target_home = target_home_env.join(".gents");
     let target_home_str = target_home.to_str().expect("utf-8 target home");
@@ -505,6 +505,7 @@ async fn config_apply_rebinds_placeholder_manifest_to_home_identity_locally() ->
             target_home_str,
             "--bind-agent-did",
             "home",
+            "--force-rebind-concrete-did",
         ],
     )?;
     assert_eq!(
@@ -549,8 +550,8 @@ async fn config_apply_rebinds_placeholder_manifest_to_home_identity_locally() ->
     )?;
     assert_manifest_agent_dids(&reexport_root, &target_agent_did)?;
     assert!(
-        !manifest_contains(&reexport_root, placeholder_did)?,
-        "placeholder DID should not be written into target home"
+        !manifest_contains(&reexport_root, concrete_manifest_did)?,
+        "previous concrete DID should not be written into target home"
     );
 
     let diff = run_cli_json(
@@ -564,6 +565,7 @@ async fn config_apply_rebinds_placeholder_manifest_to_home_identity_locally() ->
             target_home_str,
             "--bind-agent-did",
             "home",
+            "--force-rebind-concrete-did",
         ],
     )?;
     assert_eq!(diff.get("status").and_then(Value::as_str), Some("diffed"));

@@ -4,7 +4,7 @@ use serde::Serialize;
 use crate::model::{FilesystemEntry, WalkStats, DEFAULT_IGNORED_NAMES};
 
 const DEFAULT_GREP_PREVIEW_CHARS: usize = 240;
-const OUTPUT_META_PREFIX: &str = "defra_fs: ";
+const OUTPUT_META_PREFIX: &str = "gents_fs: ";
 
 #[derive(Serialize)]
 pub(crate) struct EntrySummary {

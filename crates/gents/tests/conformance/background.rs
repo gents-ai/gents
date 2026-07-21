@@ -176,12 +176,7 @@ async fn setup_background_spawn_fixture(
                 targets
                     .into_iter()
                     .map(|behavior_id| {
-                        gents::subagent_target_entry(
-                            behavior_id,
-                            AGENT_DID,
-                            behavior_id,
-                            None,
-                        )
+                        gents::subagent_target_entry(behavior_id, AGENT_DID, behavior_id, None)
                     })
                     .collect(),
             ),

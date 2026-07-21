@@ -807,7 +807,7 @@ fn from_document_read_only_allowlist_override_and_fallback() {
 fn tool_policy_version_controls_nullable_default_decode() {
     let legacy_doc = crate::document_config::ToolSelectionDocument {
         selection_id: "legacy-tools".to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         ..Default::default()
     };
     let legacy = ToolSelection::from_document(&legacy_doc).unwrap();
@@ -890,7 +890,7 @@ fn init_like_tool_selection_document(
 ) -> crate::document_config::ToolSelectionDocument {
     crate::document_config::ToolSelectionDocument {
         selection_id: format!("{package_name}-tools"),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         display_name: Some(package_name.to_string()),
         tool_policy_version: None,
         enable_file_tools: Some(enable_file_tools),
@@ -1112,7 +1112,7 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
         .unwrap();
         let explanation = config.explain_with_runtime(
             case.mcp_services_online,
-            "did:defra-agent:test",
+            "did:test:test",
             &std::collections::HashSet::new(),
         );
 
@@ -1151,7 +1151,7 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
 
 #[test]
 fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
-    let own_agent_did = "did:defra-agent:local";
+    let own_agent_did = "did:test:local";
     let mut selection = crate::document_config::ToolSelectionDocument {
         selection_id: "complex-tools".to_string(),
         agent_did: own_agent_did.to_string(),
@@ -1191,7 +1191,7 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
             ),
             crate::document_config::subagent_target_entry(
                 "remote",
-                "did:defra-agent:remote",
+                "did:test:remote",
                 "remote-worker",
                 Some("remote worker".to_string()),
             ),
@@ -1334,11 +1334,8 @@ fn explain_default_surface_calls_out_builtin_reads_and_defra_query_scope() {
         Vec::new(),
     )
     .unwrap();
-    let explanation = config.explain_with_runtime(
-        false,
-        "did:defra-agent:test",
-        &std::collections::HashSet::new(),
-    );
+    let explanation =
+        config.explain_with_runtime(false, "did:test:test", &std::collections::HashSet::new());
 
     assert!(explanation
         .tool_names
@@ -1390,11 +1387,8 @@ fn category_complete_ceiling_clamps_builtin_reads() {
         Vec::new(),
     )
     .unwrap();
-    let explanation = config.explain_with_runtime(
-        false,
-        "did:defra-agent:test",
-        &std::collections::HashSet::new(),
-    );
+    let explanation =
+        config.explain_with_runtime(false, "did:test:test", &std::collections::HashSet::new());
 
     assert!(!explanation
         .tool_names
@@ -1423,11 +1417,8 @@ fn explain_mcp_empty_allowlist_reports_all_services_when_online() {
         Vec::new(),
     )
     .unwrap();
-    let explanation = config.explain_with_runtime(
-        true,
-        "did:defra-agent:test",
-        &std::collections::HashSet::new(),
-    );
+    let explanation =
+        config.explain_with_runtime(true, "did:test:test", &std::collections::HashSet::new());
 
     assert!(explanation.tool_names.contains(&"call_tool".to_string()));
     assert!(explanation

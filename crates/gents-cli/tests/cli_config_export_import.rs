@@ -79,7 +79,7 @@ async fn config_export_bind_home_ignores_stale_runtime_state_agent_did() -> Resu
             "home": explicit_home.to_string_lossy(),
             "graphql": "http://127.0.0.1:1/api/v0/graphql",
             "agent_name": agent_name,
-            "agent_did": "did:defra-agent:mini-1-steward",
+            "agent_did": "did:test:mini-1-steward",
             "default_behavior_id": "default"
         }),
     )?;

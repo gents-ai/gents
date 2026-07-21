@@ -2,14 +2,14 @@ use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use std::time::SystemTime;
 
+use defra_node::EmbeddedNode;
+use defra_p2p_adapter::P2POperations as P2POps;
 #[cfg(test)]
 use gents::agent::p2p_reconcile::{compute_pairing_diff, PairingActual, RemoteP2pAdmin};
 use gents::agent::p2p_reconcile::{
     reconcile_peer_tick, DiffOp, GraphqlPairingStateStore, PairingDesired, PairingStateStore,
     RemoteP2pAdminError,
 };
-use defra_node::EmbeddedNode;
-use defra_p2p_adapter::P2POperations as P2POps;
 use tokio::sync::{mpsc, watch, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;

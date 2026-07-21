@@ -13,8 +13,8 @@ use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle};
 use gents::{
     default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior,
-    upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, Gents,
-    DocumentRuntimeOptions, ToolCeiling, ToolSelectionDocument,
+    upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DocumentRuntimeOptions, Gents,
+    ToolCeiling, ToolSelectionDocument,
 };
 use serde::Deserialize;
 
@@ -189,7 +189,7 @@ async fn enabled_agent_spawns_local_child_and_list_reflects_it() {
         db.node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),

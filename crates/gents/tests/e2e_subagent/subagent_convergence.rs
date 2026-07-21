@@ -24,8 +24,8 @@ use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle};
 use gents::{
     default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior,
-    upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, Gents,
-    DocumentRuntimeOptions, ToolCeiling, ToolSelectionDocument,
+    upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DocumentRuntimeOptions, Gents,
+    ToolCeiling, ToolSelectionDocument,
 };
 use serde::Deserialize;
 
@@ -266,7 +266,7 @@ async fn local_background_spawn_materializes_child_with_lineage_and_lists() {
         db.node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -357,7 +357,7 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         db.node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -540,7 +540,7 @@ async fn local_foreground_spawn_materializes_child_via_source() {
         db.node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),

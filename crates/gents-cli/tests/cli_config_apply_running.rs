@@ -135,7 +135,7 @@ async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_diff_bind_live_rebinds_placeholder_manifest_to_running_runtime() -> Result<()> {
+async fn config_diff_bind_live_force_rebinds_concrete_manifest_to_running_runtime() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     let root = tempdir
@@ -145,7 +145,7 @@ async fn config_diff_bind_live_rebinds_placeholder_manifest_to_running_runtime()
         .join("mini-1-steward");
     fs::create_dir_all(&home_dir)?;
 
-    let placeholder_did = "did:defra-agent:mini-1-steward";
+    let concrete_manifest_did = "did:test:mini-1-steward";
     let model_name = format!("mock-live-rebind-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
     let port = allocate_port()?;
@@ -171,7 +171,7 @@ async fn config_diff_bind_live_rebinds_placeholder_manifest_to_running_runtime()
             root.to_str().expect("utf-8 root"),
         ],
     )?;
-    rewrite_manifest_agent_dids(&root, placeholder_did)?;
+    rewrite_manifest_agent_dids(&root, concrete_manifest_did)?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -186,7 +186,7 @@ async fn config_diff_bind_live_rebinds_placeholder_manifest_to_running_runtime()
                     updated_at: "2099-01-01T00:00:00Z"
                 }}) {{ _docID }}
             }}"#,
-            escape_graphql_string(placeholder_did),
+            escape_graphql_string(concrete_manifest_did),
         ),
     )
     .await?;
@@ -202,6 +202,7 @@ async fn config_diff_bind_live_rebinds_placeholder_manifest_to_running_runtime()
             &graphql,
             "--bind-agent-did",
             "live",
+            "--force-rebind-concrete-did",
         ],
     )?;
     assert_eq!(diff.get("status").and_then(Value::as_str), Some("diffed"));

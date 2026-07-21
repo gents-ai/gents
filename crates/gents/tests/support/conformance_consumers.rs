@@ -769,10 +769,7 @@ pub fn assert_registered_conformance_consumers_resolve() -> BTreeSet<&'static st
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .find(|path| {
-            path.join("crates/gents/proofs/lakefile.lean")
-                .exists()
-        })
+        .find(|path| path.join("crates/gents/proofs/lakefile.lean").exists())
         .expect("repository root should contain crates/gents/proofs/lakefile.lean")
         .to_path_buf()
 }

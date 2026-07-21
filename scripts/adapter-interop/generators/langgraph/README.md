@@ -2,7 +2,7 @@
 
 This generator executes real LangGraph `StateGraph` flows with an in-memory
 checkpointer, captures `graph.get_state_history(config)`, and writes wrapped
-Defra Agent `langgraph_state_history` adapter projection fixtures.
+Gents `langgraph_state_history` adapter projection fixtures.
 
 It emits:
 
@@ -36,15 +36,15 @@ To exercise a live OpenAI-compatible endpoint, pass:
 
 ```sh
 docker run --rm \
-  -e DEFRA_LANGGRAPH_PROVIDER_MODE=live \
+  -e GENTS_LANGGRAPH_PROVIDER_MODE=live \
   -e OPENAI_API_KEY \
   -e OPENAI_BASE_URL \
-  -e DEFRA_LANGGRAPH_OPENAI_MODEL=gpt-4.1-mini \
+  -e GENTS_LANGGRAPH_OPENAI_MODEL=gpt-4.1-mini \
   -v /tmp/defra-agent-langgraph-fixtures:/out \
   defra-agent-langgraph-fixture
 ```
 
-`DEFRA_LANGGRAPH_PROVIDER_MODE=auto` uses the live endpoint when
+`GENTS_LANGGRAPH_PROVIDER_MODE=auto` uses the live endpoint when
 `OPENAI_API_KEY` is set and otherwise falls back to the deterministic fake
 model. `live` fails if no API key is present.
 

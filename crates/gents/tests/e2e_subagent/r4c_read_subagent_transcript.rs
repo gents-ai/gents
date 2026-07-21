@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use crate::support::fixtures::spawn_subagent_source;
 use crate::support::test_db;
 
-const AGENT_DID: &str = "did:defra-agent:r4c-read-transcript";
+const AGENT_DID: &str = "did:test:r4c-read-transcript";
 const PARENT_BEHAVIOR_ID: &str = "r4c-parent";
 const CHILD_BEHAVIOR_ID: &str = "r4c-child";
 

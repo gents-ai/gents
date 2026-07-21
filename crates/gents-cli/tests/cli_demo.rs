@@ -53,9 +53,7 @@ fn run_demo_with_env(
             .context("writing demo shell input")?;
         stdin.flush().context("flushing demo shell input")?;
     }
-    child
-        .wait_with_output()
-        .context("waiting for gents demo")
+    child.wait_with_output().context("waiting for gents demo")
 }
 
 /// True once nothing accepts connections on `127.0.0.1:port` (evidence the demo

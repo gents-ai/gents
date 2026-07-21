@@ -735,7 +735,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    const TEST_AGENT_DID: &str = "did:defra-agent:queue-test";
+    const TEST_AGENT_DID: &str = "did:test:queue-test";
     const TEST_BEHAVIOR_ID: &str = "general";
 
     struct TestDb {

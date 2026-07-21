@@ -104,9 +104,7 @@ pub fn check_safety(history: &[ObservedSnapshot]) -> Result<(), SafetyViolation>
     Ok(())
 }
 
-fn pending_owned_ops(
-    snapshot: &ObservedSnapshot,
-) -> Vec<gents::agent::p2p_reconcile::DiffOp> {
+fn pending_owned_ops(snapshot: &ObservedSnapshot) -> Vec<gents::agent::p2p_reconcile::DiffOp> {
     compute_owned_pairing_diff(
         &snapshot.desired,
         &RuntimePairingActual {

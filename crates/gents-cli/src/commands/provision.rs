@@ -35,7 +35,10 @@ pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
         home: Some(&home_dir),
         graphql: None,
         bind_agent_did: Some(ManifestAgentDidBindingArg::Home),
-        force_rebind_concrete_did: false,
+        // Provisioning deliberately binds a portable manifest to the identity
+        // initialized for this home. Interactive config binding keeps the
+        // explicit force requirement for replacing a different concrete DID.
+        force_rebind_concrete_did: true,
         access: Some(&access),
     })
     .await?
@@ -130,7 +133,7 @@ async fn ensure_home_identity(
 
     if let Some(init_config) = read_init_config(home_dir)? {
         let agent_did = init_config.agent_did.trim().to_string();
-        if !agent_did.is_empty() && !agent_did.starts_with("did:defra-agent:") {
+        if !agent_did.is_empty() {
             return Ok(ProvisionIdentityReport {
                 status: "existing",
                 agent_name: init_config.agent_name,

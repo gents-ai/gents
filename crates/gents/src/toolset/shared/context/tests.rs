@@ -22,10 +22,8 @@ fn default_read_root_errors_when_unavailable() {
 
 #[test]
 fn relative_paths_resolve_from_base_inside_root() {
-    let root = std::env::temp_dir().join(format!(
-        "gents-tool-context-root-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("gents-tool-context-root-{}", uuid::Uuid::new_v4()));
     let base = root.join("workspace");
     std::fs::create_dir_all(&base).unwrap();
     std::fs::write(base.join("README.md"), "ok").unwrap();
@@ -44,10 +42,8 @@ fn relative_paths_resolve_from_base_inside_root() {
 
 #[test]
 fn base_outside_root_falls_back_to_root() {
-    let root = std::env::temp_dir().join(format!(
-        "gents-tool-context-root-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("gents-tool-context-root-{}", uuid::Uuid::new_v4()));
     let outside = std::env::temp_dir().join(format!(
         "gents-tool-context-outside-{}",
         uuid::Uuid::new_v4()
@@ -70,10 +66,8 @@ fn base_outside_root_falls_back_to_root() {
 
 #[tokio::test]
 async fn request_runtime_workspace_overrides_static_base() {
-    let root = std::env::temp_dir().join(format!(
-        "gents-tool-context-root-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("gents-tool-context-root-{}", uuid::Uuid::new_v4()));
     let workspace = root.join("repo");
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::write(workspace.join("README.md"), "ok").unwrap();

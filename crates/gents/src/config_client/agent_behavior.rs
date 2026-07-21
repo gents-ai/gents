@@ -3,9 +3,7 @@ use crate::AgentBehaviorDocument as AgentBehavior;
 use anyhow::Result;
 
 use super::ConfigAccess;
-use gents_protocol::graphql::{
-    graphql_bool_literal, optional_f64_field, optional_string_field,
-};
+use gents_protocol::graphql::{graphql_bool_literal, optional_f64_field, optional_string_field};
 
 pub async fn write_agent_behavior_document(
     access: &ConfigAccess,

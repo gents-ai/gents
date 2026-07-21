@@ -86,7 +86,7 @@ mod tests {
             node.clone(),
             "request-1".to_string(),
             "session-1".to_string(),
-            "did:defra-agent:test".to_string(),
+            "did:test:test".to_string(),
             "tool-1".to_string(),
             1,
             "bash_unrestricted".to_string(),
@@ -98,7 +98,7 @@ mod tests {
         let outcome = cancel_background_tool_call(
             node.clone(),
             &registry,
-            "did:defra-agent:test",
+            "did:test:test",
             "session-1",
             "tool-1",
         )

@@ -10,7 +10,7 @@ async fn key_identity_round_trip() {
     let identity = KeyIdentity::load_or_create(&path, None).unwrap();
     let payload = b"hello world";
 
-    assert!(!identity.did().starts_with("did:defra-agent:"));
+    assert!(!identity.did().starts_with("did:test:"));
     let signature = identity.sign(payload).await.unwrap();
     assert!(identity
         .verify(identity.did(), payload, &signature)

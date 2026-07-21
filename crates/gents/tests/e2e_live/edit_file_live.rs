@@ -25,8 +25,8 @@ use std::time::Duration;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::{
-    load_agent_behavior, upsert_agent_behavior, upsert_tool_selection, Gents,
-    DocumentRuntimeOptions, ToolCeiling, ToolSelectionDocument,
+    load_agent_behavior, upsert_agent_behavior, upsert_tool_selection, DocumentRuntimeOptions,
+    Gents, ToolCeiling, ToolSelectionDocument,
 };
 use serde::Deserialize;
 

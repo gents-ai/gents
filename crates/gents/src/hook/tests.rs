@@ -58,13 +58,13 @@ async fn legacy_request_id_setter_clears_requester_lineage() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:host",
+        "did:test:host",
         FailurePolicy::default(),
     );
 
     hook.set_active_request_lineage(
         Some("request-a".to_string()),
-        Some("did:defra-agent:coordinator".to_string()),
+        Some("did:test:coordinator".to_string()),
     )
     .await;
     hook.set_active_request_id(Some("request-b".to_string()))
@@ -93,7 +93,7 @@ async fn dropping_hook_clone_preserves_in_flight_tool_lifecycle() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -325,7 +325,7 @@ async fn generated_storage_observation_cases_match_hook_runtime_classification()
             let hook = DefraSessionHook::with_identity(
                 node.clone(),
                 "agent",
-                "did:defra-agent:test",
+                "did:test:test",
                 failure_policy_from_contract(&case.policy),
             );
             let result = match case.mutation_result.as_str() {
@@ -427,7 +427,7 @@ async fn create_interruptible_request(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
-                agent_did: "did:defra-agent:general",
+                agent_did: "did:test:general",
                 behavior_id: "general",
                 session_id: "{session_id}",
                 retry_parent_request: "",
@@ -548,7 +548,7 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     let user_prompt = user_text_message("Run a tool");
@@ -603,7 +603,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -614,7 +614,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     let session_id = hook.session_id().await.expect("session id");
     crate::goal::set_goal(
         node.as_ref(),
-        "did:defra-agent:general",
+        "did:test:general",
         &session_id,
         Some("Do not resurrect after budget exhaustion"),
         Some(crate::goal::GoalStatus::Active),
@@ -624,7 +624,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     .expect("create active goal");
     crate::goal::set_goal(
         node.as_ref(),
-        "did:defra-agent:general",
+        "did:test:general",
         &session_id,
         None,
         Some(crate::goal::GoalStatus::BudgetLimited),
@@ -644,11 +644,10 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
         )
         .await;
     assert!(matches!(action, ToolCallHookAction::Skip { .. }));
-    let goal =
-        crate::goal::load_canonical_goal(node.as_ref(), "did:defra-agent:general", &session_id)
-            .await
-            .expect("load goal")
-            .expect("goal exists");
+    let goal = crate::goal::load_canonical_goal(node.as_ref(), "did:test:general", &session_id)
+        .await
+        .expect("load goal")
+        .expect("goal exists");
     assert_eq!(
         goal.parsed_status(),
         Some(crate::goal::GoalStatus::BudgetLimited)
@@ -677,7 +676,7 @@ async fn completion_call_persists_context_once_before_prompt() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     let context = user_text_message("<context>\nnow=2026-06-15T00:00:00Z\n</context>");
@@ -742,7 +741,7 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     let hook1 = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     hook1
@@ -762,7 +761,7 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
         node.clone(),
         &session_id,
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     )
     .await
@@ -816,7 +815,7 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -880,7 +879,7 @@ async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -973,13 +972,13 @@ async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
     let hook_a = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     let hook_b = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -1057,14 +1056,14 @@ async fn cancelling_cascade_subagent_tool_latches_child_interrupt() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     let mut lifecycle = crate::tool_call_lifecycle::ToolCallLifecycle::new_subagent(
         node.clone(),
         "parent-cascade".to_string(),
         session_id.to_string(),
-        "did:defra-agent:general".to_string(),
+        "did:test:general".to_string(),
         "tool-cascade".to_string(),
         1,
         "spawn_agent".to_string(),
@@ -1073,7 +1072,7 @@ async fn cancelling_cascade_subagent_tool_latches_child_interrupt() {
         crate::tool_call_lifecycle::AwaitMode::Foreground,
         crate::tool_call_lifecycle::CancelPolicy::Cascade,
         child_request_id.to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lifecycle.start_running().await.unwrap();
     hook.in_flight_lifecycles
@@ -1121,14 +1120,14 @@ async fn cancelling_detached_subagent_tool_does_not_interrupt_child() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     let mut lifecycle = crate::tool_call_lifecycle::ToolCallLifecycle::new_subagent(
         node.clone(),
         "parent-detach".to_string(),
         session_id.to_string(),
-        "did:defra-agent:general".to_string(),
+        "did:test:general".to_string(),
         "tool-detach".to_string(),
         1,
         "spawn_agent".to_string(),
@@ -1137,7 +1136,7 @@ async fn cancelling_detached_subagent_tool_does_not_interrupt_child() {
         crate::tool_call_lifecycle::AwaitMode::Foreground,
         crate::tool_call_lifecycle::CancelPolicy::Detach,
         child_request_id.to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lifecycle.start_running().await.unwrap();
     hook.in_flight_lifecycles
@@ -1180,7 +1179,7 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -1237,7 +1236,7 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     let user_prompt = user_text_message("Inspect /tmp/main.rs");
@@ -1418,7 +1417,7 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     let user_prompt = user_text_message("Explain the plan");
@@ -1515,7 +1514,7 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -1537,7 +1536,7 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
     ));
 
     let raw_read_output = concat!(
-        r#"defra_fs: {"ok":true,"status":"success","tool":"read_file","path":"notes.txt","returned_count":2,"total_count":3,"truncated":false,"start_line":2,"end_line":3}"#,
+        r#"gents_fs: {"ok":true,"status":"success","tool":"read_file","path":"notes.txt","returned_count":2,"total_count":3,"truncated":false,"start_line":2,"end_line":3}"#,
         "\ncontent:\nL2: beta\nL3: gamma"
     );
     assert!(matches!(
@@ -1605,7 +1604,7 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
         text,
         "Read notes.txt (lines 2-3 of 3):\nL2: beta\nL3: gamma"
     );
-    assert!(!text.contains("defra_fs"));
+    assert!(!text.contains("gents_fs"));
 
     let row = fetch_tool_call_row(&node, &session_id, "internal-read").await;
     assert_eq!(
@@ -1634,7 +1633,7 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -1793,7 +1792,7 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -1852,7 +1851,7 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     let user_prompt = user_text_message("Inspect mini-1");
@@ -2089,7 +2088,7 @@ async fn hook_with_held_tool(
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:defra-agent:general",
+        "did:test:general",
         FailurePolicy::default(),
     );
     let user_prompt = user_text_message("Run a guarded tool");
@@ -2126,7 +2125,7 @@ async fn held_tool_call_dispatches_after_operator_approval() {
         write_approval_document(
             &approver_node,
             "internal-approve",
-            "did:defra-agent:general",
+            "did:test:general",
             "approved",
             "",
         )
@@ -2170,7 +2169,7 @@ async fn held_tool_call_denied_skips_with_operator_reason() {
         write_approval_document(
             &approver_node,
             "internal-deny",
-            "did:defra-agent:general",
+            "did:test:general",
             "denied",
             "not on my watch",
         )

@@ -1,7 +1,7 @@
-//! Defra-native LLM type vocabulary.
+//! Gents-native LLM type vocabulary.
 //!
 //! These types mirror the rig types gents used to depend on, so that the
-//! runtime, hook, persistence, and tool surfaces speak Defra-owned types rather
+//! runtime, hook, persistence, and tool surfaces speak Gents-owned types rather
 //! than rig's. rig is being confined to the provider/streaming-parsing layer
 //! ("Layer A"); the [`rig_compat`] module converts between these native types
 //! and rig's at that single boundary and will be removed once Layer A is owned.

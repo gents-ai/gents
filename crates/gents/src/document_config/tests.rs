@@ -2,9 +2,9 @@ use super::*;
 
 #[test]
 fn wide_open_preset_is_permissive_and_versioned() {
-    let did = "did:defra-agent:amy";
+    let did = "did:test:amy";
     let id = wide_open_tool_selection_id_for_agent(did);
-    assert_eq!(id, "did:defra-agent:amy:wide-open");
+    assert_eq!(id, "did:test:amy:wide-open");
 
     let preset = wide_open_tool_selection_document(did);
     // Canonical, per-principal id (passes the agent_did hydration filter).
@@ -18,7 +18,7 @@ fn wide_open_preset_is_permissive_and_versioned() {
     );
     // Reproduces today's permissive surface against an EXPLICIT expected set, so
     // a change to the underlying backfill is caught (not a tautology that
-    // recomputes the same call). meta + defra on; everything privilege-bearing
+    // recomputes the same call). meta + DefraDB query on; everything privilege-bearing
     // backfills to secure (false).
     assert_eq!(preset.enable_meta_tools, Some(true));
     assert_eq!(preset.enable_defra_query, Some(true));
@@ -40,7 +40,7 @@ fn wide_open_preset_is_permissive_and_versioned() {
 fn tool_selection_document_accepts_empty_string_arrays() {
     let document: ToolSelectionDocument = serde_json::from_value(serde_json::json!({
         "selection_id": "default-tools",
-        "agent_did": "did:defra-agent:test",
+        "agent_did": "did:test:test",
         "display_name": "Tools",
         "enable_file_tools": true,
         "file_tools_mode": "ReadOnly",
@@ -61,7 +61,7 @@ fn tool_selection_document_accepts_empty_string_arrays() {
 fn tool_selection_document_accepts_string_array_values() {
     let document: ToolSelectionDocument = serde_json::from_value(serde_json::json!({
         "selection_id": "default-tools",
-        "agent_did": "did:defra-agent:test",
+        "agent_did": "did:test:test",
         "display_name": "Tools",
         "enable_file_tools": true,
         "file_tools_mode": "ReadOnly",
@@ -85,7 +85,7 @@ fn tool_selection_document_accepts_string_array_values() {
 fn validate_rejects_empty_string_in_subagent_targets() {
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         subagent_targets: Some(vec!["".to_string()]),
         subagent_spawn_enabled: Some(true),
         ..Default::default()
@@ -102,7 +102,7 @@ fn validate_rejects_empty_string_in_subagent_targets() {
 fn validate_rejects_empty_string_in_backgroundable_tool_names() {
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         backgroundable_tool_names: Some(vec!["".to_string()]),
         ..Default::default()
     };
@@ -118,7 +118,7 @@ fn validate_rejects_empty_string_in_backgroundable_tool_names() {
 fn validate_rejects_write_tool_with_empty_tool_name() {
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         write_tools: Some(vec![WriteToolDecl {
             tool_name: "   ".to_string(),
             collection: "ActionRequest".to_string(),
@@ -139,7 +139,7 @@ fn validate_rejects_write_tool_with_empty_tool_name() {
 fn validate_rejects_write_tool_with_empty_collection() {
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         write_tools: Some(vec![WriteToolDecl {
             tool_name: "request_action".to_string(),
             collection: "  ".to_string(),
@@ -161,7 +161,7 @@ fn validate_rejects_write_tool_with_empty_collection() {
 fn validate_rejects_write_tool_field_with_empty_name() {
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         write_tools: Some(vec![WriteToolDecl {
             tool_name: "request_action".to_string(),
             collection: "ActionRequest".to_string(),
@@ -192,7 +192,7 @@ fn validate_rejects_duplicate_write_tool_names() {
     };
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         write_tools: Some(vec![decl("ActionRequest"), decl("OtherCollection")]),
         ..Default::default()
     };
@@ -209,7 +209,7 @@ fn validate_rejects_duplicate_write_tool_names() {
 fn validate_accepts_well_formed_write_tools() {
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         write_tools: Some(vec![
             WriteToolDecl {
                 tool_name: "request_action".to_string(),
@@ -241,7 +241,7 @@ fn validate_rejects_write_tool_name_colliding_with_builtin() {
     // silently shadow the native impl at registration.
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         write_tools: Some(vec![WriteToolDecl {
             tool_name: "read_file".to_string(),
             collection: "AuditLog".to_string(),
@@ -269,7 +269,7 @@ fn validate_rejects_write_tool_name_colliding_with_builtin() {
 fn validate_rejects_write_tool_name_colliding_with_defra_query() {
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         write_tools: Some(vec![WriteToolDecl {
             tool_name: "defra_query".to_string(),
             collection: "AuditLog".to_string(),
@@ -290,7 +290,7 @@ fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
     // selection, so a write tool reusing that name is a dispatch collision.
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         cli_tool_names: Some(vec!["rg".to_string()]),
         write_tools: Some(vec![WriteToolDecl {
             tool_name: "rg".to_string(),
@@ -316,7 +316,7 @@ fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
 fn validate_rejects_duplicate_field_names_within_decl() {
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         write_tools: Some(vec![WriteToolDecl {
             tool_name: "request_action".to_string(),
             collection: "ActionRequest".to_string(),
@@ -396,7 +396,7 @@ fn write_tools_deserialize_trims_whitespace() {
     // verbatim GraphQL interpolation and corrupt the mutation.
     let json = serde_json::json!({
         "selection_id": "sel-1",
-        "agent_did": "did:defra-agent:test",
+        "agent_did": "did:test:test",
         "write_tools": [{
             "tool_name": "  request_action  ",
             "collection": " ActionRequest ",
@@ -482,7 +482,7 @@ fn read_only_command_allowlist_absent_decodes_to_none() {
     // runtime falls back to the hardcoded default_read_only_commands() list.
     let json = serde_json::json!({
         "selection_id": "sel-1",
-        "agent_did": "did:defra-agent:test",
+        "agent_did": "did:test:test",
     });
     let loaded: ToolSelectionDocument = serde_json::from_value(json).unwrap();
     assert_eq!(loaded.read_only_command_allowlist, None);
@@ -492,7 +492,7 @@ fn read_only_command_allowlist_absent_decodes_to_none() {
 fn write_tools_round_trip() {
     let json = serde_json::json!({
         "selection_id": "sel-1",
-        "agent_did": "did:defra-agent:test",
+        "agent_did": "did:test:test",
         "write_tools": [{
             "tool_name": "request_action",
             "collection": "ActionRequest",
@@ -771,7 +771,7 @@ fn validate_accepts_well_formed_subagent_targets() {
     );
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         subagent_targets: Some(vec![code_entry, research_entry]),
         subagent_spawn_enabled: Some(true),
         orchestration_enabled: Some(false),
@@ -789,7 +789,7 @@ fn validate_accepts_well_formed_subagent_targets() {
 fn validate_rejects_background_default_when_background_disabled() {
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         subagent_background_enabled: Some(false),
         subagent_default_await_mode: Some("background".to_string()),
         ..Default::default()
@@ -809,7 +809,7 @@ fn validate_rejects_bare_string_subagent_target() {
     // this misconfiguration early with a clear error.
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
-        agent_did: "did:defra-agent:test".to_string(),
+        agent_did: "did:test:test".to_string(),
         subagent_targets: Some(vec!["amy-code".to_string()]),
         subagent_spawn_enabled: Some(true),
         ..Default::default()

@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::{ActiveRuntimeSnapshot, EventSource, UpdateSubscriptionSource};
 use events::EventName;
+use gents::{ActiveRuntimeSnapshot, EventSource, UpdateSubscriptionSource};
 use tokio::sync::watch;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;

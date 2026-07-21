@@ -21,7 +21,7 @@ pub mod snapshots;
 pub mod streaming_backend;
 pub mod waits;
 
-pub const AGENT_DID: &str = "did:defra-agent:test";
+pub const AGENT_DID: &str = "did:test:test";
 pub const AGENT_NAME: &str = "test";
 pub const BACKEND_ID: &str = "backend-test";
 pub const DEADLINE_SECS: u64 = 300;

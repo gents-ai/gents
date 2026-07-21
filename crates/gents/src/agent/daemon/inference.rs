@@ -842,7 +842,7 @@ mod tests {
             .await
             .expect("runtime schemas");
 
-        let requester_did = "did:defra-agent:coordinator";
+        let requester_did = "did:test:coordinator";
         let behavior = test_behavior();
         let request = create_routed_request(node.as_ref(), &behavior, requester_did).await;
         let prompt_builder = LayeredPromptBuilder::for_behavior(

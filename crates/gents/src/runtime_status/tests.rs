@@ -37,7 +37,7 @@ fn status_test_request(request_id: &str) -> crate::watcher::AgentRequest {
     crate::watcher::AgentRequest {
         doc_id: format!("{request_id}-doc"),
         request_id: request_id.to_string(),
-        agent_did: "did:defra-agent:status-test".to_string(),
+        agent_did: "did:test:status-test".to_string(),
         requester_did: None,
         behavior_id: Some("general".to_string()),
         session_id: format!("{request_id}-session"),
@@ -159,7 +159,7 @@ fn process_state_from_contract(state: &str) -> ProcessLifecycleState {
 async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_did = format!("did:defra-agent:process-contract:{}", case.name);
+    let agent_did = format!("did:test:process-contract:{}", case.name);
     let status = RuntimeStatusHandle::new(node.clone(), agent_did.clone());
     let action = case
         .action
@@ -287,7 +287,7 @@ async fn runtime_status_persists_process_and_reconcile_state() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    let status = RuntimeStatusHandle::new(node.clone(), "did:defra-agent:status-test");
+    let status = RuntimeStatusHandle::new(node.clone(), "did:test:status-test");
     status
         .set_process_state(ProcessLifecycleState::Recovering)
         .await;
@@ -319,7 +319,7 @@ async fn runtime_status_persists_process_and_reconcile_state() {
     status.publish_router_generation(1).await;
     status.set_process_state(ProcessLifecycleState::Ready).await;
 
-    let row = fetch_runtime_row(node.as_ref(), "did:defra-agent:status-test").await;
+    let row = fetch_runtime_row(node.as_ref(), "did:test:status-test").await;
     assert_eq!(row.process_state, "ready");
     assert_eq!(row.reconcile_phase, "idle");
     assert_eq!(row.active_generation, 1);
@@ -340,7 +340,7 @@ async fn runtime_status_persists_behavior_executor_capacity_and_queue_depth() {
     tx.try_send(status_test_request("queued-1")).unwrap();
     tx.try_send(status_test_request("queued-2")).unwrap();
 
-    let status = RuntimeStatusHandle::new(node.clone(), "did:defra-agent:executor-status");
+    let status = RuntimeStatusHandle::new(node.clone(), "did:test:executor-status");
     status
         .publish_startup_snapshot(&ActiveRuntimeSnapshot {
             generation: 1,
@@ -363,7 +363,7 @@ async fn runtime_status_persists_behavior_executor_capacity_and_queue_depth() {
         })
         .await;
 
-    let row = fetch_runtime_row(node.as_ref(), "did:defra-agent:executor-status").await;
+    let row = fetch_runtime_row(node.as_ref(), "did:test:executor-status").await;
     assert_eq!(row.behavior_executor_capacity, 3);
     assert_eq!(row.behavior_executor_queue_depth, 2);
 
@@ -386,7 +386,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    let status = RuntimeStatusHandle::new(node.clone(), "did:defra-agent:status-serialize");
+    let status = RuntimeStatusHandle::new(node.clone(), "did:test:status-serialize");
     let startup = ActiveRuntimeSnapshot {
         generation: 1,
         principal: None,
@@ -438,7 +438,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
     publish_snapshot.await.unwrap();
     publish_router.await.unwrap();
 
-    let row = fetch_runtime_row(node.as_ref(), "did:defra-agent:status-serialize").await;
+    let row = fetch_runtime_row(node.as_ref(), "did:test:status-serialize").await;
     assert_eq!(row.active_generation, 2);
     assert_eq!(row.router_generation, 2);
     assert_eq!(row.last_reconcile_result, "applied");
@@ -454,7 +454,7 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    let status = RuntimeStatusHandle::new(node.clone(), "did:defra-agent:runtime-contract");
+    let status = RuntimeStatusHandle::new(node.clone(), "did:test:runtime-contract");
     let startup = ActiveRuntimeSnapshot {
         generation: publish.pre_active_generation as u64,
         principal: None,
@@ -497,7 +497,7 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
     status.publish_startup_snapshot(&startup).await;
     status.set_reconcile_phase(ReconcilePhase::Applying).await;
     status.publish_applied(&applied).await;
-    let row = fetch_runtime_row(node.as_ref(), "did:defra-agent:runtime-contract").await;
+    let row = fetch_runtime_row(node.as_ref(), "did:test:runtime-contract").await;
     assert_eq!(row.reconcile_phase, publish.post_phase.as_str());
     assert_eq!(row.active_generation, publish.post_active_generation as i64);
     assert_eq!(row.router_generation, publish.post_router_generation as i64);
@@ -506,7 +506,7 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
     status
         .publish_router_generation(router.post_router_generation as u64)
         .await;
-    let row = fetch_runtime_row(node.as_ref(), "did:defra-agent:runtime-contract").await;
+    let row = fetch_runtime_row(node.as_ref(), "did:test:runtime-contract").await;
     assert_eq!(row.reconcile_phase, router.post_phase.as_str());
     assert_eq!(row.active_generation, router.post_active_generation as i64);
     assert_eq!(row.router_generation, router.post_router_generation as i64);

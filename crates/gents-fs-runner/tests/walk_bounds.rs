@@ -116,13 +116,13 @@ fn glob_wall_budget_stops_walk() {
     // The runner canonicalizes its root, so the hook path must be canonical
     // too (macOS temp dirs live behind a /var -> /private/var symlink).
     std::env::set_var(
-        "DEFRA_NATIVE_FS_RUNNER_BLOCK_DIR",
+        "GENTS_FS_RUNNER_BLOCK_DIR",
         std::fs::canonicalize(&slow_dir)
             .unwrap()
             .to_string_lossy()
             .to_string(),
     );
-    std::env::set_var("DEFRA_NATIVE_FS_RUNNER_BLOCK_MS", "300");
+    std::env::set_var("GENTS_FS_RUNNER_BLOCK_MS", "300");
 
     let value = run_json(
         &root,
@@ -136,8 +136,8 @@ fn glob_wall_budget_stops_walk() {
         }),
     );
 
-    std::env::remove_var("DEFRA_NATIVE_FS_RUNNER_BLOCK_DIR");
-    std::env::remove_var("DEFRA_NATIVE_FS_RUNNER_BLOCK_MS");
+    std::env::remove_var("GENTS_FS_RUNNER_BLOCK_DIR");
+    std::env::remove_var("GENTS_FS_RUNNER_BLOCK_MS");
     let _ = std::fs::remove_dir_all(&root);
 
     assert_eq!(value["ok"], true);

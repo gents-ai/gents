@@ -14,10 +14,10 @@ imported submodules.
 namespace Conformance.Contracts
 
 def contractJsonBegin : String :=
-  "---BEGIN DEFRA LEAN CONTRACT JSON---"
+  "---BEGIN GENTS LEAN CONTRACT JSON---"
 
 def contractJsonEnd : String :=
-  "---END DEFRA LEAN CONTRACT JSON---"
+  "---END GENTS LEAN CONTRACT JSON---"
 
 def main : IO Unit := do
   IO.println contractJsonBegin

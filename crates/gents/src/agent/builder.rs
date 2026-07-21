@@ -10,8 +10,7 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 
 use super::{
-    assemble_principal_and_behaviors, runtime, BehaviorBuildError, Gents,
-    ProcessLifecycleObserver,
+    assemble_principal_and_behaviors, runtime, BehaviorBuildError, Gents, ProcessLifecycleObserver,
 };
 use crate::admission::BackendAdmissionConfig;
 use crate::agent::completion_retry::CompletionRetryProfileFields;

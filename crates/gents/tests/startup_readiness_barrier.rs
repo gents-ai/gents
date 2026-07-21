@@ -7,8 +7,8 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::startup_readiness::StartupReadinessOptions;
 use gents::{
-    ensure_runtime_schemas, AgentIdentity, Gents, DocumentRuntimeOptions,
-    ProcessLifecycleObserver, ProcessLifecycleState, ToolCeiling,
+    ensure_runtime_schemas, AgentIdentity, DocumentRuntimeOptions, Gents, ProcessLifecycleObserver,
+    ProcessLifecycleState, ToolCeiling,
 };
 use serde_json::Value;
 use tokio::sync::watch;

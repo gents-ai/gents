@@ -24,8 +24,8 @@
 //! surfaces, and the DB ends at the pre-apply snapshot via atomicity.
 
 use anyhow::{Context, Result};
-use gents_protocol::graphql::{execute_graphql_async_with_tx, GraphqlRequestOptions};
 use defra_node::{EmbeddedNode, QueryRequest};
+use gents_protocol::graphql::{execute_graphql_async_with_tx, GraphqlRequestOptions};
 use identity::Did;
 use query::TransactionHandle;
 use serde_json::{json, Value};

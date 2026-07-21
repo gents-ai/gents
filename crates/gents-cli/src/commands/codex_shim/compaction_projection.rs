@@ -8,14 +8,14 @@ pub(super) enum CompactionProjectionEvent {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct DefraCompactionProgress {
+pub(super) struct GentsCompactionProgress {
     pub(super) call_id: String,
     pub(super) call_state: String,
 }
 
-pub(super) fn decode_defra_compaction_progress(row: &Value) -> Option<DefraCompactionProgress> {
+pub(super) fn decode_gents_compaction_progress(row: &Value) -> Option<GentsCompactionProgress> {
     (row.get("call_kind")?.as_str()? == "compaction").then_some(())?;
-    Some(DefraCompactionProgress {
+    Some(GentsCompactionProgress {
         call_id: row.get("call_id")?.as_str()?.to_string(),
         call_state: row.get("call_state")?.as_str()?.to_string(),
     })

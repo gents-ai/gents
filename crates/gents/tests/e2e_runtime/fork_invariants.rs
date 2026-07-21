@@ -764,7 +764,7 @@ async fn fork_rejects_mismatched_caller_principal() {
         ForkParams {
             source_session_id: parent_session,
             fork_at_user_turn: 0,
-            caller_agent_did: "did:defra-agent:someone-else",
+            caller_agent_did: "did:test:someone-else",
             target_behavior_id: None,
         },
     )
@@ -826,7 +826,7 @@ async fn fork_rejects_behavior_owned_by_different_principal() {
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
-    create_agent_behavior(&db.node, "foreign-behavior", "did:defra-agent:someone-else").await;
+    create_agent_behavior(&db.node, "foreign-behavior", "did:test:someone-else").await;
     create_agent_message(
         &db.node,
         parent_session,

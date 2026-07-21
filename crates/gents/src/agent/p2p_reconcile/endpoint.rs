@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use gents_protocol::network_token::EndpointRecord;
 use defra_node::EmbeddedNode;
+use gents_protocol::network_token::EndpointRecord;
 use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;

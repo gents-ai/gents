@@ -22,7 +22,7 @@ const EXPORT_ROOT_ENV: &str = "GENTS_ADAPTER_INTEROP_EXPORTS";
 
 #[tokio::test]
 #[ignore = "external interop: set GENTS_ADAPTER_INTEROP_ROUNDTRIP_FIXTURES and pass --ignored"]
-async fn external_adapter_native_captures_roundtrip_through_defra_binary() -> Result<()> {
+async fn external_adapter_native_captures_roundtrip_through_gents_binary() -> Result<()> {
     let Some(root) = fixture_root() else {
         eprintln!(
             "{FIXTURE_ROOT_ENV} or {LEGACY_FIXTURE_ROOT_ENV} is not set; skipping external adapter roundtrip"
@@ -54,7 +54,7 @@ async fn external_adapter_native_captures_roundtrip_through_defra_binary() -> Re
             .with_context(|| format!("parsing {} as external adapter capture", path.display()))?;
         if capture.mapping.is_none() {
             eprintln!(
-                "skipping {}: capture has no Defra import mapping",
+                "skipping {}: capture has no Gents import mapping",
                 path.display()
             );
             continue;
@@ -94,7 +94,7 @@ async fn external_adapter_native_captures_roundtrip_through_defra_binary() -> Re
         let actor_did = import
             .actor_did
             .as_deref()
-            .unwrap_or("did:defra-agent:external-interop-reader");
+            .unwrap_or("did:test:external-interop-reader");
         let home = agent_home.to_str().context("agent home utf8")?;
         let json_output = trace_project(
             tempdir.path(),
@@ -146,15 +146,15 @@ async fn external_adapter_native_captures_roundtrip_through_defra_binary() -> Re
                 .file_stem()
                 .and_then(|stem| stem.to_str())
                 .unwrap_or("external-adapter-capture");
-            std::fs::write(export_root.join(format!("{stem}.defra.json")), json_output)
+            std::fs::write(export_root.join(format!("{stem}.gents.json")), json_output)
                 .with_context(|| format!("writing JSON export for {}", path.display()))?;
             std::fs::write(
-                export_root.join(format!("{stem}.defra.jsonl")),
+                export_root.join(format!("{stem}.gents.jsonl")),
                 jsonl_output,
             )
             .with_context(|| format!("writing JSONL export for {}", path.display()))?;
             std::fs::write(
-                export_root.join(format!("{stem}.defra.eval-jsonl")),
+                export_root.join(format!("{stem}.gents.eval-jsonl")),
                 eval_jsonl_output,
             )
             .with_context(|| format!("writing eval JSONL export for {}", path.display()))?;
@@ -163,7 +163,7 @@ async fn external_adapter_native_captures_roundtrip_through_defra_binary() -> Re
 
     anyhow::ensure!(
         imported_count > 0,
-        "no external adapter captures with supported Defra import mappings were found in {}",
+        "no external adapter captures with supported Gents import mappings were found in {}",
         root.display()
     );
     Ok(())
@@ -282,7 +282,7 @@ fn collect_json_files(root: &Path) -> Result<Vec<PathBuf>> {
 fn collect_json_files_into(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     if path.is_file() {
         if path.extension().and_then(|ext| ext.to_str()) == Some("json")
-            && !is_defra_export_file(path)
+            && !is_gents_export_file(path)
         {
             files.push(path.to_path_buf());
         }
@@ -295,7 +295,7 @@ fn collect_json_files_into(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> 
     );
     for entry in std::fs::read_dir(path).with_context(|| format!("reading {}", path.display()))? {
         let entry = entry?;
-        if entry.file_name() == "defra-exports" {
+        if entry.file_name() == "gents-exports" {
             continue;
         }
         collect_json_files_into(&entry.path(), files)?;
@@ -303,10 +303,10 @@ fn collect_json_files_into(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> 
     Ok(())
 }
 
-fn is_defra_export_file(path: &Path) -> bool {
+fn is_gents_export_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.contains(".defra."))
+        .is_some_and(|name| name.contains(".gents."))
 }
 
 fn valid_multi_agent_capture_value() -> Value {
@@ -337,11 +337,11 @@ fn valid_multi_agent_capture_value() -> Value {
             "participants": [
                 {
                     "role": "planner",
-                    "agent_did": "did:defra-agent:planner"
+                    "agent_did": "did:test:planner"
                 },
                 {
                     "role": "researcher",
-                    "agent_did": "did:defra-agent:researcher",
+                    "agent_did": "did:test:researcher",
                     "request_id": "req-child"
                 }
             ],

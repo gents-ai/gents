@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use anyhow::{anyhow, bail, Context, Result};
+use defra_node::EmbeddedNode;
 use gents_protocol::graphql::escape_graphql_string;
 use gents_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
@@ -15,7 +16,6 @@ use gents_protocol::schemas::{
     GOAL_NAME, INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, SCHEDULE_NAME, SKILL_NAME,
     TASK_NAME, TOOL_SELECTION_NAME, TOOL_SERVICE_REGISTRY_NAME,
 };
-use defra_node::EmbeddedNode;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -1023,8 +1023,8 @@ pub async fn load_agent_scoped_snapshot(
 mod tests {
     use super::*;
     use crate::client::schema::ensure_runtime_schemas;
-    use gents_protocol::schemas::AGENT_MESSAGE_NAME;
     use defra_node::NodeBuilder;
+    use gents_protocol::schemas::AGENT_MESSAGE_NAME;
     use std::sync::Arc;
 
     #[tokio::test]

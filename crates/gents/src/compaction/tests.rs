@@ -684,7 +684,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .await
         .unwrap();
     ensure_schemas(&node).await.unwrap();
-    session::create_session_with_id(&node, "session-1", "general", "did:defra-agent:test")
+    session::create_session_with_id(&node, "session-1", "general", "did:test:test")
         .await
         .unwrap();
 
@@ -729,7 +729,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         session::save_message(
             &node,
             "session-1",
-            "did:defra-agent:test",
+            "did:test:test",
             sequence,
             "user",
             &serde_json::to_string(&user).unwrap(),
@@ -742,7 +742,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         session::save_message(
             &node,
             "session-1",
-            "did:defra-agent:test",
+            "did:test:test",
             sequence,
             "assistant",
             &serde_json::to_string(&assistant_tool_call).unwrap(),
@@ -755,7 +755,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         session::save_message(
             &node,
             "session-1",
-            "did:defra-agent:test",
+            "did:test:test",
             sequence,
             "user",
             &serde_json::to_string(&tool_result).unwrap(),
@@ -768,7 +768,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         session::save_message(
             &node,
             "session-1",
-            "did:defra-agent:test",
+            "did:test:test",
             sequence,
             "assistant",
             &serde_json::to_string(&assistant).unwrap(),
@@ -799,7 +799,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     session::save_compaction_entry(
         &node,
         "session-1",
-        "did:defra-agent:test",
+        "did:test:test",
         &summary,
         &result.files_read,
         &result.files_modified,

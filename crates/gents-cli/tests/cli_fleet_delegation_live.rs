@@ -59,6 +59,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use codex_app_server_protocol as codex;
+use futures_util::{SinkExt, StreamExt};
 use gents::{
     subagent_target_entry, JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter, P2pSyncStatusSnapshot,
 };
@@ -66,7 +67,6 @@ use gents_protocol::message::{
     AssistantContent, Message as ProtocolMessage, ToolResultContent, UserContent,
 };
 use gents_protocol::transcript::decode_persisted_message;
-use futures_util::{SinkExt, StreamExt};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::net::TcpStream;
@@ -313,7 +313,7 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
 
     // Read the parent stream and independently navigate a child while it is
     // still producing real model output on a remote deployment. This is the
-    // end-to-end fence between DEFRA's durable state machine and the native
+    // end-to-end fence between GENTS's durable state machine and the native
     // Codex collaboration/thread protocol.
     let observation = tokio::try_join!(
         fleet_capture_parent_turn(&mut parent_ws),
@@ -393,9 +393,7 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
 #[ignore = "known failing: fresh-store 19-node mesh storm tracked in #798"]
 async fn nineteen_process_release_acceptance_live() -> Result<()> {
     if std::env::var("GENTS_RELEASE_ACCEPTANCE").as_deref() != Ok("1") {
-        tracing::info!(
-            "GENTS_RELEASE_ACCEPTANCE != 1; skipping 19-process release acceptance"
-        );
+        tracing::info!("GENTS_RELEASE_ACCEPTANCE != 1; skipping 19-process release acceptance");
         return Ok(());
     }
 
@@ -2943,9 +2941,7 @@ async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
 #[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
 async fn five_process_workflow_d10_materialized_failure_live() -> Result<()> {
     if std::env::var("GENTS_LIVE_OPENAI").as_deref() != Ok("1") {
-        tracing::info!(
-            "GENTS_LIVE_OPENAI != 1; skipping fleet workflow D10 materialized e2e"
-        );
+        tracing::info!("GENTS_LIVE_OPENAI != 1; skipping fleet workflow D10 materialized e2e");
         return Ok(());
     }
     let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")

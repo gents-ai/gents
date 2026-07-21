@@ -15,7 +15,7 @@ use tracing::Instrument;
 use super::context::{RuntimeContext, StartupBarrier};
 use crate::admission::{AdmissionRegistry, BackendAdmissionConfig, InferenceCall};
 use crate::agent::reconcile::GenerationSupervisor;
-use crate::agent::{Gents, DocumentResolveContext, ProcessLifecycleState};
+use crate::agent::{DocumentResolveContext, Gents, ProcessLifecycleState};
 use crate::backend_registry;
 use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
 use crate::lifecycle::RequestLifecycle;

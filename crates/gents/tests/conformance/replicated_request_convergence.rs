@@ -24,8 +24,8 @@ use gents::{DefraWatcher, Watcher, TERMINAL_REDRIVE_CAP};
 
 const CONVERGENCE_CREATED_AT: &str = "2026-03-23T00:00:00Z";
 const OWNER_DID: &str = AGENT_DID;
-const FOREIGN_DID: &str = "did:defra-agent:foreign-owner";
-const REQUESTER_DID: &str = "did:defra-agent:requester";
+const FOREIGN_DID: &str = "did:test:foreign-owner";
+const REQUESTER_DID: &str = "did:test:requester";
 
 #[derive(Debug, Deserialize)]
 struct ConvergenceRow {

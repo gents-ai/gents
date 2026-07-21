@@ -61,9 +61,7 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
         stdin.flush().context("flushing interactive chat input")?;
     }
 
-    let output = child
-        .wait_with_output()
-        .context("waiting for gents chat")?;
+    let output = child.wait_with_output().context("waiting for gents chat")?;
     if !output.status.success() {
         bail!(
             "gents chat failed\nstdout:\n{}\nstderr:\n{}",

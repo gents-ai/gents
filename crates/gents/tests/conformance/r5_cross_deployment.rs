@@ -6,8 +6,8 @@ use gents::graphql::escape_graphql_string;
 use gents::llm::ToolCallHookAction;
 use gents::{
     default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior,
-    upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, Gents, DefraSessionHook,
-    DocumentRuntimeOptions, FailurePolicy, ToolCeiling, ToolSelectionDocument,
+    upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DefraSessionHook,
+    DocumentRuntimeOptions, FailurePolicy, Gents, ToolCeiling, ToolSelectionDocument,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -18,7 +18,7 @@ use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::{first_optional_row, test_db, test_p2p_db, TestDb};
 
-const PARENT_AGENT_DID: &str = "did:defra-agent:r5-lean-parent";
+const PARENT_AGENT_DID: &str = "did:test:r5-lean-parent";
 
 struct RunningChildAgent {
     db: TestDb,

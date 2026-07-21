@@ -122,7 +122,7 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
         db.node.as_ref(),
         &AgentBehaviorDocument {
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
-            agent_did: "did:defra-agent:r5-remote-child".to_string(),
+            agent_did: "did:test:r5-remote-child".to_string(),
             display_name: Some("R5 remote child".to_string()),
             description: None,
             summary: None,
@@ -208,7 +208,7 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
 // the target at a remote DID and opt the behavior into cross-deployment.
 #[tokio::test]
 async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
-    const REMOTE_DID: &str = "did:defra-agent:remote";
+    const REMOTE_DID: &str = "did:test:remote";
     let fixture = setup_spawn_fixture(
         "cross_deployment_cancel_intent",
         vec![CHILD_BEHAVIOR_ID],

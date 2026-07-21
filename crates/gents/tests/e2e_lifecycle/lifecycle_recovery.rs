@@ -277,7 +277,7 @@ async fn recover_all_times_out_expired_running_tool_calls() {
         db.node.clone(),
         "tool-timeout-req".to_string(),
         "tool-timeout-session".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tool-timeout-call".to_string(),
         1,
         "never".to_string(),
@@ -325,7 +325,7 @@ async fn recover_all_cancels_running_tool_call_for_interrupted_parent_only() {
         db.node.clone(),
         "tool-cancel-req".to_string(),
         "tool-cancel-session".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tool-cancel-call".to_string(),
         1,
         "slow".to_string(),
@@ -338,7 +338,7 @@ async fn recover_all_cancels_running_tool_call_for_interrupted_parent_only() {
         db.node.clone(),
         "tool-other-req".to_string(),
         "tool-other-session".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tool-other-call".to_string(),
         1,
         "slow".to_string(),
@@ -397,7 +397,7 @@ async fn recover_all_cascades_interrupted_parent_to_subagent_child() {
         db.node.clone(),
         "tool-cascade-parent".to_string(),
         "tool-cascade-parent-session".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tool-cascade-call".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -406,7 +406,7 @@ async fn recover_all_cascades_interrupted_parent_to_subagent_child() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "tool-cascade-child".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lifecycle.start_running().await.unwrap();
 
@@ -453,7 +453,7 @@ async fn recover_all_leaves_detached_subagent_tool_running() {
         db.node.clone(),
         "tool-detach-parent".to_string(),
         "tool-detach-parent-session".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "tool-detach-call".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -462,7 +462,7 @@ async fn recover_all_leaves_detached_subagent_tool_running() {
         AwaitMode::Background,
         CancelPolicy::Detach,
         "tool-detach-child".to_string(),
-        "did:defra-agent:target".to_string(),
+        "did:test:target".to_string(),
     );
     lifecycle.start_running().await.unwrap();
 

@@ -994,7 +994,7 @@ mod tests {
     fn create_agent_request_mutation_includes_sampling_and_metadata() {
         let mutation = create_agent_request_mutation(&CreateAgentRequestInput {
             request_id: "req-1",
-            agent_did: "did:defra:amy",
+            agent_did: "did:test:amy",
             content: "hello",
             session_id: "session-1",
             behavior_id: Some("amy-default"),

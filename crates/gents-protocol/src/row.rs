@@ -937,7 +937,7 @@ mod tests {
     fn agent_request_row_roundtrips() {
         let json = r#"{
             "request_id": "req-1",
-            "agent_did": "did:defra:amy",
+            "agent_did": "did:test:amy",
             "behavior_id": "amy-code",
             "session_id": "s-1",
             "retry_parent_request": "",
@@ -975,7 +975,7 @@ mod tests {
     fn tool_selection_row_handles_missing_arrays() {
         let json = r#"{
             "selection_id": "sel-1",
-            "agent_did": "did:defra:amy",
+            "agent_did": "did:test:amy",
             "display_name": "tools-engineering",
             "enable_file_tools": true,
             "file_tools_mode": "read",
@@ -997,7 +997,7 @@ mod tests {
     fn tool_selection_row_handles_null_arrays() {
         let json = r#"{
             "selection_id": "sel-2",
-            "agent_did": "did:defra:amy",
+            "agent_did": "did:test:amy",
             "cli_tool_names": null,
             "allowed_mcp_service_ids": null,
             "delegate_to": null,
@@ -1016,7 +1016,7 @@ mod tests {
     fn tool_selection_row_handles_empty_string_arrays() {
         let json = r#"{
             "selection_id": "sel-3",
-            "agent_did": "did:defra:amy",
+            "agent_did": "did:test:amy",
             "cli_tool_names": "",
             "allowed_mcp_service_ids": "",
             "delegate_to": "",
@@ -1037,7 +1037,7 @@ mod tests {
     fn tool_selection_row_round_trips_subagent_fields() {
         let json = r#"{
             "selection_id": "sel-4",
-            "agent_did": "did:defra:amy",
+            "agent_did": "did:test:amy",
             "subagent_targets": ["amy-research"],
             "subagent_spawn_enabled": true,
             "orchestration_enabled": true,
@@ -1068,7 +1068,7 @@ mod tests {
     fn tool_selection_row_round_trips_write_tools_and_await_mode() {
         let json = r#"{
             "selection_id": "sel-5",
-            "agent_did": "did:defra:amy",
+            "agent_did": "did:test:amy",
             "subagent_default_await_mode": "foreground",
             "write_tools": ["{\"tool_name\":\"upsert_note\",\"collection\":\"Note\",\"fields\":[]}"]
         }"#;

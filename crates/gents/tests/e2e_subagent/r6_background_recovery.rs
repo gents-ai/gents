@@ -22,10 +22,7 @@ struct WakeRequestRow {
     metadata: Option<String>,
 }
 
-async fn load_tool_call(
-    node: &gents::defra_node::EmbeddedNode,
-    tool_call_id: &str,
-) -> ToolCallRow {
+async fn load_tool_call(node: &gents::defra_node::EmbeddedNode, tool_call_id: &str) -> ToolCallRow {
     let tool_call_id = gents::graphql::escape_graphql_string(tool_call_id);
     let query = format!(
         r#"{{
@@ -111,7 +108,7 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
         db.node.clone(),
         "r6-recovery-parent".to_string(),
         "r6-recovery-session".to_string(),
-        "did:defra-agent:test".to_string(),
+        "did:test:test".to_string(),
         "r6-recovery-tool".to_string(),
         1,
         "bash".to_string(),

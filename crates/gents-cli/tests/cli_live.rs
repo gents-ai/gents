@@ -940,7 +940,7 @@ fn trace_project_json(
             "--redaction",
             redaction,
             "--actor-did",
-            "did:defra-agent:live-projection-test",
+            "did:test:live-projection-test",
         ],
     )?;
     serde_json::from_str::<Value>(&output).context("parsing live adapter projection JSON")
@@ -970,7 +970,7 @@ fn trace_project_jsonl_lines(
             "--format",
             format,
             "--actor-did",
-            "did:defra-agent:live-projection-test",
+            "did:test:live-projection-test",
         ],
     )?;
     output

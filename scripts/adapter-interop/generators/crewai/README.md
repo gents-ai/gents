@@ -2,7 +2,7 @@
 
 This generator executes real CrewAI `Crew` workflows with deterministic custom
 `BaseLLM` instances. It captures native CrewAI `CrewOutput` / task output
-objects and writes wrapped Defra Agent `multi_agent_task` adapter projection
+objects and writes wrapped Gents `multi_agent_task` adapter projection
 fixtures.
 
 It emits:

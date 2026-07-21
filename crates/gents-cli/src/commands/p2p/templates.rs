@@ -140,15 +140,8 @@ mod tests {
 
     #[test]
     fn p2p_templates_list_json_parses() {
-        let cli = Cli::try_parse_from([
-            "gents",
-            "p2p",
-            "templates",
-            "list",
-            "--output",
-            "json",
-        ])
-        .expect("p2p templates list --output json should parse");
+        let cli = Cli::try_parse_from(["gents", "p2p", "templates", "list", "--output", "json"])
+            .expect("p2p templates list --output json should parse");
         match cli.command {
             crate::cli::args::Command::P2p {
                 command: crate::cli::args::P2pCommand::Templates { command },

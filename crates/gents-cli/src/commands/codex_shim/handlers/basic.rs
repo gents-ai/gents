@@ -95,7 +95,7 @@ pub(super) async fn handle_basic_request(
                 json!({
                     "config": {
                         "model": model_id,
-                        "model_provider": "defra",
+                        "model_provider": "gents",
                         "approval_policy": "never",
                         "sandbox_mode": "danger-full-access"
                     },
@@ -243,13 +243,13 @@ pub(super) async fn handle_basic_request(
 /// Synthetic absolute path Codex uses as the skill identifier. The final
 /// segment is the `skill_id`, which `SkillsConfigWrite` parses back out.
 fn skill_doc_path(skill_id: &str) -> codex_utils_absolute_path::AbsolutePathBuf {
-    std::path::PathBuf::from(format!("/defra/skills/{skill_id}"))
+    std::path::PathBuf::from(format!("/gents/skills/{skill_id}"))
         .try_into()
         .expect("synthetic skill path is absolute")
 }
 
 /// Query the bound agent's `Skill` documents and project them to Codex
-/// `SkillMetadata`. Defra's `scope` maps `principal` -> `System` (shared across
+/// `SkillMetadata`. Gents' `scope` maps `principal` -> `System` (shared across
 /// the agent's behaviors) and `behavior` -> `User`.
 async fn load_skill_metadata(state: &ShimState) -> Result<Vec<codex::SkillMetadata>> {
     let query = format!(
@@ -436,7 +436,7 @@ async fn apply_config_writes(
         request_id,
         json!({
             "status": "ok",
-            "version": "defra-shim",
+            "version": "gents-shim",
             "filePath": absolute_path(&state.codex_home.join("config.toml")),
             "overriddenMetadata": null
         }),

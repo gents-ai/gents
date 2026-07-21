@@ -134,7 +134,7 @@ def provider_model_node(state: ProviderState) -> ProviderState:
     model, provider_metadata = build_provider_chat_model()
     human = HumanMessage(
         content=(
-            "Map a provider-backed LangGraph run to Defra Agent projection "
+            "Map a provider-backed LangGraph run to Gents projection "
             f"fields for topic={state.get('topic', 'adapter projection')}."
         )
     )
@@ -275,20 +275,20 @@ def build_provider_graph():
 
 
 def build_provider_chat_model() -> tuple[Any, dict[str, str]]:
-    mode = os.environ.get("DEFRA_LANGGRAPH_PROVIDER_MODE", "fake").strip().lower()
+    mode = os.environ.get("GENTS_LANGGRAPH_PROVIDER_MODE", "fake").strip().lower()
     if mode not in {"fake", "auto", "live"}:
         raise RuntimeError(
-            "DEFRA_LANGGRAPH_PROVIDER_MODE must be one of fake, auto, or live"
+            "GENTS_LANGGRAPH_PROVIDER_MODE must be one of fake, auto, or live"
         )
     model_name = (
-        os.environ.get("DEFRA_LANGGRAPH_OPENAI_MODEL")
+        os.environ.get("GENTS_LANGGRAPH_OPENAI_MODEL")
         or os.environ.get("OPENAI_MODEL")
         or "gpt-4.1-mini"
     )
     base_url = os.environ.get("OPENAI_BASE_URL", "")
     if mode == "live" and not os.environ.get("OPENAI_API_KEY"):
         raise RuntimeError(
-            "DEFRA_LANGGRAPH_PROVIDER_MODE=live requires OPENAI_API_KEY"
+            "GENTS_LANGGRAPH_PROVIDER_MODE=live requires OPENAI_API_KEY"
         )
     if mode in {"live", "auto"} and os.environ.get("OPENAI_API_KEY"):
         from langchain_openai import ChatOpenAI
@@ -303,7 +303,7 @@ def build_provider_chat_model() -> tuple[Any, dict[str, str]]:
         }
     response = (
         "FAKE_PROVIDER: map LangGraph provider messages, tool calls, and "
-        "checkpoint history into Defra Agent projection fields."
+        "checkpoint history into Gents projection fields."
     )
     return FakeListChatModel(responses=[response]), {
         "mode": "fake",
@@ -476,14 +476,14 @@ def build_projection(capture: dict[str, Any]) -> dict[str, Any]:
         "projection_version": "v1",
         "source_request_id": REQUEST_ID,
         "source_session_id": THREAD_ID,
-        "source_agent_did": "did:defra-agent:langgraph-fixture",
+        "source_agent_did": "did:test:langgraph-fixture",
         "source_behavior_id": "langgraph-research-flow",
         "redaction_mode": "full",
         "provenance": {
-            "runtime": "defra-agent",
+            "runtime": "gents",
             "source_projection_id": "run_timeline",
             "source_projection_version": "v1",
-            "actor_did": "did:defra-agent:langgraph-fixture-reader",
+            "actor_did": "did:test:langgraph-fixture-reader",
         },
         "output": {
             "adapter": "langgraph_state_history",
@@ -520,14 +520,14 @@ def build_subgraph_projection(capture: dict[str, Any]) -> dict[str, Any]:
         "projection_version": "v1",
         "source_request_id": SUBGRAPH_REQUEST_ID,
         "source_session_id": SUBGRAPH_THREAD_ID,
-        "source_agent_did": "did:defra-agent:langgraph-subgraph-fixture",
+        "source_agent_did": "did:test:langgraph-subgraph-fixture",
         "source_behavior_id": "langgraph-review-subgraph-flow",
         "redaction_mode": "full",
         "provenance": {
-            "runtime": "defra-agent",
+            "runtime": "gents",
             "source_projection_id": "run_timeline",
             "source_projection_version": "v1",
-            "actor_did": "did:defra-agent:langgraph-fixture-reader",
+            "actor_did": "did:test:langgraph-fixture-reader",
         },
         "output": {
             "adapter": "langgraph_state_history",
@@ -566,14 +566,14 @@ def build_provider_projection(capture: dict[str, Any]) -> dict[str, Any]:
         "projection_version": "v1",
         "source_request_id": PROVIDER_REQUEST_ID,
         "source_session_id": PROVIDER_THREAD_ID,
-        "source_agent_did": "did:defra-agent:langgraph-provider-fixture",
+        "source_agent_did": "did:test:langgraph-provider-fixture",
         "source_behavior_id": "langgraph-provider-backed-flow",
         "redaction_mode": "training_safe",
         "provenance": {
-            "runtime": "defra-agent",
+            "runtime": "gents",
             "source_projection_id": "run_timeline",
             "source_projection_version": "v1",
-            "actor_did": "did:defra-agent:langgraph-fixture-reader",
+            "actor_did": "did:test:langgraph-fixture-reader",
         },
         "output": {
             "adapter": "langgraph_state_history",
@@ -792,11 +792,11 @@ def provider_metadata(capture: dict[str, Any]) -> dict[str, Any]:
         "model": capture["result"].get("provider_model"),
         "base_url": capture["result"].get("provider_base_url"),
         "live_env": {
-            "DEFRA_LANGGRAPH_PROVIDER_MODE": os.environ.get(
-                "DEFRA_LANGGRAPH_PROVIDER_MODE", "fake"
+            "GENTS_LANGGRAPH_PROVIDER_MODE": os.environ.get(
+                "GENTS_LANGGRAPH_PROVIDER_MODE", "fake"
             ),
-            "DEFRA_LANGGRAPH_OPENAI_MODEL_SET": bool(
-                os.environ.get("DEFRA_LANGGRAPH_OPENAI_MODEL")
+            "GENTS_LANGGRAPH_OPENAI_MODEL_SET": bool(
+                os.environ.get("GENTS_LANGGRAPH_OPENAI_MODEL")
             ),
             "OPENAI_BASE_URL_SET": bool(os.environ.get("OPENAI_BASE_URL")),
             "OPENAI_API_KEY_SET": bool(os.environ.get("OPENAI_API_KEY")),
@@ -820,7 +820,7 @@ def write_fixture_file(
             "package": "langgraph",
             "package_version": langgraph_version(),
             "generator": "adapter-projections/generators/langgraph",
-            "capture": os.environ.get("DEFRA_FIXTURE_CAPTURE", "local"),
+            "capture": os.environ.get("GENTS_FIXTURE_CAPTURE", "local"),
             "api": source_api,
         },
         "native": native,
@@ -847,7 +847,7 @@ def build_import_mapping(
         "session_id": thread_id,
         "agent_did": agent_did,
         "behavior_id": behavior_id,
-        "actor_did": "did:defra-agent:langgraph-fixture-reader",
+        "actor_did": "did:test:langgraph-fixture-reader",
         "status": status,
     }
 
@@ -874,7 +874,7 @@ def write_linear_fixture(out_dir: Path, capture: dict[str, Any]) -> Path:
             "langgraph.linear_state_history",
             REQUEST_ID,
             THREAD_ID,
-            "did:defra-agent:langgraph-fixture",
+            "did:test:langgraph-fixture",
             "langgraph-research-flow",
             capture,
         ),
@@ -909,7 +909,7 @@ def write_subgraph_fixture(out_dir: Path, capture: dict[str, Any]) -> Path:
             "langgraph.compiled_subgraph",
             SUBGRAPH_REQUEST_ID,
             SUBGRAPH_THREAD_ID,
-            "did:defra-agent:langgraph-subgraph-fixture",
+            "did:test:langgraph-subgraph-fixture",
             "langgraph-review-subgraph-flow",
             capture,
         ),
@@ -950,7 +950,7 @@ def write_provider_fixture(out_dir: Path, capture: dict[str, Any]) -> Path:
                 "langgraph.provider_backed",
                 PROVIDER_REQUEST_ID,
                 PROVIDER_THREAD_ID,
-                "did:defra-agent:langgraph-provider-fixture",
+                "did:test:langgraph-provider-fixture",
                 "langgraph-provider-backed-flow",
                 capture,
             ),

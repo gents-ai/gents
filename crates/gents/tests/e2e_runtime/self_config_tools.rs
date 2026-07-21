@@ -5,10 +5,10 @@
 
 use std::sync::Arc;
 
+use defra_node::EmbeddedNode;
 use gents::self_config::build_self_config_tools;
 use gents::tool_surface::SelfConfigToolConfig;
 use gents::{load_agent_behavior, load_tool_selection, ToolSelectionDocument};
-use defra_node::EmbeddedNode;
 use serde_json::{json, Value};
 
 use crate::support::test_db;

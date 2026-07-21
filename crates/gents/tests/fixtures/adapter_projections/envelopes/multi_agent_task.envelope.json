@@ -5,7 +5,7 @@
       "context_id": "session-team-1",
       "delegations": [
         {
-          "agent_did": "did:defra-agent:researcher",
+          "agent_did": "did:test:researcher",
           "behavior_id": "researcher",
           "child_request_id": "req-team-research-1",
           "parent_request_id": "req-team-1",
@@ -29,12 +29,12 @@
       ],
       "participants": [
         {
-          "agent_did": "did:defra-agent:coordinator",
+          "agent_did": "did:test:coordinator",
           "behavior_id": "coordinator",
           "role": "owner"
         },
         {
-          "agent_did": "did:defra-agent:researcher",
+          "agent_did": "did:test:researcher",
           "behavior_id": "researcher",
           "role": "delegate"
         }
@@ -62,7 +62,7 @@
     "source_projection_version": "v1"
   },
   "redaction_mode": "full",
-  "source_agent_did": "did:defra-agent:coordinator",
+  "source_agent_did": "did:test:coordinator",
   "source_behavior_id": "coordinator",
   "source_request_id": "req-team-1",
   "source_session_id": "session-team-1"

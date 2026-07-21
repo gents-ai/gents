@@ -94,11 +94,8 @@ fn build_agent_behavior_for_routing_test(
         stream_liveness_timeout: std::time::Duration::from_secs(
             gents::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
-        deadline_duration: std::time::Duration::from_secs(
-            gents::DEFAULT_DEADLINE_DURATION_SECS,
-        ),
-        completion_retry:
-            gents::agent::completion_retry::CompletionRetryProfileFields::default(),
+        deadline_duration: std::time::Duration::from_secs(gents::DEFAULT_DEADLINE_DURATION_SECS),
+        completion_retry: gents::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: gents::SamplingConfig::default(),
     }
 }
@@ -161,7 +158,7 @@ fn acp_actor_for(behavior: &AgentBehavior) -> Identity {
     Identity::Authenticated(
         Did::new(behavior.principal.agent_did.as_str()).unwrap_or_else(|error| {
             panic!(
-                "behavior {:?}: principal DID {:?} is not a valid Defra identity DID: {error}",
+                "behavior {:?}: principal DID {:?} is not a valid DefraDB identity DID: {error}",
                 behavior.behavior_id, behavior.principal.agent_did
             )
         }),
@@ -171,7 +168,7 @@ fn acp_actor_for(behavior: &AgentBehavior) -> Identity {
 fn did_from_lean_case(value: &str, case: &LeanIdentityPermissionCase, field: &str) -> Did {
     Did::new(value).unwrap_or_else(|error| {
         panic!(
-            "case {:?}: {field} {:?} is not a valid Defra identity DID: {error}",
+            "case {:?}: {field} {:?} is not a valid DefraDB identity DID: {error}",
             case.name, value
         )
     })
