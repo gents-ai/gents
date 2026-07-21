@@ -6,8 +6,8 @@ normal CI.
 
 ## Checked-In Fixtures
 
-`v1/*.envelope.json` files are dependency-light examples for the first adapter
-projection targets:
+`crates/gents/tests/fixtures/adapter_projections/envelopes/*.envelope.json`
+files are dependency-light examples for the first adapter projection targets:
 
 - OpenAI/Codex-style run trace
 - LangGraph-style state/history
@@ -28,7 +28,7 @@ GENTS_ADAPTER_INTEROP_FIXTURES=/path/to/generated/fixtures \
 The same harness can be pointed at the checked-in fixtures:
 
 ```sh
-GENTS_ADAPTER_INTEROP_FIXTURES=scripts/adapter-interop/v1 \
+GENTS_ADAPTER_INTEROP_FIXTURES=crates/gents/tests/fixtures/adapter_projections/envelopes \
   cargo test -p gents --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
 ```
 
@@ -91,23 +91,23 @@ The test validates each fixture against:
 ## Native Capture Roundtrip
 
 Wrapped captures may also include a `mapping` block that describes how native
-framework evidence maps into Defra runtime documents. The ignored CLI
+framework evidence maps into Gents runtime documents. The ignored CLI
 roundtrip harness imports those mapped native captures into embedded DefraDB,
 runs the real `gents trace project` binary, writes JSON/JSONL/eval-JSONL
-exports, and lets framework-side verifiers consume those Defra exports:
+exports, and lets framework-side verifiers consume those Gents exports:
 
 ```sh
 GENTS_ADAPTER_INTEROP_ROUNDTRIP_FIXTURES=/path/to/generated/fixtures \
-GENTS_ADAPTER_INTEROP_EXPORTS=/path/to/generated/fixtures/defra-exports \
+GENTS_ADAPTER_INTEROP_EXPORTS=/path/to/generated/fixtures/gents-exports \
   cargo test -p gents-cli --test cli_adapter_interop_roundtrip -- --ignored --nocapture
 ```
 
 The Docker interop script runs this roundtrip stage after the envelope contract
 validation when Rust validation is enabled. The current LangGraph, AutoGen
 AgentChat, CrewAI, and Microsoft Agent Framework captures exercise the full
-path: real framework execution, native capture import into Defra runtime rows,
+path: real framework execution, native capture import into Gents runtime rows,
 embedded DefraDB persistence, real binary export, and framework-container
-verifiers that check the Defra export against native state/messages,
+verifiers that check the Gents export against native state/messages,
 participants, delegations, tool events, JSONL records, and eval samples.
 
 Docker, Python, and framework-specific generators should stay outside the
@@ -119,9 +119,9 @@ container write one JSON fixture per captured scenario. Then run the Rust
 harness against that output directory. This keeps framework installation and
 network access out of the default test suite while still proving that captures
 from real external runtimes can be represented by the shared Gents
-projection contract. Generators without a `mapping` block are not native Defra
+projection contract. Generators without a `mapping` block are not native Gents
 import adapters: they execute the framework, collect native evidence, map it
-into a wrapped Defra projection envelope, and then validate that envelope.
+into a wrapped Gents projection envelope, and then validate that envelope.
 Generators with a `mapping` block can additionally feed the native-capture
 roundtrip harness.
 

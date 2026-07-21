@@ -2,7 +2,7 @@
 
 ## What this is
 
-gents is a Rust agent runtime where the database is the control plane. It is built on DefraDB, and it leans on what DefraDB uniquely provides — DID-based cryptographic identity, document-level access control, and P2P replication — to give agents properties a normal stack can't: verifiable identity, least-privilege permission boundaries, and gossip-based event propagation across nodes.
+Gents is a Rust agent runtime where the database is the control plane. It is built on DefraDB, and it leans on what DefraDB uniquely provides — DID-based cryptographic identity, document-level access control, and P2P replication — to give agents properties a normal stack can't: verifiable identity, least-privilege permission boundaries, and gossip-based event propagation across nodes.
 
 Everything is a document. Configuration, requests, responses, sessions, tool calls, triggers, schedules — all DefraDB documents. You configure an agent by writing documents, trigger work by writing documents, and debug by reading documents. The runtime watches for request documents, drives them through a formally specified lifecycle, and writes response documents back.
 

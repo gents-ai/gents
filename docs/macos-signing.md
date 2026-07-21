@@ -139,7 +139,7 @@ puts the keychain first in the active search list, smoke-signs a copy of
 `/bin/echo`, and refuses to continue if the designated requirement is an ad-hoc
 `cdhash`.
 
-The gents Studio runner is launched by
+The Gents Studio runner is launched by
 `/Library/LaunchDaemons/com.github.actions.runner.gents.plist`. That
 LaunchDaemon must set `SessionCreate=true`; otherwise the job can update the
 user keychain search list while the default keychain domain seen by `codesign`
@@ -190,14 +190,14 @@ spctl --assess --type execute --verbose=4 gents-aarch64-apple-darwin/gents || tr
 ./gents-aarch64-apple-darwin/gents version
 ```
 
-## Rollout note
+## Gents rollout
 
-Hosts that previously ran ad-hoc signed steward binaries may still have keychain
-items whose access control trusts the old ad-hoc code hash. The first rollout to
-the stable signed artifact can require one-time user approval, keychain ACL
-migration, or deleting and recreating the item while running the stable signed
-binary.
+Use the [Gents cutover runbook](gents-cutover.md) for deployed hosts. Gents does
+not migrate identities or keychain items from a pre-Gents installation. Install
+the signed artifact, initialize fresh Gents state, and let the runtime create a
+new identity under the `com.source-inc.gents.identity` keychain service.
 
-After that migration, future deployed steward binaries should come only from the
-signed release artifact path so the keychain sees the same signing requirement
-across releases.
+Pre-cutover state is left untouched. Remove it manually only after the new DID,
+peer relationships, runtime health, and rollback records have been verified.
+Future steward updates should use only the signed release artifact so the
+keychain sees the same signing requirement across Gents releases.

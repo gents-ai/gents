@@ -43,7 +43,7 @@ For an isolated desktop data directory — useful for demos and QA runs — set
 
 ```bash
 GENTS_DESKTOP_HOME=/tmp/gents-desktop-demo/desktop \
-  npm --prefix apps/desktop-tauri run tauri -- dev
+  npm --prefix apps/gents-desktop run tauri -- dev
 ```
 
 The launcher, bootstrap summary, logs, peer directory, and embedded desktop

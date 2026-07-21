@@ -1,8 +1,8 @@
 # Backends
 
-This page is the committed backend support matrix for gents. It tracks
+This page is the committed backend support matrix for Gents. It tracks
 which providers are supported, which wire API each provider uses, what request
-and response shaping gents applies, and whether a provider has an offline
+and response shaping Gents applies, and whether a provider has an offline
 wire fixture replay fence.
 
 The runtime owns provider-input assembly before any provider-specific client is
@@ -114,9 +114,9 @@ as an `OAuthCredential` DefraDB document scoped by `agent_did` and provider
 - **Change the model:** pass `--model-name <slug>` to `init`, or update the behavior
   with `gents config behavior set --backend-id <id> --model-name <slug>`.
 - **Client version gate.** The backend gates model availability on the Codex client
-  version gents advertises (currently `0.138.0`, on both the request `version`
+  version Gents advertises (currently `0.138.0`, on both the request `version`
   header and the `/models` `client_version` query param). If a newer floor is required,
-  set `DEFRA_CHATGPT_CODEX_CLIENT_VERSION` — one knob moves it everywhere.
+  set `GENTS_CHATGPT_CODEX_CLIENT_VERSION` — one knob moves it everywhere.
 - **Reasoning effort** is currently fixed at `medium`; per-behavior effort selection
   (e.g. `xhigh`) is tracked in #540.
 
@@ -140,7 +140,7 @@ places. Regression tests pin these details:
   store, then writes the resulting access token, refresh token, id token, account
   id, plan, FedRAMP flag, and expiry into `OAuthCredential`.
 - The runtime reads `OAuthCredential` for the behavior's `agent_did`; it does not
-  read `CODEX_HOME`, `DEFRA_CODEX_HOME`, or `~/.codex` for ChatGPT backend auth.
+  read `CODEX_HOME` or `~/.codex` for ChatGPT backend auth.
 - v1 stores token fields as plaintext document fields, matching the current
   `InferenceBackend.api_key` precedent. Filtered replication must scope the
   credential to the owning `agent_did`; encrypted token fields are the next slice.

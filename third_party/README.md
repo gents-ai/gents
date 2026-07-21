@@ -20,7 +20,7 @@ from upstream merge commit
 | (defense) | Same underflow site if another path reintroduces duplicate Draining | `noq`: per-connection `draining_reported` (kept past `Drained`); ignore Draining when handle not in `senders` |
 | (defense) | Poisoned Drop abort via `EndpointRef` after driver | `noq`: `EndpointRef::drop` also recovers from poison |
 
-### Why this is in gents
+### Why this is in Gents
 
 - Production: fleet builds set `overflow-checks = true`, so the underflow kills steward nodes (defradb.rs#1091 / gents#634).
 - Production: stale packets for a recently abandoned path panic hub nodes during

@@ -1,6 +1,6 @@
 # Getting started on a Mac
 
-One story, end to end: local inference on your Mac driving a native Defra
+One story, end to end: local inference on your Mac driving a native Gents
 agent that can inspect — and, when you allow it, change — your computer,
 through the Codex terminal UI. No accounts, no API keys, nothing leaves your
 machine.
@@ -9,7 +9,7 @@ machine.
 brew install llama.cpp
 llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
 
-gh release download v0.4.0 --repo source-inc/gents -p 'gents-aarch64-apple-darwin.tar.gz'
+gh release download --repo source-inc/gents -p 'gents-aarch64-apple-darwin.tar.gz'
 tar -xzf gents-aarch64-apple-darwin.tar.gz
 sudo install gents-aarch64-apple-darwin/gents /usr/local/bin/gents
 
@@ -49,12 +49,12 @@ Check it:
 curl -s http://127.0.0.1:8080/v1/models | head -c 200
 ```
 
-## 2. Install gents
+## 2. Install Gents
 
 Download the signed, notarized binary from the release:
 
 ```bash
-gh release download v0.4.0 --repo source-inc/gents -p 'gents-aarch64-apple-darwin.tar.gz'
+gh release download --repo source-inc/gents -p 'gents-aarch64-apple-darwin.tar.gz'
 tar -xzf gents-aarch64-apple-darwin.tar.gz
 sudo install gents-aarch64-apple-darwin/gents /usr/local/bin/gents
 ```
@@ -131,7 +131,7 @@ commands. If you initialized with `--write`, try asking it to create or edit
 a file under the tool root.
 
 Codex-side approvals and sandboxing are intentionally bypassed: every tool
-call executes inside the Defra runtime, where the preset you chose at `init`
+call executes inside the Gents runtime, where the preset you chose at `init`
 is enforced. The TUI is a window, not a boundary.
 
 Prefer a plain REPL, or scripting a turn? `gents chat` talks to the
@@ -175,7 +175,7 @@ you can audit afterwards (`gents response show <request-id>`, or
 gents init --backend-preset ollama --model-name MODEL
 gents init --backend-preset openai --model-name MODEL
 gents init --backend-preset openrouter --model-name MODEL
-gents init --backend-preset chatgpt-codex --model-name MODEL   # uses your ~/.codex OAuth
+gents init --backend-preset chatgpt-codex --model-name MODEL   # uses a Gents OAuthCredential
 gents init --inference-url http://HOST:PORT/v1 --model-name MODEL
 ```
 
@@ -217,12 +217,12 @@ gents response wait --graphql "$GRAPHQL" --request-id "<request-id>"
 
 # Part 2 — Pair a second node
 
-Part 1 is one runtime talking to itself. The reason gents is built on
+Part 1 is one runtime talking to itself. The reason Gents is built on
 DefraDB is that the *same documents* can live on more than one node and stay
 in sync over a peer-to-peer link — no shared server in the middle. Part 2
 pairs a second runtime to the first and replicates a chat between them.
 
-This is also the reference example for **how to drive Defra P2P replication
+This is also the reference example for **how to drive DefraDB P2P replication
 from an application**. The pattern is the point: you do not imperatively wire
 peers together and hope the two sides agree. You **write a document that
 describes the pairing you want, and the runtime reconciles live P2P state
@@ -492,7 +492,7 @@ backend, behavior, tool selection) through the same upsert code as
 `gents config ... set`. `codex` and `chat` create request documents;
 the runtime claims them, drives the proven request lifecycle, executes tool
 calls inside the preset's boundary, and persists every observable step. Bash
-results come back with a `defra_exec:` JSON metadata envelope (command, exit
+results come back with a `gents_exec:` JSON metadata envelope (command, exit
 code, sandbox mode, truncation); command environments are stripped of
 variables containing `KEY`, `SECRET`, or `TOKEN`.
 

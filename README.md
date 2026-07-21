@@ -1,8 +1,8 @@
-# gents
+# Gents
 
 **An agent runtime where the database is the control plane.**
 
-gents runs LLM agents on top of [DefraDB](https://github.com/sourcenetwork/defradb): every piece of state — configuration, requests, responses, sessions, tool calls, schedules — is a replicated, access-controlled document. Agents get verifiable DID-based identity, document-level permissions, and P2P event propagation for free, because the database provides them.
+Gents runs LLM agents on top of [DefraDB](https://github.com/sourcenetwork/defradb): every piece of state — configuration, requests, responses, sessions, tool calls, schedules — is a replicated, access-controlled document. Agents get verifiable DID-based identity, document-level permissions, and P2P event propagation for free, because the database provides them.
 
 ## Get running
 
@@ -12,7 +12,7 @@ Everything local, on a Mac, in a few minutes:
 brew install llama.cpp
 llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf   # local inference on :8080
 
-gh release download v0.4.0 --repo source-inc/gents -p 'gents-aarch64-apple-darwin.tar.gz'
+gh release download --repo source-inc/gents -p 'gents-aarch64-apple-darwin.tar.gz'
 tar -xzf gents-aarch64-apple-darwin.tar.gz
 sudo install gents-aarch64-apple-darwin/gents /usr/local/bin/gents
 
@@ -27,6 +27,8 @@ each preset guarantees), pointing `init` at other OpenAI-compatible backends,
 verifying the signed binary, building from source, and the fallback `chat`
 REPL. Desktop app, fleet bring-up, and P2P pairing:
 [docs/operations.md](docs/operations.md).
+Operators performing the breaking product cutover should use the single
+[Gents cutover runbook](docs/gents-cutover.md).
 
 For the interactive fleet demo, run `gents demo` — it ships in the binary,
 no checkout, `make`, or mock required. It boots a single curated agent (read-only
@@ -43,7 +45,7 @@ is ready.
 
 ## Why this exists
 
-Agent frameworks bolt persistence, identity, and coordination onto a loop. gents inverts that: the loop is thin and formally specified, and the hard properties come from the substrate.
+Agent frameworks bolt persistence, identity, and coordination onto a loop. Gents inverts that: the loop is thin and formally specified, and the hard properties come from the substrate.
 
 - **The data store is the control plane.** Configure an agent by writing documents; trigger work by writing documents; debug by reading them. The runtime watches request documents and writes responses back. Multi-agent coordination is document replication, not RPC.
 - **Identity is cryptographic and layered.** A *principal* (DID) is the permission and audit boundary. *Behaviors* — prompt, tools, model — are reusable interfaces on a principal. *Deployments* place principals on hosts. Least privilege falls out of the model.
@@ -51,11 +53,11 @@ Agent frameworks bolt persistence, identity, and coordination onto a loop. gents
 
 ## Architecture
 
-``` md
+```text
             documents in ────────────► documents out
                  │                            ▲
    ┌─────────────▼────────────────────────────┴──────────────┐
-   │  gents runtime (the core)                         │
+   │  Gents runtime (the core)                              │
    │  watcher → request lifecycle → owned completion loop    │
    │  → tool surface (files/bash/MCP/subagents/skills)       │
    │  → persistence hooks → live response streaming          │

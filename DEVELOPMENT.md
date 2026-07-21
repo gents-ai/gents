@@ -1,6 +1,6 @@
 # Development
 
-How to build, test, and work on gents from source. For installing and
+How to build, test, and work on Gents from source. For installing and
 running the prebuilt binary, see the [README](README.md).
 
 ## Requirements
@@ -38,7 +38,7 @@ additionally needs:
   key with access to `sourcenetwork/defradb.rs` is needed to fetch dependencies.
 - **Lean toolchain** (proofs only) — [`elan`](https://github.com/leanprover/elan)
   provides `lake`/`lean` for `crates/gents/proofs`.
-- **Desktop app** (`apps/desktop-tauri`, optional) — Node.js with `bun` or
+- **Desktop app** (`apps/gents-desktop`, optional) — Node.js with `bun` or
   `npm`, and the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/).
   On Debian/Ubuntu that means the GTK/WebKit development libraries:
   `sudo apt-get install libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev`.
@@ -55,10 +55,10 @@ link time on incremental rebuilds.
 
 ```bash
 make help                                    # curated build/test targets
-cargo test -p gents                    # runtime suite (lib + integration)
+cargo test -p gents                         # runtime suite (lib + integration)
 cargo test --workspace                       # everything
 cargo build -p gents-cli --no-default-features  # CLI without embedded Codex TUI
-cd crates/gents/proofs && lake build   # the Lean proofs
+cd crates/gents/proofs && lake build        # the Lean proofs
 ```
 
 The development flow is foundation-first: Lean model → conformance tests → implementation. `CLAUDE.md` is the working brief; the [proofs README](crates/gents/proofs/README.md) maps the formal coverage.
