@@ -6,17 +6,17 @@ import type { BootstrapSummary, DeploymentView } from "../src/lib/types";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 const bootstrap: BootstrapSummary = {
-  defaultAgentHome: "/Users/test/.defra-agent",
+  defaultAgentHome: "/Users/test/.gents",
   initAgentName: "local-agent",
   initAgentDid: "did:key:z6MkLocal",
   initToolCeiling: "read-write",
   initToolRoot: "/Users/test/project",
-  desktopHome: "/Users/test/Library/Application Support/defra-agent-desktop",
+  desktopHome: "/Users/test/Library/Application Support/gents-desktop",
   peerDirectoryPath:
-    "/Users/test/Library/Application Support/defra-agent-desktop/peers.json",
-  nodeDataDir: "/Users/test/Library/Application Support/defra-agent-desktop/node",
+    "/Users/test/Library/Application Support/gents-desktop/peers.json",
+  nodeDataDir: "/Users/test/Library/Application Support/gents-desktop/node",
   logFilePath:
-    "/Users/test/Library/Application Support/defra-agent-desktop/desktop.log",
+    "/Users/test/Library/Application Support/gents-desktop/desktop.log",
   agentHomeExists: true,
   desktopHomeExists: true,
   peerDirectoryExists: false,

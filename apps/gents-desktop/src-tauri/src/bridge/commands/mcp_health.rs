@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use chrono::Utc;
-use defra_agent_desktop_core::client::ClientCore;
+use gents_desktop_core::client::ClientCore;
 use gents::graphql::escape_graphql_string;
 use gents::{
     run_health_check_cycle, HealthCheckerOptions, McpHealthCheckService, McpPool, ServiceHealthMap,
@@ -98,7 +98,7 @@ fn view_from_row(row: ToolServiceHealthStateRow) -> MCPServiceHealthView {
 }
 
 /// One-shot probe of a single registered MCP service. Mirrors
-/// `defra-agent mcp probe` (see `crates/defra-agent-cli/src/commands/mcp.rs`):
+/// `gents mcp probe` (see `crates/gents-cli/src/commands/mcp.rs`):
 /// reads the `ToolServiceRegistry` entry, runs `run_health_check_cycle`
 /// once against a fresh `McpPool` + `ServiceHealthMap`, and reports the
 /// snapshot.
@@ -134,7 +134,7 @@ pub(crate) async fn probe_mcp_service(
     let timeout = options.probe_timeout * 2;
     // Resolve the local hostname so `resolve_mcp_url` substitutes 127.0.0.1
     // for services advertised on this host. Mirrors the CLI's
-    // `defra-agent mcp probe` (crates/defra-agent-cli/src/commands/mcp.rs).
+    // `gents mcp probe` (crates/gents-cli/src/commands/mcp.rs).
     let local_hostname = hostname::get()
         .map(|host| host.to_string_lossy().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
@@ -196,7 +196,7 @@ async fn load_registry_entry(
     service_id: &str,
 ) -> Result<ToolServiceRegistryRow> {
     let escaped = escape_graphql_string(service_id);
-    // Match `defra-agent mcp probe`'s scoping: only online registry rows are
+    // Match `gents mcp probe`'s scoping: only online registry rows are
     // probe targets; an offline/dropped row should fail loudly with "no
     // online MCP service matched ..." rather than be probed and reported as
     // unreachable.

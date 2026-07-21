@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use gents::BackendProviderKind;
 
-const LIVE_BACKEND_PREFIX: &str = "DEFRA_AGENT_DESKTOP_LIVE_BACKEND";
+const LIVE_BACKEND_PREFIX: &str = "GENTS_DESKTOP_LIVE_BACKEND";
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LiveBackendOverride {
@@ -29,7 +29,7 @@ impl AgentBackendConfig {
         let model_name = override_config
             .and_then(|config| normalize_optional_owned(config.model_name.as_ref()))
             .or_else(|| optional_env(&format!("{LIVE_BACKEND_PREFIX}_MODEL")))
-            .or_else(|| optional_env("DEFRA_AGENT_TEST_OPENROUTER_MODEL"))
+            .or_else(|| optional_env("GENTS_TEST_OPENROUTER_MODEL"))
             .unwrap_or_else(|| "openai/gpt-4o-mini".to_string());
         let provider_kind = override_config
             .and_then(|config| normalize_optional_owned(config.provider.as_ref()))
@@ -81,7 +81,7 @@ impl AgentBackendConfig {
     }
 }
 
-const LIVE_SUBAGENT_BACKEND_PREFIX: &str = "DEFRA_AGENT_DESKTOP_LIVE_SUBAGENT_BACKEND";
+const LIVE_SUBAGENT_BACKEND_PREFIX: &str = "GENTS_DESKTOP_LIVE_SUBAGENT_BACKEND";
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LiveSubagentBackendOverride {

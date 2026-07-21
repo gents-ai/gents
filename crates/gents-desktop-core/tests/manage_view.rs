@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_agent_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents_protocol::row::{
     AgentBehaviorRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow, SkillRow, TaskRow,
     ToolSelectionRow,

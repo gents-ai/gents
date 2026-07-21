@@ -558,7 +558,7 @@ describe("projectChatShell", () => {
  * Mirror of the Lean `projectActiveOverlay` decision (see
  * `Proofs/ClientShell/Projection.lean`) and of the Rust
  * `should_show_overlay` helper in
- * `crates/defra-agent/tests/live_overlay_conformance.rs`. Kept inline so the
+ * `crates/gents/tests/live_overlay_conformance.rs`. Kept inline so the
  * TypeScript live-delta render decision can fail loudly if either side drifts
  * from the contract.
  */

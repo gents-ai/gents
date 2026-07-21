@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
-use defra_agent_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths, PeerRecord};
-use defra_agent_desktop_core::local_runtime::DesktopInitSummary;
+use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths, PeerRecord};
+use gents_desktop_core::local_runtime::DesktopInitSummary;
 use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 use tracing_subscriber::prelude::*;
@@ -399,10 +399,10 @@ fn live_core_options() -> ClientCoreOptions {
 fn init_live_runner_tracing() {
     static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     INIT.get_or_init(|| {
-        let filter = std::env::var("DEFRA_AGENT_DESKTOP_TEST_LOG")
+        let filter = std::env::var("GENTS_DESKTOP_TEST_LOG")
             .map(tracing_subscriber::EnvFilter::new)
             .unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("warn,defra_agent_desktop_tauri=info")
+                tracing_subscriber::EnvFilter::new("warn,gents_desktop_tauri=info")
             });
         let _ = tracing_subscriber::registry()
             .with(filter)
@@ -427,7 +427,7 @@ mod tests {
     use axum::response::{IntoResponse, Response};
     use axum::routing::{get, post};
     use axum::Router;
-    use defra_agent_desktop_core::client::ClientCore;
+    use gents_desktop_core::client::ClientCore;
     use gents::default_behavior_id_for_agent;
     use serde_json::Value;
     use tokio::sync::oneshot;

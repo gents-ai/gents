@@ -106,7 +106,7 @@ struct StatusEndpointConnection {
 
 pub fn default_agent_home() -> Result<PathBuf> {
     let home = dirs::home_dir().context("unable to resolve home directory")?;
-    Ok(home.join(".defra-agent"))
+    Ok(home.join(".gents"))
 }
 
 pub fn runtime_status_url(server_address: &str) -> Result<String> {
@@ -271,7 +271,7 @@ pub async fn init_standard_local_runtime(
         read_json::<StoredRuntimeState>(&options.agent_home.join(RUNTIME_STATE_FILE_NAME))
             .with_context(|| {
                 format!(
-            "no running local defra-agent runtime found at {}; run `defra-agent server` first",
+            "no running local gents runtime found at {}; run `gents server` first",
             options.agent_home.join(RUNTIME_STATE_FILE_NAME).display()
         )
             })?;
@@ -331,9 +331,9 @@ pub async fn init_standard_local_runtime(
         p2p_listen_address,
         peer_record_id: peer.peer_id,
         next_steps: vec![
-            "Run `defra-agent-desktop` and leave the desktop app open.".to_string(),
+            "Run `gents-desktop` and leave the desktop app open.".to_string(),
             "Wait for the status bar to show `replication subscriptions armed`.".to_string(),
-            "Then submit prompts from Chat, or run `defra-agent chat` in another terminal."
+            "Then submit prompts from Chat, or run `gents chat` in another terminal."
                 .to_string(),
         ],
     })
@@ -385,9 +385,9 @@ pub async fn init_status_endpoint_runtime(
         p2p_listen_address: connection.p2p_listen_address,
         peer_record_id: peer.peer_id,
         next_steps: vec![
-            "Run `defra-agent-desktop` and leave the desktop app open.".to_string(),
+            "Run `gents-desktop` and leave the desktop app open.".to_string(),
             "Wait for the status bar to show `replication subscriptions armed`.".to_string(),
-            "Then submit prompts from Chat, or run `defra-agent chat` in another terminal."
+            "Then submit prompts from Chat, or run `gents chat` in another terminal."
                 .to_string(),
         ],
     })
@@ -396,17 +396,17 @@ pub async fn init_status_endpoint_runtime(
 pub fn render_human_summary(summary: &DesktopInitSummary) -> String {
     let discovery_line = match summary.status_endpoint.as_deref() {
         Some(status_endpoint) => {
-            format!("Discovered defra-agent runtime from discovery endpoint: {status_endpoint}")
+            format!("Discovered gents runtime from discovery endpoint: {status_endpoint}")
         }
         None => format!(
-            "Discovered local defra-agent runtime: {agent_home}",
+            "Discovered local gents runtime: {agent_home}",
             agent_home = summary.agent_home
         ),
     };
 
     format!(
         "\
-defra-agent-desktop init complete
+gents-desktop init complete
 {discovery_line}
 GraphQL reachable: {graphql}
 Agent DID: {agent_did}
@@ -421,9 +421,9 @@ Note: init saves the discovered runtime. The desktop app completes P2P pairing
 and replication bootstrap on launch.
 
 Next:
-  1. Run `defra-agent-desktop` and leave it open.
+  1. Run `gents-desktop` and leave it open.
   2. Wait for the status bar to show `replication subscriptions armed`.
-  3. Then submit prompts from Chat, or run `defra-agent chat` in another terminal.
+  3. Then submit prompts from Chat, or run `gents chat` in another terminal.
 ",
         discovery_line = discovery_line,
         graphql = summary.graphql,
@@ -466,7 +466,7 @@ async fn fetch_graphql_runtime_connection_payload(
 
     Ok(json!({
         "status": "ok",
-        "service": "defra-agent",
+        "service": "gents",
         "graphql": graphql,
         "desktop_graphql": graphql,
         "agent_name": agent_name,
@@ -661,7 +661,7 @@ fn url_host_is_loopback_or_unspecified(url: &reqwest::Url) -> bool {
 fn validate_runtime_identity(runtime: &StoredRuntimeState, init: &StoredInitConfig) -> Result<()> {
     if runtime.p2p_transport != "iroh" {
         anyhow::bail!(
-            "local runtime uses p2p_transport={}; desktop pairing requires iroh. Restart with `defra-agent server` from a current build.",
+            "local runtime uses p2p_transport={}; desktop pairing requires iroh. Restart with `gents server` from a current build.",
             if runtime.p2p_transport.is_empty() {
                 "<empty>"
             } else {

@@ -1,7 +1,7 @@
 # Desktop UI QA Checklist
 
 Use this checklist for desktop UI PRs and for the broader desktop QA epic
-tracked in sourcenetwork/defra-agent#531.
+tracked in source-inc/gents#531.
 
 ## Fast PR Gate
 

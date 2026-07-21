@@ -12,7 +12,7 @@ mod operations_tests;
 
 use std::sync::Arc;
 
-use defra_agent_desktop_core::client::ClientCore;
+use gents_desktop_core::client::ClientCore;
 use tauri::{AppHandle, Emitter};
 
 use super::snapshot::build_client_snapshot;

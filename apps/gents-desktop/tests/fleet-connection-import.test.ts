@@ -19,7 +19,7 @@ describe("parsePeerConnectionJson", () => {
     });
   });
 
-  it("accepts defra-agent status output", () => {
+  it("accepts gents status output", () => {
     expect(
       parsePeerConnectionJson(
         JSON.stringify({
@@ -41,7 +41,7 @@ describe("parsePeerConnectionJson", () => {
     });
   });
 
-  it("accepts defra-agent server output", () => {
+  it("accepts gents server output", () => {
     expect(
       parsePeerConnectionJson(
         JSON.stringify({

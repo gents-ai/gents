@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_agent_desktop_core::client::{
+use gents_desktop_core::client::{
     ClientCore, ClientCoreOptions, ClientStore, ClientStoreRows, DesktopPaths,
 };
 use gents_protocol::client_protocol::ClientTurnState;
@@ -322,7 +322,7 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
 #[test]
 fn focused_request_id_defaults_to_none() {
     let (observed_store, _rx) =
-        defra_agent_desktop_core::client::ObservedStore::new(ClientStore::default());
+        gents_desktop_core::client::ObservedStore::new(ClientStore::default());
     assert!(observed_store.focused_request_id().is_none());
 }
 

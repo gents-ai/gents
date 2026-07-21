@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_agent_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents::graphql::escape_graphql_string;
 use tempfile::TempDir;
 

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use defra_agent_desktop_core::local_runtime::fetch_runtime_connection_payload;
+use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
 use tauri::{AppHandle, State};
 
 use super::super::commands::{add_peer, remove_peer, rename_peer, repair_p2p};

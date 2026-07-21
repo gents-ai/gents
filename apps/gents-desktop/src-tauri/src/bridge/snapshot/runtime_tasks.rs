@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use defra_agent_desktop_core::client::{ClientStore, TaskRecentRuns};
+use gents_desktop_core::client::{ClientStore, TaskRecentRuns};
 use gents_protocol::row::AgentRequestRow;
 
 use super::super::types::{

@@ -18,7 +18,7 @@ export function formatPeerConnectionError(
 
   const endpoint = endpointLabel(url);
   if (action === "local-runtime") {
-    return `Could not reach the local defra-agent runtime at ${endpoint}. Start \`defra-agent server\` and try again.`;
+    return `Could not reach the local gents runtime at ${endpoint}. Start \`gents server\` and try again.`;
   }
 
   if (action === "peer-status") {

@@ -158,7 +158,7 @@ export function createFixtureHelpers(runner: {
     /** Write a behavior document on the *remote* node.  The write triggers P2P
      *  replication so the same document becomes visible on the desktop node.
      *  This is the D1/D2 cross-node witness — write-on-A, read-on-B.
-     *  Requires DEFRA_AGENT_TAURI_LIVE=1 (enforced server-side). */
+     *  Requires GENTS_TAURI_LIVE=1 (enforced server-side). */
     saveBehaviorConfigOnRemote: async (request: BehaviorSaveRequest) =>
       runner.postJson<{ ok: boolean }>(
         "/desktop/test-fixture/remote-save-behavior",

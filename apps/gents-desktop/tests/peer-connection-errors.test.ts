@@ -10,7 +10,7 @@ describe("formatPeerConnectionError", () => {
         "local-runtime",
       ),
     ).toBe(
-      "Could not reach the local defra-agent runtime at http://127.0.0.1:9191. Start `defra-agent server` and try again.",
+      "Could not reach the local gents runtime at http://127.0.0.1:9191. Start `gents server` and try again.",
     );
   });
 
@@ -30,11 +30,11 @@ describe("formatPeerConnectionError", () => {
   it("keeps already useful errors unchanged", () => {
     expect(
       formatPeerConnectionError(
-        "no running local defra-agent runtime found at /tmp/runtime.json; run `defra-agent server` first",
+        "no running local gents runtime found at /tmp/runtime.json; run `gents server` first",
         "local-runtime",
       ),
     ).toBe(
-      "no running local defra-agent runtime found at /tmp/runtime.json; run `defra-agent server` first",
+      "no running local gents runtime found at /tmp/runtime.json; run `gents server` first",
     );
   });
 });

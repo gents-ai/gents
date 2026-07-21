@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "defra-agent desktop",
+  "productName": "gents desktop",
   "version": "0.1.0",
-  "identifier": "com.sourcenetwork.defra-agent-desktop",
+  "identifier": "com.source-inc.gents",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "defra-agent desktop",
+        "title": "gents desktop",
         "width": 1480,
         "height": 920,
         "minWidth": 1180,

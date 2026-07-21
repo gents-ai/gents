@@ -276,7 +276,7 @@ pub(crate) struct MCPServiceHealthView {
 
 /// Result envelope for `desktop_probe_mcp_service`. The probe runs a
 /// one-shot `run_health_check_cycle` against the named service against
-/// a fresh `McpPool` (mirrors `defra-agent mcp probe`) — `failure_count`
+/// a fresh `McpPool` (mirrors `gents mcp probe`) — `failure_count`
 /// always reports `0` here because the cycle starts from an initial
 /// `ServiceModel`. For accumulated K-state, the panel reads the persisted
 /// `ToolServiceHealthState` row via `desktop_list_mcp_services_with_health`.

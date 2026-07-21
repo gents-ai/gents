@@ -1,16 +1,16 @@
 [package]
-name = "defra-agent-desktop"
+name = "gents-desktop"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Compatibility launcher for the Tauri defra-agent desktop"
+description = "Compatibility launcher for the Tauri gents desktop"
 
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
 gents = { path = "../gents" }
-defra-agent-desktop-core.workspace = true
+gents-desktop-core.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true

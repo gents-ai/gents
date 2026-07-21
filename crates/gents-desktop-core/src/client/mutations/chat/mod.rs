@@ -3,7 +3,7 @@ mod conversation;
 mod request;
 
 pub use conversation::{create_conversation, rename_conversation, CreatedConversation};
-// Re-export the shared interrupt helper from `defra-agent` so the desktop
+// Re-export the shared interrupt helper from `gents` so the desktop
 // client and the runtime share a single GraphQL implementation. Keeping this
 // behind the `chat::` module path preserves the existing public surface.
 // `fetch_interrupt_requested_at` is reachable directly via `gents::` for

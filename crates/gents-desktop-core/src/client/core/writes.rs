@@ -102,7 +102,7 @@ impl ClientCore {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     action = "chat_create",
                     row_id = %result.session_id,
                     "desktop write saved"
@@ -156,7 +156,7 @@ impl ClientCore {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     action = "chat_submit",
                     row_id = %result.request_id,
                     "desktop write saved"
@@ -201,7 +201,7 @@ impl ClientCore {
                 );
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     action = "chat_submit_remote_graphql",
                     row_id = %result.request_id,
                     agent_did,
@@ -246,7 +246,7 @@ impl ClientCore {
             loop {
                 if started.elapsed() >= REMOTE_REQUEST_REFRESH_TIMEOUT {
                     tracing::warn!(
-                        target: "defra_agent_desktop_core::writes",
+                        target: "gents_desktop_core::writes",
                         request_id = %request_id,
                         agent_did = %agent_did,
                         session_id = %session_id,
@@ -271,7 +271,7 @@ impl ClientCore {
 
                         if !terminal && last_patch_signature == Some(patch_signature) {
                             tracing::debug!(
-                                target: "defra_agent_desktop_core::writes",
+                                target: "gents_desktop_core::writes",
                                 request_id = %request_id,
                                 agent_did = %agent_did,
                                 session_id = %session_id,
@@ -289,7 +289,7 @@ impl ClientCore {
                         last_patch_signature = Some(patch_signature);
                         let version = store.merge_chat_patch(patch);
                         tracing::info!(
-                            target: "defra_agent_desktop_core::writes",
+                            target: "gents_desktop_core::writes",
                             request_id = %request_id,
                             agent_did = %agent_did,
                             session_id = %session_id,
@@ -309,7 +309,7 @@ impl ClientCore {
                     }
                     Err(error) => {
                         tracing::warn!(
-                            target: "defra_agent_desktop_core::writes",
+                            target: "gents_desktop_core::writes",
                             request_id = %request_id,
                             agent_did = %agent_did,
                             session_id = %session_id,
@@ -353,7 +353,7 @@ impl ClientCore {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     action = "session_fork",
                     row_id = %outcome.session_id,
                     source_session_id,
@@ -389,7 +389,7 @@ impl ClientCore {
         .await
         .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))?
         // The GraphQL transport appends CLI-flavored operator hints
-        // ("run `defra-agent init`", "Retry with `--graphql ...`") that are
+        // ("run `gents init`", "Retry with `--graphql ...`") that are
         // meaningless inside the desktop app.
         .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))?;
         Ok(timeline)
@@ -466,7 +466,7 @@ impl ClientCore {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     action = "chat_rename",
                     row_id = %session_id,
                     "desktop write saved"
@@ -1175,7 +1175,7 @@ impl ClientCore {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     action = "chat_resend",
                     row_id = %result.request_id,
                     stale_request_id = %stale_request_id,
@@ -1192,7 +1192,7 @@ impl ClientCore {
             Ok(()) => {
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     action = "chat_interrupt",
                     row_id = %request_id,
                     "desktop write saved"
@@ -1212,7 +1212,7 @@ impl ClientCore {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     action = "chat_retry",
                     row_id = %result.request_id,
                     "desktop write saved"
@@ -1300,7 +1300,7 @@ impl ClientCore {
                     }
                 } else {
                     tracing::info!(
-                        target: "defra_agent_desktop_core::peer",
+                        target: "gents_desktop_core::peer",
                         peer_id = %record.peer_id,
                         label = %record.label,
                         env = REMOTE_P2P_PAIRING_ENV,
@@ -1335,7 +1335,7 @@ impl ClientCore {
                             {
                                 Ok(synced) => {
                                     tracing::info!(
-                                        target: "defra_agent_desktop_core::peer",
+                                        target: "gents_desktop_core::peer",
                                         peer_id = %record.peer_id,
                                         label = %record.label,
                                         synced_collections = ?synced,
@@ -1353,7 +1353,7 @@ impl ClientCore {
                             }
                         } else {
                             tracing::debug!(
-                                target: "defra_agent_desktop_core::peer",
+                                target: "gents_desktop_core::peer",
                                 peer_id = %record.peer_id,
                                 label = %record.label,
                                 env = BRANCHABLE_PAIR_SYNC_ENV,
@@ -1375,7 +1375,7 @@ impl ClientCore {
                 }
             } else {
                 tracing::info!(
-                    target: "defra_agent_desktop_core::peer",
+                    target: "gents_desktop_core::peer",
                     peer_id = %record.peer_id,
                     label = %record.label,
                     graphql,
@@ -1412,7 +1412,7 @@ impl ClientCore {
         self.clear_mutation_error();
         if let Some(warning) = warning.as_deref() {
             tracing::warn!(
-                target: "defra_agent_desktop_core::peer",
+                target: "gents_desktop_core::peer",
                 peer_id = %record.peer_id,
                 label = %record.label,
                 error = %warning,
@@ -1420,7 +1420,7 @@ impl ClientCore {
             );
         } else {
             tracing::info!(
-                target: "defra_agent_desktop_core::peer",
+                target: "gents_desktop_core::peer",
                 peer_id = %record.peer_id,
                 label = %record.label,
                 "desktop deployment added"
@@ -1455,7 +1455,7 @@ impl ClientCore {
 
         if let Err(error) = cleanup_saved_peer_p2p(&self.p2p, &record).await {
             tracing::warn!(
-                target: "defra_agent_desktop_core::peer",
+                target: "gents_desktop_core::peer",
                 peer_id = %record.peer_id,
                 label = %record.label,
                 error = %error,
@@ -1510,7 +1510,7 @@ impl ClientCore {
                 ),
             };
             tracing::warn!(
-                target: "defra_agent_desktop_core::peer",
+                target: "gents_desktop_core::peer",
                 peer_id = %record.peer_id,
                 label = %record.label,
                 error = %error,
@@ -1534,7 +1534,7 @@ impl ClientCore {
 
         self.clear_mutation_error();
         tracing::info!(
-            target: "defra_agent_desktop_core::peer",
+            target: "gents_desktop_core::peer",
             peer_id = %removed.peer_id,
             label = %removed.label,
             "desktop deployment removed"
@@ -1570,7 +1570,7 @@ impl ClientCore {
                 }
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     doc_type = "behavior",
                     row_id = %row.behavior_id,
                     "desktop write saved"
@@ -1596,7 +1596,7 @@ impl ClientCore {
                 }
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     doc_type = "agent_principal",
                     row_id = %row.agent_did,
                     "desktop write saved"
@@ -1613,7 +1613,7 @@ impl ClientCore {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     doc_type = "backend",
                     row_id = %row.backend_id,
                     "desktop write saved"
@@ -1646,7 +1646,7 @@ impl ClientCore {
                 }
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     doc_type = "tool_selection",
                     row_id = %row.selection_id,
                     "desktop write saved"
@@ -1663,7 +1663,7 @@ impl ClientCore {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     doc_type = "tool_service_registry",
                     row_id = %row.service_id,
                     "desktop write saved"
@@ -1680,7 +1680,7 @@ impl ClientCore {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     doc_type = "inference_profile",
                     row_id = %row.profile_id,
                     "desktop write saved"
@@ -1702,7 +1702,7 @@ impl ClientCore {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     doc_type = "task",
                     row_id = %row.task_id,
                     "desktop write saved"
@@ -1722,7 +1722,7 @@ impl ClientCore {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     doc_type = "skill",
                     row_id = %row.skill_id,
                     "desktop write saved"
@@ -1740,7 +1740,7 @@ impl ClientCore {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     doc_type = "schedule",
                     row_id = %row.schedule_id,
                     "desktop write saved"
@@ -1761,7 +1761,7 @@ impl ClientCore {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     doc_type = "event_trigger",
                     row_id = %row.trigger_id,
                     "desktop write saved"
@@ -1787,7 +1787,7 @@ impl ClientCore {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     doc_type = "manual_run",
                     task_id = %task_row.task_id,
                     request_doc_id = %doc_id,
@@ -1812,7 +1812,7 @@ impl ClientCore {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
-                    target: "defra_agent_desktop_core::writes",
+                    target: "gents_desktop_core::writes",
                     doc_type = "schedule",
                     row_id = %row.schedule_id,
                     action = "run_now",
@@ -1947,7 +1947,7 @@ fn complete_confirmed_delete(
                 .write()
                 .expect("mutation error lock poisoned") = Some(warning);
             tracing::warn!(
-                target: "defra_agent_desktop_core::writes",
+                target: "gents_desktop_core::writes",
                 action = %action,
                 row_id = %row_id,
                 error = %error,
@@ -1961,7 +1961,7 @@ fn complete_confirmed_delete(
     store.replace_snapshot(ClientStore::from_rows(rows));
 
     tracing::info!(
-        target: "defra_agent_desktop_core::writes",
+        target: "gents_desktop_core::writes",
         action = %action,
         row_id = %row_id,
         "desktop write saved"
@@ -2181,8 +2181,8 @@ fn strip_cli_operator_hints(message: &str) -> String {
     message
         .lines()
         .filter(|line| {
-            !line.contains("defra-agent init")
-                && !line.contains("defra-agent server")
+            !line.contains("gents init")
+                && !line.contains("gents server")
                 && !line.contains("--graphql")
         })
         .collect::<Vec<_>>()

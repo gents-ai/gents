@@ -14,7 +14,7 @@ const runner = {
   baseUrl: "http://127.0.0.1:9292",
   deploymentLabel: "desktop-live",
   agentDid: "did:key:zLive",
-  toolRoot: "/private/tmp/defra-agent-live",
+  toolRoot: "/private/tmp/gents-live",
 };
 
 describe("live smoke evidence summaries", () => {

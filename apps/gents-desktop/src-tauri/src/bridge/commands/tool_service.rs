@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use defra_agent_desktop_core::client::ClientCore;
+use gents_desktop_core::client::ClientCore;
 use gents::mcp_pool::{resolve_mcp_url, McpPool};
 use gents_protocol::row::ToolServiceRegistryRow;
 

@@ -68,8 +68,8 @@ OPENAI_API_KEY=... npm run test:ui:live:e2e:real -- \
   --model-name gpt-4.1-mini \
   --api-key-env-var OPENAI_API_KEY
 
-DEFRA_AGENT_TAURI_LIVE_INFERENCE_URL=http://workstation-1:8000/v1 \
-DEFRA_AGENT_TAURI_LIVE_MODEL_NAME=MiniMax-M2.7-NVFP4 \
+GENTS_TAURI_LIVE_INFERENCE_URL=http://workstation-1:8000/v1 \
+GENTS_TAURI_LIVE_MODEL_NAME=MiniMax-M2.7-NVFP4 \
 npm run test:ui:live:e2e:real
 ```
 

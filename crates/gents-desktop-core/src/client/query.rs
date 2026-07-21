@@ -105,7 +105,7 @@ pub async fn load_full_snapshot_with_peer_records(
                 let remote_count = remote.row_count();
                 append_rows(&mut rows, remote.to_rows());
                 tracing::info!(
-                    target: "defra_agent_desktop_core::query",
+                    target: "gents_desktop_core::query",
                     peer_id = %peer.peer_id,
                     label = %peer.label,
                     graphql,
@@ -115,7 +115,7 @@ pub async fn load_full_snapshot_with_peer_records(
             }
             Ok((peer, graphql, Err(error))) => {
                 tracing::warn!(
-                    target: "defra_agent_desktop_core::query",
+                    target: "gents_desktop_core::query",
                     peer_id = %peer.peer_id,
                     label = %peer.label,
                     graphql,
@@ -125,7 +125,7 @@ pub async fn load_full_snapshot_with_peer_records(
             }
             Err(error) => {
                 tracing::warn!(
-                    target: "defra_agent_desktop_core::query",
+                    target: "gents_desktop_core::query",
                     error = %error,
                     "desktop remote GraphQL snapshot task failed"
                 );
@@ -434,7 +434,7 @@ where
                 match serde_json::from_value(row.clone()) {
                     Ok(row) => parsed.push(row),
                     Err(error) => tracing::warn!(
-                        target: "defra_agent_desktop_core::query",
+                        target: "gents_desktop_core::query",
                         root,
                         error = %error,
                         "skipping malformed observed row"
@@ -521,7 +521,7 @@ where
                 match serde_json::from_value(row.clone()) {
                     Ok(row) => parsed.push(row),
                     Err(error) => tracing::warn!(
-                        target: "defra_agent_desktop_core::query",
+                        target: "gents_desktop_core::query",
                         root,
                         error = %error,
                         "skipping malformed remote row"

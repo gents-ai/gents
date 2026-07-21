@@ -28,7 +28,7 @@ test.describe("desktop code experience", () => {
     const header = page.getByTestId("code-context-header");
     await expect(header).toBeVisible();
     await expect(page.getByTestId("code-context-workdir")).toContainText(
-      "/tmp/defra-agent-bombadil/workspace",
+      "/tmp/gents-bombadil/workspace",
     );
     await expect(page.getByTestId("code-context-files")).toHaveText("read-only");
     // The code-aware diff renders inside Code mode as well.

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use defra_agent_desktop_core::client::ClientCore;
+use gents_desktop_core::client::ClientCore;
 use serde::Serialize;
 
 use crate::bridge::snapshot::{

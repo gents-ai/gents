@@ -428,7 +428,7 @@ impl ClientCore {
         let rows = snapshot.row_count();
         let version = self.store.merge_snapshot(snapshot);
         tracing::debug!(
-            target: "defra_agent_desktop_core::replication",
+            target: "gents_desktop_core::replication",
             version,
             rows,
             scoped = scoped.is_some(),
@@ -483,7 +483,7 @@ impl ClientCore {
         let rows = snapshot.row_count();
         let version = self.store.merge_snapshot(snapshot);
         tracing::info!(
-            target: "defra_agent_desktop_core::replication",
+            target: "gents_desktop_core::replication",
             peer_id = %record.peer_id,
             label = %record.label,
             agent_did = %record.agent_did,
@@ -514,7 +514,7 @@ impl ClientCore {
         let version = self.store.merge_snapshot(snapshot);
         map.insert(agent_did.to_string(), now);
         tracing::info!(
-            target: "defra_agent_desktop_core::replication",
+            target: "gents_desktop_core::replication",
             agent_did,
             rows,
             version,

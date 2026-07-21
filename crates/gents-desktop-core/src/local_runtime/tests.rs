@@ -24,9 +24,9 @@ fn sample_summary() -> DesktopInitSummary {
         p2p_listen_address: "iroh://peer-runtime".to_string(),
         peer_record_id: "peer-runtime".to_string(),
         next_steps: vec![
-            "Run `defra-agent-desktop` and leave the desktop app open.".to_string(),
+            "Run `gents-desktop` and leave the desktop app open.".to_string(),
             "Wait for the status bar to show `replication subscriptions armed`.".to_string(),
-            "Then submit prompts from Chat, or run `defra-agent chat` in another terminal."
+            "Then submit prompts from Chat, or run `gents chat` in another terminal."
                 .to_string(),
         ],
     }
@@ -55,8 +55,8 @@ fn remote_status_summary_render_does_not_call_it_local() {
 
     let rendered = render_human_summary(&summary);
 
-    assert!(rendered.contains("Discovered defra-agent runtime from discovery endpoint"));
-    assert!(!rendered.contains("Discovered local defra-agent runtime"));
+    assert!(rendered.contains("Discovered gents runtime from discovery endpoint"));
+    assert!(!rendered.contains("Discovered local gents runtime"));
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn desktop_graphql_is_added_to_status_payload() {
 }
 
 #[test]
-fn status_endpoint_connection_extracts_defra_agent_status_shape() {
+fn status_endpoint_connection_extracts_gents_status_shape() {
     let payload = augment_peer_status_payload_for_desktop(
         serde_json::json!({
             "agent_name": "studio-1-steward",

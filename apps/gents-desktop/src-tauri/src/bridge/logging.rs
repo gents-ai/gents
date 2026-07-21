@@ -1,7 +1,7 @@
 use std::fs::OpenOptions;
 use std::path::Path;
 
-use defra_agent_desktop_core::client::DesktopPaths;
+use gents_desktop_core::client::DesktopPaths;
 use gents::log_rate::{RateLimitConfig, RateLimitFilter};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
@@ -15,15 +15,15 @@ pub(crate) fn init_tracing() {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         with_default_transport_noise_filters(EnvFilter::new(
             "warn,\
-                 defra_agent_desktop_core=info,\
-                 defra_agent_desktop_tauri=info,\
-                 defra_agent=info,\
+                 gents_desktop_core=info,\
+                 gents_desktop_tauri=info,\
+                 gents=info,\
                  defra_node=info",
         ))
     });
     let log_path = DesktopPaths::discover()
         .map(|paths| paths.log_file_path())
-        .unwrap_or_else(|_| std::env::temp_dir().join("defra-agent-desktop.log"));
+        .unwrap_or_else(|_| std::env::temp_dir().join("gents-desktop.log"));
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -62,7 +62,7 @@ pub(crate) fn init_tracing() {
 }
 
 fn desktop_console_log_enabled() -> bool {
-    std::env::var("DEFRA_AGENT_DESKTOP_CONSOLE_LOG")
+    std::env::var("GENTS_DESKTOP_CONSOLE_LOG")
         .ok()
         .is_some_and(|value| {
             matches!(
@@ -78,7 +78,7 @@ fn open_log_writer(path: &Path) -> std::fs::File {
         .append(true)
         .open(path)
         .unwrap_or_else(|_| {
-            let fallback = std::env::temp_dir().join("defra-agent-desktop.log");
+            let fallback = std::env::temp_dir().join("gents-desktop.log");
             OpenOptions::new()
                 .create(true)
                 .append(true)

@@ -19,7 +19,7 @@ const MATERIALIZATION_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
 const MATERIALIZATION_STALL_THRESHOLD: Duration = Duration::from_secs(5);
 const MATERIALIZATION_REPAIR_COOLDOWN: Duration = Duration::from_secs(5);
 const MATERIALIZATION_REFRESH_DELAY: Duration = Duration::from_millis(250);
-const MATERIALIZATION_P2P_REPAIR_ENV: &str = "DEFRA_AGENT_DESKTOP_MATERIALIZATION_P2P_REPAIR";
+const MATERIALIZATION_P2P_REPAIR_ENV: &str = "GENTS_DESKTOP_MATERIALIZATION_P2P_REPAIR";
 
 /// Stall-detector signature for in-flight streaming responses.
 ///
@@ -94,7 +94,7 @@ pub(super) fn spawn_materialization_supervisor_task(
             let repairs = tracker.due_repairs(snapshot.as_ref(), Instant::now());
             if !repairs.is_empty() && !materialization_p2p_repair_enabled() {
                 tracing::debug!(
-                    target: "defra_agent_desktop_core::materialization",
+                    target: "gents_desktop_core::materialization",
                     repairs = repairs.len(),
                     env = MATERIALIZATION_P2P_REPAIR_ENV,
                     "skipping opt-in P2P materialization repair"
@@ -104,7 +104,7 @@ pub(super) fn spawn_materialization_supervisor_task(
 
             for repair in repairs {
                 tracing::warn!(
-                    target: "defra_agent_desktop_core::materialization",
+                    target: "gents_desktop_core::materialization",
                     request_id = %repair.request_id,
                     session_id = %repair.session_id,
                     stalled_ms = repair.stalled_for.as_millis() as u64,
@@ -120,7 +120,7 @@ pub(super) fn spawn_materialization_supervisor_task(
                 {
                     Ok(summary) => {
                         tracing::warn!(
-                            target: "defra_agent_desktop_core::materialization",
+                            target: "gents_desktop_core::materialization",
                             request_id = %repair.request_id,
                             session_id = %repair.session_id,
                             stalled_ms = repair.stalled_for.as_millis() as u64,
@@ -138,7 +138,7 @@ pub(super) fn spawn_materialization_supervisor_task(
                             }
                             Err(error) => {
                                 tracing::warn!(
-                                    target: "defra_agent_desktop_core::materialization",
+                                    target: "gents_desktop_core::materialization",
                                     request_id = %repair.request_id,
                                     session_id = %repair.session_id,
                                     error = %error,
@@ -149,7 +149,7 @@ pub(super) fn spawn_materialization_supervisor_task(
                     }
                     Err(error) => {
                         tracing::warn!(
-                            target: "defra_agent_desktop_core::materialization",
+                            target: "gents_desktop_core::materialization",
                             request_id = %repair.request_id,
                             session_id = %repair.session_id,
                             stalled_ms = repair.stalled_for.as_millis() as u64,

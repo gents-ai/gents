@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 
-pub const DESKTOP_HOME_ENV: &str = "DEFRA_AGENT_DESKTOP_HOME";
+pub const DESKTOP_HOME_ENV: &str = "GENTS_DESKTOP_HOME";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopPaths {
@@ -27,7 +27,7 @@ impl DesktopPaths {
 
         let root = dirs::data_local_dir()
             .ok_or_else(|| anyhow!("unable to resolve a local application data directory"))?
-            .join("defra-agent")
+            .join("gents")
             .join("desktop");
 
         Ok(Self::from_root(root))

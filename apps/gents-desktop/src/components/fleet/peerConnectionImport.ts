@@ -65,7 +65,7 @@ export function validateAgentDid(agentDid: string) {
   }
   if (trimmed.startsWith(LEGACY_NAME_DERIVED_DID_PREFIX)) {
     throw new Error(
-      "Agent DID must be the key-derived DID from defra-agent init/status, not did:defra-agent:<name>",
+      "Agent DID must be the key-derived DID from gents init/status, not did:defra-agent:<name>",
     );
   }
   return trimmed;

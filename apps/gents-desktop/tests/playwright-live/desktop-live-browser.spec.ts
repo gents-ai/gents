@@ -287,15 +287,15 @@ async function findDeployment(
 
 function liveOptionsFromEnv(): LiveBridgeRunnerOptions {
   return {
-    inferenceUrl: process.env.DEFRA_AGENT_TAURI_LIVE_INFERENCE_URL,
-    modelName: process.env.DEFRA_AGENT_TAURI_LIVE_MODEL_NAME,
-    provider: process.env.DEFRA_AGENT_TAURI_LIVE_PROVIDER,
-    apiKey: process.env.DEFRA_AGENT_TAURI_LIVE_API_KEY,
-    apiKeyEnvVar: process.env.DEFRA_AGENT_TAURI_LIVE_API_KEY_ENV_VAR,
-    subagentInferenceUrl: process.env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_INFERENCE_URL,
-    subagentModelName: process.env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_MODEL_NAME,
-    subagentProvider: process.env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_PROVIDER,
-    subagentApiKey: process.env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_API_KEY,
-    subagentApiKeyEnvVar: process.env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_API_KEY_ENV_VAR,
+    inferenceUrl: process.env.GENTS_TAURI_LIVE_INFERENCE_URL,
+    modelName: process.env.GENTS_TAURI_LIVE_MODEL_NAME,
+    provider: process.env.GENTS_TAURI_LIVE_PROVIDER,
+    apiKey: process.env.GENTS_TAURI_LIVE_API_KEY,
+    apiKeyEnvVar: process.env.GENTS_TAURI_LIVE_API_KEY_ENV_VAR,
+    subagentInferenceUrl: process.env.GENTS_TAURI_LIVE_SUBAGENT_INFERENCE_URL,
+    subagentModelName: process.env.GENTS_TAURI_LIVE_SUBAGENT_MODEL_NAME,
+    subagentProvider: process.env.GENTS_TAURI_LIVE_SUBAGENT_PROVIDER,
+    subagentApiKey: process.env.GENTS_TAURI_LIVE_SUBAGENT_API_KEY,
+    subagentApiKeyEnvVar: process.env.GENTS_TAURI_LIVE_SUBAGENT_API_KEY_ENV_VAR,
   };
 }

@@ -1,4 +1,4 @@
-use defra_agent_desktop_core::local_runtime::runtime_status_url;
+use gents_desktop_core::local_runtime::runtime_status_url;
 
 mod cause_derivation;
 mod operations_cascade;

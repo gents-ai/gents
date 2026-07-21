@@ -340,7 +340,7 @@ async function startBridgeRunner() {
     [
       "run",
       "-p",
-      "defra-agent-desktop-tauri",
+      "gents-desktop-tauri",
       "--bin",
       "bridge_runner",
       "--quiet",

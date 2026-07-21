@@ -86,7 +86,7 @@ fn command_denial_presentation(rule_id: &str) -> (&'static str, &'static str, &'
 
 #[cfg(test)]
 pub(crate) fn build_session_snapshot_from_store(
-    store: &defra_agent_desktop_core::client::ClientStore,
+    store: &gents_desktop_core::client::ClientStore,
     session_id: &str,
     preferred_request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
@@ -94,7 +94,7 @@ pub(crate) fn build_session_snapshot_from_store(
 }
 
 pub(crate) fn build_session_snapshot_from_store_for_agent(
-    store: &defra_agent_desktop_core::client::ClientStore,
+    store: &gents_desktop_core::client::ClientStore,
     agent_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
@@ -422,7 +422,7 @@ fn request_turn_root_id(request: &gents_protocol::row::AgentRequestRow) -> Strin
 }
 
 fn logical_turn_roots_for_session(
-    store: &defra_agent_desktop_core::client::ClientStore,
+    store: &gents_desktop_core::client::ClientStore,
     agent_did: Option<&str>,
     session_id: &str,
 ) -> Vec<String> {
@@ -449,7 +449,7 @@ fn logical_turn_roots_for_session(
 }
 
 fn logical_turn_index_for_request(
-    store: &defra_agent_desktop_core::client::ClientStore,
+    store: &gents_desktop_core::client::ClientStore,
     agent_did: Option<&str>,
     session_id: &str,
     request_id: &str,
@@ -489,7 +489,7 @@ fn selected_skill_ids_from_metadata(metadata: Option<&str>) -> Vec<String> {
 }
 
 fn build_pending_turn(
-    store: &defra_agent_desktop_core::client::ClientStore,
+    store: &gents_desktop_core::client::ClientStore,
     agent_did: Option<&str>,
     session_id: &str,
     request_id: &str,

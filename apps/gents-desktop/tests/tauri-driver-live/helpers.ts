@@ -5,10 +5,10 @@ import { LiveBridgeRunner } from "../live-bridge-runner";
 import type { DeploymentView, DesktopSessionSnapshot } from "../../src/lib/types";
 
 export const describeLive =
-  process.env.DEFRA_AGENT_TAURI_LIVE === "1" ? describe.sequential : describe.skip;
+  process.env.GENTS_TAURI_LIVE === "1" ? describe.sequential : describe.skip;
 
 export const FIRST_PROMPT =
-  "Read workspace/README.md, then summarize what defra-agent is in two short bullets.";
+  "Read workspace/README.md, then summarize what gents is in two short bullets.";
 export const SECOND_PROMPT =
   "Read workspace/CLAUDE.md, then summarize the document-driven request model in two short bullets.";
 export const THIRD_PROMPT =

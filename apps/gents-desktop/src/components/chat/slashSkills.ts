@@ -2,7 +2,7 @@ import type { BehaviorView, SkillView } from "../../lib/types";
 
 /// Composer support for the runtime's slash-skill convention: leading lines
 /// of a prompt shaped like `/skill-id` are consumed as skill selection
-/// (defra-agent skills::prompt_slash_skill_selection). This module only
+/// (gents skills::prompt_slash_skill_selection). This module only
 /// decides when to SUGGEST — the runtime remains the parser of record.
 
 export type SlashSkillSuggestion = {

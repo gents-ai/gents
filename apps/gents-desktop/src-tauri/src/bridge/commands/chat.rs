@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use defra_agent_desktop_core::client::ClientCore;
+use gents_desktop_core::client::ClientCore;
 use gents_protocol::client_protocol::ClientTurnState;
 use uuid::Uuid;
 

@@ -55,7 +55,7 @@ Run from the repo root.
    ```
 
 3. Verify the native app window:
-   - The app opens as `defra-agent desktop`.
+   - The app opens as `gents desktop`.
    - The window is not blank.
    - There is no Vite/React framework error overlay.
    - The first visible shell state is either a usable fleet/chat surface or a

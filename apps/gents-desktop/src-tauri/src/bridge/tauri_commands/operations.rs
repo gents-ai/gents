@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use defra_agent_desktop_core::client::ClientCore;
+use gents_desktop_core::client::ClientCore;
 use gents::backend_registry::{derive_display_state, list_all_backends};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
@@ -293,7 +293,7 @@ pub(crate) async fn desktop_list_subagent_tree(
 
 /// Translate the agent's GraphQL URL into the runtime's `/subagents/tree`
 /// endpoint URL. Mirrors the path-stripping logic in
-/// `defra_agent_desktop_core::local_runtime::runtime_status_url` but targets
+/// `gents_desktop_core::local_runtime::runtime_status_url` but targets
 /// the R5 subagent-lineage handler.
 #[cfg(test)]
 fn subagent_tree_url(

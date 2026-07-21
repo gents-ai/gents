@@ -5,8 +5,8 @@ use std::time::Duration;
 use std::{fs::OpenOptions, path::Path};
 
 use clap::{Parser, Subcommand};
-use defra_agent_desktop_core::client::DesktopPaths;
-use defra_agent_desktop_core::local_runtime::{
+use gents_desktop_core::client::DesktopPaths;
+use gents_desktop_core::local_runtime::{
     dangerously_overwrite_desktop_home, default_agent_home, init_standard_local_runtime,
     init_status_endpoint_runtime, render_human_summary, reset_desktop_runtime_state,
     DesktopInitOptions, StatusEndpointInitOptions,
@@ -15,8 +15,8 @@ use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "defra-agent-desktop",
-    about = "Tauri desktop launcher for local and peered defra-agent runtimes"
+    name = "gents-desktop",
+    about = "Tauri desktop launcher for local and peered gents runtimes"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -25,19 +25,19 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    #[command(about = "Discover and save a local or status-endpoint defra-agent runtime")]
+    #[command(about = "Discover and save a local or status-endpoint gents runtime")]
     Init(InitArgs),
 }
 
 #[derive(Debug, clap::Args)]
 struct InitArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     agent_home: Option<PathBuf>,
     #[arg(
         long,
         visible_aliases = ["status-url", "graphql", "graphql-endpoint"],
         value_name = "URL",
-        help = "Remote defra-agent /status or GraphQL endpoint to seed as the initial desktop deployment"
+        help = "Remote gents /status or GraphQL endpoint to seed as the initial desktop deployment"
     )]
     status_endpoint: Option<String>,
     #[arg(
@@ -127,7 +127,7 @@ fn launch_desktop() -> anyhow::Result<()> {
              listening there right now.\n\n\
              You can fix this in one of the following ways:\n  \
              - Start the dev server first: `npm --prefix apps/desktop-tauri run dev`, \
-             then run `defra-agent-desktop` again.\n  \
+             then run `gents-desktop` again.\n  \
              - Launch via `make desktop-native-dev`, which starts both for you.\n  \
              - Build a standalone binary with `make desktop-native-build` (release \
              mode; no dev server needed).",
@@ -146,7 +146,7 @@ fn launch_desktop() -> anyhow::Result<()> {
 
     let log_path = DesktopPaths::discover()
         .map(|paths| paths.log_file_path())
-        .unwrap_or_else(|_| std::env::temp_dir().join("defra-agent-desktop.log"));
+        .unwrap_or_else(|_| std::env::temp_dir().join("gents-desktop.log"));
     let stderr = open_log_writer(&log_path)?;
     let stdout = stderr.try_clone().map_err(|error| {
         anyhow::anyhow!(
@@ -164,7 +164,7 @@ fn launch_desktop() -> anyhow::Result<()> {
 }
 
 fn desktop_console_log_enabled() -> bool {
-    std::env::var("DEFRA_AGENT_DESKTOP_CONSOLE_LOG")
+    std::env::var("GENTS_DESKTOP_CONSOLE_LOG")
         .ok()
         .is_some_and(|value| {
             matches!(
@@ -204,7 +204,7 @@ fn dev_server_reachable() -> bool {
 }
 
 fn resolve_tauri_binary() -> anyhow::Result<PathBuf> {
-    if let Ok(explicit) = std::env::var("DEFRA_AGENT_DESKTOP_TAURI_BIN") {
+    if let Ok(explicit) = std::env::var("GENTS_DESKTOP_TAURI_BIN") {
         let explicit = PathBuf::from(explicit);
         if explicit.is_file() {
             return Ok(explicit);
@@ -226,7 +226,7 @@ fn resolve_tauri_binary() -> anyhow::Result<PathBuf> {
     }
 
     Err(anyhow::anyhow!(
-        "could not find the Tauri desktop binary `{}`. Install or build `defra-agent-desktop-tauri`, or set DEFRA_AGENT_DESKTOP_TAURI_BIN.",
+        "could not find the Tauri desktop binary `{}`. Install or build `gents-desktop-tauri`, or set GENTS_DESKTOP_TAURI_BIN.",
         tauri_binary_name()
     ))
 }
@@ -245,11 +245,11 @@ fn which_in_path(binary: &PathBuf) -> Option<PathBuf> {
 fn tauri_binary_name() -> &'static str {
     #[cfg(target_os = "windows")]
     {
-        "defra-agent-desktop-tauri.exe"
+        "gents-desktop-tauri.exe"
     }
     #[cfg(not(target_os = "windows"))]
     {
-        "defra-agent-desktop-tauri"
+        "gents-desktop-tauri"
     }
 }
 
@@ -257,8 +257,8 @@ fn init_tracing() {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         with_default_transport_noise_filters(EnvFilter::new(
             "warn,\
-                 defra_agent_desktop_core=trace,\
-                 defra_agent=info,\
+                 gents_desktop_core=trace,\
+                 gents=info,\
                  defra_node=info",
         ))
     });
@@ -280,7 +280,7 @@ fn init_tracing() {
         )
         .try_init();
 
-    tracing::info!("launching defra-agent desktop launcher");
+    tracing::info!("launching gents desktop launcher");
 }
 
 fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {

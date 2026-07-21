@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use defra_agent_desktop_core::client::{ClientCore, PeerMutationResult};
+use gents_desktop_core::client::{ClientCore, PeerMutationResult};
 
 use super::super::types::PeerAddRequest;
 use super::util::{require_trimmed, trim_optional};

@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "apps/desktop-tauri/src-tauri",
+    "apps/gents-desktop/src-tauri",
     "crates/gents",
     "crates/gents-cli",
-    "crates/defra-agent-desktop",
-    "crates/defra-agent-desktop-core",
+    "crates/gents-desktop",
+    "crates/gents-desktop-core",
     "crates/gents-lean-contract",
     "crates/gents-lenses/agent_tool_call_lifecycle_v1_to_v2",
     "crates/gents-lenses/agent_subagent_v2_to_v3",
@@ -27,11 +27,11 @@ exclude = [
 # wasm32-unknown-unknown`. The rlib target (used by tests via the
 # default-features=false dev-dep) is unaffected.
 default-members = [
-    "apps/desktop-tauri/src-tauri",
+    "apps/gents-desktop/src-tauri",
     "crates/gents",
     "crates/gents-cli",
-    "crates/defra-agent-desktop",
-    "crates/defra-agent-desktop-core",
+    "crates/gents-desktop",
+    "crates/gents-desktop-core",
     "crates/gents-protocol",
     "crates/gents-schemas",
 ]
@@ -64,7 +64,7 @@ crypto = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "ef7
 defra-core = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "ef772a439ec84d3fb1a7c0ef740085666ea008b4" }
 gents-protocol = { path = "crates/gents-protocol" }
 gents-schemas = { path = "crates/gents-schemas" }
-defra-agent-desktop-core = { path = "crates/defra-agent-desktop-core" }
+gents-desktop-core = { path = "crates/gents-desktop-core" }
 gents-lean-contract = { path = "crates/gents-lean-contract" }
 defra-node = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "ef772a439ec84d3fb1a7c0ef740085666ea008b4" }
 defra-p2p-adapter = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "ef772a439ec84d3fb1a7c0ef740085666ea008b4" }

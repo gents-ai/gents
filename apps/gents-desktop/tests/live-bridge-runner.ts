@@ -87,7 +87,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     const runnerArgs = [
       "run",
       "-p",
-      "defra-agent-desktop-tauri",
+      "gents-desktop-tauri",
       "--bin",
       "bridge_runner",
       "--quiet",

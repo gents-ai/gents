@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
-use defra_agent_desktop_core::client::{ClientCore, DesktopPaths, P2PHealth, PeerDirectory};
-use defra_agent_desktop_core::local_runtime::default_agent_home;
+use gents_desktop_core::client::{ClientCore, DesktopPaths, P2PHealth, PeerDirectory};
+use gents_desktop_core::local_runtime::default_agent_home;
 
 use super::types::{
     normalize_optional, DesktopBootstrapSummary, DesktopClientSnapshot, P2PHealthView,

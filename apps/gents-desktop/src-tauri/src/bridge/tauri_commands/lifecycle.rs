@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use defra_agent_desktop_core::client::{ClientCore, DesktopPaths};
-use defra_agent_desktop_core::local_runtime::{
+use gents_desktop_core::client::{ClientCore, DesktopPaths};
+use gents_desktop_core::local_runtime::{
     dangerously_overwrite_desktop_home, default_agent_home, init_standard_local_runtime,
     reset_desktop_runtime_state, DesktopInitOptions, DesktopInitSummary,
 };

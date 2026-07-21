@@ -39,42 +39,42 @@ const suite = takeFlag(argv, "--suite");
 const env = {
   ...process.env,
   CARGO_NET_GIT_FETCH_WITH_CLI: process.env.CARGO_NET_GIT_FETCH_WITH_CLI ?? "true",
-  DEFRA_AGENT_TAURI_LIVE: "1",
+  GENTS_TAURI_LIVE: "1",
 };
 
 const resolvedInferenceUrl =
   inferenceUrl ??
-  env.DEFRA_AGENT_TAURI_LIVE_INFERENCE_URL ??
-  env.DEFRA_AGENT_DESKTOP_LIVE_BACKEND_ENDPOINT ??
+  env.GENTS_TAURI_LIVE_INFERENCE_URL ??
+  env.GENTS_DESKTOP_LIVE_BACKEND_ENDPOINT ??
   DEFAULT_LIVE_INFERENCE_URL;
 const resolvedModelName =
   modelName ??
-  env.DEFRA_AGENT_TAURI_LIVE_MODEL_NAME ??
-  env.DEFRA_AGENT_DESKTOP_LIVE_BACKEND_MODEL ??
+  env.GENTS_TAURI_LIVE_MODEL_NAME ??
+  env.GENTS_DESKTOP_LIVE_BACKEND_MODEL ??
   DEFAULT_LIVE_MODEL_NAME;
 
-env.DEFRA_AGENT_TAURI_LIVE_INFERENCE_URL = resolvedInferenceUrl;
-env.DEFRA_AGENT_TAURI_LIVE_MODEL_NAME = resolvedModelName;
-env.DEFRA_AGENT_DESKTOP_LIVE_BACKEND_ENDPOINT ??= resolvedInferenceUrl;
-env.DEFRA_AGENT_DESKTOP_LIVE_BACKEND_MODEL ??= resolvedModelName;
+env.GENTS_TAURI_LIVE_INFERENCE_URL = resolvedInferenceUrl;
+env.GENTS_TAURI_LIVE_MODEL_NAME = resolvedModelName;
+env.GENTS_DESKTOP_LIVE_BACKEND_ENDPOINT ??= resolvedInferenceUrl;
+env.GENTS_DESKTOP_LIVE_BACKEND_MODEL ??= resolvedModelName;
 
 if (provider) {
-  env.DEFRA_AGENT_TAURI_LIVE_PROVIDER = provider;
+  env.GENTS_TAURI_LIVE_PROVIDER = provider;
 }
 if (apiKey) {
-  env.DEFRA_AGENT_TAURI_LIVE_API_KEY = apiKey;
+  env.GENTS_TAURI_LIVE_API_KEY = apiKey;
 }
 if (apiKeyEnvVar) {
-  env.DEFRA_AGENT_TAURI_LIVE_API_KEY_ENV_VAR = apiKeyEnvVar;
+  env.GENTS_TAURI_LIVE_API_KEY_ENV_VAR = apiKeyEnvVar;
 }
 if (subagentInferenceUrl)
-  env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_INFERENCE_URL = subagentInferenceUrl;
+  env.GENTS_TAURI_LIVE_SUBAGENT_INFERENCE_URL = subagentInferenceUrl;
 if (subagentModelName)
-  env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_MODEL_NAME = subagentModelName;
-if (subagentProvider) env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_PROVIDER = subagentProvider;
-if (subagentApiKey) env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_API_KEY = subagentApiKey;
+  env.GENTS_TAURI_LIVE_SUBAGENT_MODEL_NAME = subagentModelName;
+if (subagentProvider) env.GENTS_TAURI_LIVE_SUBAGENT_PROVIDER = subagentProvider;
+if (subagentApiKey) env.GENTS_TAURI_LIVE_SUBAGENT_API_KEY = subagentApiKey;
 if (subagentApiKeyEnvVar)
-  env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_API_KEY_ENV_VAR = subagentApiKeyEnvVar;
+  env.GENTS_TAURI_LIVE_SUBAGENT_API_KEY_ENV_VAR = subagentApiKeyEnvVar;
 
 const liveTestSuites = {
   fleet: "tests/tauri-driver.live.fleet.test.tsx",

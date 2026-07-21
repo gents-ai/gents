@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use defra_agent_desktop_core::client::ClientCore;
+use gents_desktop_core::client::ClientCore;
 use gents::graphql::escape_graphql_string;
 use gents::{
     cli_tool, default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
@@ -56,7 +56,7 @@ pub(super) async fn spawn_live_agent(
     let tool_root = key_path
         .parent()
         .map(|parent| parent.join("tool-root"))
-        .unwrap_or_else(|| std::env::temp_dir().join(format!("defra-agent-tools-{name}")));
+        .unwrap_or_else(|| std::env::temp_dir().join(format!("gents-tools-{name}")));
     std::fs::create_dir_all(&tool_root)
         .with_context(|| format!("creating live tool root {}", tool_root.display()))?;
     seed_repo_workspace(&tool_root)?;

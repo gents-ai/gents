@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use defra_agent_desktop_core::client::PeerMutationResult;
+use gents_desktop_core::client::PeerMutationResult;
 
 use super::bootstrap::DesktopBootstrapSummary;
 

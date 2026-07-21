@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use defra_agent_desktop_core::client::{ClientCore, DesktopPaths, PeerRecord};
+use gents_desktop_core::client::{ClientCore, DesktopPaths, PeerRecord};
 
 use super::agent::LiveAgentDocs;
 

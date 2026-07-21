@@ -29,9 +29,9 @@ describeLive("Tauri app live bridge runner config flow", () => {
     await withLiveDesktop(async ({ runner, driver }) => {
       const ids = createConfigFlowIds();
       const inferenceUrl =
-        process.env.DEFRA_AGENT_TAURI_LIVE_INFERENCE_URL ?? DEFAULT_LIVE_INFERENCE_URL;
+        process.env.GENTS_TAURI_LIVE_INFERENCE_URL ?? DEFAULT_LIVE_INFERENCE_URL;
       const modelName =
-        process.env.DEFRA_AGENT_TAURI_LIVE_MODEL_NAME ?? DEFAULT_LIVE_MODEL_NAME;
+        process.env.GENTS_TAURI_LIVE_MODEL_NAME ?? DEFAULT_LIVE_MODEL_NAME;
       const fileToolRoot = `${runner.toolRoot}/workspace`;
 
       await driver.ready();

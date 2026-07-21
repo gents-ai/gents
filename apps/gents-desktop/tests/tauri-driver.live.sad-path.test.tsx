@@ -7,7 +7,7 @@ import { describeLive, logTurn } from "./tauri-driver-live/helpers";
 describeLive("Tauri app live bridge runner sad paths", () => {
   it("surfaces a missing-model inference failure and returns the composer to ready", async () => {
     const baseModel =
-      process.env.DEFRA_AGENT_TAURI_LIVE_MODEL_NAME ?? "missing-live-model";
+      process.env.GENTS_TAURI_LIVE_MODEL_NAME ?? "missing-live-model";
     const missingModel = `${baseModel}__defra_missing_sad_path__`;
     await withLiveDesktop(
       async ({ runner, driver }) => {
@@ -91,7 +91,7 @@ describeLive("Tauri app live bridge runner sad paths", () => {
       {
         inferenceUrl: "http://127.0.0.1:9/v1",
         modelName:
-          process.env.DEFRA_AGENT_TAURI_LIVE_MODEL_NAME ??
+          process.env.GENTS_TAURI_LIVE_MODEL_NAME ??
           "defra-unreachable-live-model",
       },
     );

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use defra_agent_desktop_core::client::{ClientCore, ClientPeerStatus};
+use gents_desktop_core::client::{ClientCore, ClientPeerStatus};
 
 use super::super::types::{
     normalize_optional, turn_state_label, AgentPrincipalView, BehaviorView, ConversationSummary,

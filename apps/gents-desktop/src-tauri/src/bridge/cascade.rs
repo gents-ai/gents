@@ -1,14 +1,14 @@
 // Descendant tree walk for cascade preview and cascade interrupt.
 //
 // Mirrors `interrupt_request_local` in
-// `crates/defra-agent-cli/src/commands/subagent.rs:327`, but stays in the
+// `crates/gents-cli/src/commands/subagent.rs:327`, but stays in the
 // bridge so both `desktop_preview_interrupt_cascade` and
 // `desktop_interrupt_request` can share the walk.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use defra_agent_desktop_core::client::ClientCore;
+use gents_desktop_core::client::ClientCore;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use serde_json::Value;
@@ -390,7 +390,7 @@ pub(crate) struct LatchResult {
 ///   `LatchResult { was_first: true, interrupt_requested_at: <now> }`.
 ///
 /// Mirrors `interrupt_request_graphql` in
-/// `crates/defra-agent-cli/src/commands/subagent.rs:167-200`.
+/// `crates/gents-cli/src/commands/subagent.rs:167-200`.
 pub(crate) async fn latch_root_interrupt(
     core: &Arc<ClientCore>,
     request_id: &str,

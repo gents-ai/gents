@@ -27,8 +27,8 @@ use super::{
     ClientCore, ClientCoreOptions, ClientPeerStatus, P2PHealth, BOOTSTRAP_OPERATION_BACKOFF,
     BOOTSTRAP_OPERATION_TIMEOUT,
 };
-pub(super) const BRANCHABLE_PAIR_SYNC_ENV: &str = "DEFRA_AGENT_DESKTOP_SYNC_BRANCHABLE_ON_PAIR";
-pub(super) const REMOTE_P2P_PAIRING_ENV: &str = "DEFRA_AGENT_DESKTOP_PAIR_REMOTE_P2P";
+pub(super) const BRANCHABLE_PAIR_SYNC_ENV: &str = "GENTS_DESKTOP_SYNC_BRANCHABLE_ON_PAIR";
+pub(super) const REMOTE_P2P_PAIRING_ENV: &str = "GENTS_DESKTOP_PAIR_REMOTE_P2P";
 
 impl ClientCore {
     pub async fn start() -> Result<Self> {
@@ -228,7 +228,7 @@ pub(super) async fn bootstrap_saved_peers(
                     }
                 } else if record.graphql.is_some() && !p2p_pairing_enabled {
                     tracing::info!(
-                        target: "defra_agent_desktop_core::peer",
+                        target: "gents_desktop_core::peer",
                         label = %record.label,
                         env = REMOTE_P2P_PAIRING_ENV,
                         "skipping automatic remote P2P replicator bootstrap for GraphQL-managed peer"
@@ -250,7 +250,7 @@ pub(super) async fn bootstrap_saved_peers(
                                     {
                                         Ok(synced) => {
                                             tracing::info!(
-                                                target: "defra_agent_desktop_core::peer",
+                                                target: "gents_desktop_core::peer",
                                                 label = %record.label,
                                                 synced_collections = ?synced,
                                                 "desktop requested branchable collection sync after pairing"
@@ -267,7 +267,7 @@ pub(super) async fn bootstrap_saved_peers(
                                     }
                                 } else {
                                     tracing::debug!(
-                                        target: "defra_agent_desktop_core::peer",
+                                        target: "gents_desktop_core::peer",
                                         label = %record.label,
                                         env = BRANCHABLE_PAIR_SYNC_ENV,
                                         "skipping opt-in branchable collection sync after pairing"
@@ -285,7 +285,7 @@ pub(super) async fn bootstrap_saved_peers(
                         }
                     } else {
                         tracing::info!(
-                            target: "defra_agent_desktop_core::peer",
+                            target: "gents_desktop_core::peer",
                             label = %record.label,
                             graphql,
                             env = REMOTE_P2P_PAIRING_ENV,

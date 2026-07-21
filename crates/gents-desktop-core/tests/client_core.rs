@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use defra_agent_desktop_core::client::{
+use gents_desktop_core::client::{
     ClientCore, ClientCoreOptions, DesktopPaths, PeerDirectory, PeerRecord, PrincipalIdentity,
 };
 use p2p::iroh::parse_public_peer_addr;

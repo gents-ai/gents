@@ -23,8 +23,8 @@ pub(super) async fn http_get_json<T: for<'de> Deserialize<'de>>(
     let response = client.get(url).send().await.map_err(|error| {
         if error.is_connect() {
             anyhow::anyhow!(
-                "no defra-agent server found at {url}. Start one first with \
-                 `defra-agent server` or `defra-agent demo`, or pass \
+                "no gents server found at {url}. Start one first with \
+                 `gents server` or `gents demo`, or pass \
                  --status-endpoint/--graphql to point at a remote runtime."
             )
         } else {

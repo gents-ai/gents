@@ -59,13 +59,13 @@ pub(super) fn spawn_p2p_supervisor_task(
                 match p2p_notify_network_change(&p2p).await {
                     Ok(()) => {
                         tracing::info!(
-                            target: "defra_agent_desktop_core::p2p_health",
+                            target: "gents_desktop_core::p2p_health",
                             "manual desktop P2P repair requested"
                         );
                     }
                     Err(error) => {
                         tracing::warn!(
-                            target: "defra_agent_desktop_core::p2p_health",
+                            target: "gents_desktop_core::p2p_health",
                             error = %error,
                             "manual desktop P2P repair could not refresh network state"
                         );
@@ -206,7 +206,7 @@ pub(super) async fn probe_p2p_health(p2p: &Arc<dyn P2POps>, previous: &P2PHealth
 fn log_p2p_health_transition(previous: &P2PHealth, next: &P2PHealth) {
     if next.status == P2PHealthStatus::Healthy {
         tracing::info!(
-            target: "defra_agent_desktop_core::p2p_health",
+            target: "gents_desktop_core::p2p_health",
             connected_peers = next.connected_peer_count,
             replicators = next.replicator_count,
             "desktop P2P transport is healthy"
@@ -221,7 +221,7 @@ fn log_p2p_health_transition(previous: &P2PHealth, next: &P2PHealth) {
     let status = next.status.label();
     if next.status != previous.status || previous.last_error.as_deref() != Some(error) {
         tracing::warn!(
-            target: "defra_agent_desktop_core::p2p_health",
+            target: "gents_desktop_core::p2p_health",
             status,
             consecutive_failures = next.consecutive_failures,
             error,
@@ -260,7 +260,7 @@ pub(super) async fn saved_peer_needs_repair(
         Ok(connected) => !connected,
         Err(error) => {
             tracing::debug!(
-                target: "defra_agent_desktop_core::peer_maintenance",
+                target: "gents_desktop_core::peer_maintenance",
                 peer_id = %record.peer_id,
                 label = %record.label,
                 error = %error,
@@ -300,7 +300,7 @@ pub(super) async fn repair_saved_peer(
         match p2p_notify_network_change(p2p).await {
             Ok(()) => {
                 tracing::debug!(
-                    target: "defra_agent_desktop_core::peer_maintenance",
+                    target: "gents_desktop_core::peer_maintenance",
                     peer_id = %record.peer_id,
                     label = %record.label,
                     "refreshed P2P network state before reconnect"
@@ -308,7 +308,7 @@ pub(super) async fn repair_saved_peer(
             }
             Err(error) => {
                 tracing::debug!(
-                    target: "defra_agent_desktop_core::peer_maintenance",
+                    target: "gents_desktop_core::peer_maintenance",
                     peer_id = %record.peer_id,
                     label = %record.label,
                     error = %error,
@@ -351,7 +351,7 @@ pub(super) async fn repair_saved_peer(
                     }
                 } else if record.graphql.is_some() && !p2p_pairing_enabled {
                     tracing::debug!(
-                        target: "defra_agent_desktop_core::peer_maintenance",
+                        target: "gents_desktop_core::peer_maintenance",
                         peer_id = %record.peer_id,
                         label = %record.label,
                         env = REMOTE_P2P_PAIRING_ENV,
@@ -391,7 +391,7 @@ async fn run_pairing_reconcile_for_peer(
             Ok(admin) => admin.with_local_resolver(Arc::clone(node)),
             Err(error) => {
                 tracing::warn!(
-                    target: "defra_agent_desktop_core::pairing_reconcile",
+                    target: "gents_desktop_core::pairing_reconcile",
                     peer_id = %record.peer_id,
                     label = %record.label,
                     error = %error,
@@ -406,7 +406,7 @@ async fn run_pairing_reconcile_for_peer(
         Ok(None) => PairingDesired::default(),
         Err(error) => {
             tracing::warn!(
-                target: "defra_agent_desktop_core::pairing_reconcile",
+                target: "gents_desktop_core::pairing_reconcile",
                 peer_id = %record.peer_id,
                 label = %record.label,
                 error = %error,
@@ -430,7 +430,7 @@ async fn run_pairing_reconcile_for_peer(
                 record_failure(record, peer_statuses, &desired, remote_error);
             }
             tracing::warn!(
-                target: "defra_agent_desktop_core::pairing_reconcile",
+                target: "gents_desktop_core::pairing_reconcile",
                 peer_id = %record.peer_id,
                 label = %record.label,
                 error = %error,

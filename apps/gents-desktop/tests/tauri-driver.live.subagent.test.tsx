@@ -121,7 +121,7 @@ describeLive("Tauri app live subagent backgrounding", () => {
             childNode?.backendId,
             "child backendId should be populated",
           ).toBeTruthy();
-          if (process.env.DEFRA_AGENT_TAURI_LIVE_SUBAGENT_INFERENCE_URL) {
+          if (process.env.GENTS_TAURI_LIVE_SUBAGENT_INFERENCE_URL) {
             expect(childNode?.backendId).not.toBe(parentNode?.backendId);
           }
         },

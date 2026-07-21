@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use defra_agent_desktop_core::local_runtime::default_agent_home;
+use gents_desktop_core::local_runtime::default_agent_home;
 use serde::Serialize;
 use tauri::State;
 

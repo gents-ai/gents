@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use defra_agent_desktop_core::client::ClientCore;
+use gents_desktop_core::client::ClientCore;
 use gents::backend_registry::{derive_display_state, list_all_backends};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
@@ -266,12 +266,12 @@ pub(super) fn handle_request(
         // Test-only escape hatch: write a behavior document on the *remote* node so the
         // subsequent desktop-snapshot read exercises the real P2P propagation path (write
         // on remote core → visible on desktop core).  This is the D1/D2 cross-node
-        // witness.  Only available when DEFRA_AGENT_TAURI_LIVE=1 (set by run-live-test.mjs).
+        // witness.  Only available when GENTS_TAURI_LIVE=1 (set by run-live-test.mjs).
         ("POST", "/desktop/test-fixture/remote-save-behavior") => {
-            if std::env::var("DEFRA_AGENT_TAURI_LIVE").as_deref() != Ok("1") {
+            if std::env::var("GENTS_TAURI_LIVE").as_deref() != Ok("1") {
                 return Ok(HttpResponse::json_error(
                     "403 Forbidden",
-                    "remote-save-behavior is only available in live test mode (DEFRA_AGENT_TAURI_LIVE=1)",
+                    "remote-save-behavior is only available in live test mode (GENTS_TAURI_LIVE=1)",
                 ));
             }
             let req = decode::<BehaviorSaveRequest>(
