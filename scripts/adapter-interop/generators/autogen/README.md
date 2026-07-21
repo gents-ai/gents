@@ -16,22 +16,22 @@ Build and run it from the repository root:
 
 ```sh
 docker build \
-  -t defra-agent-autogen-fixture \
+  -t gents-autogen-fixture \
   scripts/adapter-interop/generators/autogen
 
-rm -rf /tmp/defra-agent-autogen-fixtures
-mkdir -p /tmp/defra-agent-autogen-fixtures
+rm -rf /tmp/gents-autogen-fixtures
+mkdir -p /tmp/gents-autogen-fixtures
 
 docker run --rm \
-  -v /tmp/defra-agent-autogen-fixtures:/out \
-  defra-agent-autogen-fixture
+  -v /tmp/gents-autogen-fixtures:/out \
+  gents-autogen-fixture
 ```
 
 Validate the generated fixture with the shared external adapter harness:
 
 ```sh
-DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES=/tmp/defra-agent-autogen-fixtures \
-  cargo test -p defra-agent --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
+GENTS_ADAPTER_INTEROP_FIXTURES=/tmp/gents-autogen-fixtures \
+  cargo test -p gents --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
 ```
 
 The generator avoids live inference by using custom deterministic agents, but

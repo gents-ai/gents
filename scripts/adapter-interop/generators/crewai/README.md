@@ -20,22 +20,22 @@ Build and run it from the repository root:
 
 ```sh
 docker build \
-  -t defra-agent-crewai-fixture \
+  -t gents-crewai-fixture \
   scripts/adapter-interop/generators/crewai
 
-rm -rf /tmp/defra-agent-crewai-fixtures
-mkdir -p /tmp/defra-agent-crewai-fixtures
+rm -rf /tmp/gents-crewai-fixtures
+mkdir -p /tmp/gents-crewai-fixtures
 
 docker run --rm \
-  -v /tmp/defra-agent-crewai-fixtures:/out \
-  defra-agent-crewai-fixture
+  -v /tmp/gents-crewai-fixtures:/out \
+  gents-crewai-fixture
 ```
 
 Validate the generated fixture with the shared external adapter harness:
 
 ```sh
-DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES=/tmp/defra-agent-crewai-fixtures \
-  cargo test -p defra-agent --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
+GENTS_ADAPTER_INTEROP_FIXTURES=/tmp/gents-crewai-fixtures \
+  cargo test -p gents --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
 ```
 
 The generator avoids live inference by using custom deterministic LLMs, but it

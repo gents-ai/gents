@@ -1,6 +1,6 @@
 # Development
 
-How to build, test, and work on defra-agent from source. For installing and
+How to build, test, and work on Gents from source. For installing and
 running the prebuilt binary, see the [README](README.md).
 
 ## Requirements
@@ -37,14 +37,14 @@ additionally needs:
   `defradb.rs` (and `backbone`) over `ssh://git@github.com/...`, so a GitHub SSH
   key with access to `sourcenetwork/defradb.rs` is needed to fetch dependencies.
 - **Lean toolchain** (proofs only) — [`elan`](https://github.com/leanprover/elan)
-  provides `lake`/`lean` for `crates/defra-agent/proofs`.
-- **Desktop app** (`apps/desktop-tauri`, optional) — Node.js with `bun` or
+  provides `lake`/`lean` for `crates/gents/proofs`.
+- **Desktop app** (`apps/gents-desktop`, optional) — Node.js with `bun` or
   `npm`, and the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/).
   On Debian/Ubuntu that means the GTK/WebKit development libraries:
   `sudo apt-get install libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev`.
   A plain `cargo build` includes this crate (it is a workspace default member);
   to build just the runtime and CLI without the GTK toolchain, use
-  `cargo build --workspace --exclude defra-agent-desktop-tauri`.
+  `cargo build --workspace --exclude gents-desktop-tauri`.
 
 A fast linker is wired up automatically when present: the workspace
 `.cargo/config.toml` routes Linux and macOS builds through `mold`/`lld` (falling
@@ -55,10 +55,10 @@ link time on incremental rebuilds.
 
 ```bash
 make help                                    # curated build/test targets
-cargo test -p defra-agent                    # runtime suite (lib + integration)
+cargo test -p gents                         # runtime suite (lib + integration)
 cargo test --workspace                       # everything
-cargo build -p defra-agent-cli --no-default-features  # CLI without embedded Codex TUI
-cd crates/defra-agent/proofs && lake build   # the Lean proofs
+cargo build -p gents-cli --no-default-features  # CLI without embedded Codex TUI
+cd crates/gents/proofs && lake build        # the Lean proofs
 ```
 
-The development flow is foundation-first: Lean model → conformance tests → implementation. `CLAUDE.md` is the working brief; the [proofs README](crates/defra-agent/proofs/README.md) maps the formal coverage.
+The development flow is foundation-first: Lean model → conformance tests → implementation. `CLAUDE.md` is the working brief; the [proofs README](crates/gents/proofs/README.md) maps the formal coverage.

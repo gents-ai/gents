@@ -17,7 +17,7 @@
 For custom tool selections, `bash_mode: Unrestricted` with no explicit
 `command_execution_policy` defaults to `unrestricted`.
 
-The generated `defra-agent init --write` selection pins
+The generated `gents init --write` selection pins
 `command_execution_policy: workspace_write` on macOS so the default demo path
 keeps write-capable bash contained to the configured tool root. Change that
 policy to `unrestricted` for host-diagnostics stewards that need `ps`, broad
@@ -35,7 +35,7 @@ Desktop app:
 CLI:
 
 ```bash
-defra-agent config tools set \
+gents config tools set \
   --graphql "$GRAPHQL" \
   --agent-did "$AGENT_DID" \
   --selection-id "$TOOL_SELECTION_ID" \
@@ -65,7 +65,7 @@ They are not aliases — pick by use case:
 | `read_only_command_allowlist` | When present **and non-empty**, **replaces** `default_read_only_commands()` wholesale. Absent or empty = keep the hardcoded default (never deny-all). | Whole executable head (`cat`, `journalctl`) | **Narrow** or fully customize the base under allowlist admission (empty prefixes). Prefixes cannot surgically edit that base list. |
 
 Validation (see `validate_command_policy` / `validate_read_only_command_inner` in
-`crates/defra-agent/src/toolset/shared/command.rs`):
+`crates/gents/src/toolset/shared/command.rs`):
 
 1. Forbidden prefixes always win.
 2. If `command_allowed_argv_prefixes` is non-empty, the command must match one

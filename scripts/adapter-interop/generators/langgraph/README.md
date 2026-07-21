@@ -19,15 +19,15 @@ Build and run it from the repository root:
 
 ```sh
 docker build \
-  -t defra-agent-langgraph-fixture \
+  -t gents-langgraph-fixture \
   scripts/adapter-interop/generators/langgraph
 
-rm -rf /tmp/defra-agent-langgraph-fixtures
-mkdir -p /tmp/defra-agent-langgraph-fixtures
+rm -rf /tmp/gents-langgraph-fixtures
+mkdir -p /tmp/gents-langgraph-fixtures
 
 docker run --rm \
-  -v /tmp/defra-agent-langgraph-fixtures:/out \
-  defra-agent-langgraph-fixture
+  -v /tmp/gents-langgraph-fixtures:/out \
+  gents-langgraph-fixture
 ```
 
 By default, the provider fixture uses LangChain's deterministic
@@ -40,8 +40,8 @@ docker run --rm \
   -e OPENAI_API_KEY \
   -e OPENAI_BASE_URL \
   -e GENTS_LANGGRAPH_OPENAI_MODEL=gpt-4.1-mini \
-  -v /tmp/defra-agent-langgraph-fixtures:/out \
-  defra-agent-langgraph-fixture
+  -v /tmp/gents-langgraph-fixtures:/out \
+  gents-langgraph-fixture
 ```
 
 `GENTS_LANGGRAPH_PROVIDER_MODE=auto` uses the live endpoint when
@@ -51,8 +51,8 @@ model. `live` fails if no API key is present.
 Validate the generated fixture with the shared external adapter harness:
 
 ```sh
-DEFRA_AGENT_ADAPTER_INTEROP_FIXTURES=/tmp/defra-agent-langgraph-fixtures \
-  cargo test -p defra-agent --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
+GENTS_ADAPTER_INTEROP_FIXTURES=/tmp/gents-langgraph-fixtures \
+  cargo test -p gents --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
 ```
 
 The normal Rust test suite does not run Docker. This generator is an

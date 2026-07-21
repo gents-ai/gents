@@ -20,9 +20,9 @@ from upstream merge commit
 | (defense) | Same underflow site if another path reintroduces duplicate Draining | `noq`: per-connection `draining_reported` (kept past `Drained`); ignore Draining when handle not in `senders` |
 | (defense) | Poisoned Drop abort via `EndpointRef` after driver | `noq`: `EndpointRef::drop` also recovers from poison |
 
-### Why this is in defra-agent
+### Why this is in Gents
 
-- Production: fleet builds set `overflow-checks = true`, so the underflow kills steward nodes (defradb.rs#1091 / defra-agent#634).
+- Production: fleet builds set `overflow-checks = true`, so the underflow kills steward nodes (defradb.rs#1091 / gents#634).
 - Production: stale packets for a recently abandoned path panic hub nodes during
   multipath churn (defradb.rs#1090).
 - Conformance: `generated_r5_cross_deployment_cases_drive_production_dispatch` tears down P2P endpoints; a poisoned Drop aborts the whole binary rather than one test.
