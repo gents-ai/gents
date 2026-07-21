@@ -676,8 +676,16 @@ pub(super) async fn generated_transcript_cases_drive_agent_message_ordering_cont
         abandon.pre_tool_call_count,
     )
     .await;
-    let observer = hook.clone();
     drop(hook);
+    let observer = DefraSessionHook::resume_or_create_with_identity_policy(
+        db.node.clone(),
+        &session_id,
+        AGENT_NAME,
+        AGENT_DID,
+        FailurePolicy::default(),
+    )
+    .await
+    .expect("resume transcript observer after ownership abandonment");
     assert_eq!(
         observer.cancel_in_flight_tool_calls().await.unwrap(),
         abandon.post_in_flight_count,
