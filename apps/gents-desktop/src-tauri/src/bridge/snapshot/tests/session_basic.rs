@@ -1,0 +1,361 @@
+use super::*;
+
+#[test]
+fn session_snapshot_is_agent_scoped_when_session_ids_match() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![
+            AgentConversationRow {
+                session_id: "shared-session".to_string(),
+                agent_name: Some("Mini 1".to_string()),
+                agent_did: Some("did:test:mini-1".to_string()),
+                requester_did: None,
+                behavior_id: Some("default".to_string()),
+                title: Some("mini-1 run".to_string()),
+                title_source: Some("manual".to_string()),
+                preview_text: None,
+                status: Some("active".to_string()),
+                created_at: Some("2026-04-21T12:00:00Z".to_string()),
+                updated_at: Some("2026-04-21T12:00:00Z".to_string()),
+                latest_request_id: None,
+            },
+            AgentConversationRow {
+                session_id: "shared-session".to_string(),
+                agent_name: Some("Mini 2".to_string()),
+                agent_did: Some("did:test:mini-2".to_string()),
+                requester_did: None,
+                behavior_id: Some("default".to_string()),
+                title: Some("mini-2 run".to_string()),
+                title_source: Some("manual".to_string()),
+                preview_text: None,
+                status: Some("active".to_string()),
+                created_at: Some("2026-04-21T12:01:00Z".to_string()),
+                updated_at: Some("2026-04-21T12:01:00Z".to_string()),
+                latest_request_id: None,
+            },
+        ],
+        messages: vec![
+            AgentMessageRow {
+                message_key: "msg-mini-1".to_string(),
+                session_id: Some("shared-session".to_string()),
+                requester_did: None,
+                sequence: Some(1),
+                role: Some("user".to_string()),
+                content: Some(user_message_json("mini 1 only")),
+                reasoning: None,
+                timestamp: Some("2026-04-21T12:00:01Z".to_string()),
+            },
+            AgentMessageRow {
+                message_key: "msg-mini-2".to_string(),
+                session_id: Some("shared-session".to_string()),
+                requester_did: None,
+                sequence: Some(2),
+                role: Some("user".to_string()),
+                content: Some(user_message_json("mini 2 only")),
+                reasoning: None,
+                timestamp: Some("2026-04-21T12:01:01Z".to_string()),
+            },
+        ],
+        message_source_agent_dids: vec![
+            Some("did:test:mini-1".to_string()),
+            Some("did:test:mini-2".to_string()),
+        ],
+        ..ClientStoreRows::default()
+    });
+
+    let snapshot = build_session_snapshot_from_store_for_agent(
+        &store,
+        Some("did:test:mini-1"),
+        "shared-session",
+        None,
+    )
+    .expect("session snapshot");
+
+    assert_eq!(snapshot.agent_did.as_deref(), Some("did:test:mini-1"));
+    assert_eq!(snapshot.title.as_deref(), Some("mini-1 run"));
+    assert_eq!(snapshot.messages.len(), 1);
+    assert_eq!(snapshot.messages[0].message_key, "msg-mini-1");
+}
+
+#[test]
+fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![AgentConversationRow {
+            session_id: "session-1".to_string(),
+            agent_name: Some("Amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
+            requester_did: None,
+            behavior_id: Some("amy-default".to_string()),
+            title: Some("architecture-review".to_string()),
+            title_source: Some("generated".to_string()),
+            preview_text: Some("follow up question".to_string()),
+            status: Some("active".to_string()),
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            updated_at: Some("2026-04-21T12:02:00Z".to_string()),
+            latest_request_id: Some("req-2".to_string()),
+        }],
+        requests: vec![
+            AgentRequestRow {
+                request_id: "req-1".to_string(),
+                agent_did: Some("did:test:amy".to_string()),
+                requester_did: None,
+                behavior_id: Some("amy-default".to_string()),
+                session_id: Some("session-1".to_string()),
+                retry_parent_request: None,
+                retry_root_request: None,
+                superseded_by_request: None,
+                content: Some("first question".to_string()),
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_tokens: None,
+                metadata: None,
+                status: Some("completed".to_string()),
+                lifecycle_state: Some("completed".to_string()),
+                backend_id: None,
+                execution_origin: Some("interactive".to_string()),
+                failure_reason: None,
+                terminalized_at: None,
+                terminal_redrive_attempts: None,
+                created_at: Some("2026-04-21T12:00:00Z".to_string()),
+                claimed_at: None,
+                deadline: None,
+                retry_count: Some(0),
+                max_retries: Some(3),
+                caused_by_trigger_id: None,
+                caused_by_trigger_kind: None,
+                caused_by_parent_request_id: None,
+                interrupt_requested_at: None,
+                valid_until: None,
+            },
+            AgentRequestRow {
+                request_id: "req-2".to_string(),
+                agent_did: Some("did:test:amy".to_string()),
+                requester_did: None,
+                behavior_id: Some("amy-default".to_string()),
+                session_id: Some("session-1".to_string()),
+                retry_parent_request: None,
+                retry_root_request: None,
+                superseded_by_request: None,
+                content: Some("follow up question".to_string()),
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_tokens: None,
+                metadata: None,
+                status: Some("processing".to_string()),
+                lifecycle_state: Some("processing".to_string()),
+                backend_id: None,
+                execution_origin: Some("interactive".to_string()),
+                failure_reason: None,
+                terminalized_at: None,
+                terminal_redrive_attempts: None,
+                created_at: Some("2026-04-21T12:01:00Z".to_string()),
+                claimed_at: None,
+                deadline: None,
+                retry_count: Some(0),
+                max_retries: Some(3),
+                caused_by_trigger_id: None,
+                caused_by_trigger_kind: None,
+                caused_by_parent_request_id: None,
+                interrupt_requested_at: None,
+                valid_until: None,
+            },
+        ],
+        messages: vec![AgentMessageRow {
+            message_key: "msg-1".to_string(),
+            session_id: Some("session-1".to_string()),
+            requester_did: None,
+            sequence: Some(1),
+            role: Some("user".to_string()),
+            content: Some(user_message_json("first question")),
+            reasoning: None,
+            timestamp: Some("2026-04-21T12:00:00Z".to_string()),
+        }],
+        ..ClientStoreRows::default()
+    });
+
+    let snapshot =
+        build_session_snapshot_from_store(&store, "session-1", None).expect("session snapshot");
+    let pending = snapshot.pending_turn.expect("pending turn");
+    assert_eq!(pending.request_id, "req-2");
+    assert_eq!(pending.content, "follow up question");
+    assert_eq!(pending.lifecycle_state.as_deref(), Some("processing"));
+}
+
+#[test]
+fn session_snapshot_hides_pending_turn_once_user_message_is_materialized() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![AgentConversationRow {
+            session_id: "session-1".to_string(),
+            agent_name: Some("Amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
+            requester_did: None,
+            behavior_id: Some("amy-default".to_string()),
+            title: Some("architecture-review".to_string()),
+            title_source: Some("generated".to_string()),
+            preview_text: Some("follow up question".to_string()),
+            status: Some("active".to_string()),
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            updated_at: Some("2026-04-21T12:02:00Z".to_string()),
+            latest_request_id: Some("req-2".to_string()),
+        }],
+        requests: vec![AgentRequestRow {
+            request_id: "req-2".to_string(),
+            agent_did: Some("did:test:amy".to_string()),
+            requester_did: None,
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("session-1".to_string()),
+            retry_parent_request: None,
+            retry_root_request: None,
+            superseded_by_request: None,
+            content: Some("follow up question".to_string()),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            max_tokens: None,
+            metadata: None,
+            status: Some("processing".to_string()),
+            lifecycle_state: Some("processing".to_string()),
+            backend_id: None,
+            execution_origin: Some("interactive".to_string()),
+            failure_reason: None,
+            terminalized_at: None,
+            terminal_redrive_attempts: None,
+            created_at: Some("2026-04-21T12:01:00Z".to_string()),
+            claimed_at: None,
+            deadline: None,
+            retry_count: Some(0),
+            max_retries: Some(3),
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            caused_by_parent_request_id: None,
+            interrupt_requested_at: None,
+            valid_until: None,
+        }],
+        messages: vec![AgentMessageRow {
+            message_key: "msg-2".to_string(),
+            session_id: Some("session-1".to_string()),
+            requester_did: None,
+            sequence: Some(2),
+            role: Some("user".to_string()),
+            content: Some(user_message_json("follow up question")),
+            reasoning: None,
+            timestamp: Some("2026-04-21T12:01:01Z".to_string()),
+        }],
+        ..ClientStoreRows::default()
+    });
+
+    let snapshot =
+        build_session_snapshot_from_store(&store, "session-1", None).expect("session snapshot");
+    assert!(snapshot.pending_turn.is_none());
+}
+
+#[test]
+fn session_snapshot_keeps_pending_turn_for_repeated_prompt_until_second_user_message_materializes()
+{
+    let store = ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![AgentConversationRow {
+            session_id: "session-1".to_string(),
+            agent_name: Some("Amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
+            requester_did: None,
+            behavior_id: Some("amy-default".to_string()),
+            title: Some("conversation".to_string()),
+            title_source: Some("generated".to_string()),
+            preview_text: Some("same prompt".to_string()),
+            status: Some("active".to_string()),
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            updated_at: Some("2026-04-21T12:02:00Z".to_string()),
+            latest_request_id: Some("req-2".to_string()),
+        }],
+        requests: vec![
+            AgentRequestRow {
+                request_id: "req-1".to_string(),
+                agent_did: Some("did:test:amy".to_string()),
+                requester_did: None,
+                behavior_id: Some("amy-default".to_string()),
+                session_id: Some("session-1".to_string()),
+                retry_parent_request: None,
+                retry_root_request: None,
+                superseded_by_request: None,
+                content: Some("same prompt".to_string()),
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_tokens: None,
+                metadata: None,
+                status: Some("completed".to_string()),
+                lifecycle_state: Some("completed".to_string()),
+                backend_id: None,
+                execution_origin: Some("interactive".to_string()),
+                failure_reason: None,
+                terminalized_at: None,
+                terminal_redrive_attempts: None,
+                created_at: Some("2026-04-21T12:00:00Z".to_string()),
+                claimed_at: None,
+                deadline: None,
+                retry_count: Some(0),
+                max_retries: Some(3),
+                caused_by_trigger_id: None,
+                caused_by_trigger_kind: None,
+                caused_by_parent_request_id: None,
+                interrupt_requested_at: None,
+                valid_until: None,
+            },
+            AgentRequestRow {
+                request_id: "req-2".to_string(),
+                agent_did: Some("did:test:amy".to_string()),
+                requester_did: None,
+                behavior_id: Some("amy-default".to_string()),
+                session_id: Some("session-1".to_string()),
+                retry_parent_request: None,
+                retry_root_request: None,
+                superseded_by_request: None,
+                content: Some("same prompt".to_string()),
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_tokens: None,
+                metadata: None,
+                status: Some("processing".to_string()),
+                lifecycle_state: Some("processing".to_string()),
+                backend_id: None,
+                execution_origin: Some("interactive".to_string()),
+                failure_reason: None,
+                terminalized_at: None,
+                terminal_redrive_attempts: None,
+                created_at: Some("2026-04-21T12:01:00Z".to_string()),
+                claimed_at: None,
+                deadline: None,
+                retry_count: Some(0),
+                max_retries: Some(3),
+                caused_by_trigger_id: None,
+                caused_by_trigger_kind: None,
+                caused_by_parent_request_id: None,
+                interrupt_requested_at: None,
+                valid_until: None,
+            },
+        ],
+        messages: vec![AgentMessageRow {
+            message_key: "msg-1".to_string(),
+            session_id: Some("session-1".to_string()),
+            requester_did: None,
+            sequence: Some(1),
+            role: Some("user".to_string()),
+            content: Some(user_message_json("same prompt")),
+            reasoning: None,
+            timestamp: Some("2026-04-21T12:00:00Z".to_string()),
+        }],
+        ..ClientStoreRows::default()
+    });
+
+    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-2"))
+        .expect("session snapshot");
+    assert_eq!(
+        snapshot
+            .pending_turn
+            .as_ref()
+            .map(|turn| turn.request_id.as_str()),
+        Some("req-2")
+    );
+}

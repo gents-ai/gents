@@ -4,7 +4,7 @@ CARGO ?= cargo
 LAKE ?= lake
 NPM ?= npm
 
-DESKTOP_DIR := apps/desktop-tauri
+DESKTOP_DIR := apps/gents-desktop
 PROOFS_DIR := crates/gents/proofs
 FUZZ_TIME ?= 30s
 
@@ -69,7 +69,7 @@ build-cli-headless:
 	$(CARGO) build -p gents-cli --no-default-features
 
 build-desktop:
-	$(CARGO) build -p defra-agent-desktop-tauri
+	$(CARGO) build -p gents-desktop-tauri
 
 build-desktop-ui:
 	$(NPM) --prefix $(DESKTOP_DIR) run build

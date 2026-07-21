@@ -1,0 +1,2 @@
+apps/gents-desktop/src-tauri/gen/apple/project.yml whitespace=-blank-at-eol
+apps/gents-desktop/src-tauri/gen/apple/Sources/*/bindings/bindings.h whitespace=-blank-at-eof

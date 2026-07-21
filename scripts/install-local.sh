@@ -34,15 +34,15 @@ if [[ "$target" == "cli" || "$target" == "all" ]]; then
 fi
 
 if [[ "$target" == "desktop" || "$target" == "all" ]]; then
-  cargo install --profile dev-install --locked --force --path crates/defra-agent-desktop "$@"
+  cargo install --profile dev-install --locked --force --path crates/gents-desktop "$@"
 
   (
-    cd apps/desktop-tauri
+    cd apps/gents-desktop
     bun install
     bun run tauri build --debug --no-bundle
   )
 
   install -m 755 \
-    "target/debug/defra-agent-desktop-tauri" \
-    "${CARGO_HOME:-$HOME/.cargo}/bin/defra-agent-desktop-tauri"
+    "target/debug/gents-desktop-tauri" \
+    "${CARGO_HOME:-$HOME/.cargo}/bin/gents-desktop-tauri"
 fi

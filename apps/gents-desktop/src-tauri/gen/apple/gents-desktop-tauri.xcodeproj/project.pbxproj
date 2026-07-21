@@ -1,0 +1,709 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		3BD48E6BFE50601182A5B300 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A05D3FAD5D9F93204E4FE80A /* CoreGraphics.framework */; };
+		3DB3C858BF3C14FFFE4EC35D /* assets in Resources */ = {isa = PBXBuildFile; fileRef = DF999997666534D30CBC7799 /* assets */; };
+		4C7A1B799015363FAC449FD6 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4A9A0C77855ED19483490C28 /* UIKit.framework */; };
+		534FEA2C4EA85FA47A571685 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4FB100F63CC4233DE1144D72 /* Metal.framework */; };
+		55FE4F8B14637ABE2163A2AA /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 95EF0069A5DA94E81250E543 /* MetalKit.framework */; };
+		71C6080565821E5F55BC7BC4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4AA87E72BB6F6E6A9013ED37 /* Assets.xcassets */; };
+		8143829881E3F0C0DB8A6D6E /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 29FC53575AC1D708DC7E349B /* libapp.a */; };
+		88EFB05DB5D303BB4A995A0B /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 4B930D4D1CC1491CC8188CAD /* LaunchScreen.storyboard */; };
+		A49DADAEA00825152FA18A1E /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 63D599966BF164B2E3721580 /* SystemConfiguration.framework */; };
+		AB4DEA7CDE0EF8AEEEB51066 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 9550978DF0AC0816DF1CC6DF /* main.mm */; };
+		ABBC6FAC9160FA4A18515F68 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A5DAD3CA911F8C2F902D01BC /* WebKit.framework */; };
+		F19ADFFB68E1FEAE6E78893E /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 62176889B485E53F753CA7C2 /* Security.framework */; };
+		FA4E95488594095CF8C4159F /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BD70A9B920D4EF2F217086B4 /* QuartzCore.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		00BAEACAD942A3E5DDBD9F2A /* requests.rs */ = {isa = PBXFileReference; path = requests.rs; sourceTree = "<group>"; };
+		07B66EC2E055C6FDD78E1D3B /* diagnostics.rs */ = {isa = PBXFileReference; path = diagnostics.rs; sourceTree = "<group>"; };
+		07C7BC6F3D9F1C0E55D14843 /* views.rs */ = {isa = PBXFileReference; path = views.rs; sourceTree = "<group>"; };
+		09823C54550737A40F5049F3 /* session_state.rs */ = {isa = PBXFileReference; path = session_state.rs; sourceTree = "<group>"; };
+		0C0542C3E7B1A505C8B3992C /* mcp_health.rs */ = {isa = PBXFileReference; path = mcp_health.rs; sourceTree = "<group>"; };
+		0DA0263B874B7B9224E4934B /* cascade.rs */ = {isa = PBXFileReference; path = cascade.rs; sourceTree = "<group>"; };
+		0F34D19E747EDA3F46928EC0 /* operations.rs */ = {isa = PBXFileReference; path = operations.rs; sourceTree = "<group>"; };
+		10B72BE90EE9E8DEFEBF21D8 /* replication.rs */ = {isa = PBXFileReference; path = replication.rs; sourceTree = "<group>"; };
+		13246CCD8EBE4F8580284738 /* gents-desktop-tauri_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "gents-desktop-tauri_iOS.entitlements"; sourceTree = "<group>"; };
+		17B3ACBC043348F1742CDB42 /* live_fixture.rs */ = {isa = PBXFileReference; path = live_fixture.rs; sourceTree = "<group>"; };
+		19F564FBF8590CF02ECB1E57 /* peers.rs */ = {isa = PBXFileReference; path = peers.rs; sourceTree = "<group>"; };
+		1DE23437722662D9D08B805B /* runtime.rs */ = {isa = PBXFileReference; path = runtime.rs; sourceTree = "<group>"; };
+		1F2694C252867EA0DD27D220 /* types.rs */ = {isa = PBXFileReference; path = types.rs; sourceTree = "<group>"; };
+		2169619DFF3BC6ED53106D28 /* tasks.rs */ = {isa = PBXFileReference; path = tasks.rs; sourceTree = "<group>"; };
+		216DC97BD3A47487FC66B7FF /* tauri_commands.rs */ = {isa = PBXFileReference; path = tauri_commands.rs; sourceTree = "<group>"; };
+		28E0C1C523164377325D9BEB /* util.rs */ = {isa = PBXFileReference; path = util.rs; sourceTree = "<group>"; };
+		299FF6AE1CE062F78FBF69B2 /* operations.rs */ = {isa = PBXFileReference; path = operations.rs; sourceTree = "<group>"; };
+		29FC53575AC1D708DC7E349B /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		2A6C306FBD06FA449DCE006E /* agent.rs */ = {isa = PBXFileReference; path = agent.rs; sourceTree = "<group>"; };
+		2A85AC55EE51E746B8F4F57E /* operations_snapshot.rs */ = {isa = PBXFileReference; path = operations_snapshot.rs; sourceTree = "<group>"; };
+		2AE981F11D819950D8B429CC /* tools_explain.rs */ = {isa = PBXFileReference; path = tools_explain.rs; sourceTree = "<group>"; };
+		379882B3B6DD315E932A6B6D /* subagent_tree.rs */ = {isa = PBXFileReference; path = subagent_tree.rs; sourceTree = "<group>"; };
+		3BBF6753437F26B6338BDFC8 /* backend.rs */ = {isa = PBXFileReference; path = backend.rs; sourceTree = "<group>"; };
+		3EEA65DC8D1E1BCF0CF3EBCE /* session_stale_rows.rs */ = {isa = PBXFileReference; path = session_stale_rows.rs; sourceTree = "<group>"; };
+		3F3BF8463CF5229C91BCA4E9 /* snapshot.rs */ = {isa = PBXFileReference; path = snapshot.rs; sourceTree = "<group>"; };
+		470F6665492E6E4866C84894 /* state.rs */ = {isa = PBXFileReference; path = state.rs; sourceTree = "<group>"; };
+		48C7BD52930BFD8A07B35014 /* chat.rs */ = {isa = PBXFileReference; path = chat.rs; sourceTree = "<group>"; };
+		4A8E3985F8D178430B2655C8 /* timeline.rs */ = {isa = PBXFileReference; path = timeline.rs; sourceTree = "<group>"; };
+		4A9A0C77855ED19483490C28 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		4AA87E72BB6F6E6A9013ED37 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		4B930D4D1CC1491CC8188CAD /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		4FB100F63CC4233DE1144D72 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		5AB282B8BF935EF647AE9F20 /* util.rs */ = {isa = PBXFileReference; path = util.rs; sourceTree = "<group>"; };
+		5B5A7408B9252B2996C02FEB /* support.rs */ = {isa = PBXFileReference; path = support.rs; sourceTree = "<group>"; };
+		5C6F971B11260565258683E2 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
+		6021C3C268E6FBFA1508EB30 /* deployment.rs */ = {isa = PBXFileReference; path = deployment.rs; sourceTree = "<group>"; };
+		604316652DED14696063DFF4 /* operations_cascade.rs */ = {isa = PBXFileReference; path = operations_cascade.rs; sourceTree = "<group>"; };
+		62176889B485E53F753CA7C2 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		63D599966BF164B2E3721580 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
+		6513914DB2E3A6D8415FD2F6 /* bridge_runner.rs */ = {isa = PBXFileReference; path = bridge_runner.rs; sourceTree = "<group>"; };
+		67EA52F5F23B0E6157256765 /* tests.rs */ = {isa = PBXFileReference; path = tests.rs; sourceTree = "<group>"; };
+		697503E4C365AC335289AB8F /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+		6A997A3B16D2A0598DA89ADC /* tests.rs */ = {isa = PBXFileReference; path = tests.rs; sourceTree = "<group>"; };
+		6C057CA4C478E4ABC6B69F0D /* session_basic.rs */ = {isa = PBXFileReference; path = session_basic.rs; sourceTree = "<group>"; };
+		72B7A94A4CBB8A694D059DF4 /* protocol.rs */ = {isa = PBXFileReference; path = protocol.rs; sourceTree = "<group>"; };
+		73435A4C314E258895D69AAE /* config.rs */ = {isa = PBXFileReference; path = config.rs; sourceTree = "<group>"; };
+		73895FFC4AB1F95CBD8E852F /* logging.rs */ = {isa = PBXFileReference; path = logging.rs; sourceTree = "<group>"; };
+		73E0CA87EE1AC083EBCAA14B /* bootstrap.rs */ = {isa = PBXFileReference; path = bootstrap.rs; sourceTree = "<group>"; };
+		77DA72D0507C153C811F9678 /* gents-desktop-tauri_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "gents-desktop-tauri_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		7E209A2DC97CECD8A16D7B04 /* workspace.rs */ = {isa = PBXFileReference; path = workspace.rs; sourceTree = "<group>"; };
+		802645E191828B3D41B8ED9D /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
+		803FB81044FE66714147718E /* runtime_tasks.rs */ = {isa = PBXFileReference; path = runtime_tasks.rs; sourceTree = "<group>"; };
+		8131C92E927D7AAD323765C5 /* events.rs */ = {isa = PBXFileReference; path = events.rs; sourceTree = "<group>"; };
+		858C2C84AB09FE17ED8D2AAA /* operations_interrupt.rs */ = {isa = PBXFileReference; path = operations_interrupt.rs; sourceTree = "<group>"; };
+		874BAB64BBFD854110A60212 /* session.rs */ = {isa = PBXFileReference; path = session.rs; sourceTree = "<group>"; };
+		9550978DF0AC0816DF1CC6DF /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
+		95EF0069A5DA94E81250E543 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		9CF756EE8D808A2DD3223707 /* operations_tests.rs */ = {isa = PBXFileReference; path = operations_tests.rs; sourceTree = "<group>"; };
+		A05D3FAD5D9F93204E4FE80A /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		A259C579E59430E960CD282A /* peer.rs */ = {isa = PBXFileReference; path = peer.rs; sourceTree = "<group>"; };
+		A5DAD3CA911F8C2F902D01BC /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+		AC8F620E6FAD87A7575DCCBA /* lifecycle.rs */ = {isa = PBXFileReference; path = lifecycle.rs; sourceTree = "<group>"; };
+		B8EC844009D9A684B3C7ED2C /* chat.rs */ = {isa = PBXFileReference; path = chat.rs; sourceTree = "<group>"; };
+		BA33B6C360ACA12BB82E15A3 /* routes.rs */ = {isa = PBXFileReference; path = routes.rs; sourceTree = "<group>"; };
+		BB9B60FA114DFC7D916C7243 /* cause_derivation.rs */ = {isa = PBXFileReference; path = cause_derivation.rs; sourceTree = "<group>"; };
+		BBFD9263E39D132D738E25F6 /* mcp_health.rs */ = {isa = PBXFileReference; path = mcp_health.rs; sourceTree = "<group>"; };
+		BD70A9B920D4EF2F217086B4 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		C121907666F419495C657583 /* config.rs */ = {isa = PBXFileReference; path = config.rs; sourceTree = "<group>"; };
+		C27ACD102719D7FC32A7A958 /* cause_derivation.rs */ = {isa = PBXFileReference; path = cause_derivation.rs; sourceTree = "<group>"; };
+		C32317E96EA5AE9C722B5FF8 /* commands.rs */ = {isa = PBXFileReference; path = commands.rs; sourceTree = "<group>"; };
+		CC50889ED03AB4275A06EF9B /* tool_service.rs */ = {isa = PBXFileReference; path = tool_service.rs; sourceTree = "<group>"; };
+		D170A1F87B919C05C065FF7B /* session.rs */ = {isa = PBXFileReference; path = session.rs; sourceTree = "<group>"; };
+		D2172BF362F6CD537098D454 /* session_timeline.rs */ = {isa = PBXFileReference; path = session_timeline.rs; sourceTree = "<group>"; };
+		DD5008E68313613CEB75DF6C /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
+		DF999997666534D30CBC7799 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
+		E2C7CAFA67BC8062EEAB81A7 /* workspace.rs */ = {isa = PBXFileReference; path = workspace.rs; sourceTree = "<group>"; };
+		E685C32AC8407A695759E600 /* http.rs */ = {isa = PBXFileReference; path = http.rs; sourceTree = "<group>"; };
+		E855A68A25A6B068CF2C8252 /* subagent_lineage.rs */ = {isa = PBXFileReference; path = subagent_lineage.rs; sourceTree = "<group>"; };
+		E9C58EEBC65B600D8B3C394B /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
+		EAA3CB50323EC527D6E6C578 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		EFB4B45637A81E1CF5AD1572 /* runtime.rs */ = {isa = PBXFileReference; path = runtime.rs; sourceTree = "<group>"; };
+		F459B945226C7020C753E97C /* operations_signature.rs */ = {isa = PBXFileReference; path = operations_signature.rs; sourceTree = "<group>"; };
+		FC2300ED6A083D1CA68BE5A8 /* task.rs */ = {isa = PBXFileReference; path = task.rs; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		F9B3CFAAFD6C2E2D64BD025A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8143829881E3F0C0DB8A6D6E /* libapp.a in Frameworks */,
+				3BD48E6BFE50601182A5B300 /* CoreGraphics.framework in Frameworks */,
+				534FEA2C4EA85FA47A571685 /* Metal.framework in Frameworks */,
+				55FE4F8B14637ABE2163A2AA /* MetalKit.framework in Frameworks */,
+				FA4E95488594095CF8C4159F /* QuartzCore.framework in Frameworks */,
+				F19ADFFB68E1FEAE6E78893E /* Security.framework in Frameworks */,
+				4C7A1B799015363FAC449FD6 /* UIKit.framework in Frameworks */,
+				A49DADAEA00825152FA18A1E /* SystemConfiguration.framework in Frameworks */,
+				ABBC6FAC9160FA4A18515F68 /* WebKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		065CC2EA11A9FCBCDA381696 = {
+			isa = PBXGroup;
+			children = (
+				DF999997666534D30CBC7799 /* assets */,
+				4AA87E72BB6F6E6A9013ED37 /* Assets.xcassets */,
+				4B930D4D1CC1491CC8188CAD /* LaunchScreen.storyboard */,
+				A451FFEA485414052E4266F7 /* Externals */,
+				E578A9CE50CAD151F94E888C /* gents-desktop-tauri_iOS */,
+				E1F731CFA4D72A5157CF32D7 /* Sources */,
+				F93A41AA294428FFBCE5F70D /* src */,
+				C3F98401656EFA6C28A17CEF /* Frameworks */,
+				D80169D771310DFDC6D9289D /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		0C7CD49B7225AACC14C852A1 /* gents-desktop-tauri */ = {
+			isa = PBXGroup;
+			children = (
+				9550978DF0AC0816DF1CC6DF /* main.mm */,
+				514A425B3B1875BAA8A5226F /* bindings */,
+			);
+			path = "gents-desktop-tauri";
+			sourceTree = "<group>";
+		};
+		15EF5454D0C9C1E6DA82A5ED /* snapshot */ = {
+			isa = PBXGroup;
+			children = (
+				F459B945226C7020C753E97C /* operations_signature.rs */,
+				2A85AC55EE51E746B8F4F57E /* operations_snapshot.rs */,
+				803FB81044FE66714147718E /* runtime_tasks.rs */,
+				1DE23437722662D9D08B805B /* runtime.rs */,
+				874BAB64BBFD854110A60212 /* session.rs */,
+				379882B3B6DD315E932A6B6D /* subagent_tree.rs */,
+				67EA52F5F23B0E6157256765 /* tests.rs */,
+				4A8E3985F8D178430B2655C8 /* timeline.rs */,
+				3132E128926DDE6BF96FEB6E /* operations_snapshot */,
+				7DC6ABAED09291505204872F /* tests */,
+			);
+			path = snapshot;
+			sourceTree = "<group>";
+		};
+		1D9E007726F2343B155F11B5 /* types */ = {
+			isa = PBXGroup;
+			children = (
+				00BAEACAD942A3E5DDBD9F2A /* requests.rs */,
+				28E0C1C523164377325D9BEB /* util.rs */,
+				07C7BC6F3D9F1C0E55D14843 /* views.rs */,
+				51817CA0164D4602186D3A1D /* views */,
+			);
+			path = types;
+			sourceTree = "<group>";
+		};
+		3132E128926DDE6BF96FEB6E /* operations_snapshot */ = {
+			isa = PBXGroup;
+			children = (
+				6A997A3B16D2A0598DA89ADC /* tests.rs */,
+			);
+			path = operations_snapshot;
+			sourceTree = "<group>";
+		};
+		514A425B3B1875BAA8A5226F /* bindings */ = {
+			isa = PBXGroup;
+			children = (
+				5C6F971B11260565258683E2 /* bindings.h */,
+			);
+			path = bindings;
+			sourceTree = "<group>";
+		};
+		51817CA0164D4602186D3A1D /* views */ = {
+			isa = PBXGroup;
+			children = (
+				73E0CA87EE1AC083EBCAA14B /* bootstrap.rs */,
+				6021C3C268E6FBFA1508EB30 /* deployment.rs */,
+				8131C92E927D7AAD323765C5 /* events.rs */,
+				0F34D19E747EDA3F46928EC0 /* operations.rs */,
+				D170A1F87B919C05C065FF7B /* session.rs */,
+			);
+			path = views;
+			sourceTree = "<group>";
+		};
+		5E296765E769B0345981F20C /* tauri_commands */ = {
+			isa = PBXGroup;
+			children = (
+				B8EC844009D9A684B3C7ED2C /* chat.rs */,
+				73435A4C314E258895D69AAE /* config.rs */,
+				AC8F620E6FAD87A7575DCCBA /* lifecycle.rs */,
+				9CF756EE8D808A2DD3223707 /* operations_tests.rs */,
+				299FF6AE1CE062F78FBF69B2 /* operations.rs */,
+				19F564FBF8590CF02ECB1E57 /* peers.rs */,
+				2169619DFF3BC6ED53106D28 /* tasks.rs */,
+				2AE981F11D819950D8B429CC /* tools_explain.rs */,
+				E2C7CAFA67BC8062EEAB81A7 /* workspace.rs */,
+			);
+			path = tauri_commands;
+			sourceTree = "<group>";
+		};
+		71BBB178C8F3055FC38A38A5 /* tests */ = {
+			isa = PBXGroup;
+			children = (
+				C27ACD102719D7FC32A7A958 /* cause_derivation.rs */,
+				802645E191828B3D41B8ED9D /* mod.rs */,
+				604316652DED14696063DFF4 /* operations_cascade.rs */,
+				858C2C84AB09FE17ED8D2AAA /* operations_interrupt.rs */,
+				5B5A7408B9252B2996C02FEB /* support.rs */,
+			);
+			path = tests;
+			sourceTree = "<group>";
+		};
+		78361A7A2112883C52F81692 /* bridge_runner */ = {
+			isa = PBXGroup;
+			children = (
+				07B66EC2E055C6FDD78E1D3B /* diagnostics.rs */,
+				E685C32AC8407A695759E600 /* http.rs */,
+				CECCAC459E16F2A57B39DAFB /* http */,
+			);
+			path = bridge_runner;
+			sourceTree = "<group>";
+		};
+		7DC6ABAED09291505204872F /* tests */ = {
+			isa = PBXGroup;
+			children = (
+				BBFD9263E39D132D738E25F6 /* mcp_health.rs */,
+				EFB4B45637A81E1CF5AD1572 /* runtime.rs */,
+				6C057CA4C478E4ABC6B69F0D /* session_basic.rs */,
+				3EEA65DC8D1E1BCF0CF3EBCE /* session_stale_rows.rs */,
+				09823C54550737A40F5049F3 /* session_state.rs */,
+				D2172BF362F6CD537098D454 /* session_timeline.rs */,
+				E855A68A25A6B068CF2C8252 /* subagent_lineage.rs */,
+			);
+			path = tests;
+			sourceTree = "<group>";
+		};
+		952744350CF0AABE246299DA /* live_fixture */ = {
+			isa = PBXGroup;
+			children = (
+				2A6C306FBD06FA449DCE006E /* agent.rs */,
+				3BBF6753437F26B6338BDFC8 /* backend.rs */,
+				10B72BE90EE9E8DEFEBF21D8 /* replication.rs */,
+				7E209A2DC97CECD8A16D7B04 /* workspace.rs */,
+			);
+			path = live_fixture;
+			sourceTree = "<group>";
+		};
+		A451FFEA485414052E4266F7 /* Externals */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Externals;
+			sourceTree = "<group>";
+		};
+		C3F98401656EFA6C28A17CEF /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				A05D3FAD5D9F93204E4FE80A /* CoreGraphics.framework */,
+				29FC53575AC1D708DC7E349B /* libapp.a */,
+				4FB100F63CC4233DE1144D72 /* Metal.framework */,
+				95EF0069A5DA94E81250E543 /* MetalKit.framework */,
+				BD70A9B920D4EF2F217086B4 /* QuartzCore.framework */,
+				62176889B485E53F753CA7C2 /* Security.framework */,
+				63D599966BF164B2E3721580 /* SystemConfiguration.framework */,
+				4A9A0C77855ED19483490C28 /* UIKit.framework */,
+				A5DAD3CA911F8C2F902D01BC /* WebKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		CECCAC459E16F2A57B39DAFB /* http */ = {
+			isa = PBXGroup;
+			children = (
+				72B7A94A4CBB8A694D059DF4 /* protocol.rs */,
+				BA33B6C360ACA12BB82E15A3 /* routes.rs */,
+			);
+			path = http;
+			sourceTree = "<group>";
+		};
+		D59229E9C31F8D423080CB62 /* bridge */ = {
+			isa = PBXGroup;
+			children = (
+				0DA0263B874B7B9224E4934B /* cascade.rs */,
+				BB9B60FA114DFC7D916C7243 /* cause_derivation.rs */,
+				C32317E96EA5AE9C722B5FF8 /* commands.rs */,
+				73895FFC4AB1F95CBD8E852F /* logging.rs */,
+				DD5008E68313613CEB75DF6C /* mod.rs */,
+				3F3BF8463CF5229C91BCA4E9 /* snapshot.rs */,
+				470F6665492E6E4866C84894 /* state.rs */,
+				216DC97BD3A47487FC66B7FF /* tauri_commands.rs */,
+				1F2694C252867EA0DD27D220 /* types.rs */,
+				E611D0461161E16EF20C028D /* commands */,
+				15EF5454D0C9C1E6DA82A5ED /* snapshot */,
+				5E296765E769B0345981F20C /* tauri_commands */,
+				71BBB178C8F3055FC38A38A5 /* tests */,
+				1D9E007726F2343B155F11B5 /* types */,
+			);
+			path = bridge;
+			sourceTree = "<group>";
+		};
+		D80169D771310DFDC6D9289D /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				77DA72D0507C153C811F9678 /* gents-desktop-tauri_iOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		E1F731CFA4D72A5157CF32D7 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				0C7CD49B7225AACC14C852A1 /* gents-desktop-tauri */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		E578A9CE50CAD151F94E888C /* gents-desktop-tauri_iOS */ = {
+			isa = PBXGroup;
+			children = (
+				13246CCD8EBE4F8580284738 /* gents-desktop-tauri_iOS.entitlements */,
+				EAA3CB50323EC527D6E6C578 /* Info.plist */,
+			);
+			path = "gents-desktop-tauri_iOS";
+			sourceTree = "<group>";
+		};
+		E611D0461161E16EF20C028D /* commands */ = {
+			isa = PBXGroup;
+			children = (
+				48C7BD52930BFD8A07B35014 /* chat.rs */,
+				C121907666F419495C657583 /* config.rs */,
+				0C0542C3E7B1A505C8B3992C /* mcp_health.rs */,
+				A259C579E59430E960CD282A /* peer.rs */,
+				FC2300ED6A083D1CA68BE5A8 /* task.rs */,
+				CC50889ED03AB4275A06EF9B /* tool_service.rs */,
+				5AB282B8BF935EF647AE9F20 /* util.rs */,
+			);
+			path = commands;
+			sourceTree = "<group>";
+		};
+		E7B1274028F9B2094742F88B /* bin */ = {
+			isa = PBXGroup;
+			children = (
+				6513914DB2E3A6D8415FD2F6 /* bridge_runner.rs */,
+				78361A7A2112883C52F81692 /* bridge_runner */,
+			);
+			path = bin;
+			sourceTree = "<group>";
+		};
+		F93A41AA294428FFBCE5F70D /* src */ = {
+			isa = PBXGroup;
+			children = (
+				697503E4C365AC335289AB8F /* lib.rs */,
+				E9C58EEBC65B600D8B3C394B /* main.rs */,
+				E7B1274028F9B2094742F88B /* bin */,
+				D59229E9C31F8D423080CB62 /* bridge */,
+				FA4E58DED36BB458C761C2CE /* runner */,
+			);
+			name = src;
+			path = ../../src;
+			sourceTree = "<group>";
+		};
+		FA4E58DED36BB458C761C2CE /* runner */ = {
+			isa = PBXGroup;
+			children = (
+				17B3ACBC043348F1742CDB42 /* live_fixture.rs */,
+				952744350CF0AABE246299DA /* live_fixture */,
+			);
+			path = runner;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		C639EC47185605E9FEA2AED6 /* gents-desktop-tauri_iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DB7D92F65C797B08C58C0B33 /* Build configuration list for PBXNativeTarget "gents-desktop-tauri_iOS" */;
+			buildPhases = (
+				8C15FD77159AB8BF07914C1C /* Build Rust Code */,
+				B3F9FD548C157DCE39F108BD /* Sources */,
+				383DB12BBD1046155948DCD4 /* Resources */,
+				F9B3CFAAFD6C2E2D64BD025A /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "gents-desktop-tauri_iOS";
+			packageProductDependencies = (
+			);
+			productName = "gents-desktop-tauri_iOS";
+			productReference = 77DA72D0507C153C811F9678 /* gents-desktop-tauri_iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E26EA2099383F0EADC2E802A /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					C639EC47185605E9FEA2AED6 = {
+						DevelopmentTeam = NXJ753WW5X;
+					};
+				};
+			};
+			buildConfigurationList = 349DD1947E16C89F99A8DAE2 /* Build configuration list for PBXProject "gents-desktop-tauri" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 065CC2EA11A9FCBCDA381696;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = D80169D771310DFDC6D9289D /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				C639EC47185605E9FEA2AED6 /* gents-desktop-tauri_iOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		383DB12BBD1046155948DCD4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				71C6080565821E5F55BC7BC4 /* Assets.xcassets in Resources */,
+				88EFB05DB5D303BB4A995A0B /* LaunchScreen.storyboard in Resources */,
+				3DB3C858BF3C14FFFE4EC35D /* assets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		8C15FD77159AB8BF07914C1C /* Build Rust Code */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust Code";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a",
+				"$(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		B3F9FD548C157DCE39F108BD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AB4DEA7CDE0EF8AEEEB51066 /* main.mm in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		46A8A7BA2C63305B77CE5752 /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "gents-desktop-tauri_iOS/gents-desktop-tauri_iOS.entitlements";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = "NXJ753WW5X";
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = "gents-desktop-tauri_iOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.source-inc.gents;
+				PRODUCT_NAME = "Gents";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
+			};
+			name = debug;
+		};
+		63519245E47CF905A201CD8E /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "gents-desktop-tauri_iOS/gents-desktop-tauri_iOS.entitlements";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = "NXJ753WW5X";
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = "gents-desktop-tauri_iOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.source-inc.gents;
+				PRODUCT_NAME = "Gents";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
+			};
+			name = release;
+		};
+		865DB50A113D3E6EC2E52ACD /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = release;
+		};
+		C064E2C7C1E37E5C8C7EF561 /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		349DD1947E16C89F99A8DAE2 /* Build configuration list for PBXProject "gents-desktop-tauri" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C064E2C7C1E37E5C8C7EF561 /* debug */,
+				865DB50A113D3E6EC2E52ACD /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+		DB7D92F65C797B08C58C0B33 /* Build configuration list for PBXNativeTarget "gents-desktop-tauri_iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				46A8A7BA2C63305B77CE5752 /* debug */,
+				63519245E47CF905A201CD8E /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = E26EA2099383F0EADC2E802A /* Project object */;
+}
