@@ -6116,7 +6116,7 @@ async fn codex_shim_waits_for_a_missing_bound_behavior_instead_of_disabling() ->
     // rather than disable itself for the life of the process (#699). The port
     // stays closed — there is nothing to serve yet — and the server keeps
     // serving everything else.
-    let mut serve = spawn_server_with_env(
+    let (mut serve, readiness) = spawn_server_with_ready_json(
         &home_dir,
         server_port,
         &[
@@ -6130,6 +6130,21 @@ async fn codex_shim_waits_for_a_missing_bound_behavior_instead_of_disabling() ->
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    assert_eq!(
+        readiness
+            .pointer("/codex_shim/pending")
+            .and_then(Value::as_bool),
+        Some(true),
+        "server readiness must report the shim as pending: {readiness}"
+    );
+    assert_eq!(
+        readiness
+            .pointer("/codex_shim/bound_behavior_id")
+            .and_then(Value::as_str),
+        Some("behavior-that-does-not-exist"),
+        "server readiness must name the missing bound behavior: {readiness}"
+    );
 
     let (_stdout, stderr) = serve.captured_output()?;
     assert!(

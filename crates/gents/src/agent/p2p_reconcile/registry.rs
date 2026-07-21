@@ -221,6 +221,11 @@ pub async fn run_registry_heartbeat(
         );
     }
 
+    // `tokio::time::interval` makes its first tick immediately ready. Consume
+    // that scheduling tick after the explicit startup write so entering the
+    // loop does not issue a redundant second upsert during startup contention.
+    interval.tick().await;
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -299,7 +304,12 @@ async fn tick_registry(
     // which is empty here — the operator path sets it). The heartbeat still
     // re-advertises the offered templates so the registry offer stays fresh.
     let mutation = registry_upsert_mutation(&entry, &now, UpsertKind::Heartbeat);
-    let response = node.execute(&mutation).await;
+    let response = crate::retry::execute_graphql_with_conflict_retry(
+        node,
+        &mutation,
+        "upsert_peer_registry_heartbeat",
+    )
+    .await;
 
     if response.has_errors() {
         bail!("upsert_PeerRegistry failed: {:?}", response.errors);
