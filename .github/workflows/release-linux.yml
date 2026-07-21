@@ -1,4 +1,4 @@
-name: Release Linux defra-agent
+name: Release Linux gents
 
 on:
   push:
@@ -71,7 +71,7 @@ jobs:
         shell: bash
 
     env:
-      GIT_CONFIG_GLOBAL: /tmp/defra-agent-release-${{ github.run_id }}-${{ matrix.target }}.gitconfig
+      GIT_CONFIG_GLOBAL: /tmp/gents-release-${{ github.run_id }}-${{ matrix.target }}.gitconfig
       TARGET_TRIPLE: ${{ matrix.target }}
       CARGO_PROFILE_RELEASE_LTO: ${{ matrix.release_lto }}
       CARGO_BUILD_JOBS: ${{ matrix.cargo_jobs }}
@@ -127,16 +127,16 @@ jobs:
             exit 1
           fi
           make release-cli
-          file target/release/defra-agent
+          file target/release/gents
 
       - name: Verify binary
         run: |
           set -euo pipefail
-          binary_path="target/release/defra-agent"
+          binary_path="target/release/gents"
           version_output="$("${binary_path}" version)"
           printf '%s\n' "${version_output}"
           if [[ -z "${version_output}" ]]; then
-            echo "::error::defra-agent version produced no output."
+            echo "::error::gents version produced no output."
             exit 1
           fi
 
@@ -146,7 +146,7 @@ jobs:
           GLIBC_BASELINE: ${{ matrix.glibc_baseline }}
         run: |
           set -euo pipefail
-          binary_path="target/release/defra-agent"
+          binary_path="target/release/gents"
           required="$(objdump -T "${binary_path}" | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' | sed 's/GLIBC_//' | sort -Vu | tail -1)"
           echo "max required glibc: ${required} (baseline: ${GLIBC_BASELINE})"
           newest="$(printf '%s\n%s\n' "${GLIBC_BASELINE}" "${required}" | sort -V | tail -1)"
@@ -160,7 +160,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          artifact_basename="defra-agent-${TARGET_TRIPLE}"
+          artifact_basename="gents-${TARGET_TRIPLE}"
           dist_dir="${RUNNER_TEMP}/dist"
           rm -rf "${dist_dir}"
 
@@ -226,7 +226,7 @@ jobs:
             gh release create "${GITHUB_REF_NAME}" \
               --verify-tag \
               --title "${GITHUB_REF_NAME}" \
-              --notes "defra-agent release artifacts." \
+              --notes "gents release artifacts." \
               || gh release view "${GITHUB_REF_NAME}" >/dev/null
           fi
           gh release upload "${GITHUB_REF_NAME}" dist/*.tar.gz dist/*.tar.gz.sha256 --clobber

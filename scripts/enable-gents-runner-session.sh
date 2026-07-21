@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-plist="${1:-/Library/LaunchDaemons/com.github.actions.runner.defra-agent.plist}"
+plist="${1:-/Library/LaunchDaemons/com.github.actions.runner.gents.plist}"
 
 if [[ ! -f "${plist}" ]]; then
   echo "Runner LaunchDaemon plist not found: ${plist}" >&2

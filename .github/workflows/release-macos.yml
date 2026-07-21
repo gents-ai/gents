@@ -1,4 +1,4 @@
-name: Release macOS defra-agent
+name: Release macOS gents
 
 on:
   push:
@@ -38,7 +38,7 @@ env:
   RUST_BACKTRACE: "1"
   SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '60G' }}
   SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
-  MACOS_CODESIGN_IDENTIFIER: org.sourcenetwork.defra-agent
+  MACOS_CODESIGN_IDENTIFIER: com.source-inc.gents.cli
   TARGET_TRIPLE: aarch64-apple-darwin
 
 jobs:
@@ -118,7 +118,7 @@ jobs:
           fi
 
           if [[ "${is_release_tag}" == "true" && "${dry_run_unsigned}" == "true" ]]; then
-            echo "::error::Tagged defra-agent releases must be signed; dry_run_unsigned is not allowed for release tags."
+            echo "::error::Tagged gents releases must be signed; dry_run_unsigned is not allowed for release tags."
             exit 1
           fi
 
@@ -176,11 +176,11 @@ jobs:
             exit 0
           fi
 
-          keychain_path="${MACOS_CODESIGN_KEYCHAIN_PATH_VAR:-${HOME}/Library/Keychains/defra-agent-signing.keychain-db}"
+          keychain_path="${MACOS_CODESIGN_KEYCHAIN_PATH_VAR:-${HOME}/Library/Keychains/gents-signing.keychain-db}"
           keychain_password="${MACOS_CODESIGN_KEYCHAIN_PASSWORD}"
           login_keychain="${HOME}/Library/Keychains/login.keychain-db"
-          original_keychains_path="${RUNNER_TEMP}/defra-agent-original-keychains.txt"
-          original_default_keychain_path="${RUNNER_TEMP}/defra-agent-original-default-keychain.txt"
+          original_keychains_path="${RUNNER_TEMP}/gents-original-keychains.txt"
+          original_default_keychain_path="${RUNNER_TEMP}/gents-original-default-keychain.txt"
 
           if [[ ! -f "${keychain_path}" ]]; then
             echo "::error::Native macOS signing keychain not found at ${keychain_path}."
@@ -235,7 +235,7 @@ jobs:
           echo "SIGNING_IDENTITY=${signing_identity}" >> "${GITHUB_ENV}"
           echo "SIGNING_IDENTITY_NAME=${signing_identity_name}" >> "${GITHUB_ENV}"
 
-          smoke_bin="${RUNNER_TEMP}/defra-agent-codesign-smoke"
+          smoke_bin="${RUNNER_TEMP}/gents-codesign-smoke"
           cp /bin/echo "${smoke_bin}"
           codesign --remove-signature "${smoke_bin}" 2>/dev/null || true
           codesign \
@@ -266,14 +266,14 @@ jobs:
             echo "::error::Expected ${TARGET_TRIPLE} macOS runner, got ${host_triple}."
             exit 1
           fi
-          cargo build -p defra-agent-cli --release
-          file target/release/defra-agent
+          cargo build -p gents-cli --release
+          file target/release/gents
 
       - name: Generate dSYM and strip release binary
         run: |
           .github/scripts/prepare-macos-release-dsym.sh \
-            target/release/defra-agent \
-            target/release/defra-agent.dSYM
+            target/release/gents \
+            target/release/gents.dSYM
 
       - name: Sign binary with native macOS identity
         env:
@@ -287,7 +287,7 @@ jobs:
             exit 0
           fi
 
-          binary_path="target/release/defra-agent"
+          binary_path="target/release/gents"
           keychain_path="${SIGNING_KEYCHAIN}"
           signing_identity="${SIGNING_IDENTITY_NAME}"
           timestamp_mode="${RELEASE_CODESIGN_TIMESTAMP_MODE:-auto}"
@@ -382,22 +382,22 @@ jobs:
             exit 0
           fi
 
-          binary_path="target/release/defra-agent"
-          notary_dir="${RUNNER_TEMP}/defra-agent-notary"
+          binary_path="target/release/gents"
+          notary_dir="${RUNNER_TEMP}/gents-notary"
           staging_dir="${notary_dir}/payload"
-          notary_zip="${notary_dir}/defra-agent-notary.zip"
+          notary_zip="${notary_dir}/gents-notary.zip"
           notary_key_path="${notary_dir}/AuthKey_${MACOS_NOTARY_KEY_ID}.p8"
 
           rm -rf "${notary_dir}"
           mkdir -p "${staging_dir}"
-          cp "${binary_path}" "${staging_dir}/defra-agent"
-          chmod 0755 "${staging_dir}/defra-agent"
+          cp "${binary_path}" "${staging_dir}/gents"
+          chmod 0755 "${staging_dir}/gents"
           printf '%s\n' "${MACOS_NOTARY_API_KEY}" > "${notary_key_path}"
           chmod 0600 "${notary_key_path}"
 
           (
             cd "${staging_dir}"
-            /usr/bin/ditto -c -k --keepParent defra-agent "${notary_zip}"
+            /usr/bin/ditto -c -k --keepParent gents "${notary_zip}"
           )
 
           xcrun notarytool submit "${notary_zip}" \
@@ -415,7 +415,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          binary_path="target/release/defra-agent"
+          binary_path="target/release/gents"
           if [[ "${SIGNING_ENABLED}" == "true" ]]; then
             codesign --verify --strict --verbose=2 "${binary_path}"
 
@@ -459,7 +459,7 @@ jobs:
           version_output="$("${binary_path}" version)"
           printf '%s\n' "${version_output}"
           if [[ -z "${version_output}" ]]; then
-            echo "::error::defra-agent version produced no output."
+            echo "::error::gents version produced no output."
             exit 1
           fi
 
@@ -468,7 +468,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          artifact_basename="defra-agent-${TARGET_TRIPLE}"
+          artifact_basename="gents-${TARGET_TRIPLE}"
           if [[ "${SIGNING_ENABLED}" != "true" ]]; then
             artifact_basename="${artifact_basename}-unsigned-dry-run"
           fi
@@ -476,7 +476,7 @@ jobs:
           package_parent="${RUNNER_TEMP}/package"
           package_root="${package_parent}/${artifact_basename}"
           symbols_parent="${RUNNER_TEMP}/symbols"
-          dsym_bundle_basename="defra-agent.dSYM"
+          dsym_bundle_basename="gents.dSYM"
           dsym_archive_basename="${artifact_basename}.dSYM"
           dist_dir="${RUNNER_TEMP}/dist"
           tarball="${dist_dir}/${artifact_basename}.tar.gz"
@@ -486,9 +486,9 @@ jobs:
 
           rm -rf "${package_parent}" "${symbols_parent}" "${dist_dir}"
           mkdir -p "${package_root}" "${symbols_parent}" "${dist_dir}"
-          cp target/release/defra-agent "${package_root}/defra-agent"
-          chmod 0755 "${package_root}/defra-agent"
-          cp -R target/release/defra-agent.dSYM "${symbols_parent}/${dsym_bundle_basename}"
+          cp target/release/gents "${package_root}/gents"
+          chmod 0755 "${package_root}/gents"
+          cp -R target/release/gents.dSYM "${symbols_parent}/${dsym_bundle_basename}"
 
           tar -C "${package_parent}" -czf "${tarball}" "${artifact_basename}"
           tar -C "${symbols_parent}" -czf "${dsym_tarball}" "${dsym_bundle_basename}"
@@ -533,7 +533,7 @@ jobs:
           fi
 
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
-            gh release create "${GITHUB_REF_NAME}" --verify-tag --title "${GITHUB_REF_NAME}" --notes "Signed defra-agent macOS release artifact."
+            gh release create "${GITHUB_REF_NAME}" --verify-tag --title "${GITHUB_REF_NAME}" --notes "Signed gents macOS release artifact."
           gh release upload "${GITHUB_REF_NAME}" \
             "${TARBALL}" \
             "${CHECKSUM_FILE}" \
@@ -549,8 +549,8 @@ jobs:
           set -euo pipefail
           git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
           git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-          original_keychains_path="${RUNNER_TEMP}/defra-agent-original-keychains.txt"
-          original_default_keychain_path="${RUNNER_TEMP}/defra-agent-original-default-keychain.txt"
+          original_keychains_path="${RUNNER_TEMP}/gents-original-keychains.txt"
+          original_default_keychain_path="${RUNNER_TEMP}/gents-original-default-keychain.txt"
 
           if [[ -f "${original_keychains_path}" ]]; then
             keychains=()

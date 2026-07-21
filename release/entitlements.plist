@@ -4,7 +4,7 @@
 <dict>
     <key>keychain-access-groups</key>
     <array>
-        <string>__APPLE_TEAM_ID__.org.sourcenetwork.defra-agent</string>
+        <string>__APPLE_TEAM_ID__.com.source-inc.gents</string>
     </array>
 </dict>
 </plist>

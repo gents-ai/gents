@@ -389,6 +389,11 @@ path_slice() {
       apps/gents-desktop | apps/gents-desktop/*)
       PATH_SLICE=desktop
       ;;
+    # Markdown remains documentation even when it lives beside invoked scripts.
+    # #826 owns those active docs; the release slice must not rewrite them early.
+    scripts/*.md)
+      PATH_SLICE=docs
+      ;;
     .github/* | release | release/* | scripts | scripts/* | Makefile)
       PATH_SLICE=release
       ;;
@@ -1052,6 +1057,7 @@ self_test_fixture() {
     "$fixture_repo/apps/desktop-tauri/src-tauri/gen/apple" \
     "$fixture_repo/.github/workflows" \
     "$fixture_repo/release" \
+    "$fixture_repo/scripts/adapter-interop" \
     "$fixture_repo/scripts" \
     "$fixture_repo/docs"
 
@@ -1113,6 +1119,8 @@ self_test_fixture() {
     >"$fixture_repo/release/entitlements.plist"
   printf 'launch defra-agent\n' \
     >"$fixture_repo/scripts/enable-defra-agent-runner-session.sh"
+  printf 'adapter docs retain defra-agent until the docs slice\n' \
+    >"$fixture_repo/scripts/adapter-interop/README.md"
   printf 'tool source-inc/defra-agent\n' \
     >"$fixture_repo/scripts/rename-to-gents.sh"
 
@@ -1266,6 +1274,10 @@ self_test() (
   grep -Fq 'apps/gents-desktop/tests/example.test.ts::example' \
     crates/gents/proofs/Proofs/Conformance/CoverageLedger.lean
 
+  apply_for_slice release >/dev/null
+  grep -Fq 'adapter docs retain defra-agent until the docs slice' \
+    scripts/adapter-interop/README.md
+
   # Explicit slice execution and `apply all` must materialize the same tree.
   cd "$fixture_sequential"
   owner_checksum=$(cksum docs/gents.md)
@@ -1287,6 +1299,8 @@ self_test() (
   [[ "$apple_checksum" == "$(cksum apps/gents-desktop/src-tauri/gen/apple/project.yml)" ]]
   grep -Fq 'service=com.source-inc.gents.identity' crates/gents/runtime.txt
   grep -Fxq '__APPLE_TEAM_ID__.com.source-inc.gents' release/entitlements.plist
+  grep -Fq 'adapter docs retain gents until the docs slice' \
+    scripts/adapter-interop/README.md
   grep -Fq '"apps/gents-desktop/src-tauri"' Cargo.toml
   grep -Fq '"crates/gents-desktop"' Cargo.toml
   grep -Fq 'gents-desktop-core = { path = "crates/gents-desktop-core" }' Cargo.toml

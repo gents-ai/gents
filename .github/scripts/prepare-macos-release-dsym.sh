@@ -26,19 +26,19 @@ trap 'rm -f "${symbols_file}" "${lookup_file}" "${dsymutil_log}"' EXIT
 # dsymutil needs the linker's local symbol table to resolve the debug map back
 # to object-file DWARF. Refuse a Cargo configuration that stripped too early.
 nm "${binary_path}" > "${symbols_file}"
-if ! grep -Eq 'defra_agent(_cli)?' "${symbols_file}"; then
-  echo "::error::${binary_path} has no defra-agent Rust symbols; build with CARGO_PROFILE_RELEASE_STRIP=false before running dsymutil" >&2
+if ! grep -Eq 'gents(_cli)?' "${symbols_file}"; then
+  echo "::error::${binary_path} has no gents Rust symbols; build with CARGO_PROFILE_RELEASE_STRIP=false before running dsymutil" >&2
   exit 1
 fi
 probe_addresses="$(awk '
-  /defra_agent(_cli)?/ && $2 ~ /^[tT]$/ {
+  /gents(_cli)?/ && $2 ~ /^[tT]$/ {
     print $1
     count++
     if (count == 64) exit
   }
 ' "${symbols_file}")"
 if [[ -z "${probe_addresses}" ]]; then
-  echo "::error::${binary_path} has no defra-agent text symbols suitable for a symbolication probe" >&2
+  echo "::error::${binary_path} has no gents text symbols suitable for a symbolication probe" >&2
   exit 1
 fi
 
@@ -59,9 +59,9 @@ if [[ ! -s "${dwarf_path}" ]]; then
   exit 1
 fi
 xcrun dwarfdump --verify --quiet "${dsym_path}"
-xcrun dwarfdump --name 'crates/defra-agent-cli/src/main.rs/@/.*' --regex "${dsym_path}" > "${lookup_file}"
-if ! grep -q 'crates/defra-agent-cli/src/main.rs' "${lookup_file}"; then
-  echo "::error::${dsym_path} does not contain the defra-agent CLI compilation unit" >&2
+xcrun dwarfdump --name 'crates/gents-cli/src/main.rs/@/.*' --regex "${dsym_path}" > "${lookup_file}"
+if ! grep -q 'crates/gents-cli/src/main.rs' "${lookup_file}"; then
+  echo "::error::${dsym_path} does not contain the gents CLI compilation unit" >&2
   exit 1
 fi
 
@@ -88,20 +88,20 @@ while IFS= read -r candidate_address; do
   candidate_symbol="$(
     xcrun atos -o "${dwarf_path}" -arch "${binary_arch}" "${candidate_address}" 2>&1 || true
   )"
-  if [[ "${candidate_symbol}" == *defra_agent* && "${candidate_symbol}" != *"<deduplicated_symbol>"* ]]; then
+  if [[ "${candidate_symbol}" == *gents* && "${candidate_symbol}" != *"<deduplicated_symbol>"* ]]; then
     probe_address="${candidate_address}"
     resolved_symbol="${candidate_symbol}"
     break
   fi
 done <<< "${probe_addresses}"
 if [[ -z "${probe_address}" ]]; then
-  echo "::error::dSYM failed to resolve a defra-agent frame from the first 64 text-symbol candidates" >&2
+  echo "::error::dSYM failed to resolve a gents frame from the first 64 text-symbol candidates" >&2
   exit 1
 fi
 
 nm "${binary_path}" > "${symbols_file}"
-if grep -Eq 'defra_agent(_cli)?' "${symbols_file}"; then
-  echo "::error::${binary_path} still contains local defra-agent Rust symbols after strip" >&2
+if grep -Eq 'gents(_cli)?' "${symbols_file}"; then
+  echo "::error::${binary_path} still contains local gents Rust symbols after strip" >&2
   exit 1
 fi
 
