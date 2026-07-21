@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "gents desktop",
+  "productName": "Gents",
   "version": "0.1.0",
   "identifier": "com.source-inc.gents",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "gents desktop",
+        "title": "Gents",
         "width": 1480,
         "height": 920,
         "minWidth": 1180,

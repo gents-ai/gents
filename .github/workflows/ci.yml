@@ -26,7 +26,7 @@ jobs:
     needs: lean-proofs
     if: ${{ always() }}
     runs-on: [self-hosted, macOS, ARM64, studio]
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - name: Require Lean/Rust contract gate
         if: ${{ needs.lean-proofs.result != 'success' }}
@@ -120,15 +120,20 @@ jobs:
           cargo test -p gents-cli --test cli_server server_startup_with_iroh_p2p_reports_runtime_connectivity -- --nocapture --test-threads=1
           cargo test -p gents-cli --test cli_status -- --nocapture --test-threads=1
           cargo test -p gents-cli --test cli_reconciliation reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
-          cargo test -p defra-agent-desktop-tauri --lib
+          cargo test -p gents-desktop-core
+          cargo test -p gents-desktop
+          cargo test -p gents-desktop-tauri --lib
 
       - name: Run full library and integration tests
         if: github.event_name != 'pull_request'
         run: cargo test -p gents --lib --tests
 
-      - name: Run desktop Tauri crate tests
+      - name: Run desktop Rust package tests
         if: github.event_name != 'pull_request'
-        run: cargo test -p defra-agent-desktop-tauri --lib
+        run: |
+          cargo test -p gents-desktop-core
+          cargo test -p gents-desktop
+          cargo test -p gents-desktop-tauri --lib
 
       - name: Run full CLI test suite
         if: github.event_name != 'pull_request'
@@ -239,7 +244,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: apps/desktop-tauri/package-lock.json
+          cache-dependency-path: apps/gents-desktop/package-lock.json
 
       - name: Install elan
         run: |
@@ -248,31 +253,31 @@ jobs:
           "$HOME/.elan/bin/elan" --version
 
       - name: Install frontend dependencies
-        working-directory: apps/desktop-tauri
+        working-directory: apps/gents-desktop
         run: npm ci
 
       - name: Install Playwright browser
-        working-directory: apps/desktop-tauri
+        working-directory: apps/gents-desktop
         run: npx playwright install chromium
 
       - name: Check desktop formatting
-        working-directory: apps/desktop-tauri
+        working-directory: apps/gents-desktop
         run: npm run format:check
 
       - name: Build desktop frontend
-        working-directory: apps/desktop-tauri
+        working-directory: apps/gents-desktop
         run: npm run build
 
       - name: Run desktop unit tests
-        working-directory: apps/desktop-tauri
+        working-directory: apps/gents-desktop
         run: npm test
 
       - name: Run desktop browser journeys
-        working-directory: apps/desktop-tauri
+        working-directory: apps/gents-desktop
         run: npm run test:ui:e2e
 
       - name: Run desktop Bombadil smoke
-        working-directory: apps/desktop-tauri
+        working-directory: apps/gents-desktop
         run: npm run test:ui:fuzz -- --time-limit 30s
 
       - name: Upload desktop UI artifacts
@@ -282,6 +287,6 @@ jobs:
           name: desktop-ui-artifacts
           if-no-files-found: ignore
           path: |
-            apps/desktop-tauri/test-results
-            apps/desktop-tauri/playwright-report
-            apps/desktop-tauri/playwright-screenshots-report
+            apps/gents-desktop/test-results
+            apps/gents-desktop/playwright-report
+            apps/gents-desktop/playwright-screenshots-report

@@ -25,10 +25,10 @@ env:
   GENTS_CLI_E2E_MODEL_ENDPOINT: ${{ github.event.inputs.inference_endpoint }}
   GENTS_CLI_E2E_MODEL_NAME: ${{ github.event.inputs.model_name }}
   GENTS_CLI_E2E_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
-  DEFRA_AGENT_TAURI_LIVE_INFERENCE_URL: ${{ github.event.inputs.inference_endpoint }}
-  DEFRA_AGENT_TAURI_LIVE_MODEL_NAME: ${{ github.event.inputs.model_name }}
-  DEFRA_AGENT_TAURI_LIVE_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
-  DEFRA_AGENT_TAURI_LIVE_REQUIRE_REAL_INFERENCE: "1"
+  GENTS_TAURI_LIVE_INFERENCE_URL: ${{ github.event.inputs.inference_endpoint }}
+  GENTS_TAURI_LIVE_MODEL_NAME: ${{ github.event.inputs.model_name }}
+  GENTS_TAURI_LIVE_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
+  GENTS_TAURI_LIVE_REQUIRE_REAL_INFERENCE: "1"
   AGENT_DAEMON_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
 
 jobs:
@@ -127,7 +127,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: apps/desktop-tauri/package-lock.json
+          cache-dependency-path: apps/gents-desktop/package-lock.json
 
       - name: Install protobuf compiler
         run: |
@@ -160,24 +160,32 @@ jobs:
         run: .github/scripts/setup-rust-build-cache.sh
 
       - name: Install frontend dependencies
-        working-directory: apps/desktop-tauri
+        working-directory: apps/gents-desktop
         run: npm ci
 
       - name: Run live desktop chat smoke
-        working-directory: apps/desktop-tauri
+        working-directory: apps/gents-desktop
         run: npm run test:live:chat
 
       - name: Run live desktop config smoke
-        working-directory: apps/desktop-tauri
+        working-directory: apps/gents-desktop
         run: npm run test:live:config
 
       - name: Run live desktop operations smoke
-        working-directory: apps/desktop-tauri
+        working-directory: apps/gents-desktop
         run: npm run test:live:operations
 
       - name: Run live desktop interrupt smoke
-        working-directory: apps/desktop-tauri
+        working-directory: apps/gents-desktop
         run: npm run test:live:interrupt
+
+      - name: Run live desktop fleet smoke
+        working-directory: apps/gents-desktop
+        run: npm run test:live:fleet
+
+      - name: Run live desktop replication smoke
+        working-directory: apps/gents-desktop
+        run: npm run test:live:replication
 
       - name: Cleanup git auth
         if: always()
@@ -218,7 +226,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: apps/desktop-tauri/package-lock.json
+          cache-dependency-path: apps/gents-desktop/package-lock.json
 
       - name: Install protobuf compiler
         run: |
@@ -251,15 +259,15 @@ jobs:
         run: .github/scripts/setup-rust-build-cache.sh
 
       - name: Install frontend dependencies
-        working-directory: apps/desktop-tauri
+        working-directory: apps/gents-desktop
         run: npm ci
 
       - name: Install Playwright browser
-        working-directory: apps/desktop-tauri
+        working-directory: apps/gents-desktop
         run: npx playwright install chromium
 
       - name: Run live desktop browser smoke
-        working-directory: apps/desktop-tauri
+        working-directory: apps/gents-desktop
         run: npm run test:ui:live:e2e
 
       - name: Upload live desktop browser artifacts
@@ -269,8 +277,8 @@ jobs:
           name: desktop-live-browser-artifacts
           if-no-files-found: ignore
           path: |
-            apps/desktop-tauri/test-results/playwright-live
-            apps/desktop-tauri/playwright-live-report
+            apps/gents-desktop/test-results/playwright-live
+            apps/gents-desktop/playwright-live-report
 
       - name: Cleanup git auth
         if: always()

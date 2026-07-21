@@ -4,7 +4,7 @@ import {
 } from "../desktop-api";
 import type { CascadeCancelPreview, InterruptRequestResult } from "../types/operations";
 
-// Request shapes mirror Rust bridge requests (see apps/desktop-tauri/src-tauri/src/bridge/types/requests.rs).
+// Request shapes mirror Rust bridge requests (see apps/gents-desktop/src-tauri/src/bridge/types/requests.rs).
 // Tauri serializes the params object directly, and tauri::command expects an
 // argument named `request` matching the Rust handler signature, so each call
 // wraps its body under { request }.

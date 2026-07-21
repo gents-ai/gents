@@ -153,6 +153,32 @@ declare -a CORE_CONSUMER_SUBS=(
   "crates/defra-agent/proofs|crates/gents/proofs"
 )
 
+# #824 has the same narrow cross-slice obligation for consumers of the renamed
+# desktop paths and packages. Keep both the substitutions and file list exact:
+# release artifact/signing names and general documentation remain owned by
+# #825/#826 even when they contain broader old-product tokens.
+declare -a DESKTOP_CONSUMER_SUBS=(
+  "apps/desktop-tauri|apps/gents-desktop"
+  "crates/defra-agent-desktop-core|crates/gents-desktop-core"
+  "crates/defra-agent-desktop|crates/gents-desktop"
+  "defra-agent-desktop-tauri|gents-desktop-tauri"
+  "defra_agent_desktop_tauri_lib|gents_desktop_tauri_lib"
+  "defra_agent_desktop_core|gents_desktop_core"
+  "DEFRA_AGENT_TAURI|GENTS_TAURI"
+  "DEFRA_AGENT_DESKTOP|GENTS_DESKTOP"
+  'app: "desktop-tauri"|app: "gents-desktop"'
+)
+
+declare -a DESKTOP_CONSUMER_FILES=(
+  ".github/workflows/ci.yml"
+  ".github/workflows/desktop-ui-qa.yml"
+  ".github/workflows/live-smoke.yml"
+  "Makefile"
+  "scripts/install-local.sh"
+  "crates/gents/tests/support/conformance_consumers.rs"
+  "crates/gents/proofs/Proofs/Conformance/CoverageLedger.lean"
+)
+
 # Root workspace files are shared across slices, so they cannot receive the
 # catch-all substitution map. These exact entries keep every intermediate
 # workspace valid: #823 rewrites only core members/dependencies, then #824
@@ -207,6 +233,7 @@ declare -a DESKTOP_LOCK_SUBS=(
 # Stale tokens for the guard scan (from #811 section 1)
 declare -a STALE_TOKENS=(
   "defra-agent"
+  "apps/desktop-tauri"
   "defra_agent"
   "DEFRA_AGENT"
   "Defra Agent"
@@ -644,6 +671,22 @@ apply_content_for_slice() {
     echo "core consumer substitutions applied to $consumer_count desktop/release files"
   fi
 
+  if [[ "$slice" == "desktop" ]]; then
+    local desktop_consumer_file desktop_consumer_count=0
+    for desktop_consumer_file in "${DESKTOP_CONSUMER_FILES[@]}"; do
+      [[ -f "$desktop_consumer_file" ]] || continue
+      [[ -L "$desktop_consumer_file" ]] && continue
+      first_checksum=$(cksum "$desktop_consumer_file")
+      apply_substitution_array_to_file "$desktop_consumer_file" DESKTOP_CONSUMER_SUBS
+      second_checksum=$(cksum "$desktop_consumer_file")
+      if [[ "$first_checksum" != "$second_checksum" ]]; then
+        git add "$desktop_consumer_file"
+        desktop_consumer_count=$((desktop_consumer_count + 1))
+      fi
+    done
+    echo "desktop consumer substitutions applied to $desktop_consumer_count exact files"
+  fi
+
   if [[ "$slice" == "desktop" && -f Cargo.toml ]]; then
     first_checksum=$(cksum Cargo.toml)
     apply_substitution_array_to_file Cargo.toml DESKTOP_WORKSPACE_SUBS
@@ -813,6 +856,13 @@ scan_core_consumer_contracts() {
   done
 }
 
+scan_desktop_consumer_contracts() {
+  local file
+  for file in "${DESKTOP_CONSUMER_FILES[@]}"; do
+    scan_contract_array_in_file "$file" DESKTOP_CONSUMER_SUBS "desktop consumer"
+  done
+}
+
 scan_slice_contracts() {
   local slice="$1"
   case "$slice" in
@@ -823,9 +873,10 @@ scan_slice_contracts() {
       scan_core_consumer_contracts
       ;;
     desktop)
-      echo "--- Shared-file contracts (desktop) ---"
+      echo "--- Shared-file and consumer contracts (desktop) ---"
       scan_contract_array_in_file Cargo.toml DESKTOP_WORKSPACE_SUBS "desktop workspace"
       scan_contract_array_in_file Cargo.lock DESKTOP_LOCK_SUBS "desktop lockfile"
+      scan_desktop_consumer_contracts
       ;;
   esac
 }
@@ -989,6 +1040,7 @@ self_test_fixture() {
 
   mkdir -p \
     "$fixture_repo/crates/defra-agent/proofs/Proofs/Conformance" \
+    "$fixture_repo/crates/defra-agent/tests/support" \
     "$fixture_repo/crates/defra-agent-cli" \
     "$fixture_repo/crates/defra-agent-protocol" \
     "$fixture_repo/crates/defra-agent-schemas" \
@@ -1033,8 +1085,30 @@ self_test_fixture() {
   printf 'generated=com.sourcenetwork.defra-agent-desktop\n' \
     >"$fixture_repo/apps/desktop-tauri/src-tauri/gen/apple/project.yml"
 
-  printf 'cargo test -p defra-agent-protocol -p defra-agent\n' \
+  printf '%s\n' \
+    'cargo test -p defra-agent-protocol -p defra-agent' \
+    'cargo test -p defra-agent-desktop-tauri' \
+    'working-directory: apps/desktop-tauri' \
+    'DEFRA_AGENT_TAURI_LIVE_MODEL_NAME=test' \
     >"$fixture_repo/.github/workflows/ci.yml"
+  printf '%s\n' \
+    'DESKTOP_DIR := apps/desktop-tauri' \
+    'cargo build -p defra-agent-desktop-tauri' \
+    'RELEASE_ARTIFACT := defra-agent-test' \
+    >"$fixture_repo/Makefile"
+  printf '%s\n' \
+    'cargo install --path crates/defra-agent-desktop' \
+    'cd apps/desktop-tauri' \
+    'install target/debug/defra-agent-desktop-tauri' \
+    'release_binary=defra-agent' \
+    >"$fixture_repo/scripts/install-local.sh"
+  printf '%s\n' \
+    'app: "desktop-tauri"' \
+    'source_path: "apps/desktop-tauri/tests/example.test.ts"' \
+    >"$fixture_repo/crates/defra-agent/tests/support/conformance_consumers.rs"
+  printf '%s\n' \
+    '"apps/desktop-tauri/tests/example.test.ts::example"' \
+    >"$fixture_repo/crates/defra-agent/proofs/Proofs/Conformance/CoverageLedger.lean"
   printf '__APPLE_TEAM_ID__.org.sourcenetwork.defra-agent\n' \
     >"$fixture_repo/release/entitlements.plist"
   printf 'launch defra-agent\n' \
@@ -1171,6 +1245,26 @@ self_test() (
     return 1
   fi
   grep -Fq 'did:defra-agent' <<<"$guard_output"
+
+  # The desktop slice owns only the exact external consumer seam. It updates
+  # build/test paths while leaving release artifact names for the release slice.
+  apply_for_slice desktop >/dev/null
+  [[ -d apps/gents-desktop && ! -e apps/desktop-tauri ]]
+  grep -Fq 'cargo test -p gents-desktop-tauri' .github/workflows/ci.yml
+  grep -Fq 'working-directory: apps/gents-desktop' .github/workflows/ci.yml
+  grep -Fq 'GENTS_TAURI_LIVE_MODEL_NAME=test' .github/workflows/ci.yml
+  grep -Fq 'DESKTOP_DIR := apps/gents-desktop' Makefile
+  grep -Fq 'cargo build -p gents-desktop-tauri' Makefile
+  grep -Fq 'RELEASE_ARTIFACT := defra-agent-test' Makefile
+  grep -Fq 'cargo install --path crates/gents-desktop' scripts/install-local.sh
+  grep -Fq 'cd apps/gents-desktop' scripts/install-local.sh
+  grep -Fq 'install target/debug/gents-desktop-tauri' scripts/install-local.sh
+  grep -Fq 'release_binary=defra-agent' scripts/install-local.sh
+  grep -Fq 'app: "gents-desktop"' crates/gents/tests/support/conformance_consumers.rs
+  grep -Fq 'apps/gents-desktop/tests/example.test.ts' \
+    crates/gents/tests/support/conformance_consumers.rs
+  grep -Fq 'apps/gents-desktop/tests/example.test.ts::example' \
+    crates/gents/proofs/Proofs/Conformance/CoverageLedger.lean
 
   # Explicit slice execution and `apply all` must materialize the same tree.
   cd "$fixture_sequential"

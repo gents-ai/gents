@@ -15,7 +15,7 @@ use tokio::time::{sleep, timeout};
 fn store_indexes_conversations_and_runtimes() {
     let store = ClientStore::from_rows(ClientStoreRows {
         agent_principals: vec![AgentPrincipalRow {
-            agent_did: "did:defra:amy".to_string(),
+            agent_did: "did:test:amy".to_string(),
             display_name: Some("Amy".to_string()),
             default_behavior_id: None,
             enabled: Some(true),
@@ -26,7 +26,7 @@ fn store_indexes_conversations_and_runtimes() {
             AgentConversationRow {
                 session_id: "session-2".to_string(),
                 agent_name: None,
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: None,
                 title: Some("Second".to_string()),
@@ -40,7 +40,7 @@ fn store_indexes_conversations_and_runtimes() {
             AgentConversationRow {
                 session_id: "session-1".to_string(),
                 agent_name: None,
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: None,
                 title: Some("First".to_string()),
@@ -53,7 +53,7 @@ fn store_indexes_conversations_and_runtimes() {
             },
         ],
         runtimes: vec![AgentRuntimeRow {
-            agent_did: "did:defra:amy".to_string(),
+            agent_did: "did:test:amy".to_string(),
             process_state: Some("online".to_string()),
             reconcile_phase: None,
             active_generation: None,
@@ -72,12 +72,12 @@ fn store_indexes_conversations_and_runtimes() {
         ..ClientStoreRows::default()
     });
 
-    let conversations = store.conversation_rows("did:defra:amy");
+    let conversations = store.conversation_rows("did:test:amy");
     assert_eq!(conversations.len(), 2);
     assert_eq!(conversations[0].session_id, "session-1");
     assert_eq!(
         store
-            .latest_runtime("did:defra:amy")
+            .latest_runtime("did:test:amy")
             .and_then(|runtime| runtime.process_state.as_deref()),
         Some("online")
     );
@@ -89,7 +89,7 @@ fn store_derives_turn_from_retry_chain_tip() {
         requests: vec![
             AgentRequestRow {
                 request_id: "req-1".to_string(),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: None,
                 session_id: Some("session-1".to_string()),
@@ -122,7 +122,7 @@ fn store_derives_turn_from_retry_chain_tip() {
             },
             AgentRequestRow {
                 request_id: "req-2".to_string(),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: None,
                 session_id: Some("session-1".to_string()),
@@ -211,7 +211,7 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: None,
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: None,
             title: Some("Turn ordering".to_string()),
@@ -225,7 +225,7 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
         requests: vec![
             AgentRequestRow {
                 request_id: "req-z-still-processing".to_string(),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: None,
                 session_id: Some("session-1".to_string()),
@@ -258,7 +258,7 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
             },
             AgentRequestRow {
                 request_id: "req-a-complete".to_string(),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: None,
                 session_id: Some("session-1".to_string()),
@@ -333,7 +333,7 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
             AgentConversationRow {
                 session_id: "session-1".to_string(),
                 agent_name: Some("Amy".to_string()),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 title: Some("Old title".to_string()),
@@ -347,7 +347,7 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
             AgentConversationRow {
                 session_id: "session-1".to_string(),
                 agent_name: Some("Bea".to_string()),
-                agent_did: Some("did:defra:bea".to_string()),
+                agent_did: Some("did:test:bea".to_string()),
                 requester_did: None,
                 behavior_id: Some("bea-default".to_string()),
                 title: Some("Other agent".to_string()),
@@ -369,7 +369,7 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
             reasoning: None,
             timestamp: Some("2026-04-14T00:01:00Z".to_string()),
         }],
-        message_source_agent_dids: vec![Some("did:defra:amy".to_string())],
+        message_source_agent_dids: vec![Some("did:test:amy".to_string())],
         sessions: vec![AgentSessionRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Bea".to_string()),
@@ -379,7 +379,7 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
             ended: None,
             status: Some("active".to_string()),
         }],
-        session_source_agent_dids: vec![Some("did:defra:bea".to_string())],
+        session_source_agent_dids: vec![Some("did:test:bea".to_string())],
         ..ClientStoreRows::default()
     });
 
@@ -387,7 +387,7 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("Updated title".to_string()),
@@ -400,7 +400,7 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
         }],
         requests: vec![AgentRequestRow {
             request_id: "req-2".to_string(),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -452,21 +452,21 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
         }],
         ..ClientStoreRows::default()
     });
-    patch.stamp_source_agent_did("did:defra:amy");
+    patch.stamp_source_agent_did("did:test:amy");
 
     let merged = base.merge_chat_patch(patch);
 
     assert_eq!(merged.conversations.len(), 2);
     assert_eq!(
         merged
-            .conversation_rows("did:defra:amy")
+            .conversation_rows("did:test:amy")
             .first()
             .and_then(|row| row.title.as_deref()),
         Some("Updated title")
     );
     assert_eq!(
         merged
-            .conversation_rows("did:defra:bea")
+            .conversation_rows("did:test:bea")
             .first()
             .and_then(|row| row.title.as_deref()),
         Some("Other agent")
@@ -477,11 +477,11 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
     assert!(merged
         .session_source_agent_dids
         .iter()
-        .any(|source| source.as_deref() == Some("did:defra:amy")));
+        .any(|source| source.as_deref() == Some("did:test:amy")));
     assert!(merged
         .session_source_agent_dids
         .iter()
-        .any(|source| source.as_deref() == Some("did:defra:bea")));
+        .any(|source| source.as_deref() == Some("did:test:bea")));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -500,7 +500,7 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
         .execute(
             r#"mutation {
                 add_AgentPrincipal(input: {
-                    agent_did: "did:defra:test-agent"
+                    agent_did: "did:test:test-agent"
                     display_name: "Test Agent"
                     enabled: true
                 }) { agent_did }
@@ -537,7 +537,7 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
 
     assert_eq!(
         store.snapshot().agent_principals[0].agent_did,
-        "did:defra:test-agent"
+        "did:test:test-agent"
     );
     core.shutdown().await?;
     Ok(())

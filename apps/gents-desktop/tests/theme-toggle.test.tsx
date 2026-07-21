@@ -37,7 +37,7 @@ describe("ThemeToggle", () => {
   });
 
   it("honors a persisted light choice on mount", () => {
-    window.localStorage.setItem("defra-desktop-theme", "light");
+    window.localStorage.setItem("gents-desktop-theme", "light");
     render(<ThemeToggle />);
     expect(screen.getByTestId("theme-toggle")).toHaveAccessibleName(
       "Switch to dark theme",

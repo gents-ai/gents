@@ -1152,21 +1152,21 @@ mod tests {
             )],
             ..ClientStoreRows::default()
         });
-        store.stamp_source_agent_did("did:defra:mini-1");
+        store.stamp_source_agent_did("did:test:mini-1");
 
         let restored = ClientStore::from_rows(store.to_rows());
 
         assert_eq!(
             restored.task_source_agent_dids,
-            vec![Some("did:defra:mini-1".to_string())]
+            vec![Some("did:test:mini-1".to_string())]
         );
         assert_eq!(
             restored.schedule_source_agent_dids,
-            vec![Some("did:defra:mini-1".to_string())]
+            vec![Some("did:test:mini-1".to_string())]
         );
         assert_eq!(
             restored.event_trigger_source_agent_dids,
-            vec![Some("did:defra:mini-1".to_string())]
+            vec![Some("did:test:mini-1".to_string())]
         );
     }
 

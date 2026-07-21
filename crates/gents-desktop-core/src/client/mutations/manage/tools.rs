@@ -509,10 +509,10 @@ mod delete_tests {
 
     #[test]
     fn tool_selection_delete_is_scoped_to_agent_and_escapes_values() {
-        let mutation = build_delete_tool_selection_mutation("did:defra:remote", "tools-\"safe\"")
+        let mutation = build_delete_tool_selection_mutation("did:test:remote", "tools-\"safe\"")
             .expect("delete mutation");
 
-        assert!(mutation.contains(r#"agent_did: { _eq: "did:defra:remote" }"#));
+        assert!(mutation.contains(r#"agent_did: { _eq: "did:test:remote" }"#));
         assert!(mutation.contains(r#"selection_id: { _eq: "tools-\"safe\"" }"#));
     }
 }

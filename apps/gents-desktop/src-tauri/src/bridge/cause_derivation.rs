@@ -12,7 +12,7 @@
 //
 // Inner doc-comments (//!) intentionally avoided here because this file is
 // `include!`-ed into the bin's manually-assembled bridge module
-// (apps/desktop-tauri/src-tauri/src/bin/bridge_runner.rs) and inner docs at
+// (apps/gents-desktop/src-tauri/src/bin/bridge_runner.rs) and inner docs at
 // the top of an include! body trip E0753 in that context.
 // No IO. All inputs are plain Rust structs.
 

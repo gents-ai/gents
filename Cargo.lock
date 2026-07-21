@@ -6699,76 +6699,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac6b926516df9c60bfa16e107b21086399f8285a44ca9711344b9e553c5146e2"
 
 [[package]]
-name = "defra-agent-desktop"
-version = "0.7.2"
-dependencies = [
- "anyhow",
- "clap",
- "defra-agent-desktop-core",
- "gents",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "defra-agent-desktop-core"
-version = "0.7.2"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "crypto",
- "defra-node",
- "defra-p2p-adapter",
- "dirs 5.0.1",
- "events",
- "gents",
- "gents-lean-contract",
- "gents-protocol",
- "identity",
- "p2p",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
- "wiremock",
-]
-
-[[package]]
-name = "defra-agent-desktop-tauri"
-version = "0.7.2"
-dependencies = [
- "anyhow",
- "axum",
- "blake3",
- "chrono",
- "clap",
- "defra-agent-desktop-core",
- "gents",
- "gents-lean-contract",
- "gents-protocol",
- "hostname",
- "reqwest 0.12.28",
- "rig-core",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "defra-core"
 version = "0.5.0"
 source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=ef772a439ec84d3fb1a7c0ef740085666ea008b4#ef772a439ec84d3fb1a7c0ef740085666ea008b4"
@@ -8740,6 +8670,76 @@ dependencies = [
  "tokio-tungstenite 0.26.2",
  "tracing",
  "tracing-opentelemetry",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "gents-desktop"
+version = "0.7.2"
+dependencies = [
+ "anyhow",
+ "clap",
+ "gents",
+ "gents-desktop-core",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "gents-desktop-core"
+version = "0.7.2"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "crypto",
+ "defra-node",
+ "defra-p2p-adapter",
+ "dirs 5.0.1",
+ "events",
+ "gents",
+ "gents-lean-contract",
+ "gents-protocol",
+ "identity",
+ "p2p",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
+name = "gents-desktop-tauri"
+version = "0.7.2"
+dependencies = [
+ "anyhow",
+ "axum",
+ "blake3",
+ "chrono",
+ "clap",
+ "gents",
+ "gents-desktop-core",
+ "gents-lean-contract",
+ "gents-protocol",
+ "hostname",
+ "reqwest 0.12.28",
+ "rig-core",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "tempfile",
+ "tokio",
+ "tracing",
  "tracing-subscriber",
  "uuid",
 ]

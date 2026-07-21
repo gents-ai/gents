@@ -92,7 +92,7 @@ function session(
 ): DesktopSessionSnapshot {
   return {
     sessionId: "session-1",
-    agentDid: "did:defra:amy",
+    agentDid: "did:test:amy",
     behaviorId: "default",
     title: "conversation",
     previewText: "preview",
@@ -196,7 +196,7 @@ function repoRoot() {
 }
 
 function agentDid(id: number | null) {
-  return id === null ? null : `did:defra:agent-${id}`;
+  return id === null ? null : `did:test:agent-${id}`;
 }
 
 function sessionId(id: number | null) {
@@ -250,7 +250,7 @@ function localWorkflowFromContract(
         kind: "submittingRequest",
         agentDid:
           agentDid(contractCase.frontend_selected_agent_did) ??
-          "did:defra:agent-missing",
+          "did:test:agent-missing",
         sessionId: sessionId(contractCase.frontend_local_workflow_session),
       };
     case "awaitingObservation":
@@ -362,7 +362,7 @@ describe("projectChatShell", () => {
   test("blocks follow up while turn is streaming", () => {
     const projection = projectChatShell({
       clientAvailable: true,
-      selectedAgentDid: "did:defra:amy",
+      selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
@@ -382,7 +382,7 @@ describe("projectChatShell", () => {
   test("uses tracked request before observed latest request catches up", () => {
     const projection = projectChatShell({
       clientAvailable: true,
-      selectedAgentDid: "did:defra:amy",
+      selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
@@ -415,7 +415,7 @@ describe("projectChatShell", () => {
   test("keeps awaiting observation until the matching request is observed", () => {
     const projection = projectChatShell({
       clientAvailable: true,
-      selectedAgentDid: "did:defra:amy",
+      selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
@@ -446,7 +446,7 @@ describe("projectChatShell", () => {
   test("ignores stale tracked workflow after user switches sessions", () => {
     const projection = projectChatShell({
       clientAvailable: true,
-      selectedAgentDid: "did:defra:amy",
+      selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-2",
       draft: "new session follow up",
       sending: false,
@@ -476,7 +476,7 @@ describe("projectChatShell", () => {
   test("blocks inconsistent observation when latest request is missing", () => {
     const projection = projectChatShell({
       clientAvailable: true,
-      selectedAgentDid: "did:defra:amy",
+      selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
@@ -503,7 +503,7 @@ describe("projectChatShell", () => {
   test("allows follow up after terminal turn", () => {
     const projection = projectChatShell({
       clientAvailable: true,
-      selectedAgentDid: "did:defra:amy",
+      selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
@@ -519,7 +519,7 @@ describe("projectChatShell", () => {
   test("allows follow up after interrupted turn", () => {
     const projection = projectChatShell({
       clientAvailable: true,
-      selectedAgentDid: "did:defra:amy",
+      selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
@@ -535,7 +535,7 @@ describe("projectChatShell", () => {
   test("allows follow up when conversation summary is missing but session snapshot is terminal", () => {
     const projection = projectChatShell({
       clientAvailable: true,
-      selectedAgentDid: "did:defra:amy",
+      selectedAgentDid: "did:test:amy",
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,

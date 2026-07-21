@@ -19,7 +19,7 @@ describe("parsePeerConnectionJson", () => {
     });
   });
 
-  it("accepts gents status output", () => {
+  it("accepts Gents status output", () => {
     expect(
       parsePeerConnectionJson(
         JSON.stringify({
@@ -41,7 +41,7 @@ describe("parsePeerConnectionJson", () => {
     });
   });
 
-  it("accepts gents server output", () => {
+  it("accepts Gents server output", () => {
     expect(
       parsePeerConnectionJson(
         JSON.stringify({
@@ -71,14 +71,18 @@ describe("parsePeerConnectionJson", () => {
     });
   });
 
-  it("rejects legacy name-derived DIDs", () => {
-    expect(() =>
+  it("accepts any non-empty concrete agent DID", () => {
+    expect(
       parsePeerConnectionJson(
         JSON.stringify({
-          agent_did: "did:defra-agent:infra-api",
+          agent_did: "did:test:infra-api",
           p2p_shareable_address: "endpoint://ops",
         }),
       ),
-    ).toThrow("key-derived DID");
+    ).toEqual({
+      label: "infra-api",
+      agentDid: "did:test:infra-api",
+      addr: "endpoint://ops",
+    });
   });
 });

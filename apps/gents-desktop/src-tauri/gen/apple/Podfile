@@ -1,13 +1,13 @@
 # Uncomment the next line to define a global platform for your project
 
-target 'defra-agent-desktop-tauri_iOS' do
+target 'gents-desktop-tauri_iOS' do
 platform :ios, '26.5'
-  # Pods for defra-agent-desktop-tauri_iOS
+  # Pods for gents-desktop-tauri_iOS
 end
 
-target 'defra-agent-desktop-tauri_macOS' do
+target 'gents-desktop-tauri_macOS' do
 platform :osx, '11.0'
-  # Pods for defra-agent-desktop-tauri_macOS
+  # Pods for gents-desktop-tauri_macOS
 end
 
 # Delete the deployment target for iOS and macOS, causing it to be inherited from the Podfile

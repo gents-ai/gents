@@ -8,10 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use gents_desktop_core::client::ClientCore;
 use gents::backend_registry::{derive_display_state, list_all_backends};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
+use gents_desktop_core::client::ClientCore;
 #[cfg(test)]
 use reqwest::Url;
 use tauri::State;
@@ -547,7 +547,7 @@ fn parse_call_row(row: &serde_json::Value) -> InferenceCallSummaryView {
 
 /// Panel #278: returns the persisted `ToolServiceHealthState` rows the
 /// agent writes every health-check cycle. The desktop renders these into
-/// the MCP health status panel — see `apps/desktop-tauri/src/components/mcpHealth/`.
+/// the MCP health status panel — see `apps/gents-desktop/src/components/mcpHealth/`.
 #[tauri::command]
 pub(crate) async fn desktop_list_mcp_services_with_health(
     state: State<'_, DesktopAppState>,

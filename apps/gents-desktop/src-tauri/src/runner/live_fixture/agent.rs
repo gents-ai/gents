@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents_desktop_core::client::ClientCore;
 use gents::graphql::escape_graphql_string;
 use gents::{
     cli_tool, default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
@@ -12,6 +11,7 @@ use gents::{
     subagent_target_entry, upsert_agent_behavior, AgentIdentity, DocumentRuntimeOptions, Gents,
     KeyIdentity, ToolCeiling,
 };
+use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::{AgentBehaviorRow, InferenceProfileRow, ToolSelectionRow};
 use serde_json::Value;
 use tokio::sync::watch;

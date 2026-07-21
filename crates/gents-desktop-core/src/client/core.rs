@@ -179,7 +179,7 @@ mod pairing_status_tests {
         let peer_status = ClientPeerStatus {
             peer_id: "p1".into(),
             label: "l".into(),
-            agent_did: "did:defra:p1".into(),
+            agent_did: "did:test:p1".into(),
             addr: "/ip4/1/p2p/p1".into(),
             dial_succeeded: true,
             last_error: None,

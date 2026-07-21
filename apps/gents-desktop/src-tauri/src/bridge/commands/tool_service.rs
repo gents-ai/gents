@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use gents_desktop_core::client::ClientCore;
 use gents::mcp_pool::{resolve_mcp_url, McpPool};
+use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::ToolServiceRegistryRow;
 
 use super::super::types::{

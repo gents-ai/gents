@@ -54,7 +54,7 @@ async fn create_conversation_writes_session_and_conversation() -> Result<()> {
     .await?;
 
     let created = core
-        .create_conversation("did:defra:amy", Some("amy-code"))
+        .create_conversation("did:test:amy", Some("amy-code"))
         .await?;
 
     let session: SessionRow = query_single(
@@ -100,7 +100,7 @@ async fn create_conversation_writes_session_and_conversation() -> Result<()> {
     .await?;
     assert_eq!(conversation.session_id, created.session_id);
     assert_eq!(conversation.agent_name, "amy");
-    assert_eq!(conversation.agent_did, "did:defra:amy");
+    assert_eq!(conversation.agent_did, "did:test:amy");
     assert_eq!(conversation.behavior_id, "amy-code");
     assert!(conversation.title.is_empty());
     assert!(conversation.preview_text.is_empty());
@@ -120,12 +120,12 @@ async fn submit_request_writes_request_and_updates_conversation_summary() -> Res
     .await?;
 
     let created = core
-        .create_conversation("did:defra:amy", Some("amy-code"))
+        .create_conversation("did:test:amy", Some("amy-code"))
         .await?;
     let submitted = core
         .submit_request(
             &created.session_id,
-            "did:defra:amy",
+            "did:test:amy",
             "  hello   there\noperator  ",
             None,
         )
@@ -157,7 +157,7 @@ async fn submit_request_writes_request_and_updates_conversation_summary() -> Res
     )
     .await?;
     assert_eq!(request.request_id, submitted.request_id);
-    assert_eq!(request.agent_did, "did:defra:amy");
+    assert_eq!(request.agent_did, "did:test:amy");
     assert_eq!(request.behavior_id, "amy-code");
     assert_eq!(request.session_id, created.session_id);
     assert_eq!(request.content, "hello   there\noperator");
@@ -218,7 +218,7 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
     .await?;
 
     let created = core
-        .create_conversation("did:defra:amy", Some("amy-code"))
+        .create_conversation("did:test:amy", Some("amy-code"))
         .await?;
 
     // Submit with explicit sampling overrides + metadata.
@@ -234,7 +234,7 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
     let original = core
         .submit_request_with_options(
             &created.session_id,
-            "did:defra:amy",
+            "did:test:amy",
             "please preserve my overrides",
             None,
             options,
@@ -333,7 +333,7 @@ async fn add_and_remove_peer_persists_peer_directory() -> Result<()> {
         .add_peer(
             "Workshop Bay",
             &addr,
-            "did:defra:workshop",
+            "did:test:workshop",
             Some("http://127.0.0.1:1/api/v0/graphql"),
         )
         .await?;

@@ -51,11 +51,11 @@ Run from the repo root.
    The direct npm form is:
 
    ```bash
-   npm --prefix apps/desktop-tauri run tauri -- dev
+   npm --prefix apps/gents-desktop run tauri -- dev
    ```
 
 3. Verify the native app window:
-   - The app opens as `gents desktop`.
+   - The app opens as `Gents desktop`.
    - The window is not blank.
    - There is no Vite/React framework error overlay.
    - The first visible shell state is either a usable fleet/chat surface or a

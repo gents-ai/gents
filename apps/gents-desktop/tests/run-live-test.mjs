@@ -69,8 +69,7 @@ if (apiKeyEnvVar) {
 }
 if (subagentInferenceUrl)
   env.GENTS_TAURI_LIVE_SUBAGENT_INFERENCE_URL = subagentInferenceUrl;
-if (subagentModelName)
-  env.GENTS_TAURI_LIVE_SUBAGENT_MODEL_NAME = subagentModelName;
+if (subagentModelName) env.GENTS_TAURI_LIVE_SUBAGENT_MODEL_NAME = subagentModelName;
 if (subagentProvider) env.GENTS_TAURI_LIVE_SUBAGENT_PROVIDER = subagentProvider;
 if (subagentApiKey) env.GENTS_TAURI_LIVE_SUBAGENT_API_KEY = subagentApiKey;
 if (subagentApiKeyEnvVar)

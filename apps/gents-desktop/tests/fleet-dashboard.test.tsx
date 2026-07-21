@@ -12,11 +12,9 @@ const bootstrap: BootstrapSummary = {
   initToolCeiling: "read-write",
   initToolRoot: "/Users/test/project",
   desktopHome: "/Users/test/Library/Application Support/gents-desktop",
-  peerDirectoryPath:
-    "/Users/test/Library/Application Support/gents-desktop/peers.json",
+  peerDirectoryPath: "/Users/test/Library/Application Support/gents-desktop/peers.json",
   nodeDataDir: "/Users/test/Library/Application Support/gents-desktop/node",
-  logFilePath:
-    "/Users/test/Library/Application Support/gents-desktop/desktop.log",
+  logFilePath: "/Users/test/Library/Application Support/gents-desktop/desktop.log",
   agentHomeExists: true,
   desktopHomeExists: true,
   peerDirectoryExists: false,

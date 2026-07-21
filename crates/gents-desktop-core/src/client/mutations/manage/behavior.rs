@@ -218,10 +218,10 @@ mod delete_tests {
 
     #[test]
     fn delete_is_scoped_to_agent_and_escapes_values() {
-        let mutation = build_delete_agent_behavior_mutation("did:defra:remote", "say-\"hi\"")
+        let mutation = build_delete_agent_behavior_mutation("did:test:remote", "say-\"hi\"")
             .expect("delete mutation");
 
-        assert!(mutation.contains(r#"agent_did: { _eq: "did:defra:remote" }"#));
+        assert!(mutation.contains(r#"agent_did: { _eq: "did:test:remote" }"#));
         assert!(mutation.contains(r#"behavior_id: { _eq: "say-\"hi\"" }"#));
     }
 }

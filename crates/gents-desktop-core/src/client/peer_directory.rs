@@ -268,7 +268,7 @@ mod tests {
         let path = tempdir.path().join("peers.json");
         let mut directory = PeerDirectory::load(&path).await.unwrap();
 
-        let mut record = PeerRecord::new("Workshop Bay", "iroh://alpha", "did:defra:alpha");
+        let mut record = PeerRecord::new("Workshop Bay", "iroh://alpha", "did:test:alpha");
         let peer_id = record.peer_id.clone();
         directory.upsert(record.clone()).await.unwrap();
 
@@ -316,11 +316,11 @@ mod tests {
         let mut directory = PeerDirectory::load(&path).await.unwrap();
 
         directory
-            .upsert(PeerRecord::new("Zulu", "iroh://zulu", "did:defra:zulu"))
+            .upsert(PeerRecord::new("Zulu", "iroh://zulu", "did:test:zulu"))
             .await
             .unwrap();
         directory
-            .upsert(PeerRecord::new("Alpha", "iroh://alpha", "did:defra:alpha"))
+            .upsert(PeerRecord::new("Alpha", "iroh://alpha", "did:test:alpha"))
             .await
             .unwrap();
 
@@ -335,11 +335,11 @@ mod tests {
         let mut directory = PeerDirectory::load(&path).await.unwrap();
 
         let first = directory
-            .upsert_saved_peer("Workshop Bay", "iroh://alpha", "did:defra:alpha")
+            .upsert_saved_peer("Workshop Bay", "iroh://alpha", "did:test:alpha")
             .await
             .unwrap();
         let second = directory
-            .upsert_saved_peer("Workshop Bay Updated", "iroh://alpha", "did:defra:alpha")
+            .upsert_saved_peer("Workshop Bay Updated", "iroh://alpha", "did:test:alpha")
             .await
             .unwrap();
 
@@ -358,7 +358,7 @@ mod tests {
             .upsert_local_standard_peer(
                 "Local Agent",
                 "iroh://first",
-                "did:defra-agent:default",
+                "did:test:default",
                 "http://127.0.0.1:9191/api/v0/graphql",
             )
             .await
@@ -367,7 +367,7 @@ mod tests {
             .upsert_local_standard_peer(
                 "Local Agent Updated",
                 "iroh://second",
-                "did:defra-agent:default",
+                "did:test:default",
                 "http://127.0.0.1:9192/api/v0/graphql",
             )
             .await

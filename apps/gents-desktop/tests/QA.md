@@ -8,11 +8,11 @@ tracked in source-inc/gents#531.
 Run these before opening or updating a normal desktop UI PR:
 
 ```bash
-npm --prefix apps/desktop-tauri run format:check
-npm --prefix apps/desktop-tauri run build
-npm --prefix apps/desktop-tauri run test:ui:unit
-npm --prefix apps/desktop-tauri run test:ui:e2e
-npm --prefix apps/desktop-tauri run test:ui:fuzz -- --time-limit 30s
+npm --prefix apps/gents-desktop run format:check
+npm --prefix apps/gents-desktop run build
+npm --prefix apps/gents-desktop run test:ui:unit
+npm --prefix apps/gents-desktop run test:ui:e2e
+npm --prefix apps/gents-desktop run test:ui:fuzz -- --time-limit 30s
 ```
 
 Equivalent Makefile shortcuts:
@@ -33,9 +33,9 @@ defects found in the deterministic harness`.
 Use the sweep when intentionally looking for defects:
 
 ```bash
-npm --prefix apps/desktop-tauri run test:ui:qa-sweep
-npm --prefix apps/desktop-tauri run test:ui:visual
-npm --prefix apps/desktop-tauri run test:ui:fuzz:long
+npm --prefix apps/gents-desktop run test:ui:qa-sweep
+npm --prefix apps/gents-desktop run test:ui:visual
+npm --prefix apps/gents-desktop run test:ui:fuzz:long
 ```
 
 Equivalent Makefile shortcuts:
@@ -55,8 +55,8 @@ even when the job passes so artifacts can be reviewed.
 
 Review:
 
-- `apps/desktop-tauri/test-results`
-- `apps/desktop-tauri/playwright-report`
+- `apps/gents-desktop/test-results`
+- `apps/gents-desktop/playwright-report`
 - Bombadil output path printed by `tests/bombadil/run-bombadil.mjs`
 - `README.md` inside each Bombadil output directory for inspect/reproduce commands
 - browser console attachments on Playwright failure
@@ -107,8 +107,8 @@ first. File a GitHub issue after it reproduces.
 The live browser path is intentionally outside the fast PR gate:
 
 ```bash
-npm --prefix apps/desktop-tauri run test:ui:live:e2e
-npm --prefix apps/desktop-tauri run test:ui:live:e2e:real -- \
+npm --prefix apps/gents-desktop run test:ui:live:e2e
+npm --prefix apps/gents-desktop run test:ui:live:e2e:real -- \
   --inference-url <url> \
   --model-name <model> \
   --api-key-env-var OPENAI_API_KEY

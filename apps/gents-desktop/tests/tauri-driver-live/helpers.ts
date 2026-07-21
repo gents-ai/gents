@@ -8,7 +8,7 @@ export const describeLive =
   process.env.GENTS_TAURI_LIVE === "1" ? describe.sequential : describe.skip;
 
 export const FIRST_PROMPT =
-  "Read workspace/README.md, then summarize what gents is in two short bullets.";
+  "Read workspace/README.md, then summarize what Gents is in two short bullets.";
 export const SECOND_PROMPT =
   "Read workspace/CLAUDE.md, then summarize the document-driven request model in two short bullets.";
 export const THIRD_PROMPT =

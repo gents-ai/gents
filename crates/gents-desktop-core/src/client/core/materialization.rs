@@ -651,7 +651,7 @@ mod tests {
             create_AgentConversation(input: {
                 session_id: "sess-1",
                 agent_name: "amy",
-                agent_did: "did:defra-agent:amy",
+                agent_did: "did:test:amy",
                 behavior_id: "default",
                 title: "Debug session",
                 title_source: "generated",
@@ -663,7 +663,7 @@ mod tests {
             }) { _docID }
             create_AgentRequest(input: {
                 request_id: "req-1",
-                agent_did: "did:defra-agent:amy",
+                agent_did: "did:test:amy",
                 behavior_id: "default",
                 session_id: "sess-1",
                 content: "hello",
@@ -674,7 +674,7 @@ mod tests {
             create_AgentResponse(input: {
                 response_key: "req-1",
                 request_id: "req-1",
-                agent_did: "did:defra-agent:amy",
+                agent_did: "did:test:amy",
                 behavior_id: "default",
                 session_id: "sess-1",
                 content: "partial",
@@ -696,7 +696,7 @@ mod tests {
             conversations: vec![AgentConversationRow {
                 session_id: "sess-1".to_string(),
                 agent_name: None,
-                agent_did: Some("did:defra-agent:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("default".to_string()),
                 title: None,
@@ -709,7 +709,7 @@ mod tests {
             }],
             requests: vec![AgentRequestRow {
                 request_id: "req-1".to_string(),
-                agent_did: Some("did:defra-agent:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("default".to_string()),
                 session_id: Some("sess-1".to_string()),
@@ -743,7 +743,7 @@ mod tests {
             responses: vec![AgentResponseRow {
                 response_key: "req-1".to_string(),
                 request_id: Some("req-1".to_string()),
-                agent_did: Some("did:defra-agent:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("default".to_string()),
                 session_id: Some("sess-1".to_string()),

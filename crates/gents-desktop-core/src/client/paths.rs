@@ -98,4 +98,12 @@ mod tests {
             tempdir.path().join("peers.json")
         );
     }
+
+    #[test]
+    fn discover_without_override_uses_fresh_gents_desktop_root() {
+        let paths = DesktopPaths::discover_with_env(None).expect("paths");
+
+        assert_eq!(DESKTOP_HOME_ENV, "GENTS_DESKTOP_HOME");
+        assert!(paths.root().ends_with(Path::new("gents").join("desktop")));
+    }
 }

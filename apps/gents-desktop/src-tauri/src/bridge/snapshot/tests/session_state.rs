@@ -20,7 +20,7 @@ fn session_snapshot_projects_durable_goal_state() {
         goals: vec![GoalRow {
             goal_id: "goal-1".to_string(),
             session_id: "session-goal".to_string(),
-            agent_did: "did:defra:amy".to_string(),
+            agent_did: "did:test:amy".to_string(),
             objective: Some("Ship the durable controller".to_string()),
             status: Some("active".to_string()),
             token_budget: Some(50_000),
@@ -45,7 +45,7 @@ fn session_snapshot_projects_durable_goal_state() {
 
     let snapshot = build_session_snapshot_from_store_for_agent(
         &store,
-        Some("did:defra:amy"),
+        Some("did:test:amy"),
         "session-goal",
         None,
     )
@@ -78,7 +78,7 @@ fn session_snapshot_can_be_built_without_conversation_row_when_session_is_observ
         }],
         requests: vec![AgentRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -112,7 +112,7 @@ fn session_snapshot_can_be_built_without_conversation_row_when_session_is_observ
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -135,7 +135,7 @@ fn session_snapshot_can_be_built_without_conversation_row_when_session_is_observ
     let snapshot =
         build_session_snapshot_from_store(&store, "session-1", None).expect("session snapshot");
     assert_eq!(snapshot.session_id, "session-1");
-    assert_eq!(snapshot.agent_did.as_deref(), Some("did:defra:amy"));
+    assert_eq!(snapshot.agent_did.as_deref(), Some("did:test:amy"));
     assert_eq!(snapshot.behavior_id.as_deref(), Some("amy-default"));
     assert_eq!(snapshot.status.as_deref(), Some("active"));
     assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
@@ -148,7 +148,7 @@ fn session_snapshot_prefers_tracked_request_over_stale_conversation_latest_reque
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
@@ -162,7 +162,7 @@ fn session_snapshot_prefers_tracked_request_over_stale_conversation_latest_reque
         requests: vec![
             AgentRequestRow {
                 request_id: "req-1".to_string(),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
@@ -195,7 +195,7 @@ fn session_snapshot_prefers_tracked_request_over_stale_conversation_latest_reque
             },
             AgentRequestRow {
                 request_id: "req-2".to_string(),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
@@ -230,7 +230,7 @@ fn session_snapshot_prefers_tracked_request_over_stale_conversation_latest_reque
         responses: vec![AgentResponseRow {
             response_key: "resp-2".to_string(),
             request_id: Some("req-2".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -287,7 +287,7 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
@@ -300,7 +300,7 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
         }],
         requests: vec![AgentRequestRow {
             request_id: "req-old".to_string(),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -662,7 +662,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
@@ -675,7 +675,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
         }],
         requests: vec![AgentRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -731,7 +731,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
@@ -744,7 +744,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
         }],
         requests: vec![AgentRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -778,7 +778,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -813,7 +813,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
@@ -826,7 +826,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
         }],
         requests: vec![AgentRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -860,7 +860,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -918,7 +918,7 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("cancel cause test".to_string()),
@@ -931,7 +931,7 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
         }],
         requests: vec![AgentRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -965,7 +965,7 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -1085,7 +1085,7 @@ fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_pol
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("cascade cancel test".to_string()),
@@ -1098,7 +1098,7 @@ fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_pol
         }],
         requests: vec![AgentRequestRow {
             request_id: "req-child".to_string(),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -1132,7 +1132,7 @@ fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_pol
         responses: vec![AgentResponseRow {
             response_key: "resp-child".to_string(),
             request_id: Some("req-child".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -1231,7 +1231,7 @@ fn transcript_contract_store(case: &LeanTranscriptCase) -> ClientStore {
     ClientStore::from_rows(ClientStoreRows {
         requests: vec![AgentRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:defra:contract-agent".to_string()),
+            agent_did: Some("did:test:contract-agent".to_string()),
             requester_did: None,
             behavior_id: Some("contract-behavior".to_string()),
             session_id: Some("session-1".to_string()),
@@ -1583,7 +1583,7 @@ fn client_shell_contract_store(case: &LeanClientShellCase) -> ClientStore {
         rows.conversations.push(AgentConversationRow {
             session_id: session_id.clone(),
             agent_name: Some("Contract Agent".to_string()),
-            agent_did: Some("did:defra:contract-agent".to_string()),
+            agent_did: Some("did:test:contract-agent".to_string()),
             requester_did: None,
             behavior_id: Some("contract-behavior".to_string()),
             title: Some("contract conversation".to_string()),
@@ -1599,7 +1599,7 @@ fn client_shell_contract_store(case: &LeanClientShellCase) -> ClientStore {
     if let Some(request_id) = observed_request_id {
         rows.requests.push(AgentRequestRow {
             request_id: request_id.clone(),
-            agent_did: Some("did:defra:contract-agent".to_string()),
+            agent_did: Some("did:test:contract-agent".to_string()),
             requester_did: None,
             behavior_id: Some("contract-behavior".to_string()),
             session_id: Some(session_id),
@@ -1635,7 +1635,7 @@ fn client_shell_contract_store(case: &LeanClientShellCase) -> ClientStore {
             rows.responses.push(AgentResponseRow {
                 response_key: format!("resp-{request_id}"),
                 request_id: Some(request_id),
-                agent_did: Some("did:defra:contract-agent".to_string()),
+                agent_did: Some("did:test:contract-agent".to_string()),
                 requester_did: None,
                 behavior_id: Some("contract-behavior".to_string()),
                 session_id: rows.requests.last().and_then(|row| row.session_id.clone()),
@@ -1689,7 +1689,7 @@ fn streaming_response_contract_store(case: &LeanResponseTransitionCase) -> Clien
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Contract Agent".to_string()),
-            agent_did: Some("did:defra:contract-agent".to_string()),
+            agent_did: Some("did:test:contract-agent".to_string()),
             requester_did: None,
             behavior_id: Some("contract-behavior".to_string()),
             title: Some("streaming response contract".to_string()),
@@ -1702,7 +1702,7 @@ fn streaming_response_contract_store(case: &LeanResponseTransitionCase) -> Clien
         }],
         requests: vec![AgentRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:defra:contract-agent".to_string()),
+            agent_did: Some("did:test:contract-agent".to_string()),
             requester_did: None,
             behavior_id: Some("contract-behavior".to_string()),
             session_id: Some("session-1".to_string()),
@@ -1736,7 +1736,7 @@ fn streaming_response_contract_store(case: &LeanResponseTransitionCase) -> Clien
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
-            agent_did: Some("did:defra:contract-agent".to_string()),
+            agent_did: Some("did:test:contract-agent".to_string()),
             requester_did: None,
             behavior_id: Some("contract-behavior".to_string()),
             session_id: Some("session-1".to_string()),

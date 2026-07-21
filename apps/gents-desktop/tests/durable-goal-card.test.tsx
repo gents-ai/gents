@@ -8,7 +8,7 @@ describe("durable goal transcript card", () => {
   it("renders persisted goal status, objective, token usage, and active time", () => {
     const session: DesktopSessionSnapshot = {
       sessionId: "session-goal",
-      agentDid: "did:defra:goal-agent",
+      agentDid: "did:test:goal-agent",
       behaviorId: "default",
       title: "goal session",
       previewText: "",

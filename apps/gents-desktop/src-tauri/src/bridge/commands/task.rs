@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Result};
-use gents_desktop_core::client::ClientCore;
 use gents::graphql::escape_graphql_string;
+use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::{AgentRequestRow, EventTriggerRow, ScheduleRow, TaskRow};
 
 use super::super::types::{

@@ -70,18 +70,16 @@ describeLive("Tauri app live fleet add flow", () => {
       expect(driver.input("fleet-add-server-address")).toBeEnabled();
       expect(screen.getByTestId("fleet-add-submit")).toBeEnabled();
 
-      await driver.replaceInput("fleet-add-label", "Legacy Peer");
-      await driver.replaceInput("fleet-add-agent-did", "did:defra-agent:legacy");
-      await driver.replaceInput("fleet-add-addr", "iroh://legacy-peer");
+      await driver.replaceInput("fleet-add-label", "Invalid Peer");
+      await driver.replaceInput("fleet-add-agent-did", "   ");
+      await driver.replaceInput("fleet-add-addr", "iroh://invalid-peer");
       await driver.user.click(screen.getByTestId("fleet-add-submit"));
 
       await waitFor(() => {
-        expect(
-          screen.getByText(/Agent DID must be the key-derived DID/i),
-        ).toBeInTheDocument();
+        expect(screen.getByText(/Agent DID is required/i)).toBeInTheDocument();
       });
-      expect(driver.input("fleet-add-label")).toHaveValue("Legacy Peer");
-      expect(driver.input("fleet-add-agent-did")).toHaveValue("did:defra-agent:legacy");
+      expect(driver.input("fleet-add-label")).toHaveValue("Invalid Peer");
+      expect(driver.input("fleet-add-agent-did")).toHaveValue("   ");
       expect(screen.getByTestId("fleet-add-submit")).toBeEnabled();
       expect((await runner.fetchSnapshot()).client?.deployments.length ?? 0).toBe(
         initialDeploymentCount,

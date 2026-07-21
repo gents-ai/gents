@@ -271,9 +271,9 @@ pub async fn init_standard_local_runtime(
         read_json::<StoredRuntimeState>(&options.agent_home.join(RUNTIME_STATE_FILE_NAME))
             .with_context(|| {
                 format!(
-            "no running local gents runtime found at {}; run `gents server` first",
-            options.agent_home.join(RUNTIME_STATE_FILE_NAME).display()
-        )
+                    "no running local Gents runtime found at {}; run `gents server` first",
+                    options.agent_home.join(RUNTIME_STATE_FILE_NAME).display()
+                )
             })?;
 
     validate_runtime_identity(&runtime, &init)?;
@@ -333,8 +333,7 @@ pub async fn init_standard_local_runtime(
         next_steps: vec![
             "Run `gents-desktop` and leave the desktop app open.".to_string(),
             "Wait for the status bar to show `replication subscriptions armed`.".to_string(),
-            "Then submit prompts from Chat, or run `gents chat` in another terminal."
-                .to_string(),
+            "Then submit prompts from Chat, or run `gents chat` in another terminal.".to_string(),
         ],
     })
 }
@@ -387,8 +386,7 @@ pub async fn init_status_endpoint_runtime(
         next_steps: vec![
             "Run `gents-desktop` and leave the desktop app open.".to_string(),
             "Wait for the status bar to show `replication subscriptions armed`.".to_string(),
-            "Then submit prompts from Chat, or run `gents chat` in another terminal."
-                .to_string(),
+            "Then submit prompts from Chat, or run `gents chat` in another terminal.".to_string(),
         ],
     })
 }
@@ -396,10 +394,10 @@ pub async fn init_status_endpoint_runtime(
 pub fn render_human_summary(summary: &DesktopInitSummary) -> String {
     let discovery_line = match summary.status_endpoint.as_deref() {
         Some(status_endpoint) => {
-            format!("Discovered gents runtime from discovery endpoint: {status_endpoint}")
+            format!("Discovered Gents runtime from discovery endpoint: {status_endpoint}")
         }
         None => format!(
-            "Discovered local gents runtime: {agent_home}",
+            "Discovered local Gents runtime: {agent_home}",
             agent_home = summary.agent_home
         ),
     };

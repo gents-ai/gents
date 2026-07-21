@@ -16,7 +16,7 @@ use tracing_subscriber::{prelude::*, EnvFilter};
 #[derive(Debug, Parser)]
 #[command(
     name = "gents-desktop",
-    about = "Tauri desktop launcher for local and peered gents runtimes"
+    about = "Tauri desktop launcher for local and peered Gents runtimes"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -25,7 +25,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    #[command(about = "Discover and save a local or status-endpoint gents runtime")]
+    #[command(about = "Discover and save a local or status-endpoint Gents runtime")]
     Init(InitArgs),
 }
 
@@ -37,7 +37,7 @@ struct InitArgs {
         long,
         visible_aliases = ["status-url", "graphql", "graphql-endpoint"],
         value_name = "URL",
-        help = "Remote gents /status or GraphQL endpoint to seed as the initial desktop deployment"
+        help = "Remote Gents /status or GraphQL endpoint to seed as the initial desktop deployment"
     )]
     status_endpoint: Option<String>,
     #[arg(
@@ -126,7 +126,7 @@ fn launch_desktop() -> anyhow::Result<()> {
              (http://localhost:1420) instead of bundled assets, but nothing is \
              listening there right now.\n\n\
              You can fix this in one of the following ways:\n  \
-             - Start the dev server first: `npm --prefix apps/desktop-tauri run dev`, \
+             - Start the dev server first: `npm --prefix apps/gents-desktop run dev`, \
              then run `gents-desktop` again.\n  \
              - Launch via `make desktop-native-dev`, which starts both for you.\n  \
              - Build a standalone binary with `make desktop-native-build` (release \
@@ -280,7 +280,7 @@ fn init_tracing() {
         )
         .try_init();
 
-    tracing::info!("launching gents desktop launcher");
+    tracing::info!("launching Gents desktop launcher");
 }
 
 fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {

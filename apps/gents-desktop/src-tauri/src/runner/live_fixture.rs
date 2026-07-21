@@ -427,8 +427,8 @@ mod tests {
     use axum::response::{IntoResponse, Response};
     use axum::routing::{get, post};
     use axum::Router;
-    use gents_desktop_core::client::ClientCore;
     use gents::default_behavior_id_for_agent;
+    use gents_desktop_core::client::ClientCore;
     use serde_json::Value;
     use tokio::sync::oneshot;
 

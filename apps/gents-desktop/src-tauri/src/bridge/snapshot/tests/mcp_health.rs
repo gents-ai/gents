@@ -37,7 +37,7 @@ fn row_from_lean(case_name: &str, state: &str, count: usize) -> ToolServiceHealt
     let status = lean_state_to_defradb_status(state);
     ToolServiceHealthStateRow {
         service_id: format!("contract-{}", case_name),
-        agent_did: Some("did:defra:contract-agent".to_string()),
+        agent_did: Some("did:test:contract-agent".to_string()),
         endpoint: Some("127.0.0.1:9201/mcp".to_string()),
         status: Some(status.to_string()),
         tool_count: Some(7),

@@ -1,6 +1,6 @@
 export type Theme = "dark" | "light";
 
-const THEME_KEY = "defra-desktop-theme";
+const THEME_KEY = "gents-desktop-theme";
 
 /// Dark is the design default; "light" is the only stored override so an
 /// absent or corrupt value always resolves to a working theme.

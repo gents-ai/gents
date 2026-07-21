@@ -489,7 +489,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "goal_decision_cases"
       "GoalDecisionCases"
-      "apps/desktop-tauri/tests/durable-goal-card.test.tsx::durable goal transcript card renders persisted goal status, objective, token usage, and active time")
+      "apps/gents-desktop/tests/durable-goal-card.test.tsx::durable goal transcript card renders persisted goal status, objective, token usage, and active time")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
       "goal_decision_cases"
@@ -603,7 +603,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "frontend_client_shell_cases"
       "FrontendClientShellCases"
-      "apps/desktop-tauri/src/lib/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts")
+      "apps/gents-desktop/src/lib/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "desktop_client_shell_cases"

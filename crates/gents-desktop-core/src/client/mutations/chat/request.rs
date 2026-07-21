@@ -802,7 +802,7 @@ mod tests {
         assert_lean_transition_is_legal, lean_contract_snapshot, LeanSessionRecoveryCase,
     };
 
-    const RECOVERY_AGENT_DID: &str = "did:defra:amy";
+    const RECOVERY_AGENT_DID: &str = "did:test:amy";
     const RECOVERY_BEHAVIOR_ID: &str = "amy-code";
 
     #[derive(Debug)]
@@ -1666,10 +1666,10 @@ mod tests {
         .await?;
 
         let created = core
-            .create_conversation("did:defra:amy", Some("amy-code"))
+            .create_conversation("did:test:amy", Some("amy-code"))
             .await?;
         let original = core
-            .submit_request(&created.session_id, "did:defra:amy", "first attempt", None)
+            .submit_request(&created.session_id, "did:test:amy", "first attempt", None)
             .await?;
         let mut parent = core
             .store()
@@ -1700,7 +1700,7 @@ mod tests {
             core.node(),
             duplicate_request_id,
             &created.session_id,
-            "did:defra:amy",
+            "did:test:amy",
             "amy-code",
         )
         .await?;
@@ -1743,13 +1743,13 @@ mod tests {
         .await?;
 
         let created = core
-            .create_conversation("did:defra:amy", Some("amy-code"))
+            .create_conversation("did:test:amy", Some("amy-code"))
             .await?;
         let metadata = r#"{"eval":"amygdala","case":"retry"}"#.to_string();
         let original = core
             .submit_request_with_options(
                 &created.session_id,
-                "did:defra:amy",
+                "did:test:amy",
                 "retry should preserve overrides",
                 None,
                 SubmitRequestOptions {

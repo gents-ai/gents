@@ -1,8 +1,8 @@
 use std::fs::OpenOptions;
 use std::path::Path;
 
-use gents_desktop_core::client::DesktopPaths;
 use gents::log_rate::{RateLimitConfig, RateLimitFilter};
+use gents_desktop_core::client::DesktopPaths;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 /// Per-callsite log-rate ceiling: no code path may flood the desktop log

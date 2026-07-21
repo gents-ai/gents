@@ -394,7 +394,7 @@ mod tests {
         // Load from a non-existent path → empty peer directory (no I/O error on missing file).
         let peer_dir = Arc::new(AsyncRwLock::new(
             crate::client::peer_directory::PeerDirectory::load(
-                "/tmp/defra-observe-test-peers-nonexistent.json",
+                "/tmp/gents-observe-test-peers-nonexistent.json",
             )
             .await
             .expect("peer_directory"),

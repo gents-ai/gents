@@ -137,8 +137,7 @@ function applyProviderFlags(
   if (apiKeyEnvVar) env.GENTS_TAURI_LIVE_API_KEY_ENV_VAR = apiKeyEnvVar;
   if (subagentInferenceUrl)
     env.GENTS_TAURI_LIVE_SUBAGENT_INFERENCE_URL = subagentInferenceUrl;
-  if (subagentModelName)
-    env.GENTS_TAURI_LIVE_SUBAGENT_MODEL_NAME = subagentModelName;
+  if (subagentModelName) env.GENTS_TAURI_LIVE_SUBAGENT_MODEL_NAME = subagentModelName;
   if (subagentProvider) env.GENTS_TAURI_LIVE_SUBAGENT_PROVIDER = subagentProvider;
   if (subagentApiKey) env.GENTS_TAURI_LIVE_SUBAGENT_API_KEY = subagentApiKey;
   if (subagentApiKeyEnvVar)

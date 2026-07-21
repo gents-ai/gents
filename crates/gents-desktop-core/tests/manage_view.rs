@@ -19,7 +19,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         .execute(
             r#"mutation {
                 add_AgentPrincipal(input: {
-                    agent_did: "did:defra:amy"
+                    agent_did: "did:test:amy"
                     display_name: "Amy"
                     default_behavior_id: "amy-default"
                     enabled: true
@@ -74,7 +74,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
 
     core.save_tool_selection(&ToolSelectionRow {
         selection_id: "tools-amy".to_string(),
-        agent_did: Some("did:defra:amy".to_string()),
+        agent_did: Some("did:test:amy".to_string()),
         display_name: Some("Amy Tools".to_string()),
         tool_policy_version: Some("tool-policy/v1".to_string()),
         subagent_default_await_mode: Some("foreground".to_string()),
@@ -117,7 +117,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
 
     core.save_skill(&SkillRow {
         skill_id: "amy-skill".to_string(),
-        agent_did: Some("did:defra:amy".to_string()),
+        agent_did: Some("did:test:amy".to_string()),
         scope: Some("behavior".to_string()),
         name: Some("Amy Skill".to_string()),
         description: Some("Focus Amy on the queue.".to_string()),
@@ -132,7 +132,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
 
     core.save_behavior(&AgentBehaviorRow {
         behavior_id: "amy-default".to_string(),
-        agent_did: Some("did:defra:amy".to_string()),
+        agent_did: Some("did:test:amy".to_string()),
         display_name: Some("Amy Default".to_string()),
         system_prompt: Some("You are Amy.".to_string()),
         backend_id: Some("backend-amy".to_string()),
@@ -265,7 +265,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
     // We only assert that the schedule exists with the expected
     // apply-owned shape here.
 
-    core.delete_skill("amy-skill", "did:defra:amy").await?;
+    core.delete_skill("amy-skill", "did:test:amy").await?;
     let snapshot = core.store().snapshot();
     assert!(!snapshot
         .skills

@@ -7,7 +7,7 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
             AgentConversationRow {
                 session_id: "shared-session".to_string(),
                 agent_name: Some("Mini 1".to_string()),
-                agent_did: Some("did:defra:mini-1".to_string()),
+                agent_did: Some("did:test:mini-1".to_string()),
                 requester_did: None,
                 behavior_id: Some("default".to_string()),
                 title: Some("mini-1 run".to_string()),
@@ -21,7 +21,7 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
             AgentConversationRow {
                 session_id: "shared-session".to_string(),
                 agent_name: Some("Mini 2".to_string()),
-                agent_did: Some("did:defra:mini-2".to_string()),
+                agent_did: Some("did:test:mini-2".to_string()),
                 requester_did: None,
                 behavior_id: Some("default".to_string()),
                 title: Some("mini-2 run".to_string()),
@@ -56,21 +56,21 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
             },
         ],
         message_source_agent_dids: vec![
-            Some("did:defra:mini-1".to_string()),
-            Some("did:defra:mini-2".to_string()),
+            Some("did:test:mini-1".to_string()),
+            Some("did:test:mini-2".to_string()),
         ],
         ..ClientStoreRows::default()
     });
 
     let snapshot = build_session_snapshot_from_store_for_agent(
         &store,
-        Some("did:defra:mini-1"),
+        Some("did:test:mini-1"),
         "shared-session",
         None,
     )
     .expect("session snapshot");
 
-    assert_eq!(snapshot.agent_did.as_deref(), Some("did:defra:mini-1"));
+    assert_eq!(snapshot.agent_did.as_deref(), Some("did:test:mini-1"));
     assert_eq!(snapshot.title.as_deref(), Some("mini-1 run"));
     assert_eq!(snapshot.messages.len(), 1);
     assert_eq!(snapshot.messages[0].message_key, "msg-mini-1");
@@ -82,7 +82,7 @@ fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("architecture-review".to_string()),
@@ -96,7 +96,7 @@ fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized
         requests: vec![
             AgentRequestRow {
                 request_id: "req-1".to_string(),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
@@ -129,7 +129,7 @@ fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized
             },
             AgentRequestRow {
                 request_id: "req-2".to_string(),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
@@ -188,7 +188,7 @@ fn session_snapshot_hides_pending_turn_once_user_message_is_materialized() {
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("architecture-review".to_string()),
@@ -201,7 +201,7 @@ fn session_snapshot_hides_pending_turn_once_user_message_is_materialized() {
         }],
         requests: vec![AgentRequestRow {
             request_id: "req-2".to_string(),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -257,7 +257,7 @@ fn session_snapshot_keeps_pending_turn_for_repeated_prompt_until_second_user_mes
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
@@ -271,7 +271,7 @@ fn session_snapshot_keeps_pending_turn_for_repeated_prompt_until_second_user_mes
         requests: vec![
             AgentRequestRow {
                 request_id: "req-1".to_string(),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
@@ -304,7 +304,7 @@ fn session_snapshot_keeps_pending_turn_for_repeated_prompt_until_second_user_mes
             },
             AgentRequestRow {
                 request_id: "req-2".to_string(),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),

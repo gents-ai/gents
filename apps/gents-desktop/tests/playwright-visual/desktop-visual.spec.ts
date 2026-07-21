@@ -106,7 +106,7 @@ test.describe("desktop visual baselines", () => {
       scenario: "default",
       snapshotName: "fleet-dashboard-light.png",
     });
-    await page.evaluate(() => window.localStorage.removeItem("defra-desktop-theme"));
+    await page.evaluate(() => window.localStorage.removeItem("gents-desktop-theme"));
 
     await attachVisualReviewManifest(testInfo, snapshots);
   });

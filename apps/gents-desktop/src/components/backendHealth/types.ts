@@ -1,6 +1,6 @@
 /**
  * Mirrors `BackendHealthView` / `InferenceCallSummaryView` from
- * `apps/desktop-tauri/src-tauri/src/bridge/types/views/operations.rs`.
+ * `apps/gents-desktop/src-tauri/src/bridge/types/views/operations.rs`.
  * The Tauri layer serializes with `#[serde(rename_all = "camelCase")]`,
  * so field names here are camelCase even though the underlying
  * `InferenceBackend` / `InferenceCall` columns are snake_case.

@@ -9,7 +9,7 @@ fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
         conversations: vec![AgentConversationRow {
             session_id: "sess-1".to_string(),
             agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
@@ -22,7 +22,7 @@ fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
         }],
         requests: vec![AgentRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("sess-1".to_string()),
@@ -66,7 +66,7 @@ fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("sess-1".to_string()),
@@ -107,7 +107,7 @@ fn session_snapshot_deduplicates_persisted_rows_from_multiple_sources() {
     duplicate_user.sequence = Some(9);
     duplicate_user.content = Some(user_message_json("later duplicate"));
     rows.messages.push(duplicate_user);
-    rows.message_source_agent_dids = vec![None, Some("did:defra:amy".to_string())];
+    rows.message_source_agent_dids = vec![None, Some("did:test:amy".to_string())];
 
     let assistant = AgentMessageRow {
         message_key: "msg-2".to_string(),
@@ -126,12 +126,12 @@ fn session_snapshot_deduplicates_persisted_rows_from_multiple_sources() {
     duplicate_assistant.content = Some(assistant_message_json("later duplicate"));
     rows.messages.push(duplicate_assistant);
     rows.message_source_agent_dids
-        .push(Some("did:defra:amy".to_string()));
+        .push(Some("did:test:amy".to_string()));
 
     let store = ClientStore::from_rows(rows);
     let snapshot = build_session_snapshot_from_store_for_agent(
         &store,
-        Some("did:defra:amy"),
+        Some("did:test:amy"),
         "sess-1",
         Some("req-1"),
     )
@@ -207,7 +207,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
@@ -221,7 +221,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
         requests: vec![
             AgentRequestRow {
                 request_id: "req-1".to_string(),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
@@ -254,7 +254,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
             },
             AgentRequestRow {
                 request_id: "req-2".to_string(),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
@@ -299,7 +299,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
         responses: vec![AgentResponseRow {
             response_key: "resp-2".to_string(),
             request_id: Some("req-2".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -375,7 +375,7 @@ fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
@@ -388,7 +388,7 @@ fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
         }],
         requests: vec![AgentRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -432,7 +432,7 @@ fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -483,7 +483,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
@@ -497,7 +497,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
         requests: vec![
             AgentRequestRow {
                 request_id: "req-1".to_string(),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
@@ -530,7 +530,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
             },
             AgentRequestRow {
                 request_id: "req-2".to_string(),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
@@ -600,7 +600,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
         responses: vec![AgentResponseRow {
             response_key: "resp-2".to_string(),
             request_id: Some("req-2".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
@@ -635,7 +635,7 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
             agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             title: Some("conversation".to_string()),
@@ -648,7 +648,7 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
         }],
         requests: vec![AgentRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),

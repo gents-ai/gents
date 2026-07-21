@@ -2,8 +2,6 @@ import type { PeerAddRequest } from "../../lib/types";
 
 type JsonRecord = Record<string, unknown>;
 
-const LEGACY_NAME_DERIVED_DID_PREFIX = "did:defra-agent:";
-
 export function parsePeerConnectionJson(input: string): PeerAddRequest {
   const value = parseJsonFromText(input);
   const record = asRecord(value);
@@ -62,11 +60,6 @@ export function validateAgentDid(agentDid: string) {
   const trimmed = agentDid.trim();
   if (!trimmed) {
     throw new Error("Agent DID is required");
-  }
-  if (trimmed.startsWith(LEGACY_NAME_DERIVED_DID_PREFIX)) {
-    throw new Error(
-      "Agent DID must be the key-derived DID from gents init/status, not did:defra-agent:<name>",
-    );
   }
   return trimmed;
 }

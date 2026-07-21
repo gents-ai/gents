@@ -27,7 +27,7 @@ fn request_backed_conversation_summaries_include_in_flight_sessions() {
     let store = ClientStore::from_rows(ClientStoreRows {
         requests: vec![AgentRequestRow {
             request_id: "req-live".to_string(),
-            agent_did: Some("did:defra:amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-live".to_string()),
@@ -62,7 +62,7 @@ fn request_backed_conversation_summaries_include_in_flight_sessions() {
     });
 
     let summaries =
-        request_backed_conversation_summaries(&store, "did:defra:amy", true, &[], &[], &[]);
+        request_backed_conversation_summaries(&store, "did:test:amy", true, &[], &[], &[]);
 
     assert_eq!(summaries.len(), 1);
     assert_eq!(summaries[0].session_id, "session-live");
@@ -80,7 +80,7 @@ fn conversation_task_tag_uses_latest_schedule_lineage() {
         requests: vec![
             AgentRequestRow {
                 request_id: "req-old".to_string(),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
@@ -113,7 +113,7 @@ fn conversation_task_tag_uses_latest_schedule_lineage() {
             },
             AgentRequestRow {
                 request_id: "req-new".to_string(),
-                agent_did: Some("did:defra:amy".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
@@ -158,7 +158,7 @@ fn conversation_task_tag_uses_latest_schedule_lineage() {
 
     let tag = conversation_task_tag(
         &store,
-        "did:defra:amy",
+        "did:test:amy",
         true,
         "session-1",
         &tasks,
@@ -179,7 +179,7 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
         requests: vec![
             AgentRequestRow {
                 request_id: "req-mini-1".to_string(),
-                agent_did: Some("did:defra:mini-1".to_string()),
+                agent_did: Some("did:test:mini-1".to_string()),
                 requester_did: None,
                 behavior_id: Some("default".to_string()),
                 session_id: Some("session-mini-1".to_string()),
@@ -212,7 +212,7 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
             },
             AgentRequestRow {
                 request_id: "req-mini-2".to_string(),
-                agent_did: Some("did:defra:mini-2".to_string()),
+                agent_did: Some("did:test:mini-2".to_string()),
                 requester_did: None,
                 behavior_id: Some("default".to_string()),
                 session_id: Some("session-mini-2".to_string()),
@@ -248,7 +248,7 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
     });
     let schedules = vec![schedule_view("shared-schedule", "task-1")];
 
-    let runs = task_run_history(&store, "did:defra:mini-1", true, "task-1", &schedules, &[]);
+    let runs = task_run_history(&store, "did:test:mini-1", true, "task-1", &schedules, &[]);
 
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].request_id, "req-mini-1");
@@ -357,7 +357,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
         let store = ClientStore::from_rows(ClientStoreRows {
             requests: vec![AgentRequestRow {
                 request_id: request_id.clone(),
-                agent_did: Some("did:defra:contract-agent".to_string()),
+                agent_did: Some("did:test:contract-agent".to_string()),
                 requester_did: None,
                 behavior_id: Some("contract-behavior".to_string()),
                 session_id: Some(format!("contract-session-{index}")),
@@ -418,7 +418,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
 
         let run_history = task_run_history(
             &store,
-            "did:defra:contract-agent",
+            "did:test:contract-agent",
             true,
             &task_id,
             &schedules,

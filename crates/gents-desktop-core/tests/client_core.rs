@@ -25,7 +25,7 @@ async fn peer_directory_round_trip() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let path = tempdir.path().join("peers.json");
     let mut directory = PeerDirectory::load(&path).await?;
-    let record = PeerRecord::new("Workshop Bay", "iroh://alpha", "did:defra:alpha");
+    let record = PeerRecord::new("Workshop Bay", "iroh://alpha", "did:test:alpha");
     let peer_id = record.peer_id.clone();
 
     directory.upsert(record).await?;

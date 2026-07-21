@@ -277,7 +277,7 @@ async fn saved_peer_cleanup_removes_replicator_before_idempotent_disconnect() {
     let record = PeerRecord::new(
         "Never Connected",
         "127.0.0.1:56000/p2p/peer-absent",
-        "did:defra:absent",
+        "did:test:absent",
     );
 
     cleanup_saved_peer_p2p(&p2p, &record)
@@ -307,7 +307,7 @@ async fn remove_peer_retains_saved_deployment_when_p2p_cleanup_fails() {
     let record = PeerRecord::new(
         "Invalid Address",
         "not-a-valid-p2p-address",
-        "did:defra:invalid",
+        "did:test:invalid",
     );
     core.peer_directory
         .write()
@@ -366,7 +366,7 @@ async fn repair_saved_peer_refreshes_network_before_redial() {
     let record = PeerRecord::new(
         "Workshop Bay",
         "127.0.0.1:56000/p2p/peer-alpha",
-        "did:defra:workshop-bay",
+        "did:test:workshop-bay",
     );
 
     let repaired = repair_saved_peer(
@@ -398,7 +398,7 @@ async fn repair_saved_peer_forces_reconfiguration_while_peer_is_connected() {
     let record = PeerRecord::new(
         "Workshop Bay",
         "127.0.0.1:56000/p2p/peer-alpha",
-        "did:defra:workshop-bay",
+        "did:test:workshop-bay",
     );
     recording.set_connected_peers(vec![record.addr.clone()]);
     let p2p: Arc<dyn P2POps> = recording.clone();
@@ -434,7 +434,7 @@ async fn saved_peer_needs_repair_when_live_connection_has_dropped() {
     let record = PeerRecord::new(
         "Workshop Bay",
         "127.0.0.1:56000/p2p/peer-alpha",
-        "did:defra:workshop-bay",
+        "did:test:workshop-bay",
     );
 
     let needs_repair = saved_peer_needs_repair(
@@ -463,7 +463,7 @@ async fn saved_peer_does_not_need_repair_while_live_connection_is_healthy() {
     let record = PeerRecord::new(
         "Workshop Bay",
         "127.0.0.1:56000/p2p/peer-alpha",
-        "did:defra:workshop-bay",
+        "did:test:workshop-bay",
     );
 
     let needs_repair = saved_peer_needs_repair(

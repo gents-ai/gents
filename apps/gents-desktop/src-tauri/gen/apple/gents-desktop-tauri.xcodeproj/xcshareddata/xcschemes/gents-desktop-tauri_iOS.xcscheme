@@ -15,10 +15,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "BC936A50434A9514F0ABB8CE"
-               BuildableName = "defra-agent-desktop-tauri_iOS.app"
-               BlueprintName = "defra-agent-desktop-tauri_iOS"
-               ReferencedContainer = "container:defra-agent-desktop-tauri.xcodeproj">
+               BlueprintIdentifier = "C639EC47185605E9FEA2AED6"
+               BuildableName = "gents-desktop-tauri_iOS.app"
+               BlueprintName = "gents-desktop-tauri_iOS"
+               ReferencedContainer = "container:gents-desktop-tauri.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -32,10 +32,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "BC936A50434A9514F0ABB8CE"
-            BuildableName = "defra-agent-desktop-tauri_iOS.app"
-            BlueprintName = "defra-agent-desktop-tauri_iOS"
-            ReferencedContainer = "container:defra-agent-desktop-tauri.xcodeproj">
+            BlueprintIdentifier = "C639EC47185605E9FEA2AED6"
+            BuildableName = "gents-desktop-tauri_iOS.app"
+            BlueprintName = "gents-desktop-tauri_iOS"
+            ReferencedContainer = "container:gents-desktop-tauri.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -69,10 +69,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "BC936A50434A9514F0ABB8CE"
-            BuildableName = "defra-agent-desktop-tauri_iOS.app"
-            BlueprintName = "defra-agent-desktop-tauri_iOS"
-            ReferencedContainer = "container:defra-agent-desktop-tauri.xcodeproj">
+            BlueprintIdentifier = "C639EC47185605E9FEA2AED6"
+            BuildableName = "gents-desktop-tauri_iOS.app"
+            BlueprintName = "gents-desktop-tauri_iOS"
+            ReferencedContainer = "container:gents-desktop-tauri.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
@@ -100,10 +100,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "BC936A50434A9514F0ABB8CE"
-            BuildableName = "defra-agent-desktop-tauri_iOS.app"
-            BlueprintName = "defra-agent-desktop-tauri_iOS"
-            ReferencedContainer = "container:defra-agent-desktop-tauri.xcodeproj">
+            BlueprintIdentifier = "C639EC47185605E9FEA2AED6"
+            BuildableName = "gents-desktop-tauri_iOS.app"
+            BlueprintName = "gents-desktop-tauri_iOS"
+            ReferencedContainer = "container:gents-desktop-tauri.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>

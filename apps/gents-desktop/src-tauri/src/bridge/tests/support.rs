@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents::graphql::escape_graphql_string;
+use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use tempfile::TempDir;
 
 /// Minimal projection of an `AgentRequest` row used in interrupt tests.

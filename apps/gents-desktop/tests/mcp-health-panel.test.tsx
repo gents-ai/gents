@@ -18,7 +18,7 @@ function svc(
 ): MCPServiceHealthView {
   return {
     serviceId: overrides.serviceId,
-    agentDid: overrides.agentDid ?? "did:defra:agent-1",
+    agentDid: overrides.agentDid ?? "did:test:agent-1",
     endpoint: overrides.endpoint ?? "100.69.4.79:9201/mcp",
     status: overrides.status ?? "healthy",
     failureCount: overrides.failureCount ?? 0,

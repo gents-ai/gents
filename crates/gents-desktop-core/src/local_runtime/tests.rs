@@ -1,9 +1,9 @@
 use super::identity::{normalize_optional_string, resolve_p2p_peer_id};
 use super::{
     augment_peer_status_payload_for_desktop, dangerously_overwrite_desktop_home,
-    extract_status_endpoint_connection, graphql_endpoint_for_desktop_access, render_human_summary,
-    reset_desktop_runtime_state, runtime_discovery_url, runtime_graphql_url, runtime_status_url,
-    DesktopInitSummary, LOCAL_STANDARD_SOURCE,
+    default_agent_home, extract_status_endpoint_connection, graphql_endpoint_for_desktop_access,
+    render_human_summary, reset_desktop_runtime_state, runtime_discovery_url, runtime_graphql_url,
+    runtime_status_url, DesktopInitSummary, LOCAL_STANDARD_SOURCE,
 };
 use crate::client::DesktopPaths;
 
@@ -17,7 +17,7 @@ fn sample_summary() -> DesktopInitSummary {
         peer_directory: "/tmp/desktop/peers.json".to_string(),
         label: "Local Agent".to_string(),
         agent_name: "default".to_string(),
-        agent_did: "did:defra-agent:default".to_string(),
+        agent_did: "did:test:default".to_string(),
         graphql: "http://127.0.0.1:9191/graphql".to_string(),
         p2p_transport: "iroh".to_string(),
         p2p_peer_id: "peer-runtime".to_string(),
@@ -26,10 +26,19 @@ fn sample_summary() -> DesktopInitSummary {
         next_steps: vec![
             "Run `gents-desktop` and leave the desktop app open.".to_string(),
             "Wait for the status bar to show `replication subscriptions armed`.".to_string(),
-            "Then submit prompts from Chat, or run `gents chat` in another terminal."
-                .to_string(),
+            "Then submit prompts from Chat, or run `gents chat` in another terminal.".to_string(),
         ],
     }
+}
+
+#[test]
+fn default_agent_home_uses_fresh_gents_home() {
+    let home = default_agent_home().expect("agent home");
+
+    assert_eq!(
+        home.file_name().and_then(|name| name.to_str()),
+        Some(".gents")
+    );
 }
 
 #[test]
@@ -55,8 +64,8 @@ fn remote_status_summary_render_does_not_call_it_local() {
 
     let rendered = render_human_summary(&summary);
 
-    assert!(rendered.contains("Discovered gents runtime from discovery endpoint"));
-    assert!(!rendered.contains("Discovered local gents runtime"));
+    assert!(rendered.contains("Discovered Gents runtime from discovery endpoint"));
+    assert!(!rendered.contains("Discovered local Gents runtime"));
 }
 
 #[test]
