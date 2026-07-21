@@ -37,6 +37,11 @@ pub async fn run_endpoint_heartbeat(
         );
     }
 
+    // `tokio::time::interval` makes its first tick immediately ready. Consume
+    // that scheduling tick after the explicit startup write so entering the
+    // loop does not issue a redundant second upsert during startup contention.
+    interval.tick().await;
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
@@ -89,7 +94,12 @@ async fn tick_endpoint(
         .await
         .context("signing PeerEndpoint binding")?;
     let mutation = peer_endpoint_upsert_mutation(&record);
-    let response = node.execute(&mutation).await;
+    let response = crate::retry::execute_graphql_with_conflict_retry(
+        node,
+        &mutation,
+        "upsert_peer_endpoint_heartbeat",
+    )
+    .await;
     if response.has_errors() {
         bail!("upsert_PeerEndpoint failed: {:?}", response.errors);
     }
