@@ -5,6 +5,17 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
+    inputs:
+      full_candidate:
+        description: Run the full non-PR candidate suites.
+        required: true
+        type: boolean
+        default: true
+      candidate_sha:
+        description: Exact 40-character commit SHA expected at the dispatched ref.
+        required: true
+        type: string
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -22,12 +33,55 @@ env:
   SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
 
 jobs:
+  rename-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify immutable full-candidate dispatch
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          FULL_CANDIDATE: ${{ inputs.full_candidate }}
+        run: |
+          set -euo pipefail
+          if [[ "${FULL_CANDIDATE}" != "true" ]]; then
+            echo "::error::Manual CI dispatches must select full_candidate."
+            exit 1
+          fi
+          if [[ ! "${CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::candidate_sha must be a full lowercase 40-character commit SHA."
+            exit 1
+          fi
+          if [[ "${CANDIDATE_SHA}" != "${GITHUB_SHA}" ]]; then
+            echo "::error::candidate_sha ${CANDIDATE_SHA} does not match checked-out GITHUB_SHA ${GITHUB_SHA}."
+            exit 1
+          fi
+
+      - name: Check rename tool syntax
+        run: bash -n scripts/rename-to-gents.sh
+
+      - name: Run rename tool self-test
+        run: scripts/rename-to-gents.sh self-test
+
+      - name: Reject stale product identifiers
+        run: scripts/rename-to-gents.sh guard all
+
   rust-and-cli:
-    needs: lean-proofs
+    needs: [rename-guard, lean-proofs]
     if: ${{ always() }}
     runs-on: [self-hosted, macOS, ARM64, studio]
     timeout-minutes: 90
     steps:
+      - name: Require rename guard
+        if: ${{ needs.rename-guard.result != 'success' }}
+        run: |
+          echo "::error::rename-guard must pass before the Rust and CLI suites run (got '${{ needs.rename-guard.result }}')."
+          exit 1
+
       - name: Require Lean/Rust contract gate
         if: ${{ needs.lean-proofs.result != 'success' }}
         run: |
@@ -106,6 +160,9 @@ jobs:
       # (#646). It also warms the build cache for the test steps that follow.
       - name: Compile all targets
         run: cargo check --workspace --all-targets
+
+      - name: Build the WASM lens target
+        run: cargo build -p agent-tool-call-lifecycle-v1-to-v2-lens --target wasm32-unknown-unknown
 
       # Guards the noq 1.0.1 active_connections underflow fix (gents#634 /
       # n0-computer/noq#743). Vendored under third_party/; not a workspace member.
@@ -212,6 +269,14 @@ jobs:
 
       - name: Prepare disk-backed Rust build cache
         run: .github/scripts/setup-rust-build-cache.sh
+
+      - name: Reject Lean sorry placeholders
+        working-directory: crates/gents/proofs
+        run: |
+          if find . -type f -name '*.lean' -exec grep -n -E '(^|[^[:alnum:]_])sorry([^[:alnum:]_]|$)' {} +; then
+            echo "::error::Lean proof sources must not contain sorry placeholders."
+            exit 1
+          fi
 
       - name: Build proofs
         working-directory: crates/gents/proofs
