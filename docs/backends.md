@@ -1,8 +1,8 @@
 # Backends
 
-This page is the committed backend support matrix for defra-agent. It tracks
+This page is the committed backend support matrix for gents. It tracks
 which providers are supported, which wire API each provider uses, what request
-and response shaping defra-agent applies, and whether a provider has an offline
+and response shaping gents applies, and whether a provider has an offline
 wire fixture replay fence.
 
 The runtime owns provider-input assembly before any provider-specific client is
@@ -29,7 +29,7 @@ different places:
   document's `enabled` and `probe_status`. The startup ratchet promotes
   `unknown → healthy` for reachable backends and stamps `last_probe`; the
   scheduled prober keeps that promotion recurring with fresh `last_probe`, and
-  `defra-agent config backend set --probe-status ...` remains the manual
+  `gents config backend set --probe-status ...` remains the manual
   override. Nothing ever writes `unhealthy` here: reachability is
   observer-relative, and 16 runtimes stomping one document would replicate
   churn and conflicting opinions.
@@ -37,7 +37,7 @@ different places:
   10s timeout) probes the models endpoint of every enabled, probeable backend
   and keeps an in-memory `BackendHealthMap`. Hysteresis is K=3 consecutive
   failures to demote to `unhealthy`, one success to promote back (formal
-  model: `crates/defra-agent/proofs/Proofs/BackendHealth/`). ChatGPT-Codex
+  model: `crates/gents/proofs/Proofs/BackendHealth/`). ChatGPT-Codex
   backends are never probed (OAuthCredential is agent-scoped) and therefore
   never demoted — the document status governs them.
 
@@ -47,15 +47,15 @@ unavailable within `probe_interval × K + reconcile debounce`, and one
 successful probe restores routing. Measured state resets on restart (a dead
 backend is doc-available again for up to K probe intervals until re-demoted).
 
-The `defra_agent_backend_probe_status{backend_id,status}` metric reports the
+The `gents_backend_probe_status{backend_id,status}` metric reports the
 MEASURED state with value 1 iff healthy — it genuinely reads 0 during an
-outage — and `defra_agent_backend_last_probe_seconds` reports probe freshness.
+outage — and `gents_backend_last_probe_seconds` reports probe freshness.
 Both fall back to document values for backends the prober has no opinion on.
 
 ## Wire Fixture Policy
 
 Provider fixture replay is tracked in #545. Recorded fixtures live under
-`crates/defra-agent/tests/fixtures/providers/` and must be safe to commit.
+`crates/gents/tests/fixtures/providers/` and must be safe to commit.
 
 Rules:
 
@@ -83,7 +83,7 @@ as an `OAuthCredential` DefraDB document scoped by `agent_did` and provider
 2. Sign in and write the credential document:
 
    ```sh
-   defra-agent codex-login --agent-did did:key:...
+   gents codex-login --agent-did did:key:...
    ```
 
    Add `--device-auth` for headless login, and `--graphql` to write to a running
@@ -91,20 +91,20 @@ as an `OAuthCredential` DefraDB document scoped by `agent_did` and provider
 3. Verify:
 
    ```sh
-   defra-agent codex-auth-probe --agent-did did:key:...
+   gents codex-auth-probe --agent-did did:key:...
    ```
 
 ### Models
 
 - **Default:** the `chatgpt-codex` preset defaults the model to **`gpt-5.5`**, so
-  `defra-agent init --backend-preset chatgpt-codex` works without `--model-name`.
+  `gents init --backend-preset chatgpt-codex` works without `--model-name`.
 - **Use plain `gpt-5.x` slugs, not `-codex` variants.** A ChatGPT subscription serves
   models like `gpt-5.5`; the `-codex` variants (`gpt-5.2-codex`, …) return
   *"not supported when using Codex with a ChatGPT account"*.
 - **List your account's models:**
 
   ```sh
-  defra-agent config backend discover-models \
+  gents config backend discover-models \
     --graphql <url> --backend-id <id> --agent-did did:key:...
   ```
 
@@ -112,9 +112,9 @@ as an `OAuthCredential` DefraDB document scoped by `agent_did` and provider
   plan and by the advertised Codex client version (see below). An empty list usually
   means a stale client version.
 - **Change the model:** pass `--model-name <slug>` to `init`, or update the behavior
-  with `defra-agent config behavior set --backend-id <id> --model-name <slug>`.
+  with `gents config behavior set --backend-id <id> --model-name <slug>`.
 - **Client version gate.** The backend gates model availability on the Codex client
-  version defra-agent advertises (currently `0.138.0`, on both the request `version`
+  version gents advertises (currently `0.138.0`, on both the request `version`
   header and the `/models` `client_version` query param). If a newer floor is required,
   set `DEFRA_CHATGPT_CODEX_CLIENT_VERSION` — one knob moves it everywhere.
 - **Reasoning effort** is currently fixed at `medium`; per-behavior effort selection
@@ -136,7 +136,7 @@ places. Regression tests pin these details:
 
 ### Credential storage
 
-- `defra-agent codex-login` uses Codex's OAuth flow with an ephemeral in-memory
+- `gents codex-login` uses Codex's OAuth flow with an ephemeral in-memory
   store, then writes the resulting access token, refresh token, id token, account
   id, plan, FedRAMP flag, and expiry into `OAuthCredential`.
 - The runtime reads `OAuthCredential` for the behavior's `agent_did`; it does not
@@ -159,7 +159,7 @@ places. Regression tests pin these details:
   `OAuthCredential:agent_did=did:key:...`; do not include `OAuthCredential` in an
   unfiltered config replicator.
 - The single-node/local demo path treats the local runtime as the owner.
-- A remote frontend (`defra-agent codex`) does not need local ChatGPT credentials;
+- A remote frontend (`gents codex`) does not need local ChatGPT credentials;
   the server-side runtime uses the replicated `OAuthCredential` document.
 
 ### Token refresh
@@ -174,14 +174,14 @@ places. Regression tests pin these details:
 - If the provider rejects a live request with 401/403, the bearer is invalidated
   so the next request forces a refresh rather than replaying a clock-fresh but
   server-revoked token. Runtime errors still tell the operator to rerun
-  `defra-agent codex-login` when a refresh cannot recover.
+  `gents codex-login` when a refresh cannot recover.
 
 ### Diagnostics
 
-- `defra-agent codex-auth-probe` reads the credential document (read-only; it
+- `gents codex-auth-probe` reads the credential document (read-only; it
   never refreshes — the owning runtime is the single refresh writer, so a second
   writer would trip the provider's reuse-detection), probes `/models`, and prints
   account, plan, expiry, and reachable models.
-- `defra-agent diagnose` reports `checks.chatgpt_auth` as structured JSON with
-  `credential_id` and `expires_at`, or an actionable `defra-agent codex-login`
+- `gents diagnose` reports `checks.chatgpt_auth` as structured JSON with
+  `credential_id` and `expires_at`, or an actionable `gents codex-login`
   guidance string when the document is missing or expired.

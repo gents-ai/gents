@@ -2,11 +2,11 @@
 
 ## What this is
 
-defra-agent is a Rust agent runtime where the database is the control plane. It is built on DefraDB, and it leans on what DefraDB uniquely provides — DID-based cryptographic identity, document-level access control, and P2P replication — to give agents properties a normal stack can't: verifiable identity, least-privilege permission boundaries, and gossip-based event propagation across nodes.
+gents is a Rust agent runtime where the database is the control plane. It is built on DefraDB, and it leans on what DefraDB uniquely provides — DID-based cryptographic identity, document-level access control, and P2P replication — to give agents properties a normal stack can't: verifiable identity, least-privilege permission boundaries, and gossip-based event propagation across nodes.
 
 Everything is a document. Configuration, requests, responses, sessions, tool calls, triggers, schedules — all DefraDB documents. You configure an agent by writing documents, trigger work by writing documents, and debug by reading documents. The runtime watches for request documents, drives them through a formally specified lifecycle, and writes response documents back.
 
-**The `defra-agent` runtime crate is the core of this repository.** The CLI, the desktop app, the protocol crate, the schemas — all of it exists to operate, observe, or share the vocabulary of that runtime. When you are deciding where logic belongs or what matters in a tradeoff, the runtime's integrity wins.
+**The `gents` runtime crate is the core of this repository.** The CLI, the desktop app, the protocol crate, the schemas — all of it exists to operate, observe, or share the vocabulary of that runtime. When you are deciding where logic belongs or what matters in a tradeoff, the runtime's integrity wins.
 
 ## How we build: the foundation flow
 
@@ -32,7 +32,7 @@ The shape that should ground any work here:
 - **Tools are documents too:** tool selections, MCP services, subagent targets, and skills are all configured as documents and resolved into a per-behavior tool surface at reconcile time. Subagents are first-class: children are requests, bridged back to the parent's tool call.
 - **Automation is document-driven:** Tasks, Schedules, and EventTriggers fire requests through the trigger engine, with lineage stamped on every request.
 - **Everything persisted can be projected back out:** the run timeline (`run_timeline.rs`) reconstructs a request's event stream from persisted rows, and adapter projections (`adapter_projection.rs`, CLI `trace timeline|project`) export it in external-framework shapes (OpenAI-Codex, LangGraph, multi-agent) with redaction modes enforced by ACP.
-- **External code is held at arm's length:** rig-core is the provider/streaming client only ("Layer A"); rig types cross into the runtime through one converter seam (`llm::rig_compat`). The message family is native and byte-compatible with what's persisted (`defra-agent-protocol::message`). Full rig removal is staged (#438/#439). DefraDB itself comes from `sourcenetwork/defradb.rs` (private), pinned in the workspace `Cargo.toml` — look there when node, schema, or identity behavior is in question.
+- **External code is held at arm's length:** rig-core is the provider/streaming client only ("Layer A"); rig types cross into the runtime through one converter seam (`llm::rig_compat`). The message family is native and byte-compatible with what's persisted (`gents-protocol::message`). Full rig removal is staged (#438/#439). DefraDB itself comes from `sourcenetwork/defradb.rs` (private), pinned in the workspace `Cargo.toml` — look there when node, schema, or identity behavior is in question.
 
 ## Sharp edges
 
@@ -40,7 +40,7 @@ The few things you can't discover until they bite:
 
 - **Always `graphql::escape_graphql_string()`** for anything interpolated into a GraphQL string. Queries are built inline by convention.
 - **Never emit `[]` in a DefraDB mutation** — an empty list literal types as `JsonArray` and corrupts nillable array columns. Emit `null`.
-- **Gate with the full package suite** (`cargo test -p defra-agent`), not `--lib` — integration tests are separate compile units and `--lib` will happily pass while they don't build.
+- **Gate with the full package suite** (`cargo test -p gents`), not `--lib` — integration tests are separate compile units and `--lib` will happily pass while they don't build.
 - **Compile the whole workspace before pushing** (`cargo check --workspace --all-targets`) — the test gate above still skips examples, the desktop crates, and many test targets, so a new required struct field breaks their construction sites silently until CI (or the next unrelated PR). CI enforces this in `rust-and-cli`; run it locally first.
 - **Flaky tests are defects.** The formal-verification investment exists to eliminate that class; capture, file, and fix — never shrug.
 - `tracing`, never `println`.

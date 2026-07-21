@@ -9,13 +9,13 @@ machine.
 brew install llama.cpp
 llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
 
-gh release download v0.4.0 --repo sourcenetwork/defra-agent -p 'defra-agent-aarch64-apple-darwin.tar.gz'
-tar -xzf defra-agent-aarch64-apple-darwin.tar.gz
-sudo install defra-agent-aarch64-apple-darwin/defra-agent /usr/local/bin/defra-agent
+gh release download v0.4.0 --repo source-inc/gents -p 'gents-aarch64-apple-darwin.tar.gz'
+tar -xzf gents-aarch64-apple-darwin.tar.gz
+sudo install gents-aarch64-apple-darwin/gents /usr/local/bin/gents
 
-defra-agent init
-defra-agent server
-defra-agent codex
+gents init
+gents server
+gents codex
 ```
 
 The rest of this document walks those commands, then the permission
@@ -49,14 +49,14 @@ Check it:
 curl -s http://127.0.0.1:8080/v1/models | head -c 200
 ```
 
-## 2. Install defra-agent
+## 2. Install gents
 
 Download the signed, notarized binary from the release:
 
 ```bash
-gh release download v0.4.0 --repo sourcenetwork/defra-agent -p 'defra-agent-aarch64-apple-darwin.tar.gz'
-tar -xzf defra-agent-aarch64-apple-darwin.tar.gz
-sudo install defra-agent-aarch64-apple-darwin/defra-agent /usr/local/bin/defra-agent
+gh release download v0.4.0 --repo source-inc/gents -p 'gents-aarch64-apple-darwin.tar.gz'
+tar -xzf gents-aarch64-apple-darwin.tar.gz
+sudo install gents-aarch64-apple-darwin/gents /usr/local/bin/gents
 ```
 
 To verify the download, fetch the matching `.sha256` asset and run
@@ -68,18 +68,18 @@ Building from source instead (needs a Rust toolchain and a checkout):
 cargo install --profile dev-install --locked --path crates/gents-cli
 ```
 
-That installs the `defra-agent` binary into `~/.cargo/bin`.
+That installs the `gents` binary into `~/.cargo/bin`.
 For a headless build without the embedded Codex TUI, add
 `--no-default-features`; the server shim and `chat` command still build.
 
 ## 3. Initialize the agent
 
 ```bash
-defra-agent init
+gents init
 ```
 
 This is idempotent. It provisions a safe home directory under
-`~/.defra-agent`: a DID-keyed principal, a backend document pointing at
+`~/.gents`: a DID-keyed principal, a backend document pointing at
 `http://127.0.0.1:8080/v1`, a default behavior, and a **read-only** tool
 selection — file and bash tools that can inspect but not change anything.
 
@@ -92,8 +92,8 @@ JSON; the fields you will use are `agent_did` and `next_steps`.
 Two presets, both explicit opt-ins:
 
 ```bash
-defra-agent init --write   # sandboxed writes, scoped to the tool root
-defra-agent init --yolo    # unrestricted: full host access as your user
+gents init --write   # sandboxed writes, scoped to the tool root
+gents init --yolo    # unrestricted: full host access as your user
 ```
 
 What they actually guarantee is in [Permission presets](#permission-presets)
@@ -104,7 +104,7 @@ below.
 In terminal 1:
 
 ```bash
-defra-agent server
+gents server
 ```
 
 This starts the embedded DefraDB node, the GraphQL API, P2P transport for
@@ -117,10 +117,10 @@ only). It prints readiness JSON and stays in the foreground; stop it with
 In terminal 2:
 
 ```bash
-defra-agent codex
+gents codex
 ```
 
-This opens the Codex terminal UI — running embedded inside `defra-agent`, so
+This opens the Codex terminal UI — running embedded inside `gents`, so
 there is nothing to install or configure — connected to your local runtime.
 Ask it something about the directory you initialized in:
 
@@ -134,12 +134,12 @@ Codex-side approvals and sandboxing are intentionally bypassed: every tool
 call executes inside the Defra runtime, where the preset you chose at `init`
 is enforced. The TUI is a window, not a boundary.
 
-Prefer a plain REPL, or scripting a turn? `defra-agent chat` talks to the
+Prefer a plain REPL, or scripting a turn? `gents chat` talks to the
 same runtime without the Codex UI:
 
 ```bash
-defra-agent chat
-defra-agent chat "Introduce yourself in two short sentences."
+gents chat
+gents chat "Introduce yourself in two short sentences."
 ```
 
 ## Permission presets
@@ -164,19 +164,19 @@ defra-agent chat "Introduce yourself in two short sentences."
 
 Identity is the other half of the boundary: every action the runtime takes is
 attributed to the agent's DID, and every tool call is persisted as a document
-you can audit afterwards (`defra-agent response show <request-id>`, or
-`defra-agent trace timeline`).
+you can audit afterwards (`gents response show <request-id>`, or
+`gents trace timeline`).
 
 ## Other backends
 
 `init` speaks to anything OpenAI-compatible:
 
 ```bash
-defra-agent init --backend-preset ollama --model-name MODEL
-defra-agent init --backend-preset openai --model-name MODEL
-defra-agent init --backend-preset openrouter --model-name MODEL
-defra-agent init --backend-preset chatgpt-codex --model-name MODEL   # uses your ~/.codex OAuth
-defra-agent init --inference-url http://HOST:PORT/v1 --model-name MODEL
+gents init --backend-preset ollama --model-name MODEL
+gents init --backend-preset openai --model-name MODEL
+gents init --backend-preset openrouter --model-name MODEL
+gents init --backend-preset chatgpt-codex --model-name MODEL   # uses your ~/.codex OAuth
+gents init --inference-url http://HOST:PORT/v1 --model-name MODEL
 ```
 
 If the endpoint needs auth, pass `--api-key` or `--api-key-env-var NAME`.
@@ -187,37 +187,37 @@ OpenAI and OpenRouter presets default to their standard env vars
 
 **Re-running init.** `init` is idempotent and re-running it with a different
 preset (`--write`, `--yolo`) updates the tool documents in place. It does not
-clear persisted runtime connectivity state; `defra-agent reset` does, and
-`defra-agent init --reset` combines them. `--dangerously-overwrite` wipes the
+clear persisted runtime connectivity state; `gents reset` does, and
+`gents init --reset` combines them. `--dangerously-overwrite` wipes the
 home entirely.
 
 **Isolated homes.** Pass `--home /some/path` to `init`, `server`, `chat`, and
-`codex`-adjacent commands to keep a demo out of `~/.defra-agent`.
+`codex`-adjacent commands to keep a demo out of `~/.gents`.
 
 **The shim port is taken.** Something else is on 9292; either stop it or run
-`defra-agent server --codex-shim-port PORT` and
-`defra-agent codex --remote ws://127.0.0.1:PORT/`.
+`gents server --codex-shim-port PORT` and
+`gents codex --remote ws://127.0.0.1:PORT/`.
 
 **No Codex endpoint.** If the server was started with `--no-codex-shim`,
-`defra-agent codex` will tell you nothing is listening. Restart the server
+`gents codex` will tell you nothing is listening. Restart the server
 without the flag.
 
 **Inference is down.** The server starts degraded if the backend is
-unreachable; `defra-agent status` and `GET /healthz` show backend health.
+unreachable; `gents status` and `GET /healthz` show backend health.
 Make sure `llama-server` is still running and serving `/v1` on port 8080.
 
 **Single requests without a UI:**
 
 ```bash
 export GRAPHQL=http://127.0.0.1:9191/api/v0/graphql
-defra-agent request submit --graphql "$GRAPHQL" --agent-did "did:key:..." \
+gents request submit --graphql "$GRAPHQL" --agent-did "did:key:..." \
   --content "Introduce yourself in two short sentences."
-defra-agent response wait --graphql "$GRAPHQL" --request-id "<request-id>"
+gents response wait --graphql "$GRAPHQL" --request-id "<request-id>"
 ```
 
 # Part 2 — Pair a second node
 
-Part 1 is one runtime talking to itself. The reason defra-agent is built on
+Part 1 is one runtime talking to itself. The reason gents is built on
 DefraDB is that the *same documents* can live on more than one node and stay
 in sync over a peer-to-peer link — no shared server in the middle. Part 2
 pairs a second runtime to the first and replicates a chat between them.
@@ -235,7 +235,7 @@ gossip replication.
 Straight from the binary, run the interactive demo and type `pair` in its shell:
 
 ```bash
-defra-agent demo
+gents demo
 ```
 
 `pair` brings up a second isolated node (the **Worker**), creates an
@@ -270,14 +270,14 @@ Keep Part 1's runtime running. In a fresh home, start a second one. Both bind
 P2P to loopback for the demo:
 
 ```bash
-defra-agent init  --home /tmp/coding --agent-name coding \
+gents init  --home /tmp/coding --agent-name coding \
   --inference-url http://127.0.0.1:8080/v1 --model-name "$MODEL"
-defra-agent server --home /tmp/coding --no-codex-shim \
+gents server --home /tmp/coding --no-codex-shim \
   --p2p-bind-addr 127.0.0.1 --p2p-port 0 \
   --p2p-relay-mode disabled --p2p-discovery disabled
 ```
 
-Use Part 1's home (say `~/.defra-agent`) as the first node, "Amy", and
+Use Part 1's home (say `~/.gents`) as the first node, "Amy", and
 `/tmp/coding` as the second, "Coding".
 
 ## 2. Create the network and grant membership
@@ -291,15 +291,15 @@ On Amy:
 
 ```bash
 CODING_DID=$(jq -r .agent_did /tmp/coding/init.json)
-defra-agent p2p network create --name "Two Node Demo"
-defra-agent p2p network grant "$CODING_DID"
+gents p2p network create --name "Two Node Demo"
+gents p2p network grant "$CODING_DID"
 ```
 
 Then mint a signed network-control invite for Coding:
 
 ```bash
 AMY_INVITE=$(
-  defra-agent p2p pairings invite \
+  gents p2p pairings invite \
     --member-did "$CODING_DID" \
     --template network-control \
     | jq -r .token
@@ -309,7 +309,7 @@ AMY_INVITE=$(
 On Coding, accept it:
 
 ```bash
-defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE"
+gents p2p pairings join --home /tmp/coding "$AMY_INVITE"
 ```
 
 This writes Coding's control-plane `PeerPairingDesired` row for Amy, imports
@@ -322,7 +322,7 @@ The network-control edge moves membership and endpoint documents. Conversation
 traffic lives in a separate operator-owned `DataPlanePairingDesired` row so it
 can be filtered by local `agent_did` and gated by the same membership decision.
 
-The `defra-agent demo` `pair` command writes the two data-plane rows for you (an
+The `gents demo` `pair` command writes the two data-plane rows for you (an
 `upsert_DataPlanePairingDesired` mutation in each direction, carrying the peer
 id, local `agent_did`, the conversation collections, and the replicator
 address). A dedicated CLI sugar command for data-plane rows is the next
@@ -333,8 +333,8 @@ operator-ergonomics step.
 You wrote documents; you installed nothing. Watch the reconciler converge:
 
 ```bash
-defra-agent p2p pairings list --output table
-defra-agent p2p pairings list --home /tmp/coding --output table
+gents p2p pairings list --output table
+gents p2p pairings list --home /tmp/coding --output table
 ```
 
 ```
@@ -365,7 +365,7 @@ it does not require the model backend to answer.
 
 ```bash
 REQ=$(
-  defra-agent request submit \
+  gents request submit \
     --graphql http://127.0.0.1:19392/api/v0/graphql \
     --agent-did "$CODING_DID" \
     --content "two-node p2p demo ping from Coding" \
@@ -373,7 +373,7 @@ REQ=$(
     | jq -r .request_id
 )
 
-defra-agent request show \
+gents request show \
   --graphql http://127.0.0.1:19391/api/v0/graphql \
   "$REQ" --output json | jq .request
 ```
@@ -385,7 +385,7 @@ Delete the desired row. The runtime sees the row gone, reads its
 pairing, then deletes the applied record:
 
 ```bash
-defra-agent p2p pairings rm --home /tmp/coding --peer "$AMY_PEER_ID"
+gents p2p pairings rm --home /tmp/coding --peer "$AMY_PEER_ID"
 ```
 
 Any wiring you had added by hand survives — the reconciler never owned it.
@@ -427,8 +427,8 @@ The fleet admin creates one signed network root, then grants each joining DID.
 On Amy:
 
 ```bash
-defra-agent p2p network create --name "Fleet One"
-defra-agent p2p network grant "$CODING_DID"
+gents p2p network create --name "Fleet One"
+gents p2p network grant "$CODING_DID"
 ```
 
 `network create` writes the singleton `AgentNetwork` document and the admin's
@@ -442,13 +442,13 @@ enrollment:
 
 ```bash
 AMY_INVITE=$(
-  defra-agent p2p pairings invite \
+  gents p2p pairings invite \
     --member-did "$CODING_DID" \
     --template network-control \
     | jq -r .token
 )
 
-defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE"
+gents p2p pairings join --home /tmp/coding "$AMY_INVITE"
 ```
 
 The token embeds the signed network root and the signed membership grant.
@@ -463,7 +463,7 @@ answer "which application documents should move?" For chat and subagent demos,
 write `DataPlanePairingDesired` rows for the exact pair of agents you want to
 link.
 
-The interactive `defra-agent demo` command does this today: its `pair` step
+The interactive `gents demo` command does this today: its `pair` step
 writes both conversation data-plane rows and waits until both reconcilers
 install push replicators, and `delegate` then runs a cross-node subagent whose
 child request replicates back — the same edge, driven from the binary.
@@ -489,7 +489,7 @@ document.
 
 Everything above is documents. `init` writes config documents (principal,
 backend, behavior, tool selection) through the same upsert code as
-`defra-agent config ... set`. `codex` and `chat` create request documents;
+`gents config ... set`. `codex` and `chat` create request documents;
 the runtime claims them, drives the proven request lifecycle, executes tool
 calls inside the preset's boundary, and persists every observable step. Bash
 results come back with a `defra_exec:` JSON metadata envelope (command, exit
@@ -507,24 +507,24 @@ in [crates/gents-cli/tests](../crates/gents-cli/tests). Gate with
 the full package suites:
 
 ```bash
-cargo test -p defra-agent
-cargo test -p defra-agent-cli
+cargo test -p gents
+cargo test -p gents-cli
 ```
 
 There is also an ignored live smoke test against a real inference endpoint:
 
 ```bash
-export DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT=http://127.0.0.1:8080/v1
-export DEFRA_AGENT_CLI_E2E_MODEL_NAME=google/gemma-4-12B-it-qat-q4_0-gguf
+export GENTS_CLI_E2E_MODEL_ENDPOINT=http://127.0.0.1:8080/v1
+export GENTS_CLI_E2E_MODEL_NAME=google/gemma-4-12B-it-qat-q4_0-gguf
 # Optional for hosted OpenAI-compatible endpoints:
-# export DEFRA_AGENT_CLI_E2E_API_KEY="$OPENAI_API_KEY"
+# export GENTS_CLI_E2E_API_KEY="$OPENAI_API_KEY"
 
-cargo test -p defra-agent-cli \
+cargo test -p gents-cli \
   --test cli_live \
   cli_flow_runs_real_tool_loop_against_live_endpoint \
   -- --ignored --nocapture --test-threads=1
 
-cargo test -p defra-agent-cli \
+cargo test -p gents-cli \
   --test cli_codex_shim \
   codex_shim_live_protocol_uses_real_backend \
   -- --ignored --nocapture --test-threads=1

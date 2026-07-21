@@ -1,6 +1,6 @@
 # macOS release signing
 
-Deployed macOS steward agents must be installed from the signed `defra-agent`
+Deployed macOS steward agents must be installed from the signed `gents`
 release artifact produced by `.github/workflows/release-macos.yml`.
 
 ## Why ad-hoc signing is not enough
@@ -19,7 +19,7 @@ CI release artifacts are signed with a stable certificate identity and the
 explicit code identifier:
 
 ```text
-org.sourcenetwork.defra-agent
+com.source-inc.gents.cli
 ```
 
 Future releases signed with the same certificate and identifier share a stable
@@ -34,18 +34,18 @@ The macOS release workflow:
 - caps Cargo build fan-out with `CARGO_BUILD_JOBS` and uses disk-backed
   `sccache` to reduce repeated Rust compilation on memory-constrained Studio
   runners;
-- builds `defra-agent-cli` in release mode, producing `target/release/defra-agent`;
+- builds `gents-cli` in release mode, producing `target/release/gents`;
 - unlocks the runner's persistent signing keychain;
 - makes that keychain visible to non-interactive `codesign` jobs;
 - smoke-signs a test binary before the Rust build starts;
-- signs with `--identifier org.sourcenetwork.defra-agent`;
+- signs with `--identifier com.source-inc.gents.cli`;
 - submits the signed CLI to Apple's notary service;
 - verifies with `codesign --verify --strict --verbose=2`;
 - prints the designated requirement with `codesign -d -r-`;
 - prints `spctl --assess --type execute` diagnostics;
-- runs `defra-agent version` so a signed-but-not-launchable binary fails before
+- runs `gents version` so a signed-but-not-launchable binary fails before
   packaging;
-- packages `defra-agent-aarch64-apple-darwin.tar.gz`;
+- packages `gents-aarch64-apple-darwin.tar.gz`;
 - writes a `.sha256` checksum file;
 - uploads both files as workflow artifacts;
 - attaches both files to the GitHub Release for tags matching `v*`.
@@ -94,7 +94,7 @@ The workflow also honors optional repository variables:
 CARGO_BUILD_JOBS=4
 SCCACHE_CACHE_SIZE=60G
 SCCACHE_DIR=/Users/admin/.cache/sccache
-MACOS_CODESIGN_KEYCHAIN_PATH=/Users/admin/Library/Keychains/defra-agent-signing.keychain-db
+MACOS_CODESIGN_KEYCHAIN_PATH=/Users/admin/Library/Keychains/gents-signing.keychain-db
 MACOS_CODESIGN_TIMESTAMP_MODE=auto|enabled
 ```
 
@@ -104,7 +104,7 @@ disk-backed cache under `/Users/admin/.cache/sccache`; do not point it at a
 memory-backed volume.
 
 `MACOS_CODESIGN_KEYCHAIN_PATH` defaults to
-`$HOME/Library/Keychains/defra-agent-signing.keychain-db`.
+`$HOME/Library/Keychains/gents-signing.keychain-db`.
 
 Signed release artifacts must use a timestamped Developer ID signature because
 the workflow notarizes them. The default `auto` mode uses `--timestamp` and
@@ -130,7 +130,7 @@ persistent keychain that CI can unlock over SSH and from the GitHub Actions
 runner session. The release workflow defaults to:
 
 ```text
-/Users/admin/Library/Keychains/defra-agent-signing.keychain-db
+/Users/admin/Library/Keychains/gents-signing.keychain-db
 ```
 
 The current release identity is a Developer ID Application identity. The workflow
@@ -139,14 +139,14 @@ puts the keychain first in the active search list, smoke-signs a copy of
 `/bin/echo`, and refuses to continue if the designated requirement is an ad-hoc
 `cdhash`.
 
-The defra-agent Studio runner is launched by
-`/Library/LaunchDaemons/com.github.actions.runner.defra-agent.plist`. That
+The gents Studio runner is launched by
+`/Library/LaunchDaemons/com.github.actions.runner.gents.plist`. That
 LaunchDaemon must set `SessionCreate=true`; otherwise the job can update the
 user keychain search list while the default keychain domain seen by `codesign`
 still contains only the System keychain. Use:
 
 ```sh
-scripts/enable-defra-agent-runner-session.sh
+scripts/enable-gents-runner-session.sh
 ```
 
 To create or rotate the identity on a Studio:
@@ -181,13 +181,13 @@ release artifacts must be signed by the native Studio keychain path.
 After downloading the workflow or release artifacts:
 
 ```sh
-shasum -a 256 -c defra-agent-aarch64-apple-darwin.tar.gz.sha256
-tar -xzf defra-agent-aarch64-apple-darwin.tar.gz
-codesign --verify --strict --verbose=2 defra-agent-aarch64-apple-darwin/defra-agent
-codesign -d -r- defra-agent-aarch64-apple-darwin/defra-agent
-codesign -d -vvv defra-agent-aarch64-apple-darwin/defra-agent
-spctl --assess --type execute --verbose=4 defra-agent-aarch64-apple-darwin/defra-agent || true
-./defra-agent-aarch64-apple-darwin/defra-agent version
+shasum -a 256 -c gents-aarch64-apple-darwin.tar.gz.sha256
+tar -xzf gents-aarch64-apple-darwin.tar.gz
+codesign --verify --strict --verbose=2 gents-aarch64-apple-darwin/gents
+codesign -d -r- gents-aarch64-apple-darwin/gents
+codesign -d -vvv gents-aarch64-apple-darwin/gents
+spctl --assess --type execute --verbose=4 gents-aarch64-apple-darwin/gents || true
+./gents-aarch64-apple-darwin/gents version
 ```
 
 ## Rollout note

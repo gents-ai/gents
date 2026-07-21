@@ -11,21 +11,21 @@ Build and install the desktop binaries:
 scripts/install-local.sh
 ```
 
-Pair and launch (with a `defra-agent server` already running):
+Pair and launch (with a `gents server` already running):
 
 ```bash
-defra-agent-desktop init
-defra-agent-desktop
+gents-desktop init
+gents-desktop
 ```
 
-`defra-agent-desktop init` discovers a runtime and saves it in the desktop
+`gents-desktop init` discovers a runtime and saves it in the desktop
 peer directory. To seed a remote or deployed runtime from its operations API,
 pass its GraphQL or status endpoint:
 
 ```bash
-defra-agent-desktop init --graphql http://agent-host:9191/api/v0/graphql
+gents-desktop init --graphql http://agent-host:9191/api/v0/graphql
 # or:
-defra-agent-desktop init --status-endpoint http://agent-host:9191/status
+gents-desktop init --status-endpoint http://agent-host:9191/status
 ```
 
 The discovery URL is used to read connection metadata; the saved deployment
@@ -36,13 +36,13 @@ to show `replication: subscriptions armed` before sending prompts you expect
 to render in the UI.
 
 If you isolated the agent home, pass the same path as
-`--agent-home /some/path` to `defra-agent-desktop init`.
+`--agent-home /some/path` to `gents-desktop init`.
 
 For an isolated desktop data directory — useful for demos and QA runs — set
-`DEFRA_AGENT_DESKTOP_HOME` before launching the Tauri app:
+`GENTS_DESKTOP_HOME` before launching the Tauri app:
 
 ```bash
-DEFRA_AGENT_DESKTOP_HOME=/tmp/defra-agent-desktop-demo/desktop \
+GENTS_DESKTOP_HOME=/tmp/gents-desktop-demo/desktop \
   npm --prefix apps/desktop-tauri run tauri -- dev
 ```
 
@@ -58,7 +58,7 @@ with relay and discovery disabled.
 To pin the local P2P socket:
 
 ```bash
-defra-agent server \
+gents server \
   --p2p-bind-addr 127.0.0.1 \
   --p2p-port 4017 \
   --p2p-relay-mode disabled \
@@ -67,12 +67,12 @@ defra-agent server \
 
 ## Connected runtime bring-up
 
-The interactive `defra-agent demo` command is the fastest path to a connected
+The interactive `gents demo` command is the fastest path to a connected
 fleet. It ships in the binary, boots a curated single node, and its `demo>`
 shell escalates to the full topology:
 
 ```bash
-defra-agent demo
+gents demo
 ```
 
 - `pair` brings up a 2nd node (the **Worker**), creates a signed
@@ -84,7 +84,7 @@ defra-agent demo
   rejected) and `subagent_allow_cross_deployment` on both runtimes — a gate that
   is off by default and appropriate only for a trusted local loopback fleet.
 - `desktop` seeds an isolated desktop peer directory with both runtimes and
-  launches the native app (`DEFRA_AGENT_DESKTOP_HOME` set, remote re-pair off),
+  launches the native app (`GENTS_DESKTOP_HOME` set, remote re-pair off),
   so the **Fleet Dashboard** shows both deployments and Chat mirrors the CLI.
 
 The demo needs a real OpenAI-compatible backend — no mock. Point it at a local
@@ -94,20 +94,20 @@ inference server at `http://127.0.0.1:8080/v1`:
 llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
 ```
 
-or a hosted preset (`defra-agent demo --desktop --backend-preset openai --model gpt-5.4-mini`,
+or a hosted preset (`gents demo --desktop --backend-preset openai --model gpt-5.4-mini`,
 with `OPENAI_API_KEY` in the environment). The first run offers an interactive
 backend picker and remembers the choice.
 
 To bring up two runtimes manually and enroll Coding into Amy's signed network:
 
 ```bash
-defra-agent init --home /tmp/amy --agent-name amy
-defra-agent init --home /tmp/coding --agent-name coding
+gents init --home /tmp/amy --agent-name amy
+gents init --home /tmp/coding --agent-name coding
 
-defra-agent server --home /tmp/amy --no-codex-shim \
+gents server --home /tmp/amy --no-codex-shim \
   --p2p-bind-addr 127.0.0.1 --p2p-port 4017 \
   --p2p-relay-mode disabled --p2p-discovery disabled
-defra-agent server --home /tmp/coding --no-codex-shim \
+gents server --home /tmp/coding --no-codex-shim \
   --p2p-bind-addr 127.0.0.1 --p2p-port 4018 \
   --p2p-relay-mode disabled --p2p-discovery disabled
 ```
@@ -118,18 +118,18 @@ signed `network-control` invite:
 ```bash
 CODING_DID=$(jq -r .agent_did /tmp/coding/init.json)
 
-defra-agent p2p network create --home /tmp/amy --name "Two Node Demo"
-defra-agent p2p network grant --home /tmp/amy "$CODING_DID"
+gents p2p network create --home /tmp/amy --name "Two Node Demo"
+gents p2p network grant --home /tmp/amy "$CODING_DID"
 
 AMY_INVITE=$(
-  defra-agent p2p pairings invite \
+  gents p2p pairings invite \
     --home /tmp/amy \
     --member-did "$CODING_DID" \
     --template network-control \
     | jq -r .token
 )
 
-defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE"
+gents p2p pairings join --home /tmp/coding "$AMY_INVITE"
 ```
 
 The join wires the narrow control-plane substrate only. To move chat,
@@ -140,10 +140,10 @@ replication by submitting a no-wait request on Coding and reading it from Amy.
 Inspect desired pairing rows and live connectivity from either runtime:
 
 ```bash
-defra-agent p2p pairings list --home /tmp/amy --output table
-defra-agent p2p status --home /tmp/amy
-defra-agent p2p peers --home /tmp/coding
-defra-agent status --home /tmp/coding
+gents p2p pairings list --home /tmp/amy --output table
+gents p2p status --home /tmp/amy
+gents p2p peers --home /tmp/coding
+gents status --home /tmp/coding
 ```
 
 The most useful fields for bring-up are `p2p_transport`, `p2p_peer_id`,
@@ -167,7 +167,7 @@ per-peer scoping policy (agent_did equality or unscoped), and a delivery mode
 `pairings set` instead of hand-authoring collection lists.
 
 ```bash
-defra-agent p2p templates list          # print the built-in catalog
+gents p2p templates list          # print the built-in catalog
 ```
 
 Built-in templates:
@@ -185,12 +185,12 @@ application data-plane rows:
 
 ```bash
 AMY_INVITE=$(
-  defra-agent p2p pairings invite \
+  gents p2p pairings invite \
     --member-did "$CODING_DID" \
     --template network-control \
     | jq -r .token
 )
-defra-agent p2p pairings join --home /tmp/coding "$AMY_INVITE"
+gents p2p pairings join --home /tmp/coding "$AMY_INVITE"
 # join reads the template from the token; pass --template only to override
 ```
 
@@ -202,7 +202,7 @@ per-collection field-equality predicates (repeatable). These are parsed into
 DefraDB filtered-replication endpoint is pending defradb.rs #1033.
 
 ```bash
-defra-agent p2p admin replicators add \
+gents p2p admin replicators add \
   --home /tmp/coding \
   --peer iroh://peer-id \
   --collection AgentRequest \
@@ -224,16 +224,16 @@ There are two related network surfaces:
   pairing diagnostics.
 
 ```bash
-defra-agent p2p network create --home /tmp/amy --name "Fleet One"
-defra-agent p2p network grant --home /tmp/amy "$CODING_DID"
+gents p2p network create --home /tmp/amy --name "Fleet One"
+gents p2p network grant --home /tmp/amy "$CODING_DID"
 
-defra-agent p2p network register --home /tmp/amy --template conversation   # self-register in discovery
-defra-agent p2p network list --home /tmp/coding --output table              # discovered members + liveness + paired/auto-pair
-defra-agent p2p network rm --home /tmp/amy                                  # deregister this node's row
+gents p2p network register --home /tmp/amy --template conversation   # self-register in discovery
+gents p2p network list --home /tmp/coding --output table              # discovered members + liveness + paired/auto-pair
+gents p2p network rm --home /tmp/amy                                  # deregister this node's row
 ```
 
 Auto-pairing of discovered members is **off by default**. Set the
-`DEFRA_AGENT_DISCOVERY_AUTO_PAIR=1` environment variable on `server` to have
+`GENTS_DISCOVERY_AUTO_PAIR=1` environment variable on `server` to have
 the discovery reconciler materialize registry-owned `PeerPairingDesired` rows
 (`source: "registry"`) for live members; with it unset, `network list` shows
 discovered peers and you pair explicitly. Registry-owned rows are retracted
@@ -250,8 +250,8 @@ authentication. To drive a runtime from another machine, bind it to a trusted
 private or Tailscale IP and point the client at it:
 
 ```bash
-defra-agent server --codex-shim-bind-addr <trusted-private-or-tailscale-ip>
-defra-agent codex --remote ws://<that-host>:9292/
+gents server --codex-shim-bind-addr <trusted-private-or-tailscale-ip>
+gents codex --remote ws://<that-host>:9292/
 ```
 
 Never bind it to an unspecified address; the server refuses `0.0.0.0`.
@@ -271,7 +271,7 @@ surface:
   `/subagents/dispatches`, `/subagents/tree` — runtime introspection
 
 Connectivity fields are also persisted to `runtime.json` under the agent home
-(usually `~/.defra-agent/runtime.json`). `defra-agent reset` removes it.
+(usually `~/.gents/runtime.json`). `gents reset` removes it.
 
 ## Live updates to tool selections
 
@@ -283,13 +283,13 @@ export GRAPHQL=http://127.0.0.1:9191/api/v0/graphql
 export AGENT_DID="did:key:..."
 export TOOL_SELECTION_ID="${AGENT_DID}:default-tools"
 
-defra-agent config tools set \
+gents config tools set \
   --graphql "$GRAPHQL" \
   --agent-did "$AGENT_DID" \
   --selection-id "$TOOL_SELECTION_ID" \
   --enable-file-tools
 
-defra-agent config behavior set \
+gents config behavior set \
   --graphql "$GRAPHQL" \
   --agent-did "$AGENT_DID" \
   --tool-selection-id "$TOOL_SELECTION_ID" \
