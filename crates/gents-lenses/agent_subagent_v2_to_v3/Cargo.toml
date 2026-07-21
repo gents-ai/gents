@@ -2,6 +2,7 @@
 name = "agent-subagent-v2-to-v3-lens"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 [lib]
 crate-type = ["cdylib"]

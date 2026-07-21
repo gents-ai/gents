@@ -99,6 +99,8 @@ dist-cli: release-cli
 	@mkdir -p "$(DIST_DIR)/$(RELEASE_ARTIFACT)"
 	cp "$(RELEASE_BIN)" "$(DIST_DIR)/$(RELEASE_ARTIFACT)/gents"
 	chmod 0755 "$(DIST_DIR)/$(RELEASE_ARTIFACT)/gents"
+	cp LICENSE "$(DIST_DIR)/$(RELEASE_ARTIFACT)/LICENSE"
+	chmod 0644 "$(DIST_DIR)/$(RELEASE_ARTIFACT)/LICENSE"
 	tar -C "$(DIST_DIR)" -czf "$(DIST_DIR)/$(RELEASE_ARTIFACT).tar.gz" "$(RELEASE_ARTIFACT)"
 	cd "$(DIST_DIR)" && sha256sum "$(RELEASE_ARTIFACT).tar.gz" > "$(RELEASE_ARTIFACT).tar.gz.sha256"
 	@rm -rf "$(DIST_DIR)/$(RELEASE_ARTIFACT)"

@@ -84,4 +84,9 @@ The development flow is foundation-first: Lean model → conformance tests → i
 
 ## Status
 
-Closed source during incubation. Extracted from a larger system (Amygdala) and intentionally narrow: the runtime and its formal specification.
+Pre-1.0 and under active development. Extracted from a larger system
+(Amygdala) and intentionally narrow: the runtime and its formal specification.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE).

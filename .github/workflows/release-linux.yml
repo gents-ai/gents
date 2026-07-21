@@ -232,10 +232,12 @@ jobs:
             sha256sum -c "$(basename "${CHECKSUM_FILE}")"
           )
 
-          archive_files="$(tar -tzf "${TARBALL}" | sed '/\/$/d')"
+          archive_files="$(tar -tzf "${TARBALL}" | sed '/\/$/d' | LC_ALL=C sort)"
           expected_binary="${ARTIFACT_BASENAME}/gents"
-          if [[ "${archive_files}" != "${expected_binary}" ]]; then
-            echo "::error::Release archive must contain exactly ${expected_binary}; found:"
+          expected_license="${ARTIFACT_BASENAME}/LICENSE"
+          expected_files="$(printf '%s\n' "${expected_license}" "${expected_binary}")"
+          if [[ "${archive_files}" != "${expected_files}" ]]; then
+            echo "::error::Release archive must contain exactly ${expected_license} and ${expected_binary}; found:"
             printf '%s\n' "${archive_files}"
             exit 1
           fi
@@ -244,8 +246,13 @@ jobs:
           trap 'rm -rf "${verify_root}"' EXIT
           tar -xzf "${TARBALL}" -C "${verify_root}"
           packaged_binary="${verify_root}/${expected_binary}"
+          packaged_license="${verify_root}/${expected_license}"
           if [[ ! -x "${packaged_binary}" ]]; then
             echo "::error::Packaged Gents binary is missing or not executable."
+            exit 1
+          fi
+          if ! cmp -s LICENSE "${packaged_license}"; then
+            echo "::error::Packaged Apache-2.0 LICENSE is missing or differs from the repository LICENSE."
             exit 1
           fi
 

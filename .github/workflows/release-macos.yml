@@ -541,10 +541,14 @@ jobs:
           mkdir -p "${package_root}" "${symbols_parent}" "${dist_dir}"
           cp target/release/gents "${package_root}/gents"
           chmod 0755 "${package_root}/gents"
+          cp LICENSE "${package_root}/LICENSE"
+          chmod 0644 "${package_root}/LICENSE"
           cp -R target/release/gents.dSYM "${symbols_parent}/${dsym_bundle_basename}"
+          cp LICENSE "${symbols_parent}/LICENSE"
+          chmod 0644 "${symbols_parent}/LICENSE"
 
           tar -C "${package_parent}" -czf "${tarball}" "${artifact_basename}"
-          tar -C "${symbols_parent}" -czf "${dsym_tarball}" "${dsym_bundle_basename}"
+          tar -C "${symbols_parent}" -czf "${dsym_tarball}" "${dsym_bundle_basename}" LICENSE
           (
             cd "${dist_dir}"
             shasum -a 256 "${artifact_basename}.tar.gz" > "${artifact_basename}.tar.gz.sha256"
@@ -575,16 +579,23 @@ jobs:
             shasum -a 256 -c "$(basename "${DSYM_CHECKSUM_FILE}")"
           )
 
-          archive_files="$(tar -tzf "${TARBALL}" | sed '/\/$/d')"
+          archive_files="$(tar -tzf "${TARBALL}" | sed '/\/$/d' | LC_ALL=C sort)"
           expected_binary="${ARTIFACT_BASENAME}/gents"
-          if [[ "${archive_files}" != "${expected_binary}" ]]; then
-            echo "::error::Release archive must contain exactly ${expected_binary}; found:"
+          expected_license="${ARTIFACT_BASENAME}/LICENSE"
+          expected_files="$(printf '%s\n' "${expected_license}" "${expected_binary}")"
+          if [[ "${archive_files}" != "${expected_files}" ]]; then
+            echo "::error::Release archive must contain exactly ${expected_license} and ${expected_binary}; found:"
             printf '%s\n' "${archive_files}"
             exit 1
           fi
-          if tar -tzf "${DSYM_TARBALL}" | grep -Ev '^gents\.dSYM(/|$)' >/dev/null; then
-            echo "::error::Symbol archive contains an entry outside gents.dSYM."
-            tar -tzf "${DSYM_TARBALL}"
+          dsym_archive_entries="$(tar -tzf "${DSYM_TARBALL}")"
+          if grep -Ev '^(gents\.dSYM(/|$)|LICENSE$)' <<< "${dsym_archive_entries}" >/dev/null; then
+            echo "::error::Symbol archive contains an entry outside gents.dSYM and LICENSE."
+            printf '%s\n' "${dsym_archive_entries}"
+            exit 1
+          fi
+          if ! grep -Fx 'LICENSE' <<< "${dsym_archive_entries}" >/dev/null; then
+            echo "::error::Symbol archive is missing the Apache-2.0 LICENSE."
             exit 1
           fi
 
@@ -597,10 +608,16 @@ jobs:
           tar -xzf "${DSYM_TARBALL}" -C "${symbols_root}"
 
           packaged_binary="${binary_root}/${expected_binary}"
+          packaged_license="${binary_root}/${expected_license}"
           packaged_dsym="${symbols_root}/gents.dSYM"
+          packaged_dsym_license="${symbols_root}/LICENSE"
           packaged_dwarf="${packaged_dsym}/Contents/Resources/DWARF/gents"
           if [[ ! -x "${packaged_binary}" || ! -s "${packaged_dwarf}" ]]; then
             echo "::error::Packaged Gents binary or gents.dSYM DWARF payload is missing."
+            exit 1
+          fi
+          if ! cmp -s LICENSE "${packaged_license}" || ! cmp -s LICENSE "${packaged_dsym_license}"; then
+            echo "::error::Packaged Apache-2.0 LICENSE is missing or differs from the repository LICENSE."
             exit 1
           fi
 
