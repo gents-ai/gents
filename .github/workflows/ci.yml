@@ -74,7 +74,9 @@ jobs:
     needs: [rename-guard, lean-proofs]
     if: ${{ always() }}
     runs-on: [self-hosted, macOS, ARM64, studio]
-    timeout-minutes: 90
+    # A cold self-hosted checkout must compile and link every Rust test target;
+    # repository/path changes invalidate the disk-backed build cache.
+    timeout-minutes: 180
     steps:
       - name: Require rename guard
         if: ${{ needs.rename-guard.result != 'success' }}
