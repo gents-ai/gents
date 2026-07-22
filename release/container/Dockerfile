@@ -26,7 +26,8 @@ RUN apt-get update \
 COPY --chmod=0755 release/container/bin/gents-${TARGETARCH} /usr/local/bin/gents
 COPY release/container/LICENSE /usr/share/licenses/gents/LICENSE
 
-RUN version_output="$(/usr/local/bin/gents version)" \
+RUN unset OTEL_EXPORTER_OTLP_ENDPOINT OTEL_EXPORTER_OTLP_TRACES_ENDPOINT \
+    && version_output="$(/usr/local/bin/gents version)" \
     && printf '%s\n' "${version_output}" \
     && case "${version_output}" in \
         "gents ${GENTS_VERSION} ("*) ;; \
