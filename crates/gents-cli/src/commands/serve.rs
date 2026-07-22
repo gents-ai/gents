@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use axum::http::Uri;
 use gents::defra_node::EmbeddedNode;
 use gents::{
     ensure_runtime_schemas, load_macos_keychain_identity, load_macos_secure_enclave_identity,
@@ -56,40 +57,46 @@ fn announce_codex_shim(
     bound: &crate::commands::codex_shim::BoundCodexShim,
     args: &ServeArgs,
 ) -> Value {
-    let codex_shim_url = format!(
+    let bound_url = format!(
         "ws://{}:{}/",
         display_shim_host(bound.addr().ip()),
         bound.addr().port()
     );
+    let codex_shim_url = args.codex_shim_public_url.as_deref().unwrap_or(&bound_url);
+    let launch_command =
+        codex_shim_launch_command(codex_shim_url, args.codex_shim_auth_token_env.as_deref());
     eprintln!(
-        "Codex shim is running on {codex_shim_url} with state dir {}",
+        "Codex shim is listening on {bound_url} with state dir {}",
         bound.codex_home().display(),
     );
+    if codex_shim_url != bound_url {
+        eprintln!("Codex shim public endpoint: {codex_shim_url}");
+    }
     eprintln!("Codex shim event log: {}", bound.trace_path().display());
-    eprintln!("Chat from another terminal with: gents codex");
-    if codex_shim_url != crate::DEFAULT_CODEX_REMOTE {
-        eprintln!("  (this shim is not on the default address; pass --remote {codex_shim_url})");
-    }
-    if args.codex_shim_bind_addr.is_loopback() {
-        eprintln!(
-            "For another device, restart with --codex-shim-bind-addr <trusted-private-or-tailscale-ip> and use that host in --remote."
-        );
-    } else {
-        eprintln!(
-            "Codex shim has no transport authentication; only expose this address on a trusted private network."
-        );
-    }
+    eprintln!("Chat from another terminal with: {launch_command}");
     json!({
         "websocket": codex_shim_url,
-        "launch_command": if codex_shim_url == crate::DEFAULT_CODEX_REMOTE {
-            "gents codex".to_string()
-        } else {
-            format!("gents codex --remote {codex_shim_url}")
-        },
+        "launch_command": launch_command,
+        "auth_required": bound.auth_required(),
+        "bound_agent_did": bound.agent_did(),
+        "bound_behavior_id": bound.behavior_id(),
         "shim_home": bound.codex_home().to_path_buf(),
         "codex_home": bound.codex_home().to_path_buf(),
         "event_log": bound.trace_path().to_path_buf(),
     })
+}
+
+fn codex_shim_launch_command(websocket: &str, auth_token_env: Option<&str>) -> String {
+    let mut command = if websocket == crate::DEFAULT_CODEX_REMOTE {
+        "gents codex".to_string()
+    } else {
+        format!("gents codex --remote {websocket}")
+    };
+    if let Some(env_name) = auth_token_env {
+        command.push_str(" --remote-auth-token-env ");
+        command.push_str(env_name);
+    }
+    command
 }
 
 /// Watch published generations and bind the shim on the one that makes its bound
@@ -111,7 +118,8 @@ fn spawn_codex_shim_supervisor(
     bind_args: CodexShimBindArgs,
     bound_behavior_id: String,
     mut runnable_rx: watch::Receiver<Vec<String>>,
-    bind_addr: IpAddr,
+    public_url: Option<String>,
+    auth_token_env: Option<String>,
     health: CodexShimHealthHandle,
 ) {
     tokio::spawn(async move {
@@ -127,24 +135,29 @@ fn spawn_codex_shim_supervisor(
                 match bind_codex_shim(bind_args.clone()).await {
                     Ok(bound) => {
                         binding.settle_listen(true);
-                        let url = format!(
+                        let bound_url = format!(
                             "ws://{}:{}/",
                             display_shim_host(bound.addr().ip()),
                             bound.addr().port()
                         );
+                        let url = public_url.as_deref().unwrap_or(&bound_url).to_string();
                         set_codex_shim_health(
                             &health,
                             CodexShimHealth::Listening {
                                 websocket: url.clone(),
+                                auth_required: bound.auth_required(),
+                                bound_agent_did: bound.agent_did().to_string(),
+                                bound_behavior_id: bound.behavior_id().to_string(),
                             },
                         );
                         eprintln!(
                             "Codex endpoint bound: behavior {bound_behavior_id:?} became runnable; \
                              the shim is now running on {url} (no restart was needed)."
                         );
-                        if bind_addr.is_loopback() {
-                            eprintln!("Chat from another terminal with: gents codex");
-                        }
+                        eprintln!(
+                            "Chat from another terminal with: {}",
+                            codex_shim_launch_command(&url, auth_token_env.as_deref())
+                        );
                         bound.spawn();
                         return;
                     }
@@ -188,7 +201,61 @@ fn spawn_codex_shim_supervisor(
     });
 }
 
-pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
+fn read_codex_shim_auth_token(env_name: Option<&str>) -> Result<Option<String>> {
+    env_name
+        .map(|name| read_codex_shim_auth_token_with(name, |name| std::env::var(name)))
+        .transpose()
+}
+
+fn read_codex_shim_auth_token_with<F>(env_name: &str, read: F) -> Result<String>
+where
+    F: FnOnce(&str) -> std::result::Result<String, std::env::VarError>,
+{
+    let token =
+        read(env_name).with_context(|| format!("reading app-server token from {env_name}"))?;
+    let token = token.trim();
+    if token.is_empty() {
+        anyhow::bail!("app-server token in {env_name} is empty");
+    }
+    Ok(token.to_string())
+}
+
+fn normalize_codex_shim_public_url(raw: &str) -> Result<String> {
+    let uri = raw
+        .parse::<Uri>()
+        .with_context(|| format!("invalid --codex-shim-public-url {raw:?}"))?;
+    if uri.scheme_str() != Some("wss") {
+        anyhow::bail!("--codex-shim-public-url must use wss://");
+    }
+    let authority = uri
+        .authority()
+        .ok_or_else(|| anyhow::anyhow!("--codex-shim-public-url must include a host"))?;
+    if authority.as_str().contains('@') {
+        anyhow::bail!("--codex-shim-public-url must not contain credentials");
+    }
+    if authority.port_u16().is_none() {
+        anyhow::bail!("--codex-shim-public-url must include an explicit port");
+    }
+    if uri.path() != "/" || uri.query().is_some() {
+        anyhow::bail!("--codex-shim-public-url must point to the root path without a query");
+    }
+    Ok(format!("wss://{authority}/"))
+}
+
+pub(crate) async fn serve(mut args: ServeArgs) -> Result<()> {
+    args.codex_shim_public_url = args
+        .codex_shim_public_url
+        .as_deref()
+        .map(normalize_codex_shim_public_url)
+        .transpose()?;
+    let codex_shim_auth_token = if args.no_codex_shim {
+        None
+    } else {
+        read_codex_shim_auth_token(args.codex_shim_auth_token_env.as_deref())?
+    };
+    if args.codex_shim_public_url.is_some() && codex_shim_auth_token.is_none() {
+        anyhow::bail!("--codex-shim-public-url requires --codex-shim-auth-token-env");
+    }
     let home_dir = resolve_home_dir(args.home.as_deref());
     let data_dir = args
         .data_dir
@@ -452,6 +519,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         graphql: graphql_url.clone(),
         agent_did: identity.did().to_string(),
         behavior_id: args.codex_shim_behavior_id.clone(),
+        auth_token: codex_shim_auth_token,
         bind_addr: args.codex_shim_bind_addr,
         port: args.codex_shim_port,
         timeout_secs: args.codex_shim_timeout_secs,
@@ -471,6 +539,9 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_string(),
+                        auth_required: bound.auth_required(),
+                        bound_agent_did: bound.agent_did().to_string(),
+                        bound_behavior_id: bound.behavior_id().to_string(),
                     },
                 );
                 codex_shim_output = Some(announced);
@@ -505,7 +576,8 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
                     codex_shim_bind_args.clone(),
                     bound_behavior_id,
                     runnable_rx,
-                    args.codex_shim_bind_addr,
+                    args.codex_shim_public_url.clone(),
+                    args.codex_shim_auth_token_env.clone(),
                     codex_shim_health.clone(),
                 );
                 None
@@ -1015,6 +1087,59 @@ mod shim_host_tests {
     fn ipv6_shim_hosts_are_bracketed() {
         assert_eq!(display_shim_host("::1".parse().unwrap()), "[::1]");
         assert_eq!(display_shim_host("127.0.0.1".parse().unwrap()), "127.0.0.1");
+    }
+
+    #[test]
+    fn public_shim_url_requires_a_root_wss_endpoint_with_explicit_port() {
+        assert_eq!(
+            normalize_codex_shim_public_url("wss://agent.example:443/").unwrap(),
+            "wss://agent.example:443/"
+        );
+        assert!(normalize_codex_shim_public_url("ws://agent.example:9292/").is_err());
+        assert!(normalize_codex_shim_public_url("wss://agent.example/").is_err());
+        assert!(normalize_codex_shim_public_url("wss://agent.example:443/rpc").is_err());
+    }
+
+    #[test]
+    fn shim_auth_token_env_is_trimmed_and_required() {
+        assert_eq!(
+            read_codex_shim_auth_token_with("GENTS_TOKEN", |_| Ok(" secret ".to_string())).unwrap(),
+            "secret"
+        );
+        assert!(read_codex_shim_auth_token_with("GENTS_TOKEN", |_| Ok(" ".to_string())).is_err());
+        assert!(read_codex_shim_auth_token_with("GENTS_TOKEN", |_| {
+            Err(std::env::VarError::NotPresent)
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn shim_launch_command_references_the_token_environment_variable() {
+        assert_eq!(
+            codex_shim_launch_command(
+                "wss://agent.example:443/",
+                Some("GENTS_REMOTE_TOKEN")
+            ),
+            "gents codex --remote wss://agent.example:443/ --remote-auth-token-env GENTS_REMOTE_TOKEN"
+        );
+    }
+
+    #[test]
+    fn server_parses_remote_shim_security_flags() {
+        let args = parse_server(&[
+            "--codex-shim-auth-token-env",
+            "GENTS_REMOTE_TOKEN",
+            "--codex-shim-public-url",
+            "wss://agent.example:443/",
+        ]);
+        assert_eq!(
+            args.codex_shim_auth_token_env.as_deref(),
+            Some("GENTS_REMOTE_TOKEN")
+        );
+        assert_eq!(
+            args.codex_shim_public_url.as_deref(),
+            Some("wss://agent.example:443/")
+        );
     }
 
     #[test]

@@ -34,7 +34,10 @@ pub(crate) async fn codex(args: CodexArgs) -> Result<()> {
         bail!("`gents codex` is interactive and needs a terminal; use `gents chat` for scripted turns");
     }
 
-    let endpoint = resolve_endpoint(&args.remote)?;
+    let endpoint = with_remote_auth_token(
+        resolve_endpoint(&args.remote)?,
+        read_remote_auth_token(args.remote_auth_token_env.as_deref())?,
+    )?;
     probe_shim(&endpoint).await?;
 
     let cli = build_tui_cli(&args);
@@ -69,6 +72,48 @@ pub(crate) async fn codex(_args: CodexArgs) -> Result<()> {
 fn resolve_endpoint(remote: &str) -> Result<RemoteAppServerEndpoint> {
     codex_tui::resolve_remote_addr(remote)
         .map_err(|error| anyhow!("invalid --remote address {remote:?}: {error}"))
+}
+
+#[cfg(feature = "codex-tui")]
+fn read_remote_auth_token(env_name: Option<&str>) -> Result<Option<String>> {
+    env_name
+        .map(|name| read_remote_auth_token_with(name, |name| std::env::var(name)))
+        .transpose()
+}
+
+#[cfg(feature = "codex-tui")]
+fn read_remote_auth_token_with<F>(env_name: &str, read: F) -> Result<String>
+where
+    F: FnOnce(&str) -> std::result::Result<String, std::env::VarError>,
+{
+    let token = read(env_name)
+        .with_context(|| format!("reading remote app-server token from {env_name}"))?;
+    let token = token.trim();
+    if token.is_empty() {
+        bail!("remote app-server token in {env_name} is empty");
+    }
+    Ok(token.to_string())
+}
+
+#[cfg(feature = "codex-tui")]
+fn with_remote_auth_token(
+    mut endpoint: RemoteAppServerEndpoint,
+    auth_token: Option<String>,
+) -> Result<RemoteAppServerEndpoint> {
+    let Some(auth_token) = auth_token else {
+        return Ok(endpoint);
+    };
+    if !codex_tui::remote_addr_supports_auth_token(&endpoint) {
+        bail!("remote app-server tokens require a wss:// or loopback ws:// endpoint");
+    }
+    let RemoteAppServerEndpoint::WebSocket {
+        auth_token: slot, ..
+    } = &mut endpoint
+    else {
+        bail!("remote app-server tokens are only supported for WebSocket endpoints");
+    };
+    *slot = Some(auth_token);
+    Ok(endpoint)
 }
 
 #[cfg(feature = "codex-tui")]
@@ -126,10 +171,13 @@ fn probe_authority(endpoint: &RemoteAppServerEndpoint) -> Option<String> {
 #[cfg(all(test, feature = "codex-tui"))]
 mod tests {
     use super::*;
+    use crate::cli::{Cli, Command};
+    use clap::Parser;
 
     fn args(remote: &str) -> CodexArgs {
         CodexArgs {
             remote: remote.to_string(),
+            remote_auth_token_env: None,
             no_alt_screen: false,
             prompt: None,
         }
@@ -155,6 +203,61 @@ mod tests {
     #[test]
     fn invalid_remote_is_rejected() {
         assert!(resolve_endpoint("not-a-url").is_err());
+    }
+
+    #[test]
+    fn remote_auth_token_is_attached_to_loopback_websocket() {
+        let endpoint = with_remote_auth_token(
+            resolve_endpoint(crate::DEFAULT_CODEX_REMOTE).expect("resolves"),
+            Some("secret".to_string()),
+        )
+        .expect("token accepted");
+        let RemoteAppServerEndpoint::WebSocket { auth_token, .. } = endpoint else {
+            panic!("expected websocket endpoint");
+        };
+        assert_eq!(auth_token.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn remote_auth_token_rejects_plaintext_remote_websocket() {
+        let endpoint = resolve_endpoint("ws://192.0.2.10:9292/").expect("resolves");
+        assert!(with_remote_auth_token(endpoint, Some("secret".to_string())).is_err());
+    }
+
+    #[test]
+    fn remote_auth_token_env_is_trimmed_and_required() {
+        assert_eq!(
+            read_remote_auth_token_with("GENTS_TOKEN", |_| Ok("  secret  ".to_string()))
+                .expect("token"),
+            "secret"
+        );
+        assert!(read_remote_auth_token_with("GENTS_TOKEN", |_| Ok("  ".to_string())).is_err());
+        assert!(read_remote_auth_token_with("GENTS_TOKEN", |_| {
+            Err(std::env::VarError::NotPresent)
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn remote_auth_token_env_flag_parses() {
+        let cli = Cli::try_parse_from([
+            "gents",
+            "codex",
+            "--remote-auth-token-env",
+            "GENTS_REMOTE_TOKEN",
+        ])
+        .expect("parse");
+        let Command::Codex(args) = cli.command else {
+            panic!("expected codex command");
+        };
+        assert_eq!(
+            args.remote_auth_token_env.as_deref(),
+            Some("GENTS_REMOTE_TOKEN")
+        );
+        assert!(
+            Cli::try_parse_from(["gents", "codex", "--remote-auth-token-env", "unsafe;name",])
+                .is_err()
+        );
     }
 
     #[test]

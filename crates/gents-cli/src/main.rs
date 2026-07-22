@@ -147,9 +147,10 @@ Common flow:
 The server runs the Codex TUI endpoint by default (loopback only); disable it
 with --no-codex-shim. `gents codex` in another terminal connects to it.
 
-For laptop-to-fleet use, bind the shim on a reachable interface:
-  gents server --codex-shim-bind-addr <trusted-private-or-tailscale-ip>
-  gents codex --remote ws://<tailscale-host>:9292/
+For authenticated remote use, terminate TLS in a reverse proxy to the loopback
+listener and advertise that endpoint:
+  gents server --codex-shim-auth-token-env GENTS_REMOTE_TOKEN --codex-shim-public-url wss://<host>:443/
+  gents codex --remote wss://<host>:443/ --remote-auth-token-env GENTS_REMOTE_TOKEN
 
 Identity note:
   Standalone server startup supports file keys, macOS keychain software-key homes initialized with identity_backend=macos-keychain, and macOS Secure Enclave homes initialized with identity_backend=macos-secure-enclave.

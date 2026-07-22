@@ -12,6 +12,9 @@ use gents::subagent_target_entry;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
+use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
@@ -25,6 +28,97 @@ fn gents_model_selection_id(backend_id: &str, model_name: &str) -> String {
 
 fn default_backend_id(agent_did: &str) -> String {
     format!("{agent_did}:backend")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_handshake_requires_configured_bearer_token() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let model_name = format!("mock-auth-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            "authenticated-shim",
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let server_port = allocate_port()?;
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-auth-token-env",
+            "GENTS_SHIM_TEST_TOKEN",
+        ],
+        &[("GENTS_SHIM_TEST_TOKEN", "correct-secret")],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    let url = format!("ws://127.0.0.1:{shim_port}/");
+    let health = reqwest::get(format!("http://127.0.0.1:{server_port}/healthz"))
+        .await?
+        .json::<Value>()
+        .await?;
+    assert_eq!(
+        health
+            .pointer("/checks/codex_shim/auth_required")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        health
+            .pointer("/checks/codex_shim/bound_agent_did")
+            .and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert!(!health.to_string().contains("correct-secret"));
+
+    let unauthenticated = connect_async(&url)
+        .await
+        .expect_err("missing token rejected");
+    assert_http_status(unauthenticated, StatusCode::UNAUTHORIZED)?;
+
+    let mut wrong_request = url.clone().into_client_request()?;
+    wrong_request.headers_mut().insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer wrong-secret"),
+    );
+    let wrong = connect_async(wrong_request)
+        .await
+        .expect_err("wrong token rejected");
+    assert_http_status(wrong, StatusCode::UNAUTHORIZED)?;
+
+    let mut request = url.into_client_request()?;
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer correct-secret"),
+    );
+    let (mut websocket, _) = connect_async(request).await?;
+    websocket.close(None).await?;
+    Ok(())
+}
+
+fn assert_http_status(
+    error: tokio_tungstenite::tungstenite::Error,
+    expected: StatusCode,
+) -> Result<()> {
+    let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+        bail!("expected HTTP {expected}, got {error}");
+    };
+    if response.status() != expected {
+        bail!("expected HTTP {expected}, got {}", response.status());
+    }
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
