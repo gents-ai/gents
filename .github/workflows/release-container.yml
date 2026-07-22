@@ -1,0 +1,244 @@
+name: Release container image
+
+on:
+  workflow_run:
+    workflows:
+      - Release Linux gents
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing published release tag to package.
+        required: true
+        type: string
+
+concurrency:
+  group: release-container-${{ github.event.workflow_run.head_branch || inputs.release_tag || github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Publish multi-platform image
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (github.event.workflow_run.conclusion == 'success' &&
+         startsWith(github.event.workflow_run.head_branch, 'v'))
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve published release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+          WORKFLOW_RUN_TAG: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_run" ]]; then
+            release_tag="${WORKFLOW_RUN_TAG}"
+          else
+            release_tag="${REQUESTED_TAG}"
+          fi
+
+          if [[ ! "${release_tag}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "::error::Release tag '${release_tag}' is not a supported semantic version (expected vMAJOR.MINOR.PATCH[-PRERELEASE])."
+            exit 1
+          fi
+          release_major="${BASH_REMATCH[1]}"
+          release_minor="${BASH_REMATCH[2]}"
+          release_suffix="${BASH_REMATCH[4]:-}"
+
+          release_json="$(gh release view "${release_tag}" --json isDraft,isPrerelease,tagName,url)"
+          if [[ "$(jq -r '.tagName' <<<"${release_json}")" != "${release_tag}" ]]; then
+            echo "::error::GitHub returned a different release than ${release_tag}."
+            exit 1
+          fi
+          if [[ "$(jq -r '.isDraft' <<<"${release_json}")" != "false" ]]; then
+            echo "::error::Release ${release_tag} is still a draft."
+            exit 1
+          fi
+
+          release_version="${release_tag#v}"
+          release_commit="$(gh api "repos/${GH_REPO}/commits/${release_tag}" --jq '.sha')"
+          is_prerelease="$(jq -r '.isPrerelease' <<<"${release_json}")"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+
+          image_tags=(
+            "${image}:${release_tag}"
+            "${image}:${release_version}"
+          )
+          if [[ "${is_prerelease}" == "false" && -z "${release_suffix}" ]]; then
+            image_tags+=(
+              "${image}:${release_major}.${release_minor}"
+              "${image}:${release_major}"
+              "${image}:latest"
+            )
+          fi
+
+          {
+            echo "release_tag=${release_tag}"
+            echo "release_version=${release_version}"
+            echo "release_commit=${release_commit}"
+            echo "image=${image}"
+            echo "canonical_ref=${image}:${release_tag}"
+            echo "tags<<EOF"
+            printf '%s\n' "${image_tags[@]}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+          echo "Packaging $(jq -r '.url' <<<"${release_json}") as ${image}:${release_tag}."
+
+      - name: Download and verify Linux release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p release-assets release/container/bin
+          gh release download "${RELEASE_TAG}" \
+            --pattern 'gents-*-unknown-linux-gnu.tar.gz' \
+            --pattern 'gents-*-unknown-linux-gnu.tar.gz.sha256' \
+            --dir release-assets
+
+          targets=(
+            x86_64-unknown-linux-gnu
+            aarch64-unknown-linux-gnu
+          )
+          for target in "${targets[@]}"; do
+            tarball="release-assets/gents-${target}.tar.gz"
+            checksum="${tarball}.sha256"
+            if [[ ! -f "${tarball}" || ! -f "${checksum}" ]]; then
+              echo "::error::Release ${RELEASE_TAG} is missing ${target} assets."
+              exit 1
+            fi
+            (
+              cd release-assets
+              sha256sum -c "$(basename "${checksum}")"
+            )
+
+            archive_root="gents-${target}"
+            archive_files="$(tar -tzf "${tarball}" | sed '/\/$/d' | LC_ALL=C sort)"
+            expected_files="$(printf '%s\n' "${archive_root}/LICENSE" "${archive_root}/gents")"
+            if [[ "${archive_files}" != "${expected_files}" ]]; then
+              echo "::error::Unexpected files in ${tarball}:"
+              printf '%s\n' "${archive_files}"
+              exit 1
+            fi
+
+            packaged_license="$(mktemp)"
+            tar -xOf "${tarball}" "${archive_root}/LICENSE" > "${packaged_license}"
+            if [[ -f release/container/LICENSE ]] && ! cmp -s release/container/LICENSE "${packaged_license}"; then
+              echo "::error::The Linux release artifacts contain different licenses."
+              exit 1
+            fi
+            install -m 0644 "${packaged_license}" release/container/LICENSE
+            rm -f "${packaged_license}"
+
+            case "${target}" in
+              x86_64-unknown-linux-gnu) platform_arch=amd64 ;;
+              aarch64-unknown-linux-gnu) platform_arch=arm64 ;;
+              *) echo "::error::Unsupported target ${target}."; exit 1 ;;
+            esac
+            tar -xOf "${tarball}" "${archive_root}/gents" > "release/container/bin/gents-${platform_arch}"
+            chmod 0755 "release/container/bin/gents-${platform_arch}"
+          done
+
+          if ! grep -q 'Apache License' release/container/LICENSE ||
+             ! grep -q 'Version 2.0' release/container/LICENSE; then
+            echo "::error::Release ${RELEASE_TAG} does not contain the Apache-2.0 license."
+            exit 1
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and publish image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: release/container/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          pull: true
+          tags: ${{ steps.release.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=Gents
+            org.opencontainers.image.description=Database-native agent runtime built on DefraDB
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.release.outputs.release_version }}
+            org.opencontainers.image.revision=${{ steps.release.outputs.release_commit }}
+            org.opencontainers.image.licenses=Apache-2.0
+          build-args: |
+            GENTS_VERSION=${{ steps.release.outputs.release_version }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify published image
+        env:
+          IMAGE_REF: ${{ steps.release.outputs.canonical_ref }}
+          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+        run: |
+          set -euo pipefail
+
+          manifest="$(docker buildx imagetools inspect "${IMAGE_REF}")"
+          printf '%s\n' "${manifest}"
+          grep -qE 'Platform:[[:space:]]+linux/amd64' <<<"${manifest}"
+          grep -qE 'Platform:[[:space:]]+linux/arm64' <<<"${manifest}"
+
+          for platform in linux/amd64 linux/arm64; do
+            version_output="$(docker run --rm --platform "${platform}" "${IMAGE_REF}" version)"
+            printf '%s: %s\n' "${platform}" "${version_output}"
+            expected_prefix="gents ${RELEASE_VERSION} ("
+            if [[ "${version_output}" != "${expected_prefix}"* ]]; then
+              echo "::error::${platform} image version does not start with '${expected_prefix}'."
+              exit 1
+            fi
+          done
+
+      - name: Publish summary
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_REF: ${{ steps.release.outputs.canonical_ref }}
+          TAGS: ${{ steps.release.outputs.tags }}
+        run: |
+          {
+            echo "## Container image published"
+            echo
+            echo "- Image: \`${IMAGE_REF}\`"
+            echo "- Digest: \`${DIGEST}\`"
+            echo "- Platforms: \`linux/amd64\`, \`linux/arm64\`"
+            echo "- Tags:"
+            while IFS= read -r tag; do
+              echo "  - \`${tag}\`"
+            done <<<"${TAGS}"
+          } >> "${GITHUB_STEP_SUMMARY}"
