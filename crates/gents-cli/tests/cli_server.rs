@@ -282,17 +282,9 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         r#"mutation { create_AgentMessage(input: { message_key: "self-budget-session:1", session_id: "self-budget-session", sequence: 1, role: "user", content: "hello", timestamp: "2026-06-02T10:01:00Z" }) { _docID } }"#.to_string(),
         r#"mutation { create_CompactionEntry(input: { compaction_key: "self-budget-ce", session_id: "self-budget-session", sequence: 1, original_tokens: 1234, compacted_tokens: 567, created_at: "2026-06-02T10:00:00Z" }) { _docID } }"#.to_string(),
     ] {
-        let seed = client
-            .post(graphql.as_str())
-            .json(&serde_json::json!({ "query": mutation }))
-            .send()
+        graphql_query(&graphql, &mutation)
             .await
             .context("seeding self-view fixtures")?;
-        let seed_body: Value = seed.json().await.context("reading seed mutation response")?;
-        assert!(
-            seed_body.get("errors").is_none(),
-            "seed mutation returned errors: {seed_body}"
-        );
     }
 
     // /status carries the behavior join plus context budget/indicator.
@@ -1328,7 +1320,6 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     // Seed a linked trace (same request_id + session_id across collections).
-    let client = reqwest::Client::new();
     let mutations = [
         format!(
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "trace-req", agent_did: "{agent_did}", session_id: "trace-session", status: "completed", content: "hi", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
@@ -1338,17 +1329,9 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
         r#"mutation { create_AgentToolCall(input: { tool_call_key: "trace-tc", request_id: "trace-req", session_id: "trace-session", tool_name: "defra_query", args: "{\"collection\":\"AgentRequest\"}", result: "{\"ok\":true}", status: "completed" }) { _docID } }"#.to_string(),
     ];
     for mutation in mutations {
-        let resp = client
-            .post(graphql.as_str())
-            .json(&serde_json::json!({ "query": mutation }))
-            .send()
+        graphql_query(&graphql, &mutation)
             .await
             .context("seeding trace")?;
-        let body: Value = resp.json().await?;
-        assert!(
-            body.get("errors").is_none(),
-            "seed mutation errored: {body}"
-        );
     }
 
     // Reconstruct each collection via `gents query`.
@@ -1570,21 +1553,15 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     // Seed a linked request + tool call.
-    let http = reqwest::Client::new();
     for mutation in [
         format!(
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "mcp-req", agent_did: "{agent_did}", session_id: "mcp-session", status: "completed", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
         ),
         r#"mutation { create_AgentToolCall(input: { tool_call_key: "mcp-tc", request_id: "mcp-req", session_id: "mcp-session", tool_name: "defra_query", args: "{\"collection\":\"AgentRequest\"}", result: "{\"ok\":true}", status: "completed" }) { _docID } }"#.to_string(),
     ] {
-        let resp = http
-            .post(graphql.as_str())
-            .json(&serde_json::json!({ "query": mutation }))
-            .send()
+        graphql_query(&graphql, &mutation)
             .await
             .context("seeding mcp trace")?;
-        let body: Value = resp.json().await?;
-        assert!(body.get("errors").is_none(), "seed mutation errored: {body}");
     }
 
     // Connect an MCP client to the mounted /mcp endpoint.
