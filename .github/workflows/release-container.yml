@@ -34,7 +34,7 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
 
@@ -216,7 +216,11 @@ jobs:
           grep -qE 'Platform:[[:space:]]+linux/arm64' <<<"${manifest}"
 
           for platform in linux/amd64 linux/arm64; do
-            version_output="$(docker run --rm --platform "${platform}" "${IMAGE_REF}" version)"
+            version_output="$(docker run --rm \
+              --platform "${platform}" \
+              --env OTEL_EXPORTER_OTLP_ENDPOINT= \
+              --env OTEL_EXPORTER_OTLP_TRACES_ENDPOINT= \
+              "${IMAGE_REF}" version)"
             printf '%s: %s\n' "${platform}" "${version_output}"
             expected_prefix="gents ${RELEASE_VERSION} ("
             if [[ "${version_output}" != "${expected_prefix}"* ]]; then
