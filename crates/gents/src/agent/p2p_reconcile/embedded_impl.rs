@@ -708,7 +708,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embedded_subagent_host_replays_only_requester_lineage() {
+    async fn embedded_subagent_host_replays_only_return_projection() {
         let sender_test = runtime_test_node().await;
         let receiver_test = runtime_test_node().await;
         let sender = Arc::clone(&sender_test.node);
@@ -721,18 +721,20 @@ mod tests {
         seed_subagent_return_artifacts(&sender, "match", Some("did:key:coord")).await;
         seed_subagent_return_artifacts(&sender, "unrelated", None).await;
 
-        let collections = vec![
+        let available_collections = vec![
+            "AgentRequest".to_string(),
             "AgentResponse".to_string(),
             "AgentMessage".to_string(),
+            "AgentToolCall".to_string(),
             "AgentSession".to_string(),
             "AgentConversation".to_string(),
         ];
         sender_admin
-            .add_p2p_collections(&collections)
+            .add_p2p_collections(&available_collections)
             .await
             .expect("add sender p2p collections");
         receiver_admin
-            .add_p2p_collections(&collections)
+            .add_p2p_collections(&available_collections)
             .await
             .expect("add receiver p2p collections");
 
@@ -743,18 +745,26 @@ mod tests {
         wait_for_active_peer(&sender_admin).await;
         wait_for_active_peer(&receiver_admin).await;
         receiver_admin
-            .add_replicator(&sender_addresses, &collections, &PairingFilters::default())
+            .add_replicator(
+                &sender_addresses,
+                &available_collections,
+                &PairingFilters::default(),
+            )
             .await
             .expect("authorize sender as receiver-side replicator");
 
         let template = resolve_template(SUBAGENT_HOST_TEMPLATE).expect("subagent-host template");
-        let mut filters = scope_filter(
+        let collections = template
+            .collections
+            .iter()
+            .map(|collection| (*collection).to_string())
+            .collect::<Vec<_>>();
+        let filters = scope_filter(
             &template.scope,
             template.collections,
             "did:key:coord",
             "did:key:host",
         );
-        filters.retain(|collection, _| collections.contains(collection));
         sender_admin
             .add_replicator(&receiver_addresses, &collections, &filters)
             .await
@@ -774,21 +784,6 @@ mod tests {
             "return-match-session:1",
         )
         .await;
-        wait_for_value(
-            &receiver,
-            "AgentSession",
-            "session_id",
-            "return-match-session",
-        )
-        .await;
-        wait_for_value(
-            &receiver,
-            "AgentConversation",
-            "session_id",
-            "return-match-session",
-        )
-        .await;
-
         assert_eq!(
             collection_values(&receiver, "AgentResponse", "response_key").await,
             BTreeSet::from(["return-match-response".to_string()])
@@ -799,12 +794,13 @@ mod tests {
         );
         assert_eq!(
             collection_values(&receiver, "AgentSession", "session_id").await,
-            BTreeSet::from(["return-match-session".to_string()])
+            BTreeSet::new(),
+            "host-local session ownership must not cross the return leg"
         );
         assert_eq!(
             collection_values(&receiver, "AgentConversation", "session_id").await,
-            BTreeSet::from(["return-match-session".to_string()]),
-            "unrelated host conversation history must not cross the return leg"
+            BTreeSet::new(),
+            "host-local conversation metadata must not cross the return leg"
         );
 
         sender.shutdown().await;

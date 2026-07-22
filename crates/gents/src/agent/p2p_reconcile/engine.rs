@@ -1456,7 +1456,7 @@ mod tests {
     }
 
     #[test]
-    fn data_plane_subagent_host_scopes_all_artifacts_to_signed_requester() {
+    fn data_plane_subagent_host_scopes_return_projection_to_signed_requester() {
         let signed_endpoint = NetworkEndpointEntry {
             peer_id: "peer-a".to_string(),
             agent_did: "did:key:coord".to_string(),
@@ -1476,7 +1476,16 @@ mod tests {
         .expect("data-plane host desired")
         .expect("some data-plane layer");
 
-        assert_eq!(desired.replicator_filter.len(), 8);
+        assert_eq!(
+            desired.replicator_collections,
+            set(&[
+                "AgentRequest",
+                "AgentResponse",
+                "AgentMessage",
+                "AgentToolCall"
+            ])
+        );
+        assert_eq!(desired.replicator_filter.len(), 4);
         for predicate in desired.replicator_filter.values() {
             assert_eq!(predicate.field, "requester_did");
             assert_eq!(predicate.value, "did:key:coord");
@@ -2549,7 +2558,7 @@ mod tests {
     }
 
     #[test]
-    fn subagent_host_template_filters_all_artifacts_to_requester() {
+    fn subagent_host_template_filters_return_projection_to_requester() {
         let desired = desired_from_pairing_row(
             desired_row(Some("subagent-host"), Some("did:key:coord")),
             "did:key:host",
@@ -2558,8 +2567,16 @@ mod tests {
         .expect("some desired layer");
 
         assert!(desired.collections.is_empty());
-        assert!(desired.replicator_collections.contains("AgentToolCall"));
-        assert_eq!(desired.replicator_filter.len(), 8);
+        assert_eq!(
+            desired.replicator_collections,
+            set(&[
+                "AgentRequest",
+                "AgentResponse",
+                "AgentMessage",
+                "AgentToolCall"
+            ])
+        );
+        assert_eq!(desired.replicator_filter.len(), 4);
         for predicate in desired.replicator_filter.values() {
             assert_eq!(predicate.field, "requester_did");
             assert_eq!(predicate.value, "did:key:coord");
