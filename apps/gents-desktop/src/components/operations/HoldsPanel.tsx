@@ -4,7 +4,7 @@ import { resolveToolCallHold } from "../../lib/desktop-api";
 import type { HeldToolCallView } from "../../lib/types/operations";
 import { useToolCallHolds } from "./useToolCallHolds";
 
-function argsPreview(args: string | null) {
+function normalizedArgs(args: string | null) {
   if (!args) {
     return null;
   }
@@ -12,7 +12,11 @@ function argsPreview(args: string | null) {
   if (!trimmed || trimmed === "{}") {
     return null;
   }
-  return trimmed.length > 120 ? `${trimmed.slice(0, 120)}…` : trimmed;
+  return trimmed;
+}
+
+function argsPreview(args: string) {
+  return args.length > 120 ? `${args.slice(0, 120)}…` : args;
 }
 
 function deadlineLabel(deadlineAt: string | null) {
@@ -101,7 +105,8 @@ export function HoldsPanel({ agentDid }: { agentDid: string | null }) {
       ) : null}
       <ul className="holds-panel-list">
         {(holds ?? []).map((hold) => {
-          const preview = argsPreview(hold.args);
+          const fullArgs = normalizedArgs(hold.args);
+          const preview = fullArgs ? argsPreview(fullArgs) : null;
           const deadline = deadlineLabel(hold.deadlineAt);
           const busy = busyCallId === hold.toolCallId;
           const denying = denyingCallId === hold.toolCallId;
@@ -115,13 +120,36 @@ export function HoldsPanel({ agentDid }: { agentDid: string | null }) {
                 <span className="holds-panel-tool">
                   {hold.toolName ?? hold.toolCallId}
                 </span>
-                {preview ? <code className="holds-panel-args">{preview}</code> : null}
+                {preview ? (
+                  <code
+                    className="holds-panel-args"
+                    data-testid={`hold-args-preview-${hold.toolCallId}`}
+                  >
+                    {preview}
+                  </code>
+                ) : null}
                 {deadline ? (
                   <span className="holds-panel-deadline">{deadline}</span>
                 ) : null}
               </div>
               {hold.requestId ? (
                 <div className="holds-panel-row-meta">request {hold.requestId}</div>
+              ) : null}
+              {fullArgs ? (
+                <details
+                  className="holds-panel-args-details"
+                  data-testid={`hold-args-details-${hold.toolCallId}`}
+                >
+                  <summary data-testid={`hold-args-toggle-${hold.toolCallId}`}>
+                    View full arguments
+                  </summary>
+                  <pre
+                    className="holds-panel-args-full"
+                    data-testid={`hold-args-full-${hold.toolCallId}`}
+                  >
+                    {fullArgs}
+                  </pre>
+                </details>
               ) : null}
               <div className="holds-panel-row-actions">
                 <button

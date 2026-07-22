@@ -39,8 +39,39 @@ describe("holds panel", () => {
       expect(screen.getByTestId("hold-row-call-1")).toBeInTheDocument(),
     );
     expect(screen.getByText("bash_unrestricted")).toBeInTheDocument();
-    expect(screen.getByText('{"command":"cargo publish"}')).toBeInTheDocument();
+    expect(screen.getByTestId("hold-args-preview-call-1")).toHaveTextContent(
+      '{"command":"cargo publish"}',
+    );
     expect(screen.getByText("request req-1")).toBeInTheDocument();
+  });
+
+  it("expands the complete args when the significant tail is past the preview", async () => {
+    const significantTail = "rm -rf /srv/production";
+    const longArgs = JSON.stringify({
+      command: `${"echo safe && ".repeat(12)}${significantTail}`,
+    });
+    expect(longArgs.length).toBeGreaterThan(120);
+    withAdapter({
+      listToolCallHolds: vi.fn().mockResolvedValue([heldCall({ args: longArgs })]),
+      resolveToolCallHold: vi.fn(),
+    });
+    render(<HoldsPanel agentDid={AGENT_DID} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("hold-row-call-1")).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId("hold-args-preview-call-1")).not.toHaveTextContent(
+      significantTail,
+    );
+    expect(screen.getByTestId("hold-args-details-call-1")).not.toHaveAttribute("open");
+
+    fireEvent.click(screen.getByTestId("hold-args-toggle-call-1"));
+
+    expect(screen.getByTestId("hold-args-details-call-1")).toHaveAttribute("open");
+    expect(screen.getByTestId("hold-args-full-call-1")).toHaveTextContent(
+      significantTail,
+    );
+    expect(screen.getByTestId("hold-args-full-call-1")).toHaveTextContent(longArgs);
   });
 
   it("shows the empty state when nothing is held", async () => {
