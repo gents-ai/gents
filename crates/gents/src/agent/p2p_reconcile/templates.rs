@@ -169,6 +169,13 @@ const SUBAGENT_COORDINATOR_RULES: &[CollectionRule] = &[CollectionRule {
 /// Host → coordinator leg for subagent completion: carry only artifacts whose
 /// immutable requester route names this coordinator. This preserves child
 /// returns without replaying unrelated host-owned conversation history.
+const SUBAGENT_HOST_COLLECTIONS: &[&str] = &[
+    "AgentRequest",
+    "AgentResponse",
+    "AgentMessage",
+    "AgentToolCall",
+];
+
 const SUBAGENT_HOST_RULES: &[CollectionRule] = &[
     CollectionRule {
         collection: "AgentRequest",
@@ -187,26 +194,6 @@ const SUBAGENT_HOST_RULES: &[CollectionRule] = &[
     },
     CollectionRule {
         collection: "AgentToolCall",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentToolResult",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentSession",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentConversation",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "CompactionEntry",
         field: "requester_did",
         source: DidSource::PeerDid,
     },
@@ -256,7 +243,7 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     },
     ScopeTemplate {
         id: SUBAGENT_HOST_TEMPLATE,
-        collections: CONVERSATION_COLLECTIONS,
+        collections: SUBAGENT_HOST_COLLECTIONS,
         scope: Scope::PerCollection(SUBAGENT_HOST_RULES),
         delivery: Delivery::Push,
     },
@@ -473,12 +460,12 @@ mod tests {
     }
 
     #[test]
-    fn subagent_host_filters_every_artifact_on_requester() {
+    fn subagent_host_filters_only_return_projection_on_requester() {
         let t = resolve_template(SUBAGENT_HOST_TEMPLATE).unwrap();
         assert_eq!(t.delivery, Delivery::Push);
-        assert_eq!(t.collections, CONVERSATION_COLLECTIONS);
+        assert_eq!(t.collections, SUBAGENT_HOST_COLLECTIONS);
         let f = scope_filter(&t.scope, t.collections, "did:key:coord", "did:key:host");
-        assert_eq!(f.len(), CONVERSATION_COLLECTIONS.len());
+        assert_eq!(f.len(), SUBAGENT_HOST_COLLECTIONS.len());
         assert_eq!(
             f.get("AgentRequest"),
             Some(&FilterPredicate {
@@ -486,7 +473,7 @@ mod tests {
                 value: "did:key:coord".to_string(),
             })
         );
-        for col in CONVERSATION_COLLECTIONS {
+        for col in SUBAGENT_HOST_COLLECTIONS {
             assert_eq!(
                 f.get(*col),
                 Some(&FilterPredicate {
@@ -495,6 +482,15 @@ mod tests {
                 }),
                 "unexpected subagent-host filter for {col}"
             );
+        }
+        for local_collection in [
+            "AgentToolResult",
+            "AgentSession",
+            "AgentConversation",
+            "CompactionEntry",
+        ] {
+            assert!(!t.collections.contains(&local_collection));
+            assert!(!f.contains_key(local_collection));
         }
     }
 }

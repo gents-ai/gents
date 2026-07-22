@@ -61,18 +61,15 @@ fn unscoped_scope_resolves_to_no_filter() {
 /// Mirrors Lean `subagentCoordinator_filter_eq` / `subagentHost_filter_eq` /
 /// `subagentHost_filters_requester_lineage`: coordinator parent requests do
 /// not fan out to hosts, and every host artifact returns only to the paired
-/// requester DID.
+/// requester DID. The return leg contains only the completion/readable-
+/// transcript projection consumed by the coordinator.
 #[test]
 fn subagent_templates_resolve_to_exact_directional_filters() {
-    const CONVERSATION: &[&str] = &[
+    const RETURN_PROJECTION: &[&str] = &[
         "AgentRequest",
         "AgentResponse",
         "AgentMessage",
         "AgentToolCall",
-        "AgentToolResult",
-        "AgentSession",
-        "AgentConversation",
-        "CompactionEntry",
     ];
 
     let coord = resolve_template("subagent-coordinator").expect("coordinator template");
@@ -96,14 +93,14 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
 
     let host = resolve_template("subagent-host").expect("host template");
     assert_eq!(host.delivery, Delivery::Push);
-    assert_eq!(host.collections, CONVERSATION);
+    assert_eq!(host.collections, RETURN_PROJECTION);
     let host_filter = scope_filter(
         &host.scope,
         host.collections,
         "did:key:coord",
         "did:key:host",
     );
-    assert_eq!(host_filter.len(), CONVERSATION.len());
+    assert_eq!(host_filter.len(), RETURN_PROJECTION.len());
     assert_eq!(
         host_filter.get("AgentRequest"),
         Some(&FilterPredicate {
@@ -111,7 +108,7 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
             value: "did:key:coord".to_string(),
         })
     );
-    for collection in CONVERSATION {
+    for collection in RETURN_PROJECTION {
         assert_eq!(
             host_filter.get(*collection),
             Some(&FilterPredicate {
@@ -120,6 +117,15 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
             }),
             "unexpected host filter for {collection}"
         );
+    }
+    for local_collection in [
+        "AgentToolResult",
+        "AgentSession",
+        "AgentConversation",
+        "CompactionEntry",
+    ] {
+        assert!(!host.collections.contains(&local_collection));
+        assert!(!host_filter.contains_key(local_collection));
     }
 
     for predicate in coord_filter.values().chain(host_filter.values()) {
@@ -130,12 +136,12 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
     }
 }
 
-/// Regression for #713: owner scoping made an unrelated host conversation
-/// match the return leg. The requester route key keeps the coordinator-spawned
-/// child conversation and excludes unrelated host history, even though both
-/// rows share the same host `agent_did`.
+/// Regression for #713: owner scoping made unrelated host history match the
+/// return leg. The requester route key keeps the coordinator-spawned child
+/// messages and excludes unrelated host history, even though both rows share
+/// the same host `agent_did`.
 #[test]
-fn subagent_host_conversation_filter_excludes_unrelated_host_history() {
+fn subagent_host_message_filter_excludes_unrelated_host_history() {
     let host = resolve_template("subagent-host").expect("host template");
     let filter = scope_filter(
         &host.scope,
@@ -143,9 +149,7 @@ fn subagent_host_conversation_filter_excludes_unrelated_host_history() {
         "did:key:coord",
         "did:key:host",
     );
-    let predicate = filter
-        .get("AgentConversation")
-        .expect("conversation filter");
+    let predicate = filter.get("AgentMessage").expect("message filter");
 
     let child_requester_did = Some("did:key:coord");
     let unrelated_requester_did: Option<&str> = None;
