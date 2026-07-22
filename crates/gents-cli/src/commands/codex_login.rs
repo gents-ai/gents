@@ -82,7 +82,10 @@ pub(crate) async fn run_codex_login(
         let server = run_login_server(server_opts).context("starting ChatGPT login server")?;
         // Human prompt goes to stderr so stdout stays reserved for the caller's
         // machine-readable JSON.
-        eprintln!("Open this URL to sign in with ChatGPT:\n{}", server.auth_url);
+        eprintln!(
+            "Open this URL to sign in with ChatGPT:\n{}",
+            server.auth_url
+        );
         server
             .block_until_done()
             .await

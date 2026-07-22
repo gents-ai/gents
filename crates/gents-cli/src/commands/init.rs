@@ -1012,7 +1012,10 @@ mod tests {
     #[test]
     fn non_codex_next_steps_omit_login() {
         let steps = init_next_steps(
-            &init_summary(BackendProviderKind::OpenAiCompatible, "http://127.0.0.1:8080/v1"),
+            &init_summary(
+                BackendProviderKind::OpenAiCompatible,
+                "http://127.0.0.1:8080/v1",
+            ),
             false,
         );
         assert!(!steps.iter().any(|step| step == "gents codex-login"));

@@ -112,7 +112,8 @@ async fn pick_backend() -> Result<BackendSelection> {
             let (url, detected_model) = match local {
                 Some(found) => found,
                 None => {
-                    let url = prompt_line_default("Local server base URL", OLLAMA_DEFAULT_URL).await?;
+                    let url =
+                        prompt_line_default("Local server base URL", OLLAMA_DEFAULT_URL).await?;
                     let detected = probe_models(&url).await.unwrap_or_default();
                     (url, detected)
                 }
