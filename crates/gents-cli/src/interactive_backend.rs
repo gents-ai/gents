@@ -70,6 +70,8 @@ fn should_prompt(args: &InitArgs) -> bool {
 fn has_backend_arg(args: &InitArgs) -> bool {
     args.resolved_inference_endpoint().is_some()
         || args.backend_preset.is_some()
+        || args.provider_kind.is_some()
+        || args.openai_wire_api.is_some()
         || args.api_key.is_some()
         || args.api_key_env_var.is_some()
         || args.model_name.is_some()
@@ -327,6 +329,14 @@ mod tests {
         let mut preset = bare_init_args();
         preset.backend_preset = Some(BackendPresetArg::OpenAi);
         assert!(has_backend_arg(&preset));
+
+        let mut provider_kind = bare_init_args();
+        provider_kind.provider_kind = Some("Anthropic".to_string());
+        assert!(has_backend_arg(&provider_kind));
+
+        let mut wire_api = bare_init_args();
+        wire_api.openai_wire_api = Some(crate::cli::args::OpenAiWireApiArg::Responses);
+        assert!(has_backend_arg(&wire_api));
 
         let mut api_key = bare_init_args();
         api_key.api_key = Some("sk-test".to_string());
