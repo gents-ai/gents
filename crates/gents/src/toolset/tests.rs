@@ -330,6 +330,15 @@ async fn fan_out_and_synthesize_validate_rejects_bad_args() {
         ok_err.contains("service_unavailable"),
         "valid args must pass validation and hit the hook-managed guard, got: {ok_err}"
     );
+    assert!(
+        ok_err.contains("outside the Gents session hook"),
+        "hook-managed guard must use the final product name, got: {ok_err}"
+    );
+    let legacy_hook_name = ["Defra", " session hook"].concat();
+    assert!(
+        !ok_err.contains(&legacy_hook_name),
+        "hook-managed guard retained the legacy product name: {ok_err}"
+    );
 }
 
 #[test]

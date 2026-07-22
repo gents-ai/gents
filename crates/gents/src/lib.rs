@@ -1,7 +1,7 @@
-//! DefraDB-backed agent framework extracted from `agent-daemon`.
+//! Core DefraDB-backed agent runtime for Gents.
 //!
-//! This crate preserves the current agent runtime pieces while
-//! `agent-daemon` remains the first consumer during the extraction phase.
+//! This crate owns request execution, lifecycle enforcement, persistence,
+//! identity, tools, networking, and provider-input assembly.
 
 pub mod adapter_projection;
 pub(crate) mod admission;

@@ -1,4 +1,4 @@
-//! Shared GraphQL utility functions used across agent-daemon modules.
+//! Shared GraphQL utility functions used across Gents runtime modules.
 
 pub fn escape_graphql_string(s: &str) -> String {
     s.replace('\\', "\\\\")

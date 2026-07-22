@@ -43,8 +43,7 @@ fn test_load_history_deserializes_legacy_assistant_content() {
 
 #[tokio::test]
 async fn compaction_entries_track_files_cumulatively() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-daemon-compaction-{}", uuid::Uuid::new_v4()));
+    let data_path = std::env::temp_dir().join(format!("gents-compaction-{}", uuid::Uuid::new_v4()));
     let node = defra_node::EmbeddedNode::builder()
         .data_path(&data_path)
         .build()
@@ -90,8 +89,7 @@ async fn compaction_entries_track_files_cumulatively() {
 
 #[tokio::test]
 async fn close_session_preserves_started_datetime() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-daemon-session-{}", uuid::Uuid::new_v4()));
+    let data_path = std::env::temp_dir().join(format!("gents-session-{}", uuid::Uuid::new_v4()));
     let node = defra_node::EmbeddedNode::builder()
         .data_path(&data_path)
         .build()
@@ -156,10 +154,8 @@ async fn close_session_preserves_started_datetime() {
 
 #[tokio::test]
 async fn create_session_with_id_is_idempotent() {
-    let data_path = std::env::temp_dir().join(format!(
-        "agent-daemon-session-upsert-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let data_path =
+        std::env::temp_dir().join(format!("gents-session-upsert-{}", uuid::Uuid::new_v4()));
     let node = defra_node::EmbeddedNode::builder()
         .data_path(&data_path)
         .build()
@@ -216,10 +212,8 @@ async fn create_session_with_id_is_idempotent() {
 
 #[tokio::test]
 async fn upsert_conversation_from_request_keeps_title_empty_until_generated() {
-    let data_path = std::env::temp_dir().join(format!(
-        "agent-daemon-conversation-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let data_path =
+        std::env::temp_dir().join(format!("gents-conversation-{}", uuid::Uuid::new_v4()));
     let node = defra_node::EmbeddedNode::builder()
         .data_path(&data_path)
         .build()
@@ -331,10 +325,8 @@ async fn upsert_conversation_from_request_keeps_title_empty_until_generated() {
 
 #[tokio::test]
 async fn update_conversation_title_with_source_persists_generated_title() {
-    let data_path = std::env::temp_dir().join(format!(
-        "agent-daemon-conversation-title-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let data_path =
+        std::env::temp_dir().join(format!("gents-conversation-title-{}", uuid::Uuid::new_v4()));
     let node = defra_node::EmbeddedNode::builder()
         .data_path(&data_path)
         .build()
@@ -401,10 +393,8 @@ async fn update_conversation_title_with_source_persists_generated_title() {
 
 #[tokio::test]
 async fn create_session_with_behavior_id_rejects_mismatched_existing_binding() {
-    let data_path = std::env::temp_dir().join(format!(
-        "agent-daemon-session-binding-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let data_path =
+        std::env::temp_dir().join(format!("gents-session-binding-{}", uuid::Uuid::new_v4()));
     let node = defra_node::EmbeddedNode::builder()
         .data_path(&data_path)
         .build()
@@ -428,7 +418,7 @@ async fn create_session_with_behavior_id_rejects_mismatched_existing_binding() {
 #[tokio::test]
 async fn upsert_conversation_rejects_mismatched_existing_behavior() {
     let data_path = std::env::temp_dir().join(format!(
-        "agent-daemon-conversation-binding-{}",
+        "gents-conversation-binding-{}",
         uuid::Uuid::new_v4()
     ));
     let node = defra_node::EmbeddedNode::builder()

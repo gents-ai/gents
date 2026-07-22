@@ -3,7 +3,8 @@ name = "gents"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Reusable DefraDB-backed agent framework extracted from agent-daemon"
+repository.workspace = true
+description = "Core DefraDB-backed agent runtime for Gents"
 
 [features]
 default = ["defra-node/http", "defra-node/p2p", "rocksdb"]

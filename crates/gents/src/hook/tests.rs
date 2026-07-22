@@ -1222,8 +1222,7 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
 
 #[tokio::test]
 async fn streaming_turn_persists_full_assistant_history_in_sequence() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-daemon-hook-{}", uuid::Uuid::new_v4()));
+    let data_path = std::env::temp_dir().join(format!("gents-hook-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
             .data_path(&data_path)

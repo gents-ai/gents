@@ -232,6 +232,11 @@ declare -a DESKTOP_LOCK_SUBS=(
 
 # Stale tokens for the guard scan (from #811 section 1)
 declare -a STALE_TOKENS=(
+  "agent-daemon"
+  "agent_daemon"
+  "AGENT_DAEMON"
+  "Agent Daemon"
+  "agent daemon"
   "defra-agent"
   "apps/desktop-tauri"
   "defra_agent"
@@ -312,6 +317,7 @@ declare -a STALE_TOKENS=(
   "Defra-owned"
   "Defra remote runtime"
   "Defra runtime"
+  "Defra session hook"
   "Defra tools"
   "Defra import"
   "Defra Test"
@@ -883,6 +889,14 @@ scan_slice_contracts() {
       scan_contract_array_in_file Cargo.lock DESKTOP_LOCK_SUBS "desktop lockfile"
       scan_desktop_consumer_contracts
       ;;
+    all)
+      # The final guard must retain the stricter shared-file and consumer
+      # contracts owned by the incremental core and desktop slices. A plain
+      # all-tree token scan is not equivalent: some exact legacy selectors,
+      # such as `app: "desktop-tauri"`, do not contain a broad stale token.
+      scan_slice_contracts core
+      scan_slice_contracts desktop
+      ;;
   esac
 }
 
@@ -1179,6 +1193,7 @@ self_test() (
   local test_dir test_file fixture_base fixture_slice fixture_sequential fixture_all
   local fixture_path first_checksum second_checksum owner_checksum apple_checksum
   local lock_checksum sequential_tree all_tree idempotent_tree guard_output
+  local -a original_stale_tokens
   test_dir=$(mktemp -d)
   test_file="$test_dir/substitutions.txt"
   trap 'rm -rf "$test_dir"' EXIT
@@ -1219,7 +1234,7 @@ self_test() (
   # substitutions to desktop/release consumers. Branding remains untouched.
   cd "$fixture_slice"
   owner_checksum=$(cksum docs/gents.md)
-  apple_checksum=$(cksum apps/desktop-tauri/src-tauri/gen/apple/project.yml)
+  apple_checksum=$(cksum <apps/desktop-tauri/src-tauri/gen/apple/project.yml)
   lock_checksum=$(cksum Cargo.lock)
   first_checksum=$(cksum crates/defra-agent-desktop/branding.txt)
   apply_for_slice core >/dev/null
@@ -1245,7 +1260,7 @@ self_test() (
   second_checksum=$(cksum crates/defra-agent-desktop/branding.txt)
   [[ "$first_checksum" == "$second_checksum" ]]
   [[ "$owner_checksum" == "$(cksum docs/gents.md)" ]]
-  [[ "$apple_checksum" == "$(cksum apps/desktop-tauri/src-tauri/gen/apple/project.yml)" ]]
+  [[ "$apple_checksum" == "$(cksum <apps/desktop-tauri/src-tauri/gen/apple/project.yml)" ]]
   grep -Fq 'service=com.source-inc.gents.identity' crates/gents/runtime.txt
   grep -Fq 'test_did=did:defra-agent:test' crates/gents/runtime.txt
   if guard_output=$(run_guard core 2>&1); then
@@ -1281,22 +1296,22 @@ self_test() (
   # Explicit slice execution and `apply all` must materialize the same tree.
   cd "$fixture_sequential"
   owner_checksum=$(cksum docs/gents.md)
-  apple_checksum=$(cksum apps/desktop-tauri/src-tauri/gen/apple/project.yml)
+  apple_checksum=$(cksum <apps/desktop-tauri/src-tauri/gen/apple/project.yml)
   for owned_slice in "${SLICE_ORDER[@]}"; do
     apply_for_slice "$owned_slice" >/dev/null
   done
   sequential_tree=$(git write-tree)
   [[ "$owner_checksum" == "$(cksum docs/gents.md)" ]]
-  [[ "$apple_checksum" == "$(cksum apps/gents-desktop/src-tauri/gen/apple/project.yml)" ]]
+  [[ "$apple_checksum" == "$(cksum <apps/gents-desktop/src-tauri/gen/apple/project.yml)" ]]
 
   cd "$fixture_all"
   owner_checksum=$(cksum docs/gents.md)
-  apple_checksum=$(cksum apps/desktop-tauri/src-tauri/gen/apple/project.yml)
+  apple_checksum=$(cksum <apps/desktop-tauri/src-tauri/gen/apple/project.yml)
   apply_for_slice all >/dev/null
   all_tree=$(git write-tree)
   [[ "$sequential_tree" == "$all_tree" ]]
   [[ "$owner_checksum" == "$(cksum docs/gents.md)" ]]
-  [[ "$apple_checksum" == "$(cksum apps/gents-desktop/src-tauri/gen/apple/project.yml)" ]]
+  [[ "$apple_checksum" == "$(cksum <apps/gents-desktop/src-tauri/gen/apple/project.yml)" ]]
   grep -Fq 'service=com.source-inc.gents.identity' crates/gents/runtime.txt
   grep -Fxq '__APPLE_TEAM_ID__.com.source-inc.gents' release/entitlements.plist
   grep -Fq 'adapter docs retain gents until the docs slice' \
@@ -1309,6 +1324,22 @@ self_test() (
   idempotent_tree=$(git write-tree)
   apply_for_slice all >/dev/null
   [[ "$idempotent_tree" == "$(git write-tree)" ]]
+
+  # The final all-tree guard must run the exact core and desktop contracts,
+  # not just the broad stale-token list. Temporarily use an unrelated token so
+  # these assertions fail if `scan_slice_contracts all` stops delegating.
+  printf '\n"crates/defra-agent"\n' >>Cargo.toml
+  printf '\napp: "desktop-tauri"\n' \
+    >>crates/gents/tests/support/conformance_consumers.rs
+  original_stale_tokens=("${STALE_TOKENS[@]}")
+  STALE_TOKENS=("__no_fixture_stale_token__")
+  if guard_output=$(run_guard all 2>&1); then
+    echo "global guard unexpectedly skipped slice-specific contracts" >&2
+    return 1
+  fi
+  grep -Fq 'core workspace' <<<"$guard_output"
+  grep -Fq 'desktop consumer' <<<"$guard_output"
+  STALE_TOKENS=("${original_stale_tokens[@]}")
 
   # Protected owner/generated files are still final-guard violations: apply
   # protection is intentionally not a stale-token allowlist.
@@ -1334,6 +1365,28 @@ self_test() (
   scan_stale_tokens all >/dev/null
   [[ "$SCAN_VIOLATIONS" -eq 1 ]]
   [[ "$SCAN_TOTAL" -eq 2 ]]
+
+  # A narrow product-message token catches legacy Gents branding without
+  # treating legitimate DefraDB/upstream crate vocabulary as stale.
+  fixture_repo="$test_dir/product-message-fixture"
+  mkdir -p "$fixture_repo"
+  git -C "$fixture_repo" init -q
+  printf '%s\n' \
+    'outside the Defra session hook' \
+    'DefraDB uses defra-core and defra-node' \
+    >"$fixture_repo/messages.txt"
+  git -C "$fixture_repo" add messages.txt
+  cd "$fixture_repo"
+  ALLOWLIST=("__no_fixture_allowlist__")
+  STALE_TOKENS=("Defra session hook")
+  scan_stale_tokens all >"$test_dir/product-message-guard.txt"
+  [[ "$SCAN_VIOLATIONS" -eq 1 ]]
+  [[ "$SCAN_TOTAL" -eq 1 ]]
+  grep -Fq 'Defra session hook' "$test_dir/product-message-guard.txt"
+  if grep -Eq 'DefraDB|defra-core|defra-node' "$test_dir/product-message-guard.txt"; then
+    echo "product-message guard flagged legitimate DefraDB vocabulary" >&2
+    return 1
+  fi
 
   trap - EXIT
   rm -rf "$test_dir"

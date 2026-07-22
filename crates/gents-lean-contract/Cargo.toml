@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Test helper for loading gents Lean conformance contracts"
+description = "Test helper for loading Gents Lean conformance contracts"
 
 [dependencies]
 anyhow.workspace = true

@@ -268,7 +268,7 @@ fn not_yet_executable_error(tool_name: &str) -> ToolError {
         "ok": false,
         "failure_class": "service_unavailable",
         "path": "/",
-        "message": format!("{tool_name} is hook-managed and cannot be executed outside the Defra session hook"),
+        "message": format!("{tool_name} is hook-managed and cannot be executed outside the Gents session hook"),
         "retryable": true,
         "service_id": ORCHESTRATION_SERVICE_ID,
         "tool_name": tool_name

@@ -676,8 +676,7 @@ fn estimate_tokens_rough() {
 
 #[tokio::test]
 async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-daemon-compactor-{}", uuid::Uuid::new_v4()));
+    let data_path = std::env::temp_dir().join(format!("gents-compactor-{}", uuid::Uuid::new_v4()));
     let node = defra_node::EmbeddedNode::builder()
         .data_path(&data_path)
         .build()
