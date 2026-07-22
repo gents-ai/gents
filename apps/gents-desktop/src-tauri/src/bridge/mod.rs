@@ -83,7 +83,9 @@ pub fn run() {
             tauri_commands::operations::desktop_interrupt_request,
             tauri_commands::operations::desktop_list_backends_with_health,
             tauri_commands::operations::desktop_list_mcp_services_with_health,
-            tauri_commands::operations::desktop_probe_mcp_service
+            tauri_commands::operations::desktop_probe_mcp_service,
+            tauri_commands::operations::desktop_list_tool_call_holds,
+            tauri_commands::operations::desktop_resolve_tool_call_hold
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

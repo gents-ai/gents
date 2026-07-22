@@ -15,6 +15,8 @@ import { McpHealthPanel } from "./mcpHealth";
 import { OperationsRail, OperationsRailProvider } from "./operations";
 import type { OperationsRailTabDescriptor } from "./operations";
 import { BackgroundedToolsPanel } from "./backgroundedTools";
+import { HoldsPanel } from "./operations/HoldsPanel";
+import { useToolCallHolds } from "./operations/useToolCallHolds";
 import { WorkspaceTreePanel } from "./workspace/WorkspaceTreePanel";
 import { RequestTracePanel } from "./trace/RequestTracePanel";
 import { useOperationsSnapshot } from "./backgroundedTools/useOperationsSnapshot";
@@ -212,6 +214,10 @@ export function ActiveChatWorkspace({
     opsSnapshot?.agentDid === selectedDeployment.agentDid
       ? opsSnapshot.stuckDiagnostics.length
       : 0;
+  // Held-approval count for the Holds tab badge. The panel runs its own
+  // instance of this hook; both poll the same cheap indexed query.
+  const { holds: heldToolCalls } = useToolCallHolds(selectedDeployment.agentDid);
+  const heldCount = heldToolCalls?.length ?? 0;
 
   const operationsRailTabs = useMemo<OperationsRailTabDescriptor[]>(() => {
     const rootRequestId = lineageRootOverride ?? session?.latestRequestId ?? null;
@@ -235,6 +241,12 @@ export function ActiveChatWorkspace({
             }}
           />
         ),
+      },
+      {
+        id: "holds",
+        label: "Holds",
+        badge: heldCount > 0 ? String(heldCount) : null,
+        render: () => <HoldsPanel agentDid={selectedDeployment.agentDid} />,
       },
       {
         id: "lineage",
@@ -278,6 +290,7 @@ export function ActiveChatWorkspace({
     lineageRootOverride,
     beginInterrupt,
     stuckCount,
+    heldCount,
   ]);
 
   function onInterruptClick() {

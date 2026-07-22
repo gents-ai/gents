@@ -6,8 +6,8 @@
 #![cfg(test)]
 
 use super::operations::{
-    desktop_interrupt_request, desktop_list_subagent_tree, desktop_operations_snapshot,
-    desktop_preview_interrupt_cascade,
+    desktop_interrupt_request, desktop_list_subagent_tree, desktop_list_tool_call_holds,
+    desktop_operations_snapshot, desktop_preview_interrupt_cascade, desktop_resolve_tool_call_hold,
 };
 
 #[allow(dead_code)]
@@ -19,4 +19,6 @@ fn _assert_command_signatures() {
     let _ = desktop_list_subagent_tree;
     let _ = desktop_preview_interrupt_cascade;
     let _ = desktop_interrupt_request;
+    let _ = desktop_list_tool_call_holds;
+    let _ = desktop_resolve_tool_call_hold;
 }

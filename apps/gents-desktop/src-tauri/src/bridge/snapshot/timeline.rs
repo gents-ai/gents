@@ -45,7 +45,8 @@ fn parse_tool_detail_value(value: Option<&str>) -> Option<ToolDetailValueView> {
 fn tool_status_kind(status: Option<&str>) -> String {
     match status.unwrap_or_default().to_ascii_lowercase().as_str() {
         "completed" | "complete" | "success" => "success".to_string(),
-        "failed" | "error" | "cancelled" => "error".to_string(),
+        "failed" | "error" | "cancelled" | "timedout" => "error".to_string(),
+        "awaitingapproval" => "awaitingApproval".to_string(),
         _ => "running".to_string(),
     }
 }
@@ -268,4 +269,23 @@ pub(super) fn build_rendered_timeline(
     }
 
     timeline
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tool_status_kind;
+
+    #[test]
+    fn status_kind_maps_awaiting_approval_and_terminals() {
+        assert_eq!(
+            tool_status_kind(Some("awaitingApproval")),
+            "awaitingApproval"
+        );
+        assert_eq!(tool_status_kind(Some("completed")), "success");
+        assert_eq!(tool_status_kind(Some("failed")), "error");
+        assert_eq!(tool_status_kind(Some("cancelled")), "error");
+        assert_eq!(tool_status_kind(Some("timedOut")), "error");
+        assert_eq!(tool_status_kind(Some("running")), "running");
+        assert_eq!(tool_status_kind(None), "running");
+    }
 }

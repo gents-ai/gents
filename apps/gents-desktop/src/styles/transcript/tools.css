@@ -75,6 +75,20 @@
     background: var(--color-error);
   }
 
+  .tool-item-dot-held {
+    background: var(--color-warning);
+  }
+
+  .tool-item-held-badge {
+    font-size: var(--text-xs);
+    line-height: 1;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-pill);
+    color: var(--color-warning);
+    border: 1px solid var(--color-warning);
+    white-space: nowrap;
+  }
+
   .tool-item-name {
     font-weight: 500;
     color: var(--color-text-soft);

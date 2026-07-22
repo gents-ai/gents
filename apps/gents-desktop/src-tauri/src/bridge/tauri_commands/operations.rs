@@ -25,10 +25,11 @@ use super::super::snapshot::subagent_tree::{
 };
 use super::super::state::{current_core, DesktopAppState};
 use super::super::types::{
-    BackendHealthView, CascadeCancelPreview, DesktopInterruptRequest,
+    BackendHealthView, CascadeCancelPreview, DesktopInterruptRequest, DesktopListHoldsRequest,
     DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
-    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest, InferenceCallSummaryView,
-    InterruptRequestResult, MCPServiceHealthView, McpServiceProbeResult, NativeExecutorStatusView,
+    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest,
+    DesktopResolveHoldRequest, HeldToolCallView, InferenceCallSummaryView, InterruptRequestResult,
+    MCPServiceHealthView, McpServiceProbeResult, NativeExecutorStatusView, ResolveHoldResult,
     RuntimeLivenessView, SubagentTreeView,
 };
 
@@ -588,4 +589,77 @@ pub(crate) async fn probe_mcp_service_for_core(
     probe_mcp_service(core.as_ref(), &request.service_id)
         .await
         .map_err(|error| error.to_string())
+}
+
+/// Holds strip: list the selected agent's tool calls awaiting operator
+/// approval. Routed per-agent — remote deployments answer from their own
+/// node, where the hold (and its verdict watcher) actually live.
+#[tauri::command]
+pub(crate) async fn desktop_list_tool_call_holds(
+    state: State<'_, DesktopAppState>,
+    request: DesktopListHoldsRequest,
+) -> Result<Vec<HeldToolCallView>, String> {
+    let Some(core) = current_core(&state) else {
+        return Err("desktop client is not running".to_string());
+    };
+    list_tool_call_holds_for_core(core, request).await
+}
+
+pub(crate) async fn list_tool_call_holds_for_core(
+    core: Arc<ClientCore>,
+    request: DesktopListHoldsRequest,
+) -> Result<Vec<HeldToolCallView>, String> {
+    let held = core
+        .list_tool_call_holds(&request.agent_did)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(held
+        .into_iter()
+        .map(|call| HeldToolCallView {
+            tool_call_id: call.tool_call_id,
+            request_id: call.request_id,
+            session_id: call.session_id,
+            agent_did: call.agent_did,
+            tool_name: call.tool_name,
+            args: call.args,
+            deadline_at: call.deadline_at,
+        })
+        .collect())
+}
+
+/// Approve or deny a held tool call. The approver DID recorded on the
+/// decision document is always the desktop's own principal identity.
+#[tauri::command]
+pub(crate) async fn desktop_resolve_tool_call_hold(
+    state: State<'_, DesktopAppState>,
+    request: DesktopResolveHoldRequest,
+) -> Result<ResolveHoldResult, String> {
+    let Some(core) = current_core(&state) else {
+        return Err("desktop client is not running".to_string());
+    };
+    resolve_tool_call_hold_for_core(core, request).await
+}
+
+pub(crate) async fn resolve_tool_call_hold_for_core(
+    core: Arc<ClientCore>,
+    request: DesktopResolveHoldRequest,
+) -> Result<ResolveHoldResult, String> {
+    let approval_id = core
+        .resolve_tool_call_hold(
+            &request.agent_did,
+            &request.tool_call_id,
+            request.approve,
+            request.reason.clone(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(ResolveHoldResult {
+        approval_id,
+        tool_call_id: request.tool_call_id,
+        decision: if request.approve {
+            "approved".to_string()
+        } else {
+            "denied".to_string()
+        },
+    })
 }

@@ -1,4 +1,4 @@
-@layer tokens, base, primitives, shell, sidebar, chat, fleet, config, transcript, components, backend-health, backgrounded-tools, utilities, trace, workspace;
+@layer tokens, base, primitives, shell, sidebar, chat, fleet, config, transcript, components, backend-health, backgrounded-tools, holds, utilities, trace, workspace;
 
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/funnel-display";
@@ -30,6 +30,7 @@
 @import "./styles/subagent-lineage.css";
 @import "./styles/backend-health/backend-health.css";
 @import "./styles/backgrounded-tools.css";
+@import "./styles/holds.css";
 @import "./styles/cancel-ux.css";
 @import "./styles/utilities.css";
 @import "./styles/trace.css";

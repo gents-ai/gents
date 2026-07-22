@@ -395,6 +395,100 @@ impl ClientCore {
         Ok(timeline)
     }
 
+    /// Tool calls held in `awaitingApproval` for one agent. Routed per-agent:
+    /// a hold on a remote deployment lives (and must be resolved) on that
+    /// deployment's node, where its verdict watcher polls.
+    pub async fn list_tool_call_holds(
+        &self,
+        agent_did: &str,
+    ) -> Result<Vec<gents::config_client::HeldToolCall>> {
+        let agent_did = normalize_required("agent_did", agent_did)?;
+        let access = match self.graphql_for_agent(agent_did).await {
+            Some(graphql) => gents::config_client::ConfigAccess::Graphql(graphql),
+            None => gents::config_client::ConfigAccess::Local(self.node_arc()),
+        };
+        let held = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            gents::config_client::list_held_tool_calls(&access, Some(agent_did)),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out listing tool-call holds for {agent_did}"))?
+        .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))?;
+        Ok(held)
+    }
+
+    /// Resolve a held tool call by writing the AgentToolApproval decision
+    /// document. The approver identity is always the desktop's own principal
+    /// DID — never taken from the frontend. Returns the approval_id.
+    pub async fn resolve_tool_call_hold(
+        &self,
+        agent_did: &str,
+        tool_call_id: &str,
+        approve: bool,
+        reason: Option<String>,
+    ) -> Result<String> {
+        let agent_did = normalize_required("agent_did", agent_did)?;
+        let tool_call_id = normalize_required("tool_call_id", tool_call_id)?;
+        let approval_id = match self
+            .resolve_tool_call_hold_inner(agent_did, tool_call_id, approve, reason)
+            .await
+        {
+            Ok(approval_id) => approval_id,
+            Err(error) => return Err(self.record_mutation_error("resolve tool-call hold", error)),
+        };
+        self.clear_mutation_error();
+        tracing::info!(
+            target: "gents_desktop_core::writes",
+            action = "resolve_tool_call_hold",
+            row_id = %tool_call_id,
+            approve,
+            "desktop write saved"
+        );
+        Ok(approval_id)
+    }
+
+    /// Inner body of [`Self::resolve_tool_call_hold`]. Both remote calls are
+    /// bounded like the sibling per-agent reads so a dead peer fails the
+    /// panel instead of pinning the row's buttons for minutes.
+    async fn resolve_tool_call_hold_inner(
+        &self,
+        agent_did: &str,
+        tool_call_id: &str,
+        approve: bool,
+        reason: Option<String>,
+    ) -> Result<String> {
+        let access = match self.graphql_for_agent(agent_did).await {
+            Some(graphql) => gents::config_client::ConfigAccess::Graphql(graphql),
+            None => gents::config_client::ConfigAccess::Local(self.node_arc()),
+        };
+        let held = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            gents::config_client::list_held_tool_calls(&access, Some(agent_did)),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out listing tool-call holds for {agent_did}"))?
+        .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))?;
+        let target = held
+            .iter()
+            .find(|call| call.tool_call_id == tool_call_id)
+            .ok_or_else(|| anyhow::anyhow!("tool call {tool_call_id} is not awaiting approval"))?;
+        let verdict = gents::config_client::ToolApprovalVerdict {
+            tool_call_id: tool_call_id.to_string(),
+            agent_did: agent_did.to_string(),
+            request_id: target.request_id.clone(),
+            approve,
+            approver_did: self.principal().did().to_string(),
+            reason,
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            gents::config_client::write_tool_approval(&access, &verdict),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out writing approval decision for {tool_call_id}"))?
+        .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))
+    }
+
     /// Live P2P/network state for the visibility panel. Each probe fails
     /// independently — a dead subsystem reports its error instead of hiding
     /// the healthy ones.

@@ -206,6 +206,28 @@ pub(crate) struct InterruptRequestResult {
     pub preview: Option<CascadeCancelPreview>,
 }
 
+/// One tool call held in `awaitingApproval`, as shown in the Holds strip.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HeldToolCallView {
+    pub tool_call_id: String,
+    pub request_id: Option<String>,
+    pub session_id: Option<String>,
+    pub agent_did: Option<String>,
+    pub tool_name: Option<String>,
+    pub args: Option<String>,
+    pub deadline_at: Option<String>,
+}
+
+/// Result of writing an AgentToolApproval decision for a held call.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ResolveHoldResult {
+    pub approval_id: String,
+    pub tool_call_id: String,
+    pub decision: String,
+}
+
 /// One backend's persisted health + recent admission outcomes. Read-only
 /// projection of `InferenceBackend` joined with the last N `InferenceCall`
 /// rows for that backend. `display_state` is derived from

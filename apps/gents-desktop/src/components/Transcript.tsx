@@ -71,6 +71,8 @@ function toolStatusClass(statusKind?: string | null) {
       return "tool-item-dot tool-item-dot-success";
     case "error":
       return "tool-item-dot tool-item-dot-error";
+    case "awaitingapproval":
+      return "tool-item-dot tool-item-dot-held";
     default:
       return "tool-item-dot tool-item-dot-running";
   }
@@ -182,6 +184,14 @@ function ToolGroups({ tools }: { tools: RenderedToolCallView[] }) {
                     cause={tool.cancelCause}
                     className="tool-item-cause-badge"
                   />
+                ) : null}
+                {(tool.statusKind ?? "").toLowerCase() === "awaitingapproval" ? (
+                  <span
+                    className="tool-item-held-badge"
+                    data-testid={`tool-held-${tool.itemKey}`}
+                  >
+                    awaiting approval
+                  </span>
                 ) : null}
               </span>
               <span aria-hidden="true" className="tool-item-action">

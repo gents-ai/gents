@@ -49,6 +49,9 @@ import type {
 import type {
   DesktopOperationsSnapshot,
   DesktopOperationsSnapshotRequest,
+  DesktopResolveHoldRequest,
+  HeldToolCallView,
+  ResolveHoldResult,
 } from "./types/operations";
 
 type TauriInternalsWindow = Window & {
@@ -213,6 +216,10 @@ export type DesktopApiAdapter = {
   interruptRequest: (
     request: DesktopInterruptRequestRequest,
   ) => Promise<InterruptRequestResult>;
+  listToolCallHolds: (agentDid: string) => Promise<HeldToolCallView[]>;
+  resolveToolCallHold: (
+    request: DesktopResolveHoldRequest,
+  ) => Promise<ResolveHoldResult>;
 };
 
 const defaultDesktopApiAdapter: DesktopApiAdapter = {
@@ -413,6 +420,16 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   interruptRequest(request) {
     return invokeDesktop<InterruptRequestResult>("desktop_interrupt_request", {
+      request,
+    });
+  },
+  listToolCallHolds(agentDid) {
+    return invokeDesktop<HeldToolCallView[]>("desktop_list_tool_call_holds", {
+      request: { agentDid },
+    });
+  },
+  resolveToolCallHold(request) {
+    return invokeDesktop<ResolveHoldResult>("desktop_resolve_tool_call_hold", {
       request,
     });
   },
@@ -647,4 +664,12 @@ export async function previewInterruptCascade(
 
 export async function interruptRequest(request: DesktopInterruptRequestRequest) {
   return desktopApiAdapter().interruptRequest(request);
+}
+
+export async function listToolCallHolds(agentDid: string) {
+  return desktopApiAdapter().listToolCallHolds(agentDid);
+}
+
+export async function resolveToolCallHold(request: DesktopResolveHoldRequest) {
+  return desktopApiAdapter().resolveToolCallHold(request);
 }
