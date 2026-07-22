@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -61,13 +62,17 @@ WARNING: --yolo bootstraps UNRESTRICTED tools. The agent can run any command\n\
 and write any file your user account can reach — no sandbox, no containment.\n\
 Use --write for sandboxed writes scoped to the tool root.";
 
-pub(crate) async fn init(args: InitArgs) -> Result<()> {
+pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let tool_package = resolve_init_tool_package(args.write_tools, args.yolo, args.tool_package)?;
     validate_init_tool_flags(&args, tool_package)?;
     if matches!(tool_package, ToolPackageArg::Yolo) {
         eprintln!("{YOLO_WARNING}");
     }
+    // First-run ergonomics: when nothing names a backend and we have a
+    // terminal, ask instead of silently defaulting to a local llama-server
+    // that may not be running. No-op under pipes/CI/--identity-only.
+    crate::interactive_backend::resolve_backend_interactively(&mut args).await?;
     if args.dangerously_overwrite {
         dangerously_overwrite_home(&home_dir)?;
     }
@@ -190,6 +195,12 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         false
     };
 
+    // Config is fully persisted; the inline ChatGPT login is best-effort and
+    // never fails init (a declined or failed login just leaves the next_steps
+    // guidance in place).
+    let codex_login =
+        maybe_inline_codex_login(&access, initialized_identity.identity.did(), &summary).await;
+
     let output = json!({
         "status": "initialized",
         "home": home_dir,
@@ -218,12 +229,87 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
             "secure_enclave_label": stored.secure_enclave_label,
             "permission_boundary": "This DID and key identify the permission boundary for every action the agent runtime performs."
         },
-        "next_steps": init_next_steps(&summary),
+        "codex_login": codex_login
+            .outcome()
+            .map(crate::commands::codex_login::codex_login_result_json),
+        "next_steps": init_next_steps(&summary, codex_login.is_authenticated()),
         "init": summary,
     });
     print_json(&output)?;
 
     Ok(())
+}
+
+/// Offer to complete ChatGPT sign-in inline when `init` just seeded a
+/// chatgpt-codex backend interactively and no credential exists yet. Returns
+/// Existing credentials count as authenticated without producing a fresh login
+/// result. Non-codex backends, non-terminal sessions, declined prompts, and
+/// failed logins remain unauthenticated here; none of those are init failures.
+enum InlineCodexLoginState {
+    Unauthenticated,
+    ExistingCredential,
+    Completed(crate::commands::codex_login::CodexLoginOutcome),
+}
+
+impl InlineCodexLoginState {
+    fn is_authenticated(&self) -> bool {
+        matches!(self, Self::ExistingCredential | Self::Completed(_))
+    }
+
+    fn outcome(&self) -> Option<&crate::commands::codex_login::CodexLoginOutcome> {
+        match self {
+            Self::Completed(outcome) => Some(outcome),
+            Self::Unauthenticated | Self::ExistingCredential => None,
+        }
+    }
+}
+
+async fn maybe_inline_codex_login(
+    access: &ConfigAccess,
+    agent_did: &str,
+    summary: &InitSummary,
+) -> InlineCodexLoginState {
+    if summary.provider_kind != gents::BackendProviderKind::ChatGptCodex {
+        return InlineCodexLoginState::Unauthenticated;
+    }
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return InlineCodexLoginState::Unauthenticated;
+    }
+    let provider = gents::chatgpt_codex::normalize_provider("chatgpt-codex");
+    match crate::commands::codex_auth_probe::load_oauth_credential(access, agent_did, &provider)
+        .await
+    {
+        Ok(Some(_)) => return InlineCodexLoginState::ExistingCredential,
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("Could not check for an existing ChatGPT credential: {error:#}");
+        }
+    }
+    if !crate::interactive_backend::confirm("Log in to ChatGPT now to finish setup?", true).await {
+        return InlineCodexLoginState::Unauthenticated;
+    }
+    match crate::commands::codex_login::run_codex_login(
+        access,
+        agent_did,
+        &crate::commands::codex_login::CodexLoginOptions {
+            provider,
+            client_id: None,
+            issuer: None,
+            device_auth: false,
+        },
+    )
+    .await
+    {
+        Ok(outcome) => InlineCodexLoginState::Completed(outcome),
+        Err(error) => {
+            eprintln!(
+                "ChatGPT login did not complete: {error:#}\n\
+                 The backend is configured; finish later with `gents codex-login` \
+                 (add --device-auth on a headless machine)."
+            );
+            InlineCodexLoginState::Unauthenticated
+        }
+    }
 }
 
 pub(crate) struct IdentityOnlyHomeOptions<'a> {
@@ -811,8 +897,14 @@ fn standard_system_prompt(tool_package: ToolPackageArg) -> &'static str {
     }
 }
 
-fn init_next_steps(summary: &InitSummary) -> Vec<String> {
+fn init_next_steps(summary: &InitSummary, codex_logged_in: bool) -> Vec<String> {
     let mut steps = Vec::new();
+    // The chatgpt-codex backend authenticates with an OAuthCredential, not an
+    // API key: sign in first or the first chat turn has no token. When the
+    // inline login already ran, this step is done.
+    if summary.provider_kind == gents::BackendProviderKind::ChatGptCodex && !codex_logged_in {
+        steps.push("gents codex-login".to_string());
+    }
     if is_probably_ollama_endpoint(&summary.endpoint) {
         steps.push(format!("ollama pull {}", summary.model_name));
     } else if is_probably_llama_server_endpoint(&summary.endpoint) {
@@ -884,6 +976,85 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents::BackendProviderKind;
+
+    fn init_summary(provider_kind: BackendProviderKind, endpoint: &str) -> InitSummary {
+        InitSummary {
+            backend_id: "did:key:z-init:backend".to_string(),
+            backend_name: "test-agent backend".to_string(),
+            provider_kind,
+            endpoint: endpoint.to_string(),
+            api_key: None,
+            api_key_env_var: None,
+            model_name: "test-model".to_string(),
+            max_concurrent: 2,
+            max_queue_depth: 16,
+            default_behavior_id: "default".to_string(),
+            tool_selection_id: "default-tools".to_string(),
+            wide_open_preset_id: "wide-open".to_string(),
+            inference_profile_id: "default-profile".to_string(),
+            tool_package: ToolPackageArg::Readonly,
+            tool_ceiling: ToolCeilingArg::Readonly,
+            tool_root: None,
+            enable_memory: false,
+            enable_defra_query: false,
+            defra_query_collections: Vec::new(),
+            created_principal: true,
+            created_default_behavior: true,
+        }
+    }
+
+    #[test]
+    fn chatgpt_codex_next_steps_lead_with_login() {
+        let steps = init_next_steps(
+            &init_summary(
+                BackendProviderKind::ChatGptCodex,
+                "https://chatgpt.com/backend-api/codex",
+            ),
+            false,
+        );
+        assert_eq!(steps.first().map(String::as_str), Some("gents codex-login"));
+    }
+
+    #[test]
+    fn chatgpt_codex_next_steps_drop_login_after_inline_login() {
+        let steps = init_next_steps(
+            &init_summary(
+                BackendProviderKind::ChatGptCodex,
+                "https://chatgpt.com/backend-api/codex",
+            ),
+            true,
+        );
+        assert!(!steps.iter().any(|step| step == "gents codex-login"));
+    }
+
+    #[test]
+    fn existing_codex_credential_drops_login_step_without_new_outcome() {
+        let state = InlineCodexLoginState::ExistingCredential;
+        assert!(state.is_authenticated());
+        assert!(state.outcome().is_none());
+
+        let steps = init_next_steps(
+            &init_summary(
+                BackendProviderKind::ChatGptCodex,
+                "https://chatgpt.com/backend-api/codex",
+            ),
+            state.is_authenticated(),
+        );
+        assert!(!steps.iter().any(|step| step == "gents codex-login"));
+    }
+
+    #[test]
+    fn non_codex_next_steps_omit_login() {
+        let steps = init_next_steps(
+            &init_summary(
+                BackendProviderKind::OpenAiCompatible,
+                "http://127.0.0.1:8080/v1",
+            ),
+            false,
+        );
+        assert!(!steps.iter().any(|step| step == "gents codex-login"));
+    }
 
     fn init_args() -> InitArgs {
         InitArgs {
