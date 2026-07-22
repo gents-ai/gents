@@ -232,6 +232,11 @@ declare -a DESKTOP_LOCK_SUBS=(
 
 # Stale tokens for the guard scan (from #811 section 1)
 declare -a STALE_TOKENS=(
+  "agent-daemon"
+  "agent_daemon"
+  "AGENT_DAEMON"
+  "Agent Daemon"
+  "agent daemon"
   "defra-agent"
   "apps/desktop-tauri"
   "defra_agent"

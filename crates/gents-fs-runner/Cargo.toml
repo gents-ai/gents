@@ -3,7 +3,8 @@ name = "gents-fs-runner"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Out-of-process native filesystem runner for gents"
+repository.workspace = true
+description = "Out-of-process native filesystem runner for Gents"
 
 [dependencies]
 anyhow.workspace = true

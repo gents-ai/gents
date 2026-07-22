@@ -77,3 +77,16 @@ pub(crate) fn version_text() -> String {
         option_env!("GENTS_BUILD_RUSTC").unwrap_or("rustc unknown")
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_response_reports_canonical_repository() {
+        assert_eq!(
+            version_response().repository,
+            "https://github.com/source-inc/gents"
+        );
+    }
+}

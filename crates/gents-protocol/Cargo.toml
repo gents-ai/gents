@@ -3,7 +3,8 @@ name = "gents-protocol"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Shared schemas, client turn-observation protocol, and collection row mirrors for gents"
+repository.workspace = true
+description = "Shared schemas, client turn-observation protocol, and collection row mirrors for Gents"
 
 [dependencies]
 anyhow = { workspace = true }

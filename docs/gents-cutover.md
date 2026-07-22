@@ -73,6 +73,8 @@ Complete these once for the fleet:
   `source-inc/gents` and that `gents version` succeeds.
 - [ ] Prepare a portable manifest root for each host. Keep secrets out of the
   manifest and record how each host receives them.
+- [ ] Provision the GitHub Actions secret `GENTS_API_KEY` for live smoke. Do
+  not retain `AGENT_DAEMON_API_KEY` as an alias.
 - [ ] Decide the new fleet topology and which DIDs require network membership,
   conversation data-plane edges, or cross-deployment subagent permission.
 - [ ] Schedule a quiet repository rename window and update local remotes only

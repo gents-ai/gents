@@ -1,4 +1,4 @@
-//! Domain-specific error types for the agent daemon.
+//! Domain-specific error types for the Gents runtime.
 //!
 //! Replaces bare `anyhow::Result` on public boundaries with typed errors
 //! so callers can distinguish retryable failures from permanent ones.

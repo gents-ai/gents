@@ -24,12 +24,11 @@ env:
   SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
   GENTS_CLI_E2E_MODEL_ENDPOINT: ${{ github.event.inputs.inference_endpoint }}
   GENTS_CLI_E2E_MODEL_NAME: ${{ github.event.inputs.model_name }}
-  GENTS_CLI_E2E_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
+  GENTS_CLI_E2E_API_KEY: ${{ secrets.GENTS_API_KEY }}
   GENTS_TAURI_LIVE_INFERENCE_URL: ${{ github.event.inputs.inference_endpoint }}
   GENTS_TAURI_LIVE_MODEL_NAME: ${{ github.event.inputs.model_name }}
-  GENTS_TAURI_LIVE_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
+  GENTS_TAURI_LIVE_API_KEY: ${{ secrets.GENTS_API_KEY }}
   GENTS_TAURI_LIVE_REQUIRE_REAL_INFERENCE: "1"
-  AGENT_DAEMON_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
 
 jobs:
   live-cli-smoke:

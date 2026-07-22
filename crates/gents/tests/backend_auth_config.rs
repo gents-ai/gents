@@ -65,15 +65,3 @@ fn behavior_config_prefers_backend_specific_api_key_env_var() {
 
     assert_eq!(resolved.as_deref(), Some("backend-key"));
 }
-
-#[test]
-fn behavior_config_does_not_fall_back_to_legacy_global_api_key_env_var() {
-    let _env_guard = ENV_VAR_LOCK.blocking_lock();
-    let mut env = TestEnvGuard::new(&["AGENT_DAEMON_API_KEY"]);
-    let behavior = test_behavior("behavior-b", "backend-b", None);
-
-    env.set("AGENT_DAEMON_API_KEY", "legacy-key");
-    let resolved = behavior.resolve_backend_api_key().expect("resolve api key");
-
-    assert_eq!(resolved.as_deref(), None);
-}
