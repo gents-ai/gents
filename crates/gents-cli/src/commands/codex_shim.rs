@@ -9,12 +9,15 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
-use axum::response::IntoResponse;
+use axum::http::header::AUTHORIZATION;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use codex_app_server_protocol as codex;
 use futures_util::{SinkExt, StreamExt};
 use gents::defra_node::EmbeddedNode;
+use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
@@ -58,6 +61,7 @@ struct ShimState {
     timeout: Duration,
     poll_interval: Duration,
     sidecar: Arc<Mutex<CodexSidecar>>,
+    auth_token: Option<Arc<str>>,
 }
 
 type Outbound = mpsc::UnboundedSender<String>;
@@ -120,6 +124,7 @@ pub(crate) struct CodexShimBindArgs {
     pub(crate) graphql: String,
     pub(crate) agent_did: String,
     pub(crate) behavior_id: Option<String>,
+    pub(crate) auth_token: Option<String>,
     pub(crate) bind_addr: std::net::IpAddr,
     pub(crate) port: u16,
     pub(crate) timeout_secs: u64,
@@ -132,6 +137,9 @@ pub(crate) struct BoundCodexShim {
     trace_path: PathBuf,
     listener: TcpListener,
     app: Router,
+    agent_did: String,
+    behavior_id: String,
+    auth_required: bool,
 }
 
 impl BoundCodexShim {
@@ -145,6 +153,18 @@ impl BoundCodexShim {
 
     pub(crate) fn trace_path(&self) -> &Path {
         &self.trace_path
+    }
+
+    pub(crate) fn agent_did(&self) -> &str {
+        &self.agent_did
+    }
+
+    pub(crate) fn behavior_id(&self) -> &str {
+        &self.behavior_id
+    }
+
+    pub(crate) fn auth_required(&self) -> bool {
+        self.auth_required
     }
 
     pub(crate) fn spawn(self) -> JoinHandle<Result<()>> {
@@ -202,12 +222,8 @@ impl CodexShimBindError {
 pub(crate) async fn bind_codex_shim(
     args: CodexShimBindArgs,
 ) -> std::result::Result<BoundCodexShim, CodexShimBindError> {
-    if args.bind_addr.is_unspecified() {
-        return Err(CodexShimBindError::HostResource(anyhow::anyhow!(
-            "refusing to bind unauthenticated Codex shim on {}; bind loopback or a specific trusted private/Tailscale IP instead",
-            args.bind_addr
-        )));
-    }
+    validate_bind_security(args.bind_addr, args.auth_token.as_deref())
+        .map_err(CodexShimBindError::HostResource)?;
 
     let codex_home = args.home.join("codex-ui");
     let codex_log_dir = codex_home.join("log");
@@ -215,6 +231,8 @@ pub(crate) async fn bind_codex_shim(
         .with_context(|| format!("creating Codex UI log dir {}", codex_log_dir.display()))
         .map_err(CodexShimBindError::HostResource)?;
     let trace_path = codex_log_dir.join("codex-shim-events.jsonl");
+    let agent_did = args.agent_did.clone();
+    let auth_required = args.auth_token.is_some();
 
     let bound_behavior_id = bound_behavior::resolve_bound_behavior_id(
         args.node.as_ref(),
@@ -238,11 +256,12 @@ pub(crate) async fn bind_codex_shim(
         background_execution_registry: args.background_execution_registry,
         graphql: Arc::from(args.graphql.clone()),
         agent_did: Arc::from(args.agent_did.clone()),
-        behavior_id: Arc::from(bound_behavior_id),
+        behavior_id: Arc::from(bound_behavior_id.clone()),
         id_counter: Arc::new(AtomicU64::new(1)),
         timeout: Duration::from_secs(args.timeout_secs),
         poll_interval: Duration::from_millis(args.poll_ms.max(1)),
         sidecar: Arc::new(Mutex::new(CodexSidecar::default())),
+        auth_token: args.auth_token.map(Arc::from),
     };
 
     let app = Router::new()
@@ -260,11 +279,48 @@ pub(crate) async fn bind_codex_shim(
         trace_path,
         listener,
         app,
+        agent_did,
+        behavior_id: bound_behavior_id,
+        auth_required,
     })
 }
 
-async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<ShimState>) -> impl IntoResponse {
+fn validate_bind_security(bind_addr: std::net::IpAddr, auth_token: Option<&str>) -> Result<()> {
+    if bind_addr.is_unspecified() {
+        anyhow::bail!(
+            "refusing to bind app-server shim on unspecified address {bind_addr}; bind loopback or a specific interface instead"
+        );
+    }
+    if !bind_addr.is_loopback() && auth_token.is_none() {
+        anyhow::bail!(
+            "refusing to bind unauthenticated app-server shim on {bind_addr}; set --codex-shim-auth-token-env or bind loopback"
+        );
+    }
+    Ok(())
+}
+
+async fn ws_upgrade(
+    ws: WebSocketUpgrade,
+    State(state): State<ShimState>,
+    headers: HeaderMap,
+) -> Response {
+    if !request_is_authorized(&headers, state.auth_token.as_deref()) {
+        tracing::warn!("rejected unauthorized app-server WebSocket handshake");
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
     ws.on_upgrade(move |socket| handle_socket(socket, state))
+        .into_response()
+}
+
+fn request_is_authorized(headers: &HeaderMap, expected: Option<&str>) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+    headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|provided| bool::from(expected.as_bytes().ct_eq(provided.as_bytes())))
 }
 
 async fn handle_socket(socket: WebSocket, state: ShimState) {
@@ -498,7 +554,9 @@ impl ConnectionState {
 
 #[cfg(test)]
 mod tests {
-    use super::{CodexSidecar, DEFAULT_MEMORY_MODE};
+    use super::{request_is_authorized, validate_bind_security, CodexSidecar, DEFAULT_MEMORY_MODE};
+    use axum::http::header::AUTHORIZATION;
+    use axum::http::{HeaderMap, HeaderValue};
 
     #[test]
     fn memory_mode_defaults_to_disabled_for_unknown_thread() {
@@ -515,5 +573,26 @@ mod tests {
             .insert("t1".to_string(), "enabled".to_string());
         assert_eq!(sidecar.memory_mode_or_default("t1"), "enabled");
         assert_eq!(sidecar.memory_mode_or_default("t2"), "disabled");
+    }
+
+    #[test]
+    fn websocket_auth_requires_exact_bearer_token_when_configured() {
+        let mut headers = HeaderMap::new();
+        assert!(request_is_authorized(&headers, None));
+        assert!(!request_is_authorized(&headers, Some("secret")));
+
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer wrong"));
+        assert!(!request_is_authorized(&headers, Some("secret")));
+
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer secret"));
+        assert!(request_is_authorized(&headers, Some("secret")));
+    }
+
+    #[test]
+    fn non_loopback_bind_requires_authentication() {
+        assert!(validate_bind_security("127.0.0.1".parse().unwrap(), None).is_ok());
+        assert!(validate_bind_security("192.0.2.10".parse().unwrap(), None).is_err());
+        assert!(validate_bind_security("192.0.2.10".parse().unwrap(), Some("secret")).is_ok());
+        assert!(validate_bind_security("0.0.0.0".parse().unwrap(), Some("secret")).is_err());
     }
 }

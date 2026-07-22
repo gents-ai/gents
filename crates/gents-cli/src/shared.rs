@@ -87,7 +87,12 @@ pub(crate) enum CodexShimHealth {
     /// `--no-codex-shim`: not an error, and not a thing to report as degraded.
     Off,
     /// Listening on its port.
-    Listening { websocket: String },
+    Listening {
+        websocket: String,
+        auth_required: bool,
+        bound_agent_did: String,
+        bound_behavior_id: String,
+    },
     /// Waiting for the control plane to supply the bound behavior. Transient by
     /// construction — the supervisor binds on the generation that carries it.
     Pending {
@@ -109,9 +114,17 @@ impl CodexShimHealth {
     pub(crate) fn to_json(&self) -> serde_json::Value {
         match self {
             Self::Off => serde_json::json!({ "status": "off" }),
-            Self::Listening { websocket } => serde_json::json!({
+            Self::Listening {
+                websocket,
+                auth_required,
+                bound_agent_did,
+                bound_behavior_id,
+            } => serde_json::json!({
                 "status": "ok",
                 "websocket": websocket,
+                "auth_required": auth_required,
+                "bound_agent_did": bound_agent_did,
+                "bound_behavior_id": bound_behavior_id,
             }),
             Self::Pending {
                 bound_behavior_id,

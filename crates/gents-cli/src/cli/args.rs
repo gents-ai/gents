@@ -20,6 +20,19 @@ use crate::{
 
 use crate::default_backend_max_queue_depth;
 
+fn parse_env_var_name(value: &str) -> Result<String, String> {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return Err("environment variable name cannot be empty".to_string());
+    };
+    if !(first == '_' || first.is_ascii_alphabetic())
+        || !chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    {
+        return Err(format!("invalid environment variable name {value:?}"));
+    }
+    Ok(value.to_string())
+}
+
 #[derive(Parser)]
 #[command(
     name = "gents",
@@ -529,11 +542,27 @@ pub(crate) struct ServeArgs {
     #[arg(
         long,
         default_value = "127.0.0.1",
-        help = "Address for the Codex shim to listen on. Use a specific trusted private/Tailscale IP for remote Codex clients; default is loopback only"
+        help = "Address for the app-server shim to listen on; non-loopback addresses require --codex-shim-auth-token-env"
     )]
     pub(crate) codex_shim_bind_addr: IpAddr,
     #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_PORT)]
     pub(crate) codex_shim_port: u16,
+    #[arg(
+        long,
+        value_name = "ENV_VAR",
+        value_parser = parse_env_var_name,
+        conflicts_with = "no_codex_shim",
+        help = "Environment variable containing the bearer token required by the app-server WebSocket"
+    )]
+    pub(crate) codex_shim_auth_token_env: Option<String>,
+    #[arg(
+        long,
+        value_name = "WSS_URL",
+        requires = "codex_shim_auth_token_env",
+        conflicts_with = "no_codex_shim",
+        help = "Public wss:// app-server URL advertised when TLS terminates in a reverse proxy"
+    )]
+    pub(crate) codex_shim_public_url: Option<String>,
     #[arg(long, help = "Optional GENTS behavior override for Codex turns")]
     pub(crate) codex_shim_behavior_id: Option<String>,
     #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_TIMEOUT_SECS)]
@@ -597,6 +626,13 @@ pub(crate) struct CodexArgs {
         help = "Codex shim endpoint (ws://HOST:PORT, wss://HOST:PORT, or unix://PATH)"
     )]
     pub(crate) remote: String,
+    #[arg(
+        long,
+        value_name = "ENV_VAR",
+        value_parser = parse_env_var_name,
+        help = "Environment variable containing the bearer token for the remote app server; requires wss:// or loopback ws://"
+    )]
+    pub(crate) remote_auth_token_env: Option<String>,
     #[arg(
         long,
         default_value_t = false,

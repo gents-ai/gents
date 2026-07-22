@@ -360,6 +360,7 @@ mod tests {
             timeout: Duration::from_secs(5),
             poll_interval: Duration::from_secs(60),
             sidecar: Arc::new(Mutex::new(CodexSidecar::default())),
+            auth_token: None,
         };
 
         let mut running = BTreeMap::new();

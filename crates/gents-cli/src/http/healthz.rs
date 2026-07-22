@@ -313,6 +313,9 @@ mod tests {
     fn healthz_reports_a_listening_shim_as_ok() {
         let state = state_with_shim(crate::shared::CodexShimHealth::Listening {
             websocket: "ws://127.0.0.1:9292/".to_string(),
+            auth_required: true,
+            bound_agent_did: "did:key:agent".to_string(),
+            bound_behavior_id: "did:key:agent:default".to_string(),
         });
         let payload = render_healthz_payload(&state, Some(&healthy_data()), None);
 
@@ -321,6 +324,18 @@ mod tests {
                 .pointer("/checks/codex_shim/status")
                 .and_then(Value::as_str),
             Some("ok")
+        );
+        assert_eq!(
+            payload
+                .pointer("/checks/codex_shim/auth_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/checks/codex_shim/bound_agent_did")
+                .and_then(Value::as_str),
+            Some("did:key:agent")
         );
         assert_eq!(payload.get("status").and_then(Value::as_str), Some("ok"));
     }

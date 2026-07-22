@@ -57,15 +57,15 @@ fn status_without_runtime_suggests_init_and_server() -> Result<()> {
 }
 
 #[test]
-fn server_help_does_not_suggest_unspecified_codex_shim_bind() -> Result<()> {
+fn server_help_requires_authentication_for_remote_app_server_bind() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
     let output = run_cli_text(&home_dir, &["server", "--help"])?;
     assert!(
-        output.contains("<trusted-private-or-tailscale-ip>"),
-        "expected trusted private bind guidance in server help, got:\n{output}"
+        output.contains("--codex-shim-auth-token-env"),
+        "expected authenticated remote-bind guidance in server help, got:\n{output}"
     );
     assert!(
         !output.contains("0.0.0.0"),

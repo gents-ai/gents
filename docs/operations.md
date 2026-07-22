@@ -245,16 +245,27 @@ walkthrough](demo.md#part-3--grow-the-link-into-a-fleet).
 
 ## Remote Codex clients
 
-The Codex endpoint binds loopback by default and has no transport
-authentication. To drive a runtime from another machine, bind it to a trusted
-private or Tailscale IP and point the client at it:
+The app-server endpoint binds loopback by default. For remote access, keep the
+listener on loopback, terminate TLS in a reverse proxy, and require a bearer
+token sourced from an environment variable:
 
 ```bash
-gents server --codex-shim-bind-addr <trusted-private-or-tailscale-ip>
-gents codex --remote ws://<that-host>:9292/
+export GENTS_REMOTE_TOKEN="$(openssl rand -hex 32)"
+gents server \
+  --codex-shim-auth-token-env GENTS_REMOTE_TOKEN \
+  --codex-shim-public-url wss://agent.example:443/
+
+# On the client, set the same token without placing it in shell history.
+gents codex \
+  --remote wss://agent.example:443/ \
+  --remote-auth-token-env GENTS_REMOTE_TOKEN
 ```
 
-Never bind it to an unspecified address; the server refuses `0.0.0.0`.
+The reverse proxy must forward the `Authorization` header to
+`ws://127.0.0.1:9292/`. The server refuses unspecified listeners and refuses
+unauthenticated non-loopback listeners. Startup readiness JSON and `/healthz`
+advertise the public WebSocket URL, whether authentication is required, and the
+bound agent and behavior; they never contain the token.
 
 ## Operations API
 
