@@ -110,34 +110,61 @@ pub async fn reconcile_directory_tick(store: &dyn DirectoryStore) -> Result<Dire
         .await
         .context("list directory entries")?;
 
+    // Per-entry error tolerance: one principal's malformed source row (e.g.
+    // no AgentRuntime row, previously producing an unparseable `last_seen`)
+    // must not abort the whole sweep. Warn-and-continue past each failure,
+    // collecting only the first error to return once every entry has had a
+    // chance to converge; outcome sets only ever record operations that
+    // actually succeeded.
     let mut outcome = DirectoryTickOutcome::default();
+    let mut first_error: Option<anyhow::Error> = None;
     for (did, entry) in &desired {
         match existing.get(did) {
             Some(row) if row == entry => {}
-            Some(_) => {
-                store
-                    .upsert_directory_entry(entry)
-                    .await
-                    .with_context(|| format!("refresh directory entry for {did}"))?;
-                outcome.refreshed.insert(did.clone());
-            }
-            None => {
-                store
-                    .upsert_directory_entry(entry)
-                    .await
-                    .with_context(|| format!("upsert directory entry for {did}"))?;
-                outcome.upserted.insert(did.clone());
-            }
+            Some(_) => match store.upsert_directory_entry(entry).await {
+                Ok(()) => {
+                    outcome.refreshed.insert(did.clone());
+                }
+                Err(error) => {
+                    tracing::warn!(agent_did = %did, error = %error, "directory entry refresh failed; continuing sweep");
+                    if first_error.is_none() {
+                        first_error =
+                            Some(error.context(format!("refresh directory entry for {did}")));
+                    }
+                }
+            },
+            None => match store.upsert_directory_entry(entry).await {
+                Ok(()) => {
+                    outcome.upserted.insert(did.clone());
+                }
+                Err(error) => {
+                    tracing::warn!(agent_did = %did, error = %error, "directory entry upsert failed; continuing sweep");
+                    if first_error.is_none() {
+                        first_error =
+                            Some(error.context(format!("upsert directory entry for {did}")));
+                    }
+                }
+            },
         }
     }
     for did in existing.keys() {
         if !desired.contains_key(did) {
-            store
-                .delete_directory_entry(did)
-                .await
-                .with_context(|| format!("retract directory entry for {did}"))?;
-            outcome.retracted.insert(did.clone());
+            match store.delete_directory_entry(did).await {
+                Ok(()) => {
+                    outcome.retracted.insert(did.clone());
+                }
+                Err(error) => {
+                    tracing::warn!(agent_did = %did, error = %error, "directory entry retraction failed; continuing sweep");
+                    if first_error.is_none() {
+                        first_error =
+                            Some(error.context(format!("retract directory entry for {did}")));
+                    }
+                }
+            }
         }
+    }
+    if let Some(error) = first_error {
+        return Err(error);
     }
     Ok(outcome)
 }
@@ -357,7 +384,7 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
     let display_name = escape_graphql_string(&entry.display_name);
     let behaviors = graphql_string_list_literal(entry.behaviors.iter().map(String::as_str));
     let runtime_state = escape_graphql_string(&entry.runtime_state);
-    let last_seen = escape_graphql_string(&entry.last_seen);
+    let last_seen = graphql_nullable_datetime_literal(&entry.last_seen);
     let now = escape_graphql_string(now);
     format!(
         r#"mutation {{
@@ -368,14 +395,14 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
                     display_name: "{display_name}",
                     behaviors: {behaviors},
                     runtime_state: "{runtime_state}",
-                    last_seen: "{last_seen}",
+                    last_seen: {last_seen},
                     updated_at: "{now}"
                 }},
                 update: {{
                     display_name: "{display_name}",
                     behaviors: {behaviors},
                     runtime_state: "{runtime_state}",
-                    last_seen: "{last_seen}",
+                    last_seen: {last_seen},
                     updated_at: "{now}"
                 }}
             ) {{ _docID }}
@@ -404,6 +431,26 @@ fn graphql_string_list_literal<'a>(values: impl IntoIterator<Item = &'a str>) ->
         "null".to_string()
     } else {
         format!("[{}]", items.join(", "))
+    }
+}
+
+/// Renders a nullable `DateTime` literal for `AgentDirectoryEntry.last_seen`.
+/// Blank/whitespace-only input — the default `derive_directory_entries`
+/// produces for a principal with no `AgentRuntime` row — renders as `null`;
+/// DefraDB rejects a non-RFC3339 `""` on create AND upsert alike, and an
+/// unconditional quoted-string render used to poison the whole sweep (one
+/// never-deployed principal wedged the directory forever). Non-blank values
+/// pass through escaped and quoted unchanged: `AgentRuntime.updated_at` is a
+/// String schema-side, not guaranteed RFC3339, so this helper does not
+/// attempt to validate it — a genuinely-garbage non-blank value still fails
+/// that one row, which is acceptable and pre-existing (see the per-entry
+/// error tolerance in `reconcile_directory_tick`).
+fn graphql_nullable_datetime_literal(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        "null".to_string()
+    } else {
+        format!(r#""{}""#, escape_graphql_string(trimmed))
     }
 }
 
@@ -460,4 +507,150 @@ struct DirectoryRow {
     runtime_state: Option<String>,
     #[serde(default)]
     last_seen: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(agent_did: &str, last_seen: &str) -> DirectoryEntry {
+        DirectoryEntry {
+            agent_did: agent_did.to_string(),
+            display_name: "Display".to_string(),
+            behaviors: Vec::new(),
+            runtime_state: "running".to_string(),
+            last_seen: last_seen.to_string(),
+        }
+    }
+
+    /// C2 regression: a principal with no `AgentRuntime` row derives a blank
+    /// `last_seen`; the mutation must render `null`, never `""` — DefraDB
+    /// rejects a non-RFC3339 `DateTime` string on create AND upsert, and an
+    /// unconditional quoted render poisoned the whole directory sweep.
+    #[test]
+    fn upsert_mutation_renders_null_for_blank_last_seen() {
+        for blank in ["", "   "] {
+            let mutation = upsert_directory_entry_mutation(
+                &entry("did:key:no-runtime", blank),
+                "2026-07-23T00:00:00Z",
+            );
+            assert!(
+                mutation.contains("last_seen: null"),
+                "blank last_seen ({blank:?}) must render as null: {mutation}"
+            );
+            assert!(!mutation.contains(r#"last_seen: """#));
+        }
+    }
+
+    #[test]
+    fn upsert_mutation_renders_quoted_last_seen_when_present() {
+        let mutation = upsert_directory_entry_mutation(
+            &entry("did:key:running", "2026-07-20T00:00:00Z"),
+            "2026-07-23T00:00:00Z",
+        );
+        assert!(mutation.contains(r#"last_seen: "2026-07-20T00:00:00Z""#));
+    }
+
+    /// Round-trip consistency: a stored `null` `last_seen` must decode back
+    /// to `""` so the settled comparison against `derive_directory_entries`'
+    /// blank default holds (no perpetual refresh loop for runtime-less
+    /// principals).
+    #[test]
+    fn nullable_datetime_literal_blank_maps_to_null_and_round_trips_via_default() {
+        assert_eq!(graphql_nullable_datetime_literal(""), "null");
+        assert_eq!(graphql_nullable_datetime_literal("  "), "null");
+        // DirectoryRow.last_seen is `Option<String>`; DefraDB's stored `null`
+        // decodes to `None`, and `unwrap_or_default()` in
+        // `list_directory_entries` maps that back to `""` — the same value
+        // `derive_directory_entries` defaults to for a runtime-less principal.
+        let decoded: Option<String> = None;
+        assert_eq!(decoded.unwrap_or_default(), "");
+    }
+
+    /// C2 regression, embedded-node integration (mirrors reciprocal.rs's
+    /// `graphql_tick_retracts_for_signed_revoked_membership`): two principals,
+    /// one WITHOUT an `AgentRuntime` row, converge in one tick — the
+    /// runtime-less principal's directory row must exist with `last_seen`
+    /// round-tripping to `""` rather than aborting the sweep. Deleting a
+    /// principal then retracts exactly its row.
+    #[tokio::test]
+    async fn graphql_tick_converges_runtime_less_principal_and_retracts_on_removal() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(tempdir.path().join("data"))
+                .build()
+                .await?,
+        );
+        crate::ensure_runtime_schemas(&node).await?;
+
+        let seed = r#"mutation {
+            create_AgentPrincipal(input: {
+                agent_did: "did:key:with-runtime",
+                display_name: "With Runtime",
+                enabled: true,
+                created_at: "2026-07-23T00:00:00Z"
+            }) { _docID }
+            create_AgentPrincipal(input: {
+                agent_did: "did:key:no-runtime",
+                display_name: "No Runtime",
+                enabled: true,
+                created_at: "2026-07-23T00:00:00Z"
+            }) { _docID }
+            create_AgentRuntime(input: {
+                agent_did: "did:key:with-runtime",
+                process_state: "running",
+                updated_at: "2026-07-23T00:00:00Z"
+            }) { _docID }
+        }"#;
+        let response = node.execute(seed).await;
+        ensure_no_errors(&response, "seed directory projection principals")?;
+
+        let store = GraphqlDirectoryStore::new(node.clone());
+        let outcome = reconcile_directory_tick(&store).await?;
+        assert_eq!(
+            outcome.upserted,
+            BTreeSet::from([
+                "did:key:with-runtime".to_string(),
+                "did:key:no-runtime".to_string(),
+            ]),
+            "the runtime-less principal must not wedge the sweep"
+        );
+
+        let entries = store.list_directory_entries().await?;
+        let with_runtime = entries
+            .get("did:key:with-runtime")
+            .expect("with-runtime directory row");
+        assert_eq!(with_runtime.runtime_state, "running");
+        let no_runtime = entries
+            .get("did:key:no-runtime")
+            .expect("no-runtime directory row present despite no AgentRuntime row");
+        assert_eq!(
+            no_runtime.last_seen, "",
+            "runtime-less principal's stored null last_seen must round-trip to \"\""
+        );
+
+        // Settled state is a write-free fixpoint: the runtime-less principal
+        // must not keep re-triggering writes forever.
+        let second = reconcile_directory_tick(&store).await?;
+        assert_eq!(second, DirectoryTickOutcome::default());
+
+        let delete = r#"mutation {
+            delete_AgentPrincipal(filter: { agent_did: { _eq: "did:key:no-runtime" } }) { _docID }
+        }"#;
+        let response = node.execute(delete).await;
+        ensure_no_errors(&response, "delete directory-projection principal")?;
+
+        let outcome = reconcile_directory_tick(&store).await?;
+        assert_eq!(
+            outcome.retracted,
+            BTreeSet::from(["did:key:no-runtime".to_string()])
+        );
+
+        let entries = store.list_directory_entries().await?;
+        assert!(!entries.contains_key("did:key:no-runtime"));
+        assert!(entries.contains_key("did:key:with-runtime"));
+
+        Ok(())
+    }
 }
