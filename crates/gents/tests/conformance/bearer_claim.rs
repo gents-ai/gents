@@ -268,6 +268,40 @@ async fn machine_reclaim_upgrades_existing_conversation_intent_template() {
     );
 }
 
+/// Last-claim-wins in the other direction (I2, #714): a member previously
+/// recorded on the wider `machine` template who re-claims with a narrower
+/// `conversation` bearer token must have the intent row narrowed in place.
+/// This is deliberate, not a bug: re-pairing with a QR is an explicit
+/// operator action, and the operator minted that QR — upgrade-only
+/// semantics would make narrowing impossible without manual row surgery.
+#[tokio::test]
+async fn conversation_reclaim_narrows_machine_intent_template() {
+    let store = ClaimPartitionStore {
+        claims: vec![claim("n1", "did:key:phone", "conversation")],
+        ..Default::default()
+    };
+    store
+        .intents
+        .lock()
+        .unwrap()
+        .insert("did:key:phone".to_string());
+    store
+        .intent_templates
+        .lock()
+        .unwrap()
+        .insert("did:key:phone".to_string(), "machine".to_string());
+
+    reconcile_bearer_claim_tick(&store, "did:key:server")
+        .await
+        .expect("tick");
+
+    assert_eq!(
+        store.intent_templates.lock().unwrap().get("did:key:phone"),
+        Some(&"conversation".to_string()),
+        "machine->conversation re-claim must narrow the intent template in place"
+    );
+}
+
 /// Mirrors Lean `claimStep_ownership_safe`: claim processing never mutates
 /// operator-authored memberships (ensure-if-absent leaves existing rows
 /// untouched; the tick only ever writes for its own admitted claimants).

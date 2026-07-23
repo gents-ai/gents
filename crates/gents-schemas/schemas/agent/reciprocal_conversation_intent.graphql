@@ -1,8 +1,9 @@
 # Reciprocal conversation pairing intent: the server's declaration that it will
 # push its own conversation documents back to a dapair-invited member DID once
 # that member's signed PeerEndpoint appears. Distinct from fleet network-control
-# membership: only a `conversation` invite creates one, so the reconciler never
-# auto-wires conversation edges for mesh subagents (fleet no-crosswise invariant).
+# membership: only a conversation-like invite (`conversation` or `machine`)
+# creates one, so the reconciler never auto-wires conversation edges for mesh
+# subagents (fleet no-crosswise invariant).
 #
 # TRUST BASIS — this record is unsigned. An intent row authorizes pushing the
 # server's entire conversation slice to whatever address the member's

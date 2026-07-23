@@ -16,9 +16,9 @@ The authority (the invite issuer's node) processes claims. Admission requires
 BOTH signatures (the issuer's over the token and the claimant's over the
 claim), token freshness, and that the nonce is not already bound to a
 *different* claimant. An admitted claim atomically — in one step — binds the
-nonce to the claimant, mints the membership, and (for `conversation` tokens
-only) records the reciprocal conversation intent consumed by the
-`ReciprocalConversation` derivation.
+nonce to the claimant, mints the membership, and (for conversation-like
+tokens — `conversation` or `machine`) records the reciprocal conversation
+intent consumed by the `ReciprocalConversation` derivation.
 
 Key differences from the v5 DID-bound join (`Transition.lean`,
 `NetworkMembership.lean`):

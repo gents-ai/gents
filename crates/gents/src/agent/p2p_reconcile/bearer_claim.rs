@@ -127,9 +127,15 @@ pub trait BearerClaimStore: Send + Sync {
     /// Author the admin-signed membership IF ABSENT. A row in any status
     /// (including operator-revoked) is left untouched.
     async fn ensure_membership(&self, network_id: &str, member_did: &str) -> Result<()>;
-    /// Record the reciprocal conversation intent IF ABSENT, or upgrade its
+    /// Record the reciprocal conversation intent IF ABSENT, or overwrite its
     /// template in place if the existing row's template differs from this
-    /// claim's (a conversation→machine re-claim widens the row).
+    /// claim's. Last-claim-wins in BOTH directions: a conversation→machine
+    /// re-claim widens the row (adds the directory), and — deliberately — a
+    /// later machine→conversation re-claim narrows it back (drops the
+    /// directory from that member's replicator). Re-pairing with a QR is an
+    /// explicit operator action; the operator minted that QR, so honoring
+    /// its template exactly, in either direction, is correct. Upgrade-only
+    /// semantics would make narrowing impossible without manual row surgery.
     async fn ensure_conversation_intent(&self, member_did: &str, template: &str) -> Result<()>;
 }
 
