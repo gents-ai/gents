@@ -41,6 +41,15 @@ pub enum Scope {
     /// Explicit per-collection filter rules for directional pairings where
     /// different collections scope to different DID sources.
     PerCollection(&'static [CollectionRule]),
+    /// Like `PeerDid`, but the named collections replicate unfiltered.
+    /// Plane-dependent exactly like `PeerDid` (control plane: peer DID;
+    /// data plane: local/self DID) — the exemption list is the only
+    /// difference. Needed by templates that mix a DID-scoped conversation
+    /// plane with unfiltered discovery collections (machine, #714).
+    PeerDidExcept {
+        field: &'static str,
+        exempt: &'static [&'static str],
+    },
 }
 
 /// DID source for one per-collection filter rule.
@@ -133,53 +142,6 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "AgentConversation",
     "CompactionEntry",
     AGENT_DIRECTORY_COLLECTION,
-];
-
-/// Machine template rules: conversation collections stay member-scoped
-/// (same `agent_did == peer` predicate the `conversation` template's
-/// `Scope::PeerDid` produces); `AgentDirectoryEntry` has NO rule and thus
-/// no filter — directory rows carry the agent's DID, not the member's.
-const MACHINE_RULES: &[CollectionRule] = &[
-    CollectionRule {
-        collection: "AgentRequest",
-        field: "agent_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentResponse",
-        field: "agent_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentMessage",
-        field: "agent_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentToolCall",
-        field: "agent_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentToolResult",
-        field: "agent_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentSession",
-        field: "agent_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "AgentConversation",
-        field: "agent_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "CompactionEntry",
-        field: "agent_did",
-        source: DidSource::PeerDid,
-    },
 ];
 
 /// Agent-config collections: behavior + tool configuration.  Unscoped because
@@ -281,7 +243,15 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     ScopeTemplate {
         id: MACHINE_TEMPLATE,
         collections: MACHINE_COLLECTIONS,
-        scope: Scope::PerCollection(MACHINE_RULES),
+        // Conversation collections stay member-scoped exactly like the
+        // `conversation` template (plane-dependent: peer DID on the control
+        // plane, self DID on the data plane); `AgentDirectoryEntry` is the
+        // sole exemption and replicates unfiltered on both planes —
+        // directory rows carry the agent's DID, not the member's (#714 C1).
+        scope: Scope::PeerDidExcept {
+            field: "agent_did",
+            exempt: &[AGENT_DIRECTORY_COLLECTION],
+        },
         delivery: Delivery::Push,
     },
     ScopeTemplate {
@@ -351,6 +321,9 @@ pub fn resolve_template(id: &str) -> Option<&'static ScopeTemplate> {
 /// - `Scope::Unscoped` → empty map (no filtering).
 /// - `Scope::PerCollection(rules)` → insert each exact collection rule using
 ///   either the peer DID or local DID as the value source.
+/// - `Scope::PeerDidExcept { field, exempt }` → same as `PeerDid`, but
+///   collections named in `exempt` are skipped (no predicate, i.e.
+///   unfiltered on the control plane).
 pub fn scope_filter(
     scope: &Scope,
     collections: &[&str],
@@ -360,6 +333,19 @@ pub fn scope_filter(
     match scope {
         Scope::PeerDid { field } => collections
             .iter()
+            .map(|&col| {
+                (
+                    col.to_string(),
+                    FilterPredicate {
+                        field: (*field).to_string(),
+                        value: peer_did.to_string(),
+                    },
+                )
+            })
+            .collect(),
+        Scope::PeerDidExcept { field, exempt } => collections
+            .iter()
+            .filter(|&&col| !exempt.contains(&col))
             .map(|&col| {
                 (
                     col.to_string(),
@@ -393,6 +379,9 @@ pub fn scope_filter(
 /// Templates whose bearer/dapair claims mint a reciprocal conversation
 /// intent (mirrors Lean `conversationLike` in BearerClaim.lean).
 pub fn conversation_like(id: &str) -> bool {
+    // Rust trims incoming ids before applying the model's exact-equality
+    // predicate: normalization happens at this boundary, not in the model —
+    // Lean `conversationLike` is exact string equality with no trimming.
     let id = id.trim();
     id == "conversation" || id == MACHINE_TEMPLATE
 }

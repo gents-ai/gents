@@ -1086,7 +1086,7 @@ fn data_plane_desired_from_pairing_row(
 
 fn scope_requires_peer_did(scope: &Scope) -> bool {
     match scope {
-        Scope::PeerDid { .. } => true,
+        Scope::PeerDid { .. } | Scope::PeerDidExcept { .. } => true,
         Scope::Unscoped => false,
         Scope::PerCollection(rules) => rules
             .iter()
@@ -1096,7 +1096,7 @@ fn scope_requires_peer_did(scope: &Scope) -> bool {
 
 fn data_plane_scope_requires_signed_peer_did(scope: &Scope) -> bool {
     match scope {
-        Scope::PeerDid { .. } | Scope::Unscoped => false,
+        Scope::PeerDid { .. } | Scope::PeerDidExcept { .. } | Scope::Unscoped => false,
         Scope::PerCollection(rules) => rules
             .iter()
             .any(|rule| matches!(rule.source, DidSource::PeerDid)),
@@ -1112,6 +1112,19 @@ fn data_plane_scope_filter(
     match scope {
         Scope::PeerDid { field } => collections
             .iter()
+            .map(|&col| {
+                (
+                    col.to_string(),
+                    super::templates::FilterPredicate {
+                        field: (*field).to_string(),
+                        value: local_did.to_string(),
+                    },
+                )
+            })
+            .collect(),
+        Scope::PeerDidExcept { field, exempt } => collections
+            .iter()
+            .filter(|&&col| !exempt.contains(&col))
             .map(|&col| {
                 (
                     col.to_string(),
@@ -1420,6 +1433,63 @@ mod tests {
                 .get("AgentRequest")
                 .map(|filter| (filter.field.as_str(), filter.value.as_str())),
             Some(("agent_did", "did:key:self"))
+        );
+    }
+
+    /// #714 C1 regression: the `machine` template's conversation collections
+    /// must scope to the same DID `conversation` uses on the data plane
+    /// (self DID — the server pushes its own slice), and `AgentDirectoryEntry`
+    /// must be the sole exemption, replicating unfiltered so machine-paired
+    /// clients actually receive directory rows.
+    #[test]
+    fn data_plane_desired_machine_scopes_conversation_like_conversation_and_exempts_directory() {
+        let signed_endpoint = NetworkEndpointEntry {
+            peer_id: "peer-b".to_string(),
+            agent_did: "did:key:peer-b".to_string(),
+            address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        };
+        let desired = data_plane_desired_from_pairing_row(
+            PairingStateRow {
+                agent_did: None,
+                collections: None,
+                replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
+                template: Some("machine".to_string()),
+                replicator_filter: None,
+            },
+            &signed_endpoint,
+            "did:key:self",
+        )
+        .expect("data-plane desired")
+        .expect("some data-plane layer");
+
+        assert!(desired
+            .replicator_collections
+            .contains(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION));
+        for col in [
+            "AgentRequest",
+            "AgentResponse",
+            "AgentMessage",
+            "AgentToolCall",
+            "AgentToolResult",
+            "AgentSession",
+            "AgentConversation",
+            "CompactionEntry",
+        ] {
+            assert_eq!(
+                desired
+                    .replicator_filter
+                    .get(col)
+                    .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+                Some(("agent_did", "did:key:self")),
+                "conversation collection {col} must be self-scoped exactly like `conversation`"
+            );
+        }
+        assert!(
+            desired
+                .replicator_filter
+                .get(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION)
+                .is_none(),
+            "directory must replicate unfiltered on the data plane"
         );
     }
 
@@ -2581,6 +2651,51 @@ mod tests {
             assert_eq!(predicate.field, "requester_did");
             assert_eq!(predicate.value, "did:key:coord");
         }
+    }
+
+    /// #714 C1 regression: on the control plane, `machine`'s conversation
+    /// collections must resolve to the peer DID exactly like `conversation`
+    /// does, and `AgentDirectoryEntry` must carry no filter (the exemption).
+    #[test]
+    fn control_plane_desired_machine_scopes_conversation_like_conversation_and_exempts_directory() {
+        let desired = desired_from_pairing_row(
+            desired_row(Some("machine"), Some("did:key:phone")),
+            "did:key:server",
+        )
+        .expect("template resolves")
+        .expect("some desired layer");
+
+        assert!(
+            desired.collections.is_empty(),
+            "Push templates must not subscribe"
+        );
+        assert!(desired
+            .replicator_collections
+            .contains(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION));
+        for col in [
+            "AgentRequest",
+            "AgentResponse",
+            "AgentMessage",
+            "AgentToolCall",
+            "AgentToolResult",
+            "AgentSession",
+            "AgentConversation",
+            "CompactionEntry",
+        ] {
+            let pred = desired
+                .replicator_filter
+                .get(col)
+                .unwrap_or_else(|| panic!("missing filter for conversation collection {col}"));
+            assert_eq!(pred.field, "agent_did");
+            assert_eq!(pred.value, "did:key:phone");
+        }
+        assert!(
+            desired
+                .replicator_filter
+                .get(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION)
+                .is_none(),
+            "directory must replicate unfiltered on the control plane"
+        );
     }
 
     #[test]
