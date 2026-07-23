@@ -214,6 +214,7 @@ Built-in templates:
 | `backup` | Same collection set as `conversation` | Unscoped (all docs) | Replicate |
 | `discovery` | Network membership + agent config bootstrap docs | Unscoped | Replicate |
 | `network-control` | Network root, membership, endpoints, join requests | Unscoped | Replicate |
+| `machine` | Conversation collections + agent directory (fleet discovery) | Unscoped | Push |
 
 Use `network-control` for signed fleet enrollment and `conversation` for
 application data-plane rows:
@@ -228,6 +229,31 @@ AMY_INVITE=$(
 gents p2p pairings join --home /tmp/coding "$AMY_INVITE"
 # join reads the template from the token; pass --template only to override
 ```
+
+## Bearer pairing and fleet discovery
+
+The examples above use `--member-did` for node-to-node enrollment. For
+unsigned, bearer-token based pairing (e.g. via QR code), use `--bearer`:
+
+```bash
+gents p2p pairings invite --bearer --qr --template conversation
+gents p2p pairings invite --bearer --qr --template machine
+```
+
+### Fleet discovery (machine pairing)
+
+Mint the invite with the `machine` template to attach a client to the whole
+home rather than a single conversation:
+
+    gents p2p pairings invite --bearer --qr --template machine
+
+A machine claim behaves exactly like a conversation claim (membership +
+reciprocal conversation plane) and additionally replicates
+`AgentDirectoryEntry` — a live, read-only index of every agent principal on
+the home (display name, DID, behaviors, runtime state), including agents
+created after pairing. Clients render an agent picker from it and address
+`AgentRequest`s to the picked `agent_did`. Existing `conversation` pairings
+are unchanged; re-pair with a machine QR to opt in.
 
 ## Admin filtered replication
 
