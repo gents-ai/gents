@@ -55,8 +55,46 @@ pub trait DirectoryStore: Send + Sync {
     async fn delete_directory_entry(&self, agent_did: &str) -> Result<()>;
 }
 
+/// Canonicalize a runtime `updated_at` into the exact lexical form DefraDB's
+/// `DateTime` column stores and returns, so a settled directory row stays a
+/// write-free fixpoint.
+///
+/// `AgentRuntime.updated_at` is a *String* column the runtime writes as
+/// `Utc::now().to_rfc3339()` — offset `+00:00`, sub-second precision — but
+/// `AgentDirectoryEntry.last_seen` is a `DateTime` column that re-serializes on
+/// storage: it renders the offset as `Z`, and its sub-second rendering is not
+/// guaranteed byte-stable (Go's DefraDB trims trailing zeros; chrono buckets to
+/// 3/6/9 digits). Comparing the raw source string against the normalized stored
+/// string made `existing != desired` on *every* sweep, so each tick re-upserted
+/// the row, and each upsert re-fired the Update-driven sweep — an unbounded
+/// write/event storm that starved the runtime.
+///
+/// Quantizing to whole-second UTC `...Z` removes the sub-second ambiguity
+/// entirely: DefraDB round-trips a second-precision `Z` value unchanged (the
+/// conformance fence and the embedded-node fixpoint test pin this), and
+/// sub-second freshness is not meaningful for a fleet "last seen". The function
+/// is idempotent (`canon(canon(x)) == canon(x)`), preserving the model's
+/// projection idempotence. Blank input (a principal with no `AgentRuntime` row)
+/// stays blank → rendered as `null`. Genuinely unparseable non-blank input
+/// passes through trimmed unchanged; that one row still fails its upsert, as
+/// before, under the per-entry error tolerance in `reconcile_directory_tick`.
+fn canonicalize_last_seen(updated_at: &str) -> String {
+    let trimmed = updated_at.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    match chrono::DateTime::parse_from_rfc3339(trimmed) {
+        Ok(parsed) => parsed
+            .with_timezone(&Utc)
+            .to_rfc3339_opts(SecondsFormat::Secs, true),
+        Err(_) => trimmed.to_string(),
+    }
+}
+
 /// The projection: one entry per principal, contents a function of the
-/// principal's payload (display name, behavior names, runtime state).
+/// principal's payload (display name, behavior names, runtime state). The
+/// runtime `updated_at` is canonicalized (see `canonicalize_last_seen`) so the
+/// derived `last_seen` matches its own stored `DateTime` round-trip.
 /// Mirrors Lean `project`.
 pub fn derive_directory_entries(
     principals: &[(String, String)],
@@ -70,7 +108,7 @@ pub fn derive_directory_entries(
             let mut names = behaviors.get(did).cloned().unwrap_or_default();
             names.sort();
             names.dedup();
-            let (runtime_state, last_seen) = runtimes.get(did).cloned().unwrap_or_default();
+            let (runtime_state, updated_at) = runtimes.get(did).cloned().unwrap_or_default();
             (
                 did.clone(),
                 DirectoryEntry {
@@ -78,7 +116,7 @@ pub fn derive_directory_entries(
                     display_name: display_name.clone(),
                     behaviors: names,
                     runtime_state,
-                    last_seen,
+                    last_seen: canonicalize_last_seen(&updated_at),
                 },
             )
         })
@@ -567,6 +605,93 @@ mod tests {
         assert_eq!(decoded.unwrap_or_default(), "");
     }
 
+    #[test]
+    fn canonicalize_last_seen_quantizes_offset_and_subseconds_to_utc_seconds() {
+        // The exact shape the runtime writes: `Utc::now().to_rfc3339()` —
+        // `+00:00` offset, sub-second precision. Must render whole-second `Z`.
+        assert_eq!(
+            canonicalize_last_seen("2026-07-23T23:30:55.845794+00:00"),
+            "2026-07-23T23:30:55Z"
+        );
+        // Non-UTC offset is converted to UTC before quantizing.
+        assert_eq!(
+            canonicalize_last_seen("2026-07-23T18:30:55.5-05:00"),
+            "2026-07-23T23:30:55Z"
+        );
+        // Already canonical → unchanged (idempotent).
+        assert_eq!(
+            canonicalize_last_seen("2026-07-23T23:30:55Z"),
+            "2026-07-23T23:30:55Z"
+        );
+        assert_eq!(
+            canonicalize_last_seen(&canonicalize_last_seen("2026-07-23T23:30:55.845794+00:00")),
+            "2026-07-23T23:30:55Z"
+        );
+        // Blank stays blank (rendered as null downstream); unparseable passes
+        // through trimmed (that one row fails its upsert, per-entry tolerant).
+        assert_eq!(canonicalize_last_seen(""), "");
+        assert_eq!(canonicalize_last_seen("   "), "");
+        assert_eq!(canonicalize_last_seen("not-a-date"), "not-a-date");
+    }
+
+    /// Regression fence for the settled-fixpoint bug: an `AgentRuntime.updated_at`
+    /// written in the runtime's real `Utc::now().to_rfc3339()` shape (offset
+    /// `+00:00`, sub-second precision) used to differ from its own stored
+    /// `AgentDirectoryEntry.last_seen` `DateTime` round-trip (offset `Z`),
+    /// making every sweep re-upsert and — since the sweep runs on Update events
+    /// — self-perpetuate into an unbounded write/event storm. Seeding the exact
+    /// runtime format and asserting the second tick is write-free pins the fix.
+    #[tokio::test]
+    async fn graphql_tick_is_write_free_fixpoint_for_runtime_updated_at_format() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(tempdir.path().join("data"))
+                .build()
+                .await?,
+        );
+        crate::ensure_runtime_schemas(&node).await?;
+        let updated_at = Utc::now().to_rfc3339();
+        let seed = format!(
+            r#"mutation {{
+                create_AgentPrincipal(input: {{
+                    agent_did: "did:key:real",
+                    display_name: "Real",
+                    enabled: true,
+                    created_at: "2026-07-23T00:00:00Z"
+                }}) {{ _docID }}
+                create_AgentRuntime(input: {{
+                    agent_did: "did:key:real",
+                    process_state: "running",
+                    updated_at: "{updated_at}"
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = node.execute(&seed).await;
+        ensure_no_errors(&response, "seed runtime-format updated_at")?;
+
+        let store = GraphqlDirectoryStore::new(node.clone());
+        let first = reconcile_directory_tick(&store).await?;
+        assert_eq!(first.upserted, BTreeSet::from(["did:key:real".to_string()]));
+
+        // The stored, canonicalized last_seen is whole-second UTC `Z`.
+        let stored = store.list_directory_entries().await?;
+        assert_eq!(
+            stored.get("did:key:real").map(|e| e.last_seen.as_str()),
+            Some(canonicalize_last_seen(&updated_at).as_str())
+        );
+
+        // The load-bearing property: a second tick over unchanged sources is a
+        // write-free fixpoint (no self-perpetuating storm).
+        let second = reconcile_directory_tick(&store).await?;
+        assert_eq!(
+            second,
+            DirectoryTickOutcome::default(),
+            "settled state must be a write-free fixpoint for the runtime updated_at format"
+        );
+        Ok(())
+    }
+
     /// C2 regression, embedded-node integration (mirrors reciprocal.rs's
     /// `graphql_tick_retracts_for_signed_revoked_membership`): two principals,
     /// one WITHOUT an `AgentRuntime` row, converge in one tick — the
@@ -600,7 +725,7 @@ mod tests {
             create_AgentRuntime(input: {
                 agent_did: "did:key:with-runtime",
                 process_state: "running",
-                updated_at: "2026-07-23T00:00:00Z"
+                updated_at: "2026-07-23T12:34:56.845794+00:00"
             }) { _docID }
         }"#;
         let response = node.execute(seed).await;
@@ -622,6 +747,11 @@ mod tests {
             .get("did:key:with-runtime")
             .expect("with-runtime directory row");
         assert_eq!(with_runtime.runtime_state, "running");
+        // The non-canonical `+00:00`/sub-second updated_at is quantized to
+        // whole-second UTC `Z`, matching its own stored DateTime round-trip so
+        // the second tick below is write-free rather than a self-perpetuating
+        // storm.
+        assert_eq!(with_runtime.last_seen, "2026-07-23T12:34:56Z");
         let no_runtime = entries
             .get("did:key:no-runtime")
             .expect("no-runtime directory row present despite no AgentRuntime row");
