@@ -65,7 +65,7 @@ fn reciprocal_derivation_is_idempotent_and_convergent() {
 }
 
 struct ReciprocalPartitionStore {
-    intents: BTreeSet<String>,
+    intents: BTreeMap<String, String>,
     revoked_members: BTreeSet<String>,
     endpoints: BTreeMap<String, NetworkEndpointEntry>,
     reciprocal_owned: Mutex<BTreeMap<String, ReciprocalRowState>>,
@@ -76,13 +76,16 @@ struct ReciprocalPartitionStore {
 
 impl ReciprocalPartitionStore {
     fn new(
-        intents: &[&str],
+        intents: &[(&str, &str)],
         endpoints: Vec<NetworkEndpointEntry>,
-        reciprocal_owned: &[(&str, &str)],
+        reciprocal_owned: &[(&str, &str, &str)],
         operator_owned: &[&str],
     ) -> Self {
         Self {
-            intents: intents.iter().map(|value| value.to_string()).collect(),
+            intents: intents
+                .iter()
+                .map(|&(did, template)| (did.to_string(), template.to_string()))
+                .collect(),
             revoked_members: BTreeSet::new(),
             endpoints: endpoints
                 .into_iter()
@@ -91,11 +94,12 @@ impl ReciprocalPartitionStore {
             reciprocal_owned: Mutex::new(
                 reciprocal_owned
                     .iter()
-                    .map(|&(peer, address)| {
+                    .map(|&(peer, address, template)| {
                         (
                             peer.to_string(),
                             ReciprocalRowState {
                                 address: address.to_string(),
+                                template: template.to_string(),
                             },
                         )
                     })
@@ -113,7 +117,7 @@ impl ReciprocalPartitionStore {
 
 #[async_trait]
 impl ReciprocalStore for ReciprocalPartitionStore {
-    async fn load_intent_dids(&self) -> Result<BTreeSet<String>> {
+    async fn load_intents(&self) -> Result<BTreeMap<String, String>> {
         Ok(self.intents.clone())
     }
 
@@ -130,11 +134,13 @@ impl ReciprocalStore for ReciprocalPartitionStore {
         peer_id: &str,
         agent_did: &str,
         address: &str,
+        template: &str,
     ) -> Result<()> {
         self.reciprocal_owned.lock().unwrap().insert(
             peer_id.to_string(),
             ReciprocalRowState {
                 address: address.to_string(),
+                template: template.to_string(),
             },
         );
         self.upserts.lock().unwrap().push((
@@ -169,7 +175,10 @@ impl ReciprocalStore for ReciprocalPartitionStore {
 #[tokio::test]
 async fn reciprocal_reconcile_is_ownership_safe() {
     let store = ReciprocalPartitionStore::new(
-        &["did:key:phone", "did:key:taken"],
+        &[
+            ("did:key:phone", "conversation"),
+            ("did:key:taken", "conversation"),
+        ],
         vec![
             endpoint("did:key:phone", "peer-phone", "/ticket/phone"),
             endpoint("did:key:taken", "peer-operator", "/ticket/taken"),
@@ -210,9 +219,9 @@ async fn reciprocal_reconcile_is_ownership_safe() {
 #[tokio::test]
 async fn reciprocal_reconcile_converges_row_contents_then_quiesces() {
     let store = ReciprocalPartitionStore::new(
-        &["did:key:phone"],
+        &[("did:key:phone", "conversation")],
         vec![endpoint("did:key:phone", "peer-phone", "/ticket/phone-new")],
-        &[("peer-phone", "/ticket/phone-old")],
+        &[("peer-phone", "/ticket/phone-old", "conversation")],
         &[],
     );
 
@@ -251,9 +260,12 @@ async fn reciprocal_reconcile_converges_row_contents_then_quiesces() {
 #[tokio::test]
 async fn reciprocal_retraction_removes_only_derived_rows() {
     let store = ReciprocalPartitionStore::new(
-        &["did:key:phone-b"],
+        &[("did:key:phone-b", "conversation")],
         vec![endpoint("did:key:phone-b", "peer-b", "/ticket/b")],
-        &[("peer-a", "/ticket/a"), ("peer-b", "/ticket/b")],
+        &[
+            ("peer-a", "/ticket/a", "conversation"),
+            ("peer-b", "/ticket/b", "conversation"),
+        ],
         &["peer-operator"],
     );
 
@@ -280,12 +292,18 @@ async fn reciprocal_retraction_removes_only_derived_rows() {
 #[tokio::test]
 async fn reciprocal_revocation_retracts_only_the_revoked_member() {
     let mut store = ReciprocalPartitionStore::new(
-        &["did:key:phone-a", "did:key:phone-b"],
+        &[
+            ("did:key:phone-a", "conversation"),
+            ("did:key:phone-b", "conversation"),
+        ],
         vec![
             endpoint("did:key:phone-a", "peer-a", "/ticket/a"),
             endpoint("did:key:phone-b", "peer-b", "/ticket/b"),
         ],
-        &[("peer-a", "/ticket/a"), ("peer-b", "/ticket/b")],
+        &[
+            ("peer-a", "/ticket/a", "conversation"),
+            ("peer-b", "/ticket/b", "conversation"),
+        ],
         &[],
     );
     store.revoked_members.insert("did:key:phone-a".to_string());
@@ -301,4 +319,41 @@ async fn reciprocal_revocation_retracts_only_the_revoked_member() {
         .lock()
         .unwrap()
         .contains_key("peer-b"));
+}
+
+/// A machine re-claim upgrades an existing conversation-template row: settled
+/// is full-row equality including template, so the drifted row refreshes in
+/// one sweep and the refreshed row carries the machine template.
+#[tokio::test]
+async fn reciprocal_reconcile_converges_template_drift() {
+    let store = ReciprocalPartitionStore::new(
+        &[("did:key:phone", "machine")],
+        vec![endpoint("did:key:phone", "peer-phone", "/ticket/phone")],
+        &[("peer-phone", "/ticket/phone", "conversation")],
+        &[],
+    );
+
+    let first = reconcile_reciprocal_tick(&store, "did:key:server")
+        .await
+        .expect("first tick");
+    assert_eq!(first.refreshed, BTreeSet::from(["peer-phone".to_string()]));
+    assert_eq!(
+        store
+            .reciprocal_owned
+            .lock()
+            .unwrap()
+            .get("peer-phone")
+            .expect("row present")
+            .template,
+        "machine"
+    );
+
+    let second = reconcile_reciprocal_tick(&store, "did:key:server")
+        .await
+        .expect("second tick");
+    assert_eq!(
+        second,
+        ReciprocalTickOutcome::default(),
+        "settled after upgrade"
+    );
 }

@@ -42,11 +42,14 @@ pub fn derive_reciprocal_desired<'a>(
 /// Reciprocal-owned `DataPlanePairingDesired` state the tick reconciles. The
 /// engine always materializes from the live signed endpoint, but the row must
 /// still converge to the derived value (Lean `settled` is full-row equality,
-/// not peer-id membership) — a drifted address would otherwise warn on every
-/// engine sweep forever.
+/// including the intent's template, not peer-id membership) — a drifted
+/// address or a stale template (e.g. a machine re-claim over a
+/// conversation-template row) would otherwise warn on every engine sweep
+/// forever.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReciprocalRowState {
     pub address: String,
+    pub template: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -58,7 +61,10 @@ pub struct ReciprocalTickOutcome {
 
 #[async_trait]
 pub trait ReciprocalStore: Send + Sync {
-    async fn load_intent_dids(&self) -> Result<BTreeSet<String>>;
+    /// Live `ReciprocalConversationIntent` rows, keyed by member DID, mapped
+    /// to the template the intent was stamped with (Lean `conversationLike`
+    /// filter — `conversation` or `machine`).
+    async fn load_intents(&self) -> Result<BTreeMap<String, String>>;
     async fn load_revoked_member_dids(&self) -> Result<BTreeSet<String>>;
     async fn load_endpoint_for_did(&self, did: &str) -> Result<Option<NetworkEndpointEntry>>;
     async fn upsert_reciprocal_data_plane(
@@ -66,6 +72,7 @@ pub trait ReciprocalStore: Send + Sync {
         peer_id: &str,
         agent_did: &str,
         address: &str,
+        template: &str,
     ) -> Result<()>;
     async fn delete_reciprocal_data_plane(&self, peer_id: &str) -> Result<()>;
     async fn list_reciprocal_data_plane_rows(&self)
@@ -82,10 +89,11 @@ pub async fn reconcile_reciprocal_tick(
     store: &dyn ReciprocalStore,
     self_did: &str,
 ) -> Result<ReciprocalTickOutcome> {
-    let intent_dids = store
-        .load_intent_dids()
+    let intents = store
+        .load_intents()
         .await
         .context("load reciprocal conversation intents")?;
+    let intent_dids: BTreeSet<String> = intents.keys().cloned().collect();
     let revoked_member_dids = store
         .load_revoked_member_dids()
         .await
@@ -120,11 +128,20 @@ pub async fn reconcile_reciprocal_tick(
 
     let mut outcome = ReciprocalTickOutcome::default();
     for (peer, entry) in &desired {
+        let template = intents
+            .get(&entry.agent_did)
+            .map(String::as_str)
+            .unwrap_or(RECIPROCAL_CONVERSATION_TEMPLATE);
         match existing.get(peer) {
-            Some(row) if row.address == entry.address => {}
+            Some(row) if row.address == entry.address && row.template == template => {}
             Some(_) => {
                 store
-                    .upsert_reciprocal_data_plane(&entry.peer_id, self_did, &entry.address)
+                    .upsert_reciprocal_data_plane(
+                        &entry.peer_id,
+                        self_did,
+                        &entry.address,
+                        template,
+                    )
                     .await
                     .with_context(|| {
                         format!("refresh reciprocal data-plane desired row for {peer}")
@@ -133,7 +150,12 @@ pub async fn reconcile_reciprocal_tick(
             }
             None => {
                 store
-                    .upsert_reciprocal_data_plane(&entry.peer_id, self_did, &entry.address)
+                    .upsert_reciprocal_data_plane(
+                        &entry.peer_id,
+                        self_did,
+                        &entry.address,
+                        template,
+                    )
                     .await
                     .with_context(|| {
                         format!("upsert reciprocal data-plane desired row for {peer}")
@@ -222,10 +244,10 @@ impl GraphqlReciprocalStore {
     }
 
     pub async fn load_materializable_entries(&self) -> Result<Vec<NetworkEndpointEntry>> {
-        let intent_dids = <Self as ReciprocalStore>::load_intent_dids(self).await?;
+        let intents = <Self as ReciprocalStore>::load_intents(self).await?;
         let revoked_member_dids = <Self as ReciprocalStore>::load_revoked_member_dids(self).await?;
         let mut endpoints = Vec::new();
-        for did in intent_dids {
+        for did in intents.into_keys() {
             if revoked_member_dids.contains(&did) {
                 continue;
             }
@@ -259,7 +281,7 @@ impl GraphqlReciprocalStore {
 
 #[async_trait]
 impl ReciprocalStore for GraphqlReciprocalStore {
-    async fn load_intent_dids(&self) -> Result<BTreeSet<String>> {
+    async fn load_intents(&self) -> Result<BTreeMap<String, String>> {
         let query = r#"{
             ReciprocalConversationIntent {
                 member_did
@@ -272,10 +294,16 @@ impl ReciprocalStore for GraphqlReciprocalStore {
             rows::<IntentRow>(&response, "ReciprocalConversationIntent")?
                 .into_iter()
                 .filter(|row| {
-                    row.template.as_deref().map(str::trim) == Some(RECIPROCAL_CONVERSATION_TEMPLATE)
+                    row.template
+                        .as_deref()
+                        .map(super::templates::conversation_like)
+                        .unwrap_or(false)
                 })
-                .filter_map(|row| row.member_did.map(|did| did.trim().to_string()))
-                .filter(|did| !did.is_empty())
+                .filter_map(|row| {
+                    let did = row.member_did?.trim().to_string();
+                    let template = row.template?.trim().to_string();
+                    (!did.is_empty()).then_some((did, template))
+                })
                 .collect(),
         )
     }
@@ -337,6 +365,7 @@ impl ReciprocalStore for GraphqlReciprocalStore {
         peer_id: &str,
         agent_did: &str,
         address: &str,
+        template: &str,
     ) -> Result<()> {
         if should_skip_reciprocal_upsert(self.existing_data_plane_ownership(peer_id).await?) {
             tracing::warn!(
@@ -347,7 +376,8 @@ impl ReciprocalStore for GraphqlReciprocalStore {
         }
 
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-        let mutation = upsert_reciprocal_data_plane_mutation(peer_id, agent_did, address, &now)?;
+        let mutation =
+            upsert_reciprocal_data_plane_mutation(peer_id, agent_did, address, template, &now)?;
         let response = self.node.execute(&mutation).await;
         ensure_no_errors(&response, "upsert reciprocal DataPlanePairingDesired")
     }
@@ -365,6 +395,7 @@ impl ReciprocalStore for GraphqlReciprocalStore {
             DataPlanePairingDesired(filter: { source: { _eq: "reciprocal" } }) {
                 peer_id
                 replicator_addresses
+                template
             }
         }"#;
         let response = self.node.execute(query).await;
@@ -383,7 +414,14 @@ impl ReciprocalStore for GraphqlReciprocalStore {
                     .map(|value| value.trim().to_string())
                     .find(|value| !value.is_empty())
                     .unwrap_or_default();
-                Some((peer_id, ReciprocalRowState { address }))
+                let template = row
+                    .template
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(RECIPROCAL_CONVERSATION_TEMPLATE)
+                    .to_string();
+                Some((peer_id, ReciprocalRowState { address, template }))
             })
             .collect())
     }
@@ -417,10 +455,11 @@ pub fn upsert_reciprocal_data_plane_mutation(
     peer_id: &str,
     agent_did: &str,
     address: &str,
+    template: &str,
     now: &str,
 ) -> Result<String> {
-    let template = resolve_template(RECIPROCAL_CONVERSATION_TEMPLATE)
-        .context("conversation template is missing from built-in catalog")?;
+    let template = resolve_template(template)
+        .with_context(|| format!("template {template} missing from built-in catalog"))?;
     let collections = graphql_string_list_literal(template.collections.iter().copied());
     let addresses = graphql_string_list_literal([address]);
     let peer_id = escape_graphql_string(peer_id);
@@ -587,6 +626,8 @@ struct DataPlaneRow {
     peer_id: String,
     #[serde(default)]
     replicator_addresses: Option<Vec<String>>,
+    #[serde(default)]
+    template: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -659,7 +700,7 @@ mod tests {
 
     #[derive(Default)]
     struct MockReciprocalStore {
-        intents: BTreeSet<String>,
+        intents: BTreeMap<String, String>,
         revoked_members: BTreeSet<String>,
         endpoints: BTreeMap<String, NetworkEndpointEntry>,
         existing: BTreeMap<String, ReciprocalRowState>,
@@ -673,13 +714,18 @@ mod tests {
             peer_id.to_string(),
             ReciprocalRowState {
                 address: address.to_string(),
+                template: RECIPROCAL_CONVERSATION_TEMPLATE.to_string(),
             },
         )
     }
 
+    fn intents_with_template(did: &str, template: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([(did.to_string(), template.to_string())])
+    }
+
     #[async_trait]
     impl ReciprocalStore for MockReciprocalStore {
-        async fn load_intent_dids(&self) -> Result<BTreeSet<String>> {
+        async fn load_intents(&self) -> Result<BTreeMap<String, String>> {
             Ok(self.intents.clone())
         }
 
@@ -696,6 +742,7 @@ mod tests {
             peer_id: &str,
             agent_did: &str,
             address: &str,
+            _template: &str,
         ) -> Result<()> {
             self.upserts.lock().unwrap().push((
                 peer_id.to_string(),
@@ -724,7 +771,7 @@ mod tests {
     #[tokio::test]
     async fn reconcile_reciprocal_tick_upserts_conversation_data_plane_for_verified_endpoint() {
         let store = MockReciprocalStore {
-            intents: BTreeSet::from(["did:key:phone".to_string()]),
+            intents: intents_with_template("did:key:phone", RECIPROCAL_CONVERSATION_TEMPLATE),
             endpoints: BTreeMap::from([(
                 "did:key:phone".to_string(),
                 endpoint("did:key:phone", "peer-phone", "/ticket/phone"),
@@ -752,7 +799,7 @@ mod tests {
     #[tokio::test]
     async fn reconcile_reciprocal_tick_deletes_when_endpoint_disappears() {
         let store = MockReciprocalStore {
-            intents: BTreeSet::from(["did:key:phone".to_string()]),
+            intents: intents_with_template("did:key:phone", RECIPROCAL_CONVERSATION_TEMPLATE),
             existing: BTreeMap::from([existing_row("peer-phone", "/ticket/phone")]),
             ..Default::default()
         };
@@ -776,7 +823,7 @@ mod tests {
     #[tokio::test]
     async fn reconcile_reciprocal_tick_refreshes_row_when_endpoint_address_drifts() {
         let store = MockReciprocalStore {
-            intents: BTreeSet::from(["did:key:phone".to_string()]),
+            intents: intents_with_template("did:key:phone", RECIPROCAL_CONVERSATION_TEMPLATE),
             endpoints: BTreeMap::from([(
                 "did:key:phone".to_string(),
                 endpoint("did:key:phone", "peer-phone", "/ticket/phone-new"),
@@ -809,7 +856,7 @@ mod tests {
     #[tokio::test]
     async fn reconcile_reciprocal_tick_is_quiescent_when_row_matches_endpoint() {
         let store = MockReciprocalStore {
-            intents: BTreeSet::from(["did:key:phone".to_string()]),
+            intents: intents_with_template("did:key:phone", RECIPROCAL_CONVERSATION_TEMPLATE),
             endpoints: BTreeMap::from([(
                 "did:key:phone".to_string(),
                 endpoint("did:key:phone", "peer-phone", "/ticket/phone"),
@@ -833,7 +880,7 @@ mod tests {
     #[tokio::test]
     async fn reconcile_reciprocal_tick_skips_peers_owned_by_other_sources() {
         let store = MockReciprocalStore {
-            intents: BTreeSet::from(["did:key:phone".to_string()]),
+            intents: intents_with_template("did:key:phone", RECIPROCAL_CONVERSATION_TEMPLATE),
             endpoints: BTreeMap::from([(
                 "did:key:phone".to_string(),
                 endpoint("did:key:phone", "peer-phone", "/ticket/phone"),
@@ -910,6 +957,7 @@ mod tests {
             "peer-phone",
             "did:key:server",
             "/ticket/phone",
+            RECIPROCAL_CONVERSATION_TEMPLATE,
             "2026-07-08T00:00:00Z",
         )
         .unwrap();
@@ -926,6 +974,20 @@ mod tests {
         assert!(mutation.contains("AgentRequest"));
         assert!(mutation.contains("AgentResponse"));
         assert!(!mutation.contains("[]"));
+    }
+
+    #[test]
+    fn reciprocal_data_plane_upsert_machine_template_includes_directory() {
+        let mutation = upsert_reciprocal_data_plane_mutation(
+            "peer-1",
+            "did:key:server",
+            "/ticket/phone",
+            super::super::templates::MACHINE_TEMPLATE,
+            "2026-07-23T00:00:00Z",
+        )
+        .expect("mutation");
+        assert!(mutation.contains("template: \"machine\""));
+        assert!(mutation.contains("\"AgentDirectoryEntry\""));
     }
 
     #[tokio::test]
