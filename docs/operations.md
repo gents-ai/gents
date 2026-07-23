@@ -214,7 +214,7 @@ Built-in templates:
 | `backup` | Same collection set as `conversation` | Unscoped (all docs) | Replicate |
 | `discovery` | Network membership + agent config bootstrap docs | Unscoped | Replicate |
 | `network-control` | Network root, membership, endpoints, join requests | Unscoped | Replicate |
-| `machine` | Conversation collections + agent directory (fleet discovery) | Unscoped | Push |
+| `machine` | Conversation collections + agent directory (fleet discovery) | `agent_did` equality (conversation collections); directory unscoped | Push |
 
 Use `network-control` for signed fleet enrollment and `conversation` for
 application data-plane rows:
