@@ -5,6 +5,7 @@ import Proofs.PeerRegistryDiscovery.Executable
 import Proofs.PeerRegistryDiscovery.NetworkMembership
 import Proofs.PeerRegistryDiscovery.ReciprocalConversation
 import Proofs.PeerRegistryDiscovery.BearerClaim
+import Proofs.PeerRegistryDiscovery.DirectoryProjection
 
 /-!
 # Peer Registry Discovery Model
