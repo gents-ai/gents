@@ -180,6 +180,7 @@ mod tests {
             ids,
             vec![
                 "conversation",
+                "machine",
                 "agent-config",
                 "backup",
                 "discovery",
