@@ -109,6 +109,11 @@ function AppShell() {
           onRemovePeer={shell.onRemovePeer}
           onRenamePeer={shell.onRenamePeer}
           onRepairP2P={shell.onRepairP2P}
+          onSaveBackendConfig={shell.onSaveBackendConfig}
+          onSaveBehaviorConfig={shell.onSaveBehaviorConfig}
+          onProbeInferenceEndpoint={shell.onProbeInferenceEndpoint}
+          onCodexLogin={shell.onCodexLogin}
+          onCancelCodexLogin={shell.onCancelCodexLogin}
         />
       ) : workspaceView === "chat" || workspaceView === "code" ? (
         <section className="workspace">

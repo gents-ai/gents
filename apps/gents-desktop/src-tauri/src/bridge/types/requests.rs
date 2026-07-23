@@ -141,6 +141,8 @@ pub(crate) struct BackendSaveRequest {
     pub backend_id: String,
     pub name: String,
     pub provider_kind: String,
+    #[serde(default)]
+    pub openai_wire_api: Option<String>,
     pub endpoint: String,
     pub api_key: Option<String>,
     pub api_key_env_var: Option<String>,
