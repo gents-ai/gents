@@ -1,0 +1,24 @@
+# Fleet-discovery directory: one row per agent principal on this home,
+# maintained by the directory projection reconciler (issue #714, modeled in
+# Proofs/PeerRegistryDiscovery/DirectoryProjection.lean).
+#
+# TRUST BASIS — pure derived state. Rows are a projection of
+# AgentPrincipal x AgentBehavior x AgentRuntime, rebuildable at any time;
+# clients treat them as read-only truth about the machine's fleet. A row
+# grants NOTHING: discovery is not a privilege boundary (a conversation-
+# paired member can already address any agent in the home); the directory
+# only reveals what exists.
+#
+# `@branchable` is REQUIRED: the machine template replicates this collection
+# to attached clients — DefraDB only P2P-syncs branchable collections.
+type AgentDirectoryEntry @branchable {
+    agent_did: String @index(unique: true)
+    display_name: String
+    # Behavior display names for the picker. Emitted as null (never []) when
+    # the principal has no behaviors - empty list literals corrupt nillable
+    # array columns.
+    behaviors: [String]
+    runtime_state: String @index
+    last_seen: DateTime
+    updated_at: DateTime @index(direction: DESC)
+}
