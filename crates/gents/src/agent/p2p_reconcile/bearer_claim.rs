@@ -127,8 +127,10 @@ pub trait BearerClaimStore: Send + Sync {
     /// Author the admin-signed membership IF ABSENT. A row in any status
     /// (including operator-revoked) is left untouched.
     async fn ensure_membership(&self, network_id: &str, member_did: &str) -> Result<()>;
-    /// Record the reciprocal conversation intent IF ABSENT.
-    async fn ensure_conversation_intent(&self, member_did: &str) -> Result<()>;
+    /// Record the reciprocal conversation intent IF ABSENT, or upgrade its
+    /// template in place if the existing row's template differs from this
+    /// claim's (a conversation→machine re-claim widens the row).
+    async fn ensure_conversation_intent(&self, member_did: &str, template: &str) -> Result<()>;
 }
 
 pub async fn reconcile_bearer_claim_tick(
@@ -188,9 +190,9 @@ pub async fn reconcile_bearer_claim_tick(
                     claim.claimant_did
                 )
             })?;
-        if claim.template == BEARER_CONVERSATION_TEMPLATE {
+        if super::templates::conversation_like(&claim.template) {
             store
-                .ensure_conversation_intent(&claim.claimant_did)
+                .ensure_conversation_intent(&claim.claimant_did, &claim.template)
                 .await
                 .with_context(|| {
                     format!(
@@ -480,12 +482,13 @@ impl BearerClaimStore for GraphqlBearerClaimStore {
         ensure_no_errors(&response, "create NetworkMembership for bearer claim")
     }
 
-    async fn ensure_conversation_intent(&self, member_did: &str) -> Result<()> {
+    async fn ensure_conversation_intent(&self, member_did: &str, template: &str) -> Result<()> {
         let escaped = escape_graphql_string(member_did);
         let query = format!(
             r#"{{
                 ReciprocalConversationIntent(filter: {{ member_did: {{ _eq: "{escaped}" }} }}, limit: 1) {{
                     member_did
+                    template
                 }}
             }}"#
         );
@@ -494,16 +497,21 @@ impl BearerClaimStore for GraphqlBearerClaimStore {
             &response,
             "query ReciprocalConversationIntent for bearer claim",
         )?;
-        if first_row::<IntentKeyRow>(&response, "ReciprocalConversationIntent")?.is_some() {
-            return Ok(());
+        if let Some(existing) =
+            first_row::<IntentKeyRow>(&response, "ReciprocalConversationIntent")?
+        {
+            if existing.template.as_deref().map(str::trim) == Some(template.trim()) {
+                // Already recorded with this exact template: nothing to do.
+                return Ok(());
+            }
         }
 
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-        let mutation = bearer_intent_create_mutation(member_did, &now);
+        let mutation = bearer_intent_upsert_mutation(member_did, template, &now);
         let response = self.node.execute(&mutation).await;
         ensure_no_errors(
             &response,
-            "create ReciprocalConversationIntent for bearer claim",
+            "upsert ReciprocalConversationIntent for bearer claim",
         )
     }
 }
@@ -553,17 +561,25 @@ fn bearer_membership_create_mutation(membership_key: &str, record: &MembershipRe
     )
 }
 
-fn bearer_intent_create_mutation(member_did: &str, now: &str) -> String {
+fn bearer_intent_upsert_mutation(member_did: &str, template: &str, now: &str) -> String {
     let member_did = escape_graphql_string(member_did);
+    let template = escape_graphql_string(template);
     let now = escape_graphql_string(now);
     format!(
         r#"mutation {{
-            create_ReciprocalConversationIntent(input: {{
-                member_did: "{member_did}",
-                template: "conversation",
-                created_at: "{now}",
-                updated_at: "{now}"
-            }}) {{ _docID }}
+            upsert_ReciprocalConversationIntent(
+                filter: {{ member_did: {{ _eq: "{member_did}" }} }},
+                add: {{
+                    member_did: "{member_did}",
+                    template: "{template}",
+                    created_at: "{now}",
+                    updated_at: "{now}"
+                }},
+                update: {{
+                    template: "{template}",
+                    updated_at: "{now}"
+                }}
+            ) {{ _docID }}
         }}"#
     )
 }
@@ -636,6 +652,7 @@ struct MembershipKeyRow {
 struct IntentKeyRow {
     #[allow(dead_code)]
     member_did: Option<String>,
+    template: Option<String>,
 }
 
 #[cfg(test)]
@@ -731,7 +748,11 @@ mod tests {
             Ok(())
         }
 
-        async fn ensure_conversation_intent(&self, member_did: &str) -> Result<()> {
+        async fn ensure_conversation_intent(
+            &self,
+            member_did: &str,
+            _template: &str,
+        ) -> Result<()> {
             if self.intents.lock().unwrap().insert(member_did.to_string()) {
                 self.intent_writes
                     .lock()
@@ -809,6 +830,31 @@ mod tests {
             .unwrap();
 
         assert!(store.intent_writes.lock().unwrap().is_empty());
+        assert_eq!(store.membership_writes.lock().unwrap().len(), 1);
+    }
+
+    /// Mirrors Lean `claimStep_intent_iff_conversation_like`: `machine` is
+    /// conversation-like and must mint the reciprocal intent too.
+    #[tokio::test]
+    async fn machine_claim_creates_conversation_intent() {
+        let store = MockBearerStore {
+            claims: vec![claim(
+                "nonce-a",
+                "did:key:laptop",
+                "machine",
+                verdicts(true, true, true),
+            )],
+            ..Default::default()
+        };
+
+        reconcile_bearer_claim_tick(&store, "did:key:server")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *store.intent_writes.lock().unwrap(),
+            vec!["did:key:laptop".to_string()]
+        );
         assert_eq!(store.membership_writes.lock().unwrap().len(), 1);
     }
 
