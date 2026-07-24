@@ -381,6 +381,8 @@ pub(crate) struct DesktopResolveHoldRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopInterruptRequest {
     pub request_id: String,
+    #[serde(default)]
+    pub agent_did: Option<String>,
     /// Currently always `"userCancelled"` per spec line 907. Kept as a String
     /// so future cause variants don't require an enum migration here.
     pub cause: String,

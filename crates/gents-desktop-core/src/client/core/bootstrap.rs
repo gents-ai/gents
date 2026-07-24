@@ -81,7 +81,7 @@ impl ClientCore {
 
         let initial_snapshot = {
             let records = peer_directory.read().await.records().to_vec();
-            load_full_snapshot_with_peer_records(node.as_ref(), &records).await?
+            load_full_snapshot_with_peer_records(node.as_ref(), &records, principal.did()).await?
         };
         let (store, _store_updates) = ObservedStore::new(initial_snapshot);
         let observer = spawn_observer_with_selection(

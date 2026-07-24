@@ -413,6 +413,11 @@ export function useDesktopShell() {
     runtimeHealth,
     canSendMessage,
     chatWorkflow: shellProjection.workflow,
+    activeRequestId: shellProjection.activeRequestId,
+    turnState: shellProjection.turnState,
+    interruptVisible:
+      shellProjection.workflow.kind === "awaitingObservation" ||
+      shellProjection.workflow.kind === "turnInProgress",
     sendStatus: shellProjection.sendStatus,
     setSelectedAgentDid,
     setSelectedSessionId,

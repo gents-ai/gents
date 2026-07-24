@@ -23,21 +23,23 @@ use serde_json::{json, Value};
 use super::peer_directory::PeerRecord;
 use super::store::{ClientStore, ClientStoreRows};
 
-const REMOTE_SNAPSHOT_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const REMOTE_SNAPSHOT_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 const AGENT_PRINCIPAL_FIELDS: &str =
     "agent_did display_name default_behavior_id enabled created_at created_by";
 const AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled skill_refs skill_excludes created_at";
 const AGENT_RUNTIME_FIELDS: &str = "agent_did process_state reconcile_phase active_generation router_generation default_behavior_id runnable_behavior_count unavailable_behavior_count behavior_executor_capacity behavior_executor_queue_depth last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
-const AGENT_CONVERSATION_FIELDS: &str = "session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id";
-const AGENT_REQUEST_FIELDS: &str = "request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content temperature top_p top_k max_tokens metadata status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_parent_request_id failure_reason terminalized_at terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until";
-const AGENT_RESPONSE_FIELDS: &str = "response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at";
-const AGENT_MESSAGE_FIELDS: &str = "message_key session_id sequence role content timestamp";
-const AGENT_SESSION_FIELDS: &str = "session_id agent_name behavior_id started ended status";
+const AGENT_CONVERSATION_FIELDS: &str = "session_id agent_name agent_did requester_did behavior_id title title_source preview_text status created_at updated_at latest_request_id";
+const AGENT_REQUEST_FIELDS: &str = "request_id agent_did requester_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content temperature top_p top_k max_tokens metadata status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_parent_request_id failure_reason terminalized_at terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until";
+const AGENT_RESPONSE_FIELDS: &str = "response_key request_id agent_did requester_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at";
+const AGENT_MESSAGE_FIELDS: &str =
+    "message_key session_id requester_did sequence role content reasoning timestamp";
+const AGENT_SESSION_FIELDS: &str =
+    "session_id agent_name requester_did behavior_id started ended status";
 const GOAL_FIELDS: &str = "goal_id session_id agent_did objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence created_at updated_at";
-const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id message_sequence tool_name tool_call_id args result status lifecycle_state cancel_policy workflow_group_id workflow_role deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms partial_output_tail partial_output_seq";
-const AGENT_TOOL_RESULT_FIELDS: &str = "agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted";
-const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at";
+const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id requester_did message_sequence tool_name tool_call_id args result status lifecycle_state cancel_policy workflow_group_id workflow_role deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms partial_output_tail partial_output_seq";
+const AGENT_TOOL_RESULT_FIELDS: &str = "agent_did requester_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted";
+const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id requester_did sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at";
 const TASK_FIELDS: &str = "task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at";
 const SKILL_FIELDS: &str = "skill_id agent_did scope name description instructions tool_refs display_name interface_json enabled created_at";
 const SCHEDULE_FIELDS: &str = "schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at";
@@ -76,6 +78,7 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
 pub async fn load_full_snapshot_with_peer_records(
     node: &EmbeddedNode,
     peers: &[PeerRecord],
+    requester_did: &str,
 ) -> Result<ClientStore> {
     let mut rows = load_full_snapshot(node).await?.to_rows();
     let mut remote_loads = Vec::new();
@@ -92,8 +95,10 @@ pub async fn load_full_snapshot_with_peer_records(
 
         let peer = peer.clone();
         let graphql = graphql.to_string();
+        let requester_did = requester_did.to_string();
         remote_loads.push(tokio::spawn(async move {
-            let result = load_full_snapshot_from_graphql(&graphql).await;
+            let result =
+                load_full_snapshot_from_graphql(&graphql, &peer.agent_did, &requester_did).await;
             (peer, graphql, result)
         }));
     }
@@ -166,8 +171,8 @@ pub async fn load_agent_runtimes(node: &EmbeddedNode) -> Result<Vec<AgentRuntime
 pub async fn load_agent_conversations(node: &EmbeddedNode) -> Result<Vec<AgentConversationRow>> {
     load_rows(
         node,
-        "AgentConversation",
-        "query { AgentConversation { session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id } }",
+        AGENT_CONVERSATION_NAME,
+        &format!("query {{ {AGENT_CONVERSATION_NAME} {{ {AGENT_CONVERSATION_FIELDS} }} }}"),
     )
     .await
 }
@@ -193,8 +198,8 @@ pub async fn load_agent_responses(node: &EmbeddedNode) -> Result<Vec<AgentRespon
 pub async fn load_agent_messages(node: &EmbeddedNode) -> Result<Vec<AgentMessageRow>> {
     load_rows(
         node,
-        "AgentMessage",
-        "query { AgentMessage { message_key session_id sequence role content timestamp } }",
+        AGENT_MESSAGE_NAME,
+        &format!("query {{ {AGENT_MESSAGE_NAME} {{ {AGENT_MESSAGE_FIELDS} }} }}"),
     )
     .await
 }
@@ -202,8 +207,8 @@ pub async fn load_agent_messages(node: &EmbeddedNode) -> Result<Vec<AgentMessage
 pub async fn load_agent_sessions(node: &EmbeddedNode) -> Result<Vec<AgentSessionRow>> {
     load_rows(
         node,
-        "AgentSession",
-        "query { AgentSession { session_id agent_name behavior_id started ended status } }",
+        AGENT_SESSION_NAME,
+        &format!("query {{ {AGENT_SESSION_NAME} {{ {AGENT_SESSION_FIELDS} }} }}"),
     )
     .await
 }
@@ -238,8 +243,8 @@ pub async fn load_agent_tool_results(node: &EmbeddedNode) -> Result<Vec<AgentToo
 pub async fn load_compaction_entries(node: &EmbeddedNode) -> Result<Vec<CompactionEntryRow>> {
     load_rows(
         node,
-        "CompactionEntry",
-        "query { CompactionEntry { compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at } }",
+        COMPACTION_ENTRY_NAME,
+        &format!("query {{ {COMPACTION_ENTRY_NAME} {{ {COMPACTION_ENTRY_FIELDS} }} }}"),
     )
     .await
 }
@@ -318,12 +323,16 @@ pub async fn load_tool_service_registries(
     .await
 }
 
-pub async fn load_full_snapshot_from_graphql(graphql: &str) -> Result<ClientStore> {
+pub async fn load_full_snapshot_from_graphql(
+    graphql: &str,
+    agent_did: &str,
+    requester_did: &str,
+) -> Result<ClientStore> {
     let client = reqwest::Client::builder()
         .timeout(REMOTE_SNAPSHOT_HTTP_TIMEOUT)
         .build()
         .context("building remote GraphQL snapshot HTTP client")?;
-    let data = execute_remote_snapshot_query(&client, graphql).await?;
+    let data = execute_remote_snapshot_query(&client, graphql, agent_did, requester_did).await?;
 
     Ok(ClientStore::from_rows(ClientStoreRows {
         agent_principals: parse_remote_rows(&data, "AgentPrincipal")?,
@@ -457,8 +466,14 @@ struct RemoteGraphqlResponse {
     errors: Option<Value>,
 }
 
-async fn execute_remote_snapshot_query(client: &reqwest::Client, graphql: &str) -> Result<Value> {
-    execute_remote_graphql_query(client, graphql, REMOTE_SNAPSHOT_QUERY, "snapshot").await
+async fn execute_remote_snapshot_query(
+    client: &reqwest::Client,
+    graphql: &str,
+    agent_did: &str,
+    requester_did: &str,
+) -> Result<Value> {
+    let query = remote_snapshot_query(agent_did, requester_did);
+    execute_remote_graphql_query(client, graphql, &query, "snapshot").await
 }
 
 async fn execute_remote_graphql_query(
@@ -618,8 +633,8 @@ fn remote_request_lookup_query(request_id: &str) -> String {
     format!(
         r#"
 query DesktopRemoteRequestLookup {{
-  AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_parent_request_id failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until }}
-  AgentResponse(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }}
+  AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ {AGENT_REQUEST_FIELDS} }}
+  AgentResponse(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {AGENT_RESPONSE_FIELDS} }}
 }}
 "#
     )
@@ -630,44 +645,50 @@ fn remote_chat_patch_query(session_id: &str) -> String {
     format!(
         r#"
 query DesktopRemoteChatPatch {{
-  AgentConversation(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id }}
-  AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_parent_request_id failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until }}
-  AgentResponse(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }}
-  AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ message_key session_id sequence role content timestamp }}
-  AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ session_id agent_name behavior_id started ended status }}
+  AgentConversation(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_CONVERSATION_FIELDS} }}
+  AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_REQUEST_FIELDS} }}
+  AgentResponse(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_RESPONSE_FIELDS} }}
+  AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_MESSAGE_FIELDS} }}
+  AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_SESSION_FIELDS} }}
   Goal(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {GOAL_FIELDS} }}
   AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_TOOL_CALL_FIELDS} }}
-  AgentToolResult(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted }}
-  CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at }}
+  AgentToolResult(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_TOOL_RESULT_FIELDS} }}
+  CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {COMPACTION_ENTRY_FIELDS} }}
 }}
 "#
     )
 }
 
-const REMOTE_SNAPSHOT_QUERY: &str = r#"
-query DesktopRemoteSnapshot {
-  AgentPrincipal { agent_did display_name default_behavior_id enabled created_at created_by }
-  AgentBehavior { behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled skill_refs skill_excludes created_at }
-  AgentRuntime { agent_did process_state reconcile_phase active_generation router_generation default_behavior_id runnable_behavior_count unavailable_behavior_count behavior_executor_capacity behavior_executor_queue_depth last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at }
-  AgentConversation { session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id }
-  AgentRequest { request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_parent_request_id failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until }
-  AgentResponse { response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }
-  AgentMessage { message_key session_id sequence role content timestamp }
-  AgentSession { session_id agent_name behavior_id started ended status }
-  Goal { goal_id session_id agent_did objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence created_at updated_at }
-  AgentToolCall { tool_call_key session_id request_id message_sequence tool_name tool_call_id args result status lifecycle_state cancel_policy workflow_group_id workflow_role deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms partial_output_tail partial_output_seq }
-  AgentToolResult { agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted }
-  CompactionEntry { compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at }
-  Task { task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at }
-  Schedule { schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at }
-  EventTrigger { trigger_id task_id source_collection event_kind filter enabled concurrency created_at updated_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count }
-  Skill { skill_id agent_did scope name description instructions tool_refs display_name interface_json enabled created_at }
-  ToolSelection { selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes command_network_mode cli_tool_names enable_meta_tools allowed_mcp_service_ids delegate_to backgroundable_tool_names enable_memory enable_session_history_tool enable_context_budget enable_defra_query defra_query_collections subagent_targets subagent_spawn_enabled orchestration_enabled subagent_steering_enabled subagent_background_enabled subagent_allow_cross_deployment cross_deployment_spawn_timeout_seconds tool_policy_version write_tools subagent_default_await_mode enable_self_config self_config_categories self_config_no_lockout self_config_dry_run }
-  InferenceBackend { backend_id name provider_kind openai_wire_api endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status }
-  InferenceProfile { profile_id display_name context_window max_output_tokens max_turns temperature top_p top_k min_p frequency_penalty presence_penalty repetition_penalty stream_batch_ms stream_liveness_timeout_secs deadline_duration_secs retry_max_transport retry_backoff_ms retry_max_resample retry_allow_repair retry_interactive_max }
-  ToolServiceRegistry { service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path status version updated_at }
+fn remote_snapshot_query(agent_did: &str, requester_did: &str) -> String {
+    let agent_did = escape_graphql_string(agent_did);
+    let requester_did = escape_graphql_string(requester_did);
+    format!(
+        r#"
+query DesktopRemoteSnapshot {{
+  AgentPrincipal(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_PRINCIPAL_FIELDS} }}
+  AgentBehavior(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_BEHAVIOR_FIELDS} }}
+  AgentRuntime(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_RUNTIME_FIELDS} }}
+  AgentConversation(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{ {AGENT_CONVERSATION_FIELDS} }}
+  AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{ {AGENT_REQUEST_FIELDS} }}
+  AgentResponse(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{ {AGENT_RESPONSE_FIELDS} }}
+  AgentMessage(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{ {AGENT_MESSAGE_FIELDS} }}
+  AgentSession(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{ {AGENT_SESSION_FIELDS} }}
+  Goal(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {GOAL_FIELDS} }}
+  AgentToolCall(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{ {AGENT_TOOL_CALL_FIELDS} }}
+  AgentToolResult(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{ {AGENT_TOOL_RESULT_FIELDS} }}
+  CompactionEntry(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{ {COMPACTION_ENTRY_FIELDS} }}
+  Task {{ task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at }}
+  Schedule {{ schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at }}
+  EventTrigger {{ trigger_id task_id source_collection event_kind filter enabled concurrency created_at updated_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count }}
+  Skill(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {SKILL_FIELDS} }}
+  ToolSelection(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {TOOL_SELECTION_FIELDS} }}
+  InferenceBackend {{ backend_id name provider_kind openai_wire_api endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status }}
+  InferenceProfile {{ profile_id display_name context_window max_output_tokens max_turns temperature top_p top_k min_p frequency_penalty presence_penalty repetition_penalty stream_batch_ms stream_liveness_timeout_secs deadline_duration_secs retry_max_transport retry_backoff_ms retry_max_resample retry_allow_repair retry_interactive_max }}
+  ToolServiceRegistry {{ service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path status version updated_at }}
+}}
+"#
+    )
 }
-"#;
 
 /// Fetch the rows for a specific set of `(collection, doc_id)` pairs and
 /// return them as a single-collection `ClientStore` patch suitable for
@@ -1026,6 +1047,8 @@ mod tests {
     use defra_node::NodeBuilder;
     use gents_protocol::schemas::AGENT_MESSAGE_NAME;
     use std::sync::Arc;
+    use wiremock::matchers::{body_string_contains, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
     async fn fetch_doc_patch_returns_only_matching_rows() {
@@ -1080,6 +1103,48 @@ mod tests {
             .await
             .expect("fetch_doc_patch");
         assert_eq!(patch.messages.len(), 1, "expected exactly one row");
+    }
+
+    #[tokio::test]
+    async fn remote_snapshot_hydrates_from_requester_scoped_query() {
+        let server = MockServer::start().await;
+        let data = json!({
+            "AgentPrincipal": [],
+            "AgentBehavior": [],
+            "AgentRuntime": [],
+            "AgentConversation": [],
+            "AgentRequest": [],
+            "AgentResponse": [],
+            "AgentMessage": [],
+            "AgentSession": [],
+            "Goal": [],
+            "AgentToolCall": [],
+            "AgentToolResult": [],
+            "CompactionEntry": [],
+            "Task": [],
+            "Schedule": [],
+            "EventTrigger": [],
+            "Skill": [],
+            "ToolSelection": [],
+            "InferenceBackend": [],
+            "InferenceProfile": [],
+            "ToolServiceRegistry": []
+        });
+        Mock::given(method("POST"))
+            .and(body_string_contains("did:test:agent"))
+            .and(body_string_contains("did:test:requester"))
+            .and(body_string_contains("requester_did"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": data })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let snapshot =
+            load_full_snapshot_from_graphql(&server.uri(), "did:test:agent", "did:test:requester")
+                .await
+                .expect("requester-scoped remote snapshot");
+
+        assert_eq!(snapshot.row_count(), 0);
     }
 
     #[tokio::test]
@@ -1227,13 +1292,14 @@ mod tests {
     #[test]
     fn remote_tool_call_queries_include_local_field_set() {
         let chat_patch = remote_chat_patch_query("sess-1");
+        let remote_snapshot = remote_snapshot_query("did:test:agent", "did:test:requester");
         for field in AGENT_TOOL_CALL_FIELDS.split_whitespace() {
             assert!(
                 chat_patch.contains(field),
                 "remote chat patch missing AgentToolCall field {field}"
             );
             assert!(
-                REMOTE_SNAPSHOT_QUERY.contains(field),
+                remote_snapshot.contains(field),
                 "remote snapshot missing AgentToolCall field {field}"
             );
         }
@@ -1242,13 +1308,14 @@ mod tests {
     #[test]
     fn remote_goal_queries_include_local_field_set() {
         let chat_patch = remote_chat_patch_query("sess-1");
+        let remote_snapshot = remote_snapshot_query("did:test:agent", "did:test:requester");
         for field in GOAL_FIELDS.split_whitespace() {
             assert!(
                 chat_patch.contains(field),
                 "remote chat patch missing Goal field {field}"
             );
             assert!(
-                REMOTE_SNAPSHOT_QUERY.contains(field),
+                remote_snapshot.contains(field),
                 "remote snapshot missing Goal field {field}"
             );
         }
@@ -1256,11 +1323,29 @@ mod tests {
 
     #[test]
     fn remote_runtime_query_includes_local_field_set() {
+        let remote_snapshot = remote_snapshot_query("did:test:agent", "did:test:requester");
         for field in AGENT_RUNTIME_FIELDS.split_whitespace() {
             assert!(
-                REMOTE_SNAPSHOT_QUERY.contains(field),
+                remote_snapshot.contains(field),
                 "remote snapshot missing AgentRuntime field {field}"
             );
         }
+    }
+
+    #[test]
+    fn remote_snapshot_scopes_conversation_rows_to_agent_and_requester() {
+        let query = remote_snapshot_query(
+            r#"did:test:agent"with-quote"#,
+            r#"did:test:requester"with-quote"#,
+        );
+
+        assert!(query.contains(
+            r#"agent_did: { _eq: "did:test:agent\"with-quote" }, requester_did: { _eq: "did:test:requester\"with-quote" }"#
+        ));
+        assert!(query.contains(
+            r#"AgentMessage(filter: { agent_did: { _eq: "did:test:agent\"with-quote" }, requester_did: { _eq: "did:test:requester\"with-quote" } })"#
+        ));
+        assert!(!query.contains("AgentConversation {"));
+        assert!(!query.contains("AgentRequest {"));
     }
 }

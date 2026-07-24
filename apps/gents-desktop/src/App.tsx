@@ -162,11 +162,13 @@ function AppShell() {
               />
             ) : null}
             <ChatWorkspace
+              activeRequestId={shell.activeRequestId}
               approxSerializedBytes={shell.snapshot?.client?.approxSerializedBytes ?? 0}
               canSend={shell.canSendMessage}
               configuredPeerCount={shell.snapshot?.client?.configuredPeerCount ?? 0}
               dialedPeerCount={shell.snapshot?.client?.dialedPeerCount ?? 0}
               draft={shell.draft}
+              interruptVisible={shell.interruptVisible}
               onDraftChange={shell.setDraft}
               onRenameConversationTitle={shell.onRenameConversationTitle}
               onSend={shell.onSendMessage}
@@ -186,6 +188,7 @@ function AppShell() {
               selectedSessionId={shell.selectedSessionId}
               sending={shell.sending}
               session={shell.session}
+              turnState={shell.turnState}
               onOpenMobileNavigation={() => setMobileChatPane("navigation")}
               onForkedConversation={shell.onSelectSession}
             />

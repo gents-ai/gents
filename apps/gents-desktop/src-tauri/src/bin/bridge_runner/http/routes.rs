@@ -319,6 +319,21 @@ pub(super) fn handle_request(
                 serde_json::json!({ "ok": true }).to_string(),
             ))
         }
+        ("POST", "/desktop/test-fixture/clear-client-store") => {
+            if std::env::var("GENTS_TAURI_LIVE").as_deref() != Ok("1") {
+                return Ok(HttpResponse::json_error(
+                    "403 Forbidden",
+                    "clear-client-store is only available in live test mode (GENTS_TAURI_LIVE=1)",
+                ));
+            }
+            fixture
+                .desktop_core()
+                .store()
+                .replace_snapshot(Default::default());
+            Ok(HttpResponse::json_ok(
+                serde_json::json!({ "ok": true }).to_string(),
+            ))
+        }
         ("POST", "/desktop/backend/save") => {
             let request =
                 decode::<BackendSaveRequest>(&request.body, "decoding backend save request")?;

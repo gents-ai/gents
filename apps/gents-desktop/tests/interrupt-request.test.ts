@@ -65,11 +65,17 @@ describe("interruptRequest", () => {
     });
     const result = await interruptRequest({
       requestId: "req_root",
+      agentDid: "did:test:op",
       cause: "userCancelled",
       cascade: false,
     });
     expect(mockedInvoke).toHaveBeenCalledWith("desktop_interrupt_request", {
-      request: { requestId: "req_root", cause: "userCancelled", cascade: false },
+      request: {
+        requestId: "req_root",
+        agentDid: "did:test:op",
+        cause: "userCancelled",
+        cascade: false,
+      },
     });
     expect(result.accepted).toBe(true);
   });

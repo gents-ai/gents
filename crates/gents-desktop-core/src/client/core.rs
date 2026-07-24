@@ -478,10 +478,13 @@ impl ClientCore {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| anyhow::anyhow!("peer {} has no GraphQL endpoint", record.label))?;
 
-        // Remote peers serve only their own agent's data, so the remote-side
-        // "full snapshot" is already agent-scoped from our perspective. The
-        // local-side merge is unchanged.
-        let mut snapshot = load_full_snapshot_from_graphql(graphql).await?;
+        // Scope legacy GraphQL recovery to the selected deployment and this
+        // desktop principal. A worker node can contain many unrelated
+        // conversations; fetching all of them is both incorrect and too large
+        // for a reliable phone reconnect.
+        let mut snapshot =
+            load_full_snapshot_from_graphql(graphql, &record.agent_did, self.principal.did())
+                .await?;
         snapshot.stamp_source_agent_did(&record.agent_did);
         let rows = snapshot.row_count();
         let version = self.store.merge_snapshot(snapshot);

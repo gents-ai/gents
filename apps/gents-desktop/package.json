@@ -32,6 +32,7 @@
     "test:live:chat": "node ./tests/run-live-test.mjs --suite chat",
     "test:live:fleet": "node ./tests/run-live-test.mjs --suite fleet",
     "test:live:interrupt": "node ./tests/run-live-test.mjs --suite interrupt",
+    "test:live:legacy-remote": "npx vitest run tests/tauri-driver.live.legacy-remote.test.ts",
     "test:live:operations": "node ./tests/run-live-test.mjs --suite operations",
     "test:live:subagent": "node ./tests/run-live-test.mjs --suite subagent",
     "test:live:replication": "node ./tests/run-live-test.mjs --suite replication",

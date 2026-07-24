@@ -23,6 +23,7 @@ import { useOperationsSnapshot } from "./backgroundedTools/useOperationsSnapshot
 import { SubagentLineageView } from "./subagentLineage";
 
 export type ChatWorkspaceProps = {
+  activeRequestId: string | null;
   selectedDeployment: DeploymentView | null;
   selectedConversationTitle: string | null;
   selectedBehaviorId: string | null;
@@ -36,7 +37,9 @@ export type ChatWorkspaceProps = {
   canSend: boolean;
   sendHint: string | null;
   draft: string;
+  interruptVisible: boolean;
   sending: boolean;
+  turnState: string | null;
   onRenameConversationTitle: (sessionId: string, title: string) => void | Promise<void>;
   onDraftChange: (value: string) => void;
   onSend: (event: FormEvent) => void;
@@ -69,6 +72,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 }
 
 export function ActiveChatWorkspace({
+  activeRequestId,
   selectedDeployment,
   selectedConversationTitle,
   selectedBehaviorId,
@@ -82,7 +86,9 @@ export function ActiveChatWorkspace({
   canSend,
   sendHint,
   draft,
+  interruptVisible,
   sending,
+  turnState,
   onRenameConversationTitle,
   onDraftChange,
   onSend,
@@ -183,6 +189,7 @@ export function ActiveChatWorkspace({
         if (childCount === 0) {
           const result = await interruptRequest({
             requestId,
+            agentDid: selectedDeployment.agentDid,
             cause: "userCancelled",
             cascade: false,
           });
@@ -296,7 +303,7 @@ export function ActiveChatWorkspace({
   ]);
 
   function onInterruptClick() {
-    const requestId = session?.latestRequestId;
+    const requestId = activeRequestId;
     if (!requestId) return;
     void beginInterrupt(requestId);
   }
@@ -323,17 +330,18 @@ export function ActiveChatWorkspace({
           />
 
           <ChatComposer
-            activeRequestId={session?.latestRequestId ?? null}
+            activeRequestId={activeRequestId}
             approxSerializedBytes={approxSerializedBytes}
             behaviorLabel={behaviorLabel}
             canSend={canSend}
             configuredPeerCount={configuredPeerCount}
             dialedPeerCount={dialedPeerCount}
             draft={draft}
+            interruptVisible={interruptVisible}
             rowCount={rowCount}
             sendHint={sendHint}
             sending={sending}
-            turnState={session?.turnState ?? null}
+            turnState={turnState}
             onDraftChange={onDraftChange}
             onInterruptClick={onInterruptClick}
             onSend={onSend}
