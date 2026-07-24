@@ -17,6 +17,7 @@ export type SidebarProps = {
   onOpenCode?: (agentDid: string) => void;
   onSelectBehavior: (behaviorId: string) => void;
   onSelectSession: (sessionId: string) => void;
+  onOpenSession?: (sessionId: string) => void;
   onSelectAgent?: (agentDid: string) => void;
   onRenameConversationTitle?: (
     sessionId: string,
@@ -37,6 +38,7 @@ export function Sidebar({
   onOpenCode,
   onSelectBehavior,
   onSelectSession,
+  onOpenSession,
   onSelectAgent,
   onRenameConversationTitle,
   onStartNewConversation,
@@ -67,6 +69,7 @@ export function Sidebar({
         selectedBehaviorId={selectedBehaviorId}
         selectedSessionId={selectedSessionId}
         onSelectSession={onSelectSession}
+        onOpenSession={onOpenSession}
         onRenameConversationTitle={onRenameConversationTitle}
       />
     </aside>

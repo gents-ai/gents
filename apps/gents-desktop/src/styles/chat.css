@@ -322,6 +322,10 @@
     overflow: hidden;
   }
 
+  .mobile-chat-navigation-button {
+    display: none;
+  }
+
   .title-rename-form {
     max-width: min(560px, 100%);
   }
@@ -348,6 +352,45 @@
   }
 
   @media (max-width: 760px) {
+    .chat-title-block {
+      display: flex;
+      flex: 1 1 auto;
+      align-items: center;
+      gap: var(--space-3);
+    }
+
+    .chat-title-row {
+      flex: 1 1 auto;
+      gap: var(--space-2);
+    }
+
+    .mobile-chat-navigation-button {
+      display: inline-flex;
+      flex: 0 0 auto;
+      min-height: 40px;
+      align-items: center;
+      gap: var(--space-2);
+      padding: 0 var(--space-3);
+    }
+
+    .chat-main {
+      gap: var(--space-3);
+    }
+
+    .transcript-panel {
+      padding: var(--space-4);
+    }
+
+    .composer-panel {
+      gap: var(--space-3);
+      padding: var(--space-3);
+    }
+
+    .composer-input {
+      max-height: 160px;
+      padding: var(--space-4);
+    }
+
     .operations-rail.is-open {
       position: fixed;
       inset: 0;

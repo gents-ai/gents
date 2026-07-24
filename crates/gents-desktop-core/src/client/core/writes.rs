@@ -1378,16 +1378,26 @@ impl ClientCore {
         addr: &str,
         agent_did: &str,
         graphql: Option<&str>,
+        default_behavior_id: Option<&str>,
     ) -> Result<PeerMutationResult> {
         let label = normalize_required("label", label)?;
         let addr = normalize_required("addr", addr)?;
         let agent_did = normalize_required("agent_did", agent_did)?;
         let graphql = graphql.map(str::trim).filter(|value| !value.is_empty());
+        let default_behavior_id = default_behavior_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
 
         let record = {
             let mut peer_directory = self.peer_directory.write().await;
             peer_directory
-                .upsert_saved_peer_with_graphql(label, addr, agent_did, graphql)
+                .upsert_saved_peer_with_graphql(
+                    label,
+                    addr,
+                    agent_did,
+                    graphql,
+                    default_behavior_id,
+                )
                 .await?
         };
 

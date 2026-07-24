@@ -42,6 +42,7 @@ export type ChatWorkspaceProps = {
   onSend: (event: FormEvent) => void;
   onRetryMessage?: (content: string) => void;
   onForkedConversation?: (sessionId: string) => void;
+  onOpenMobileNavigation?: () => void;
 };
 
 export type ActiveChatWorkspaceProps = Omit<
@@ -87,6 +88,7 @@ export function ActiveChatWorkspace({
   onSend,
   onRetryMessage,
   onForkedConversation,
+  onOpenMobileNavigation,
 }: ActiveChatWorkspaceProps) {
   const activeBehaviorId =
     selectedBehaviorId ?? selectedDeployment.defaultBehaviorId ?? null;
@@ -303,6 +305,7 @@ export function ActiveChatWorkspace({
     <OperationsRailProvider tabs={operationsRailTabs}>
       <ChatHeader
         behaviorLabel={behaviorLabel}
+        onOpenMobileNavigation={onOpenMobileNavigation}
         runtimeHealth={runtimeHealth}
         selectedConversationTitle={selectedConversationTitle}
         selectedSessionId={selectedSessionId}

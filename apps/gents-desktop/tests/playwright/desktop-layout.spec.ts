@@ -3,6 +3,7 @@ import {
   expectNoPageHorizontalOverflow,
   gotoHarness,
   openChat,
+  openChatNavigation,
   openConfig,
   openConfigTab,
   PEER_ID,
@@ -61,6 +62,26 @@ test.describe("desktop responsive layout guardrails", () => {
       ).toBeVisible();
       await expectNoPageHorizontalOverflow(page);
     }
+  });
+
+  test("phone chat uses one full-screen pane at a time", async ({ page }) => {
+    test.skip(
+      (page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) > 760,
+      "mobile viewport guardrail",
+    );
+
+    await gotoHarness(page);
+    await openChat(page);
+    await expect(page.locator(".chat-column")).toBeVisible();
+    await expect(page.locator(".sidebar")).toBeHidden();
+
+    await openChatNavigation(page);
+    await expect(page.locator(".sidebar")).toBeVisible();
+    await expect(page.locator(".chat-column")).toBeHidden();
+
+    await page.getByTestId("conversation-session-intro").click();
+    await expect(page.locator(".chat-column")).toBeVisible();
+    await expect(page.locator(".sidebar")).toBeHidden();
   });
 
   test("fleet row action buttons stay reachable at any width", async ({ page }) => {

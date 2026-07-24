@@ -1,4 +1,4 @@
-import { expect, gotoHarness, openChat, test } from "./desktopTest";
+import { expect, gotoHarness, openChat, openChatNavigation, test } from "./desktopTest";
 
 test.describe("desktop code experience", () => {
   test("renders file edits as diffs and commands as terminal output", async ({
@@ -23,6 +23,7 @@ test.describe("desktop code experience", () => {
   }) => {
     await gotoHarness(page, "coding");
     await openChat(page);
+    await openChatNavigation(page);
     await page.getByTestId("sidebar-open-code").click();
 
     const header = page.getByTestId("code-context-header");

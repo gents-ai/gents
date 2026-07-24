@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use gents_desktop_core::client::{ClientCore, ClientPeerStatus};
+use gents_desktop_core::client::{ClientCore, ClientPeerStatus, PeerRecord};
 
 use super::super::types::{
     normalize_optional, turn_state_label, AgentPrincipalView, BehaviorView, ConversationSummary,
@@ -90,8 +90,8 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     skill_excludes: row.skill_excludes.clone(),
                 })
                 .collect::<Vec<_>>();
-            if peer.is_bearer_pairing() && behaviors.is_empty() {
-                let behavior_ids = inferred_bearer_behavior_ids(
+            if peer_can_infer_behaviors(&peer) && behaviors.is_empty() {
+                let behavior_ids = inferred_peer_behavior_ids(
                     store
                         .conversation_rows(&peer.agent_did)
                         .into_iter()
@@ -512,7 +512,12 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
     }
 }
 
-fn inferred_bearer_behavior_ids<'a>(behavior_ids: impl Iterator<Item = &'a str>) -> Vec<String> {
+fn peer_can_infer_behaviors(peer: &PeerRecord) -> bool {
+    peer.is_bearer_pairing()
+        || (peer.source.as_deref() == Some("server-status") && peer.default_behavior_id.is_some())
+}
+
+fn inferred_peer_behavior_ids<'a>(behavior_ids: impl Iterator<Item = &'a str>) -> Vec<String> {
     let mut behavior_ids = behavior_ids
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -566,13 +571,13 @@ fn inferred_behavior_display_name(behavior_id: &str, peer_label: &str, is_defaul
 }
 
 #[cfg(test)]
-mod inferred_bearer_behavior_tests {
+mod inferred_peer_behavior_tests {
     use super::*;
 
     #[test]
     fn deduplicates_behavior_ids_and_prefers_named_default() {
         let ids =
-            inferred_bearer_behavior_ids(["session-classifier", "default", "default"].into_iter());
+            inferred_peer_behavior_ids(["session-classifier", "default", "default"].into_iter());
 
         assert_eq!(ids, vec!["default", "session-classifier"]);
         assert_eq!(
@@ -595,12 +600,27 @@ mod inferred_bearer_behavior_tests {
 
     #[test]
     fn signed_default_behavior_bootstraps_a_fresh_bearer_peer() {
-        let ids = inferred_bearer_behavior_ids(std::iter::empty::<&str>().chain(Some("default")));
+        let ids = inferred_peer_behavior_ids(std::iter::empty::<&str>().chain(Some("default")));
 
         assert_eq!(ids, vec!["default"]);
         assert_eq!(
             inferred_default_behavior_id("did:key:amy", Some("default"), &ids).as_deref(),
             Some("default")
+        );
+    }
+
+    #[test]
+    fn status_peer_with_imported_default_can_render_a_behavior_before_snapshot_hydration() {
+        let mut peer = PeerRecord::new("Amy", "endpoint-amy", "did:key:amy");
+        peer.source = Some("server-status".to_string());
+        peer.default_behavior_id = Some("default".to_string());
+
+        assert!(peer_can_infer_behaviors(&peer));
+        assert_eq!(
+            inferred_peer_behavior_ids(
+                std::iter::empty::<&str>().chain(peer.default_behavior_id.as_deref())
+            ),
+            vec!["default"]
         );
     }
 }

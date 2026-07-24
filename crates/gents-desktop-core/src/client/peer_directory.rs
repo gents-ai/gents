@@ -108,7 +108,7 @@ impl PeerDirectory {
         addr: &str,
         agent_did: &str,
     ) -> Result<PeerRecord> {
-        self.upsert_saved_peer_with_graphql(label, addr, agent_did, None)
+        self.upsert_saved_peer_with_graphql(label, addr, agent_did, None, None)
             .await
     }
 
@@ -118,11 +118,13 @@ impl PeerDirectory {
         addr: &str,
         agent_did: &str,
         graphql: Option<&str>,
+        default_behavior_id: Option<&str>,
     ) -> Result<PeerRecord> {
         let label = normalize_non_empty("label", label)?;
         let addr = normalize_non_empty("addr", addr)?;
         let agent_did = normalize_non_empty("agent_did", agent_did)?;
         let graphql = normalize_optional(graphql);
+        let default_behavior_id = normalize_optional(default_behavior_id);
 
         let mut record = self
             .peers
@@ -134,6 +136,9 @@ impl PeerDirectory {
         record.addr = addr.to_string();
         record.agent_did = agent_did.to_string();
         if record.source.as_deref() != Some(super::core::bearer_pairing::BEARER_PAIRING_SOURCE) {
+            if let Some(default_behavior_id) = default_behavior_id {
+                record.default_behavior_id = Some(default_behavior_id.to_string());
+            }
             if let Some(graphql) = graphql {
                 record.graphql = Some(graphql.to_string());
                 if record.source.as_deref() != Some("local-standard") {
@@ -335,6 +340,7 @@ mod tests {
                 "iroh://alpha",
                 "did:key:z6MkAlpha",
                 Some(" http://100.73.235.38:9181/api/v0/graphql "),
+                Some(" default "),
             )
             .await
             .unwrap();
@@ -344,11 +350,16 @@ mod tests {
             Some("http://100.73.235.38:9181/api/v0/graphql")
         );
         assert_eq!(record.source.as_deref(), Some("server-status"));
+        assert_eq!(record.default_behavior_id.as_deref(), Some("default"));
 
         let reloaded = PeerDirectory::load(&path).await.unwrap();
         assert_eq!(
             reloaded.records()[0].graphql.as_deref(),
             Some("http://100.73.235.38:9181/api/v0/graphql")
+        );
+        assert_eq!(
+            reloaded.records()[0].default_behavior_id.as_deref(),
+            Some("default")
         );
     }
 
@@ -403,6 +414,7 @@ mod tests {
                 "iroh://old-ticket",
                 "did:test:amy",
                 Some("http://amy.local/graphql"),
+                None,
             )
             .await
             .unwrap();

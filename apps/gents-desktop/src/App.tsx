@@ -43,6 +43,9 @@ function AppShell() {
   const [workspaceView, setWorkspaceView] = useState<
     "fleet" | "chat" | "config" | "code"
   >("fleet");
+  const [mobileChatPane, setMobileChatPane] = useState<"navigation" | "conversation">(
+    "navigation",
+  );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   useAppShortcuts({
@@ -52,6 +55,7 @@ function AppShell() {
         shell.selectedBehaviorId ?? shell.behaviorOptions[0]?.behaviorId ?? null;
       if (behaviorId) {
         setWorkspaceView("chat");
+        setMobileChatPane("conversation");
         shell.onStartNewConversation(behaviorId);
       }
     },
@@ -70,6 +74,7 @@ function AppShell() {
     if (agentDid) {
       shell.setSelectedAgentDid(agentDid);
     }
+    setMobileChatPane("conversation");
     setWorkspaceView("chat");
   }
 
@@ -77,6 +82,7 @@ function AppShell() {
     if (agentDid) {
       shell.setSelectedAgentDid(agentDid);
     }
+    setMobileChatPane("conversation");
     setWorkspaceView("code");
   }
 
@@ -88,7 +94,7 @@ function AppShell() {
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell app-view-${workspaceView}`}>
       <div aria-hidden="true" className="titlebar-drag-region" data-tauri-drag-region />
       {shell.error ? (
         <ErrorBanner message={shell.error} onDismiss={shell.onDismissError} />
@@ -116,7 +122,10 @@ function AppShell() {
           onRepairP2P={shell.onRepairP2P}
         />
       ) : workspaceView === "chat" || workspaceView === "code" ? (
-        <section className="workspace">
+        <section
+          className={`workspace mobile-chat-pane-${mobileChatPane}`}
+          data-mobile-chat-pane={mobileChatPane}
+        >
           <Sidebar
             behaviorOptions={shell.behaviorOptions}
             conversations={shell.selectedDeployment?.conversations ?? []}
@@ -130,8 +139,15 @@ function AppShell() {
               shell.setSelectedSessionId(null);
             }}
             onSelectSession={shell.onSelectSession}
+            onOpenSession={(sessionId) => {
+              shell.onSelectSession(sessionId);
+              setMobileChatPane("conversation");
+            }}
             onRenameConversationTitle={shell.onRenameConversationTitle}
-            onStartNewConversation={shell.onStartNewConversation}
+            onStartNewConversation={(behaviorId) => {
+              shell.onStartNewConversation(behaviorId);
+              setMobileChatPane("conversation");
+            }}
             selectedAgentDid={shell.selectedAgentDid}
             selectedBehaviorId={shell.selectedBehaviorId}
             selectedSessionId={shell.selectedSessionId}
@@ -170,6 +186,7 @@ function AppShell() {
               selectedSessionId={shell.selectedSessionId}
               sending={shell.sending}
               session={shell.session}
+              onOpenMobileNavigation={() => setMobileChatPane("navigation")}
               onForkedConversation={shell.onSelectSession}
             />
           </section>

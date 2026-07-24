@@ -17,6 +17,7 @@ export type ConversationListSectionProps = {
   selectedBehaviorId: string | null;
   selectedSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
+  onOpenSession?: (sessionId: string) => void;
   onRenameConversationTitle?: (
     sessionId: string,
     title: string,
@@ -30,6 +31,7 @@ export function ConversationListSection({
   selectedBehaviorId,
   selectedSessionId,
   onSelectSession,
+  onOpenSession,
   onRenameConversationTitle,
 }: ConversationListSectionProps) {
   const [query, setQuery] = useState("");
@@ -248,7 +250,9 @@ export function ConversationListSection({
                       : "list-item"
                   }
                   data-testid={`conversation-${conversation.sessionId}`}
-                  onClick={() => onSelectSession(conversation.sessionId)}
+                  onClick={() =>
+                    (onOpenSession ?? onSelectSession)(conversation.sessionId)
+                  }
                   type="button"
                 >
                   <span className="conversation-list-row">

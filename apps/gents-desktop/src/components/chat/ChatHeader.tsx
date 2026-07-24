@@ -11,6 +11,7 @@ export type ChatHeaderProps = {
   selectedSessionId: string | null;
   onRenameConversationTitle: (sessionId: string, title: string) => void | Promise<void>;
   onForkConversation?: (sessionId: string) => void | Promise<void>;
+  onOpenMobileNavigation?: () => void;
   forking?: boolean;
 };
 
@@ -21,6 +22,7 @@ export function ChatHeader({
   selectedSessionId,
   onRenameConversationTitle,
   onForkConversation,
+  onOpenMobileNavigation,
   forking = false,
 }: ChatHeaderProps) {
   const visibleConversationTitle = selectedSessionId
@@ -67,6 +69,17 @@ export function ChatHeader({
   return (
     <header className="chat-header">
       <div className="chat-title-block">
+        {onOpenMobileNavigation ? (
+          <button
+            className="ghost-button mobile-chat-navigation-button"
+            data-testid="mobile-chat-navigation"
+            onClick={onOpenMobileNavigation}
+            type="button"
+          >
+            <span aria-hidden="true">←</span>
+            Chats
+          </button>
+        ) : null}
         {selectedSessionId ? (
           isRenamingTitle ? (
             <form className="title-rename-form" onSubmit={submitTitleRename}>

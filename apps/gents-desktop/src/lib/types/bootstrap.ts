@@ -12,6 +12,7 @@ export type PeerAddRequest = {
   agentDid: string;
   addr: string;
   graphql?: string | null;
+  defaultBehaviorId?: string | null;
 };
 
 export type BearerPairingRequest = {

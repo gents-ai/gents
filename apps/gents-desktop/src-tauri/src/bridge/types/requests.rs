@@ -20,6 +20,8 @@ pub(crate) struct PeerAddRequest {
     pub addr: String,
     #[serde(default)]
     pub graphql: Option<String>,
+    #[serde(default)]
+    pub default_behavior_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

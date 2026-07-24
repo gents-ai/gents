@@ -11,8 +11,15 @@ pub(crate) async fn add_peer(core: &ClientCore, request: PeerAddRequest) -> Resu
     let agent_did = require_trimmed("agent_did", request.agent_did)?;
     let addr = require_trimmed("addr", request.addr)?;
     let graphql = trim_optional(request.graphql);
-    core.add_peer(&label, &addr, &agent_did, graphql.as_deref())
-        .await?;
+    let default_behavior_id = trim_optional(request.default_behavior_id);
+    core.add_peer(
+        &label,
+        &addr,
+        &agent_did,
+        graphql.as_deref(),
+        default_behavior_id.as_deref(),
+    )
+    .await?;
     Ok(())
 }
 

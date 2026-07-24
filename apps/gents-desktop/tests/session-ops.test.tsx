@@ -12,6 +12,23 @@ vi.mock("../src/components/backgroundedTools/useOperationsSnapshot", async (orig
 const mockedSnapshot = vi.mocked(useOperationsSnapshot);
 
 describe("session ops", () => {
+  it("offers a phone navigation control without changing desktop chat semantics", () => {
+    const onOpenMobileNavigation = vi.fn();
+    render(
+      <ChatHeader
+        selectedSessionId="session-1"
+        selectedConversationTitle="planning"
+        behaviorLabel="Amy"
+        runtimeHealth={null}
+        onRenameConversationTitle={vi.fn()}
+        onOpenMobileNavigation={onOpenMobileNavigation}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("mobile-chat-navigation"));
+    expect(onOpenMobileNavigation).toHaveBeenCalledOnce();
+  });
+
   it("offers Fork only for a selected conversation and forwards the session id", () => {
     const onForkConversation = vi.fn();
     const { rerender } = render(
