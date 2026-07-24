@@ -40,6 +40,8 @@ structure DirectoryState where
   entries : Finset Entry
   deriving DecidableEq
 
+namespace DirectoryState
+
 /-- Settled: the live entries equal the projection exactly (full-row
 equality, not did-membership — a drifted payload must converge). -/
 def settled (s : DirectoryState) : Prop :=
@@ -51,6 +53,10 @@ instance (s : DirectoryState) : Decidable s.settled := by
 /-- One sweep: replace the entries with the projection. -/
 def projectStep (s : DirectoryState) : DirectoryState :=
   { s with entries := project s.principals }
+
+end DirectoryState
+
+open DirectoryState
 
 /-- Membership characterization: an entry is projected iff a principal
 with exactly that did/payload exists. -/
