@@ -33,9 +33,9 @@ The desktop test stack has three layers:
   a real inference provider or the `live-smoke.yml` manual workflow inputs.
 - `npm run test:ui:ios:e2e` builds the real Tauri app for an iPhone Simulator,
   mints a fresh signed invite on the isolated local `iphone-e2e` node, pairs
-  through the visible UI, sends a fixed prompt, and waits for its response with
-  XCUITest. Screenshots, the accessibility hierarchy on failure, and the
-  `.xcresult` bundle are retained under the printed temporary artifact
+  through the rendered UI, sends a fixed prompt, and waits for its response
+  through a debug-only in-app driver. The runner detects an unexpected native
+  app exit and retains screenshots under the printed temporary artifact
   directory.
 - `npm run test:ui:native:preflight` runs the non-GUI native Tauri preflight.
 

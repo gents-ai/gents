@@ -10,6 +10,7 @@ const APPLE_ROOT = join(APP_ROOT, "src-tauri", "gen", "apple");
 const APP_BUNDLE_ID = "com.source-inc.gents";
 const STATUS_FILENAME = "native-e2e-status.json";
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
+const DEFAULT_POST_PASS_STABILITY_MS = 30_000;
 
 const args = new Set(process.argv.slice(2));
 const skipBuild = args.has("--skip-build");
@@ -85,7 +86,7 @@ function mintInvite() {
 
   process.stdout.write(
     `\nMinting a fresh single-use pairing invite from ${
-      remote ?? "the isolated local iphone-e2e node"
+      remote ?? `the local issuer at ${home}`
     }…\n`,
   );
   const inviteArgs = ["p2p", "pairings", "invite", "--home", home, "--bearer"];
@@ -143,8 +144,13 @@ async function waitForScenario({ deviceId, pid, runIndex, artifactRoot, statusPa
     process.env.GENTS_E2E_TIMEOUT_MS ?? `${DEFAULT_TIMEOUT_MS}`,
     10,
   );
+  const stabilityMs = Number.parseInt(
+    process.env.GENTS_E2E_STABILITY_MS ?? `${DEFAULT_POST_PASS_STABILITY_MS}`,
+    10,
+  );
   const deadline = Date.now() + timeoutMs;
   let lastStage = null;
+  let passedAt = null;
 
   while (Date.now() < deadline) {
     const status = readStatus(statusPath);
@@ -158,7 +164,7 @@ async function waitForScenario({ deviceId, pid, runIndex, artifactRoot, statusPa
         captureScreenshot({ deviceId, path: screenshot });
       }
       if (status.stage === "passed") {
-        return;
+        passedAt ??= Date.now();
       }
       if (status.stage === "failed") {
         throw new Error(`Native app E2E failed: ${status.detail ?? "unknown"}`);
@@ -167,8 +173,16 @@ async function waitForScenario({ deviceId, pid, runIndex, artifactRoot, statusPa
 
     if (!processIsAlive(pid)) {
       throw new Error(
-        `Gents exited during native E2E${lastStage ? ` at stage ${lastStage}` : ""}`,
+        `Gents exited during native E2E${
+          lastStage ? ` at stage ${lastStage}` : ""
+        }${passedAt ? " during the post-pass stability window" : ""}`,
       );
+    }
+    if (passedAt && Date.now() - passedAt >= stabilityMs) {
+      process.stdout.write(
+        `Native app remained alive for ${stabilityMs}ms after the response.\n`,
+      );
+      return;
     }
     await delay(500);
   }
@@ -266,6 +280,8 @@ for (let index = 1; index <= runs; index += 1) {
       process.env.GENTS_E2E_PROMPT?.trim() || defaultPrompt,
     SIMCTL_CHILD_GENTS_E2E_EXPECTED_RESPONSE:
       process.env.GENTS_E2E_EXPECTED_RESPONSE?.trim() || defaultExpected,
+    SIMCTL_CHILD_GENTS_E2E_EXPECT_EMPTY_CONVERSATIONS:
+      index === 1 && !keepData ? "1" : "0",
     SIMCTL_CHILD_RUST_BACKTRACE: "full",
     SIMCTL_CHILD_RUST_LOG: process.env.RUST_LOG?.trim() || "info",
   };

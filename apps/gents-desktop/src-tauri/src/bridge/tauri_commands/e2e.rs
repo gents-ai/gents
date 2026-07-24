@@ -9,6 +9,7 @@ pub(crate) struct NativeE2eConfig {
     pair_token: String,
     prompt: String,
     expected_response: String,
+    expect_empty_conversation_slice: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -39,14 +40,18 @@ pub(crate) fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, Str
 
         Ok(Some(NativeE2eConfig {
             agent_label: std::env::var("GENTS_E2E_AGENT_LABEL")
-                .unwrap_or_else(|_| "Amy".to_owned()),
+                .unwrap_or_else(|_| "Fleet E2E Agent".to_owned()),
             pair_token,
             prompt: std::env::var("GENTS_E2E_PROMPT").unwrap_or_else(|_| {
-                "Reply with only the uppercase underscore form of: amy iphone simulator e2e."
+                "Reply with only the uppercase underscore form of: fleet iphone simulator e2e."
                     .to_owned()
             }),
             expected_response: std::env::var("GENTS_E2E_EXPECTED_RESPONSE")
-                .unwrap_or_else(|_| "AMY_IPHONE_SIMULATOR_E2E".to_owned()),
+                .unwrap_or_else(|_| "FLEET_IPHONE_SIMULATOR_E2E".to_owned()),
+            expect_empty_conversation_slice: std::env::var("GENTS_E2E_EXPECT_EMPTY_CONVERSATIONS")
+                .ok()
+                .as_deref()
+                == Some("1"),
         }))
     }
 }

@@ -2,7 +2,11 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { FleetDashboard } from "../src/components/fleet/FleetDashboard";
-import type { BootstrapSummary, DeploymentView } from "../src/lib/types";
+import type {
+  BearerPairingResponse,
+  BootstrapSummary,
+  DeploymentView,
+} from "../src/lib/types";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 const bootstrap: BootstrapSummary = {
@@ -236,6 +240,63 @@ describe("FleetDashboard add connection flow", () => {
         addr: "/ip4/100.73.235.38/tcp/9161/p2p/12D3KooStudio",
         graphql: "http://100.73.235.38:9181/api/v0/graphql",
       });
+    });
+  });
+
+  it("keeps verified pairing readiness visible after closing the add panel", async () => {
+    const onPairBearer = vi.fn(async () => ({
+      bootstrap: {} as BearerPairingResponse["bootstrap"],
+      client: null,
+      pairing: {
+        peerId: "peer-steward",
+        label: "amygdalabook-steward",
+        addr: "iroh://steward",
+        issuerDid: "did:key:zSteward",
+        claimantDid: "did:key:zPhone",
+        networkId: "steward-network",
+        template: "conversation",
+        connected: true,
+        claimSubmitted: true,
+        endpointPublished: true,
+        replicationConfigured: true,
+        membershipObserved: true,
+        bidirectionalReplicationObserved: true,
+      },
+    }));
+
+    render(
+      <FleetDashboard
+        addingPeer={false}
+        bootstrap={bootstrap}
+        deployments={[deployment]}
+        loading={false}
+        p2pHealth={null}
+        repairingP2P={false}
+        starting={false}
+        onAddPeer={vi.fn()}
+        onPairBearer={onPairBearer}
+        onFetchPeerStatus={vi.fn()}
+        onInitLocalRuntime={vi.fn()}
+        onOpenChat={vi.fn()}
+        onOpenConfig={vi.fn()}
+        onRepairP2P={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Agent" }));
+    fireEvent.change(screen.getByTestId("fleet-pair-label"), {
+      target: { value: "amygdalabook-steward" },
+    });
+    fireEvent.change(screen.getByTestId("fleet-pair-token"), {
+      target: { value: "dabear1-signed-invite" },
+    });
+    fireEvent.click(screen.getByTestId("fleet-pair-submit"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("fleet-pair-submit")).not.toBeInTheDocument();
+      expect(screen.getByTestId("fleet-pair-status")).toHaveTextContent(
+        "amygdalabook-steward is ready",
+      );
     });
   });
 });

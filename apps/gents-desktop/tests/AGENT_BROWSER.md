@@ -51,7 +51,7 @@ Targets use exactly one semantic strategy:
 {"testId":"composer-input"}
 {"role":"button","name":"Send"}
 {"label":"Server address"}
-{"placeholder":"Ask Amy anything"}
+{"placeholder":"Ask this agent anything"}
 {"text":"Configure","exact":true}
 {"css":".operations-rail"}
 ```
@@ -64,10 +64,10 @@ Common commands:
 
 ```json
 {"id":"open-chat","command":"click","target":{"testId":"fleet-chat-name-peer-bombadil-local"}}
-{"id":"prompt","command":"fill","target":{"testId":"composer-input"},"value":"Hello Amy"}
+{"id":"prompt","command":"fill","target":{"testId":"composer-input"},"value":"Hello agent"}
 {"id":"send","command":"click","target":{"role":"button","name":"Send"}}
-{"id":"answer","command":"wait","target":{"text":"Amy live agent-browser confirmation."},"timeoutMs":60000}
-{"id":"shot","command":"screenshot","name":"amy-chat"}
+{"id":"answer","command":"wait","target":{"text":"Fleet E2E live agent-browser confirmation."},"timeoutMs":60000}
+{"id":"shot","command":"screenshot","name":"fleet-agent-chat"}
 {"id":"errors","command":"console"}
 {"id":"done","command":"close"}
 ```
@@ -100,8 +100,8 @@ bridge command implementation, embedded DefraDB storage, replication fixture,
 request lifecycle, and provider-shaped streaming response.
 
 Chromium still stands in for the iOS `WKWebView`. Use
-`npm run test:ui:ios:e2e` for the native lane: its XCUITest target drives the
-real app through clean-install pairing, chat creation, prompt submission, and
-Amy's replicated response. That lane covers WebKit and native lifecycle
-behavior and retains screenshots plus the accessibility hierarchy on failure.
+`npm run test:ui:ios:e2e` for the native lane: a debug-only in-app driver takes
+the real app through clean-install pairing, chat creation, prompt submission,
+and the fleet agent's replicated response. That lane covers WebKit and native
+lifecycle behavior, detects an unexpected app exit, and retains screenshots.
 Physical-device networking remains the final release check.

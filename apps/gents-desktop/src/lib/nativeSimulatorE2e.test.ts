@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { findAssistantResponseMarker } from "./nativeSimulatorE2e";
+import {
+  conversationRowCount,
+  findAssistantResponseMarker,
+} from "./nativeSimulatorE2e";
 
 describe("findAssistantResponseMarker", () => {
   it("does not mistake the user prompt for an assistant response", () => {
@@ -27,5 +30,23 @@ describe("findAssistantResponseMarker", () => {
     `;
 
     expect(findAssistantResponseMarker(document, "UNIQUE_MARKER")).not.toBeNull();
+  });
+});
+
+describe("conversationRowCount", () => {
+  it("counts conversation rows without mistaking filters for conversations", () => {
+    document.body.innerHTML = `
+      <input data-testid="conversation-search" />
+      <div class="conversation-list">
+        <span class="conversation-row">
+          <button data-testid="conversation-session-1">first</button>
+        </span>
+        <span class="conversation-row">
+          <button data-testid="conversation-session-2">second</button>
+        </span>
+      </div>
+    `;
+
+    expect(conversationRowCount(document)).toBe(2);
   });
 });

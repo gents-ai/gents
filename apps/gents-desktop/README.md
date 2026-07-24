@@ -176,8 +176,9 @@ The iOS lane builds and installs the real app in an iPhone Simulator, pairs
 with the isolated local `~/.gents/iphone-e2e` node through a fresh signed bearer
 invite, and verifies an actual prompt/response round-trip. It never targets a
 deployed agent unless the issuer environment variables are set explicitly. It
-retains XCUITest screenshots, accessibility diagnostics, and an `.xcresult`
-bundle for every run:
+uses a debug-only in-app driver so the same React and Tauri command paths run
+inside the native `WKWebView`, detects an unexpected app exit, and retains
+screenshots from the sent and terminal stages:
 
 ```bash
 npm run test:ui:ios:e2e

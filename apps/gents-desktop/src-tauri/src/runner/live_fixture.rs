@@ -31,8 +31,8 @@ use self::replication::{
 };
 use self::workspace::seed_runner_agent_home;
 
-const DEFAULT_DEPLOYMENT_LABEL: &str = "Amy Server";
-const DEFAULT_AGENT_NAME: &str = "amy";
+const DEFAULT_DEPLOYMENT_LABEL: &str = "Fleet E2E Agent";
+const DEFAULT_AGENT_NAME: &str = "fleet-e2e-agent";
 
 pub(crate) struct LiveBridgeFixture {
     runtime: Arc<Runtime>,
@@ -124,7 +124,7 @@ impl LiveBridgeFixture {
             live_core_options(),
         ))?);
 
-        let agent_key = tempdir.path().join("agent").join("amy.key");
+        let agent_key = tempdir.path().join("agent").join("fleet-e2e-agent.key");
         let (running_agent, docs, tool_root) = runtime.block_on(spawn_live_agent(
             Arc::clone(&remote_core),
             agent_key,

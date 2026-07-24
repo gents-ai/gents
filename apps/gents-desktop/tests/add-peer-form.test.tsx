@@ -63,9 +63,7 @@ describe("AddPeerForm", () => {
         token: "dabear1-signed-invite",
         label: "Amy",
       });
-      expect(screen.getByTestId("fleet-pair-status")).toHaveTextContent(
-        "Amy is ready",
-      );
+      expect(screen.getByTestId("fleet-pair-status")).toHaveTextContent("Amy is ready");
     });
   });
 

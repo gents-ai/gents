@@ -47,21 +47,26 @@ final class GentsUITests: XCTestCase {
         }
     }
 
-    func testAmyPromptRoundTrip() throws {
+    func testFleetAgentPromptRoundTrip() throws {
         let environment = ProcessInfo.processInfo.environment
+        let agentLabel = environment["GENTS_E2E_AGENT_LABEL"]
+            ?? "Fleet E2E Agent"
         let marker = environment["GENTS_E2E_EXPECTED_RESPONSE"]
-            ?? "AMY_IPHONE_SIMULATOR_E2E"
+            ?? "FLEET_IPHONE_SIMULATOR_E2E"
         let prompt = environment["GENTS_E2E_PROMPT"]
-            ?? "Reply with only the uppercase underscore form of: amy iphone simulator e2e."
+            ?? "Reply with only the uppercase underscore form of: fleet iphone simulator e2e."
 
         _ = try waitForVisualText("Fleet Dashboard", timeout: 30)
 
-        var amy = try findVisualText("Amy", exact: true)
-        if amy == nil {
-            try pairAmy(invite: pairingInvite(from: environment))
-            amy = try waitForVisualText("Amy", exact: true, timeout: 120)
+        var agent = try findVisualText(agentLabel, exact: true)
+        if agent == nil {
+            try pairAgent(
+                label: agentLabel,
+                invite: pairingInvite(from: environment)
+            )
+            agent = try waitForVisualText(agentLabel, exact: true, timeout: 120)
         }
-        tap(try XCTUnwrap(amy, "Amy did not appear after pairing"))
+        tap(try XCTUnwrap(agent, "\(agentLabel) did not appear after pairing"))
 
         let composer = try waitForVisualText("Message the selected agent", timeout: 30)
         tap(composer)
@@ -71,12 +76,12 @@ final class GentsUITests: XCTestCase {
         _ = try waitForVisualText(marker, timeout: 120)
 
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        attachment.name = "amy-round-trip"
+        attachment.name = "fleet-agent-round-trip"
         attachment.lifetime = .keepAlways
         add(attachment)
     }
 
-    private func pairAmy(invite: String) throws {
+    private func pairAgent(label agentLabel: String, invite: String) throws {
         if let disclosure = try findVisualText("Connect a remote agent") {
             tap(disclosure)
         } else {
@@ -85,7 +90,7 @@ final class GentsUITests: XCTestCase {
 
         let label = try scrollUntilVisualText("Agent label", timeout: 30)
         tapBelow(label)
-        paste("Amy")
+        paste(agentLabel)
         dismissKeyboard()
 
         let token = try scrollUntilVisualText("Pairing invite", timeout: 30)
@@ -104,7 +109,7 @@ final class GentsUITests: XCTestCase {
             return value
         }
         throw XCTSkip(
-            "Set GENTS_E2E_PAIR_TOKEN or copy a fresh Amy bearer invite to the simulator pasteboard"
+            "Set GENTS_E2E_PAIR_TOKEN or copy a fresh fleet-agent bearer invite to the simulator pasteboard"
         )
     }
 

@@ -5,6 +5,7 @@ type NativeE2eConfig = {
   pairToken: string;
   prompt: string;
   expectedResponse: string;
+  expectEmptyConversationSlice: boolean;
 };
 
 type NativeE2eStatus = {
@@ -64,6 +65,15 @@ async function runNativeSimulatorE2e() {
       300_000,
       `${config.agentLabel} default behavior readiness`,
     );
+    if (config.expectEmptyConversationSlice) {
+      await delay(3_000);
+      const conversationCount = conversationRowCount(document);
+      if (conversationCount > 0) {
+        throw new Error(
+          `Requester-scoped pairing leaked ${conversationCount} pre-existing conversation(s)`,
+        );
+      }
+    }
     newChatButton.click();
 
     const composer = await waitFor(
@@ -178,6 +188,12 @@ export function findAssistantResponseMarker(
         ?.textContent?.includes(expectedResponse),
     ) ?? null
   );
+}
+
+export function conversationRowCount(root: ParentNode): number {
+  return root.querySelectorAll(
+    '.conversation-list .conversation-row > button[data-testid^="conversation-"]',
+  ).length;
 }
 
 function setControlledValue(

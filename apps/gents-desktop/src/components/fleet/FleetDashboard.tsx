@@ -66,6 +66,7 @@ export function FleetDashboard({
   const [peerForm, setPeerForm] = useState(DEFAULT_PEER_FORM);
   const [peerFormError, setPeerFormError] = useState<string | null>(null);
   const [localRuntimeError, setLocalRuntimeError] = useState<string | null>(null);
+  const [pairingNotice, setPairingNotice] = useState<string | null>(null);
   const hasDeployments = deployments.length > 0;
   // The repair command re-dials the desktop client's P2P connections as a
   // whole, so it lives here at fleet level — a per-row placement would lie
@@ -97,6 +98,9 @@ export function FleetDashboard({
     const response = await onPairBearer(request);
     setPeerFormError(null);
     setLocalRuntimeError(null);
+    setPairingNotice(
+      `${response.pairing.label} is ready. Signed membership and bidirectional replication were observed.`,
+    );
     setShowAddPeer(false);
     return response;
   }
@@ -173,13 +177,26 @@ export function FleetDashboard({
           ) : null}
           <button
             className="primary-button"
-            onClick={() => setShowAddPeer((value) => !value)}
+            onClick={() => {
+              setPairingNotice(null);
+              setShowAddPeer((value) => !value);
+            }}
             type="button"
           >
             Add Agent
           </button>
         </div>
       </header>
+
+      {pairingNotice ? (
+        <p
+          aria-live="polite"
+          className="fleet-pairing-success"
+          data-testid="fleet-pair-status"
+        >
+          {pairingNotice}
+        </p>
+      ) : null}
 
       {showAddPeer ? (
         <section className="panel fleet-add-panel">
