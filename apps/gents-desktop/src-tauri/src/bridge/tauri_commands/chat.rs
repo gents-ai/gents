@@ -18,7 +18,7 @@ pub(crate) fn desktop_session_snapshot(
         return Ok(None);
     };
 
-    let snapshot = tauri::async_runtime::block_on(async move { core.store().snapshot() });
+    let snapshot = core.store().snapshot();
     Ok(build_session_snapshot_from_store_for_agent(
         snapshot.as_ref(),
         agent_did.as_deref(),
@@ -28,7 +28,7 @@ pub(crate) fn desktop_session_snapshot(
 }
 
 #[tauri::command]
-pub(crate) fn desktop_chat_send(
+pub(crate) async fn desktop_chat_send(
     request: ChatSendRequest,
     state: State<'_, DesktopAppState>,
 ) -> Result<ChatSendResult, String> {
@@ -36,15 +36,13 @@ pub(crate) fn desktop_chat_send(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        send_chat_message(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())
-    })
+    send_chat_message(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub(crate) fn desktop_conversation_rename(
+pub(crate) async fn desktop_conversation_rename(
     request: ConversationRenameRequest,
     state: State<'_, DesktopAppState>,
 ) -> Result<(), String> {
@@ -52,11 +50,9 @@ pub(crate) fn desktop_conversation_rename(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        rename_conversation(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())
-    })
+    rename_conversation(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -68,7 +64,7 @@ pub(crate) struct SessionForkResultView {
 }
 
 #[tauri::command]
-pub(crate) fn desktop_session_fork(
+pub(crate) async fn desktop_session_fork(
     agent_did: String,
     session_id: String,
     at_user_turn: u32,
@@ -79,21 +75,19 @@ pub(crate) fn desktop_session_fork(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        let outcome = core
-            .fork_session(
-                &agent_did,
-                &session_id,
-                at_user_turn,
-                behavior_id.as_deref(),
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-        Ok(SessionForkResultView {
-            session_id: outcome.session_id,
-            copied_messages: outcome.copied_messages,
-            copied_tool_calls: outcome.copied_tool_calls,
-        })
+    let outcome = core
+        .fork_session(
+            &agent_did,
+            &session_id,
+            at_user_turn,
+            behavior_id.as_deref(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(SessionForkResultView {
+        session_id: outcome.session_id,
+        copied_messages: outcome.copied_messages,
+        copied_tool_calls: outcome.copied_tool_calls,
     })
 }
 
@@ -105,7 +99,7 @@ pub(crate) struct RequestResendResultView {
 }
 
 #[tauri::command]
-pub(crate) fn desktop_request_resend(
+pub(crate) async fn desktop_request_resend(
     request_id: String,
     state: State<'_, DesktopAppState>,
 ) -> Result<RequestResendResultView, String> {
@@ -113,20 +107,18 @@ pub(crate) fn desktop_request_resend(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        let submitted = core
-            .resend_request(&request_id)
-            .await
-            .map_err(|error| error.to_string())?;
-        Ok(RequestResendResultView {
-            request_id: submitted.request_id,
-            session_id: submitted.session_id,
-        })
+    let submitted = core
+        .resend_request(&request_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(RequestResendResultView {
+        request_id: submitted.request_id,
+        session_id: submitted.session_id,
     })
 }
 
 #[tauri::command]
-pub(crate) fn desktop_request_timeline(
+pub(crate) async fn desktop_request_timeline(
     agent_did: String,
     request_id: String,
     state: State<'_, DesktopAppState>,
@@ -135,11 +127,9 @@ pub(crate) fn desktop_request_timeline(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        let timeline = core
-            .request_timeline(&agent_did, &request_id)
-            .await
-            .map_err(|error| error.to_string())?;
-        serde_json::to_value(&timeline).map_err(|error| error.to_string())
-    })
+    let timeline = core
+        .request_timeline(&agent_did, &request_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    serde_json::to_value(&timeline).map_err(|error| error.to_string())
 }

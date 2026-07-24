@@ -1,3 +1,4 @@
+pub(super) mod bearer_pairing;
 mod bootstrap;
 mod materialization;
 mod p2p_ops;
@@ -28,6 +29,8 @@ use super::query::{
     load_agent_scoped_snapshot, load_full_snapshot, load_full_snapshot_from_graphql,
 };
 use crate::remote_admin::PairingErrorClass;
+
+pub use bearer_pairing::{BearerInvitePreview, BearerPairingResult};
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);

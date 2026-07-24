@@ -10,7 +10,9 @@
 # commit history sync needs). Without it, `add_replicator`/`add_p2p_collections`
 # cannot move these rows between nodes.
 type PeerEndpoint @branchable {
-    did: String @index(unique: true)
+    # This is both the endpoint identity and the client-specific bootstrap
+    # replication route key; it must never change after document creation.
+    did: String @index(unique: true) @immutable
     node_id: String
     address: String
     updated_at: String

@@ -1,8 +1,10 @@
+use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
+use flate2::{write::GzEncoder, Compression};
 use gents::{graphql::escape_graphql_string, AgentIdentity, KeyIdentity};
 use gents_protocol::bearer_token::{
     bearer_signing_payload, encode_bearer, BearerInviteToken, BEARER_TOKEN_VERSION,
@@ -14,13 +16,22 @@ use serde_json::json;
 use crate::cli::args::P2pInviteArgs;
 use crate::config_writes::ConfigAccess;
 use crate::{
-    http_get_json, normalize_optional_string, print_json, read_init_config, read_runtime_state,
-    resolve_agent_did, resolve_config_access, resolve_graphql_endpoint, resolve_home_dir,
+    graphql_rows, http_get_json, normalize_optional_string, print_json, read_init_config,
+    read_runtime_state, resolve_agent_did, resolve_config_access, resolve_graphql_endpoint,
+    resolve_home_dir,
 };
 
 use super::network_admin::{load_membership_record, load_single_network_record};
 use super::output::resolve_p2p_peer_id;
 use super::pairings::resolve_pairing_template;
+
+/// Binary QR envelope for a gzip-compressed CBOR bearer token.
+///
+/// The normal copy/paste token remains `dabear1-` + base58(CBOR). Encoding
+/// that text directly in a QR expands the payload by roughly 37%, producing a
+/// code wider than many terminals. The scanner recognizes this compact,
+/// QR-only envelope and reconstructs the exact normal token before pairing.
+const BEARER_QR_MAGIC: &[u8] = b"dabear1z\0";
 
 pub(super) async fn p2p_invite(args: P2pInviteArgs) -> Result<()> {
     if args.bearer {
@@ -108,6 +119,15 @@ async fn p2p_invite_bearer(args: P2pInviteArgs) -> Result<()> {
         );
     }
 
+    let default_behavior_id = if template == "conversation" {
+        Some(
+            load_default_behavior_id(&access, identity.did())
+                .await
+                .context("loading signed default behavior routing hint")?,
+        )
+    } else {
+        None
+    };
     let (peer_id, ticket) = resolve_invite_transport(args.home.as_deref(), &graphql).await?;
     let mut token = BearerInviteToken {
         v: BEARER_TOKEN_VERSION,
@@ -118,6 +138,7 @@ async fn p2p_invite_bearer(args: P2pInviteArgs) -> Result<()> {
         network_id: network.network_id.clone(),
         issued_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
         template: template.clone(),
+        default_behavior_id,
         network,
         sig: Vec::new(),
     };
@@ -129,7 +150,8 @@ async fn p2p_invite_bearer(args: P2pInviteArgs) -> Result<()> {
 
     if args.qr {
         // QR goes to stderr so stdout stays a single parseable JSON object.
-        let code = qrcode::QrCode::new(encoded.as_bytes())
+        let payload = compact_bearer_qr_payload(&token)?;
+        let code = qrcode::QrCode::with_error_correction_level(&payload, qrcode::EcLevel::L)
             .context("encoding bearer invite token as a QR code")?;
         let rendered = code
             .render::<qrcode::render::unicode::Dense1x2>()
@@ -154,6 +176,45 @@ async fn p2p_invite_bearer(args: P2pInviteArgs) -> Result<()> {
         "claim_command": format!("gents p2p pairings claim {encoded}"),
     }))?;
     Ok(())
+}
+
+async fn load_default_behavior_id(access: &ConfigAccess, agent_did: &str) -> Result<String> {
+    let agent_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            AgentPrincipal(
+                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                limit: 1
+            ) {{
+                default_behavior_id
+            }}
+        }}"#
+    );
+    let rows = graphql_rows(access, "AgentPrincipal", &query).await?;
+    rows.first()
+        .and_then(|row| row.get("default_behavior_id"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| normalize_optional_string(Some(value)))
+        .context("conversation bearer invite requires AgentPrincipal.default_behavior_id")
+}
+
+fn compact_bearer_qr_payload(token: &BearerInviteToken) -> Result<Vec<u8>> {
+    let mut cbor = Vec::new();
+    ciborium::ser::into_writer(token, &mut cbor)
+        .context("encoding bearer invite for compact QR")?;
+
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
+    encoder
+        .write_all(&cbor)
+        .context("compressing bearer invite for compact QR")?;
+    let compressed = encoder
+        .finish()
+        .context("finishing compact bearer invite QR")?;
+
+    let mut payload = Vec::with_capacity(BEARER_QR_MAGIC.len() + compressed.len());
+    payload.extend_from_slice(BEARER_QR_MAGIC);
+    payload.extend_from_slice(&compressed);
+    Ok(payload)
 }
 
 /// Resolve this node's (peer id, dialable ticket) for an invite: prefer the
@@ -483,6 +544,10 @@ pub(super) fn resolve_home_identity(home: Option<&Path>) -> Result<Arc<dyn Agent
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
+
+    use flate2::read::GzDecoder;
+    use gents_protocol::bearer_token::{encode_bearer, BearerInviteToken, BEARER_TOKEN_VERSION};
     use gents_protocol::network_token::{MembershipRecord, NetworkRecord};
     use gents_protocol::pairing_token::{decode, encode, TOKEN_PREFIX};
 
@@ -508,6 +573,53 @@ mod tests {
             revoked_at: String::new(),
             sig: vec![4, 5, 6],
         }
+    }
+
+    fn bearer_token() -> BearerInviteToken {
+        BearerInviteToken {
+            v: BEARER_TOKEN_VERSION,
+            issuer_did: "did:key:z6MkiRC5mMbJM45SmvLhmv2MadX2KzkXhRqJwVYE5k3ThDyJ".to_string(),
+            peer_id: "775ad8b54cfff922733f96d4f5f7e1a3bb59e9031a32087040a644f9cdf67d3d"
+                .to_string(),
+            ticket: "endpointab3vvwfvjt77sitth6lnj5px4gr3wwpjamndecdqictej6on6z6t2aqbabsekbcp5bdqcagavaawr2ch".to_string(),
+            nonce: "9d2fe907-e5d6-48ed-af44-c603f0a89a1e".to_string(),
+            network_id: "net-Euv46XiYtc8knZqM7cJBAE".to_string(),
+            issued_at: "2026-07-23T21:30:00Z".to_string(),
+            template: "conversation".to_string(),
+            default_behavior_id: Some("default".to_string()),
+            network: NetworkRecord {
+                network_id: "net-Euv46XiYtc8knZqM7cJBAE".to_string(),
+                admin_did:
+                    "did:key:z6MkiRC5mMbJM45SmvLhmv2MadX2KzkXhRqJwVYE5k3ThDyJ".to_string(),
+                display_name: "amygdala".to_string(),
+                default_template: "conversation".to_string(),
+                created_at: "2026-07-23T20:48:52Z".to_string(),
+                sig: vec![7; 64],
+            },
+            sig: vec![9; 64],
+        }
+    }
+
+    #[test]
+    fn compact_bearer_qr_round_trips_and_is_smaller_than_text_token() {
+        let token = bearer_token();
+        let encoded = encode_bearer(&token).expect("encode bearer");
+        let payload = compact_bearer_qr_payload(&token).expect("compact QR payload");
+
+        assert!(payload.starts_with(BEARER_QR_MAGIC));
+        assert!(
+            payload.len() * 4 < encoded.len() * 3,
+            "compact QR should save at least 25% ({} vs {})",
+            payload.len(),
+            encoded.len()
+        );
+
+        let mut decoder = GzDecoder::new(&payload[BEARER_QR_MAGIC.len()..]);
+        let mut cbor = Vec::new();
+        decoder.read_to_end(&mut cbor).expect("decompress QR");
+        let decoded: BearerInviteToken =
+            ciborium::de::from_reader(cbor.as_slice()).expect("decode compact QR CBOR");
+        assert_eq!(decoded, token);
     }
 
     fn v5_token() -> InviteToken {

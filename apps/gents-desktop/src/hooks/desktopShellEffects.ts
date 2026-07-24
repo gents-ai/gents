@@ -1,6 +1,7 @@
 import { useEffect, type MutableRefObject } from "react";
 
 import type { ChatWorkflowState } from "../lib/chat-shell";
+import { conversationBelongsToBehavior } from "../lib/conversation-selection";
 import type {
   DeploymentView,
   DesktopClientSnapshot,
@@ -225,20 +226,28 @@ export function useDesktopShellEffects({
       selectedDeployment.behaviors.find((behavior) => behavior.isDefault)?.behaviorId ??
       selectedDeployment.behaviors[0]?.behaviorId ??
       null;
-
-    if (
-      !selectedBehaviorId ||
-      !selectedDeployment.behaviors.some(
+    const effectiveBehaviorId =
+      selectedBehaviorId &&
+      selectedDeployment.behaviors.some(
         (behavior) => behavior.behaviorId === selectedBehaviorId,
       )
-    ) {
+        ? selectedBehaviorId
+        : defaultBehaviorId;
+
+    if (selectedBehaviorId !== effectiveBehaviorId) {
       setSelectedBehaviorId(defaultBehaviorId);
     }
 
     if (
       selectedSessionId &&
       (selectedDeployment.conversations.some(
-        (conversation) => conversation.sessionId === selectedSessionId,
+        (conversation) =>
+          conversation.sessionId === selectedSessionId &&
+          conversationBelongsToBehavior(
+            conversation,
+            effectiveBehaviorId,
+            defaultBehaviorId,
+          ),
       ) ||
         (localWorkflow.kind === "awaitingObservation" &&
           localWorkflow.sessionId === selectedSessionId))
@@ -254,7 +263,15 @@ export function useDesktopShellEffects({
       return;
     }
 
-    setSelectedSessionId(selectedDeployment.conversations[0]?.sessionId ?? null);
+    setSelectedSessionId(
+      selectedDeployment.conversations.find((conversation) =>
+        conversationBelongsToBehavior(
+          conversation,
+          effectiveBehaviorId,
+          defaultBehaviorId,
+        ),
+      )?.sessionId ?? null,
+    );
   }, [
     localWorkflow,
     newConversationAgentRef,

@@ -172,6 +172,7 @@ export function ChatComposer({
           </ul>
         ) : null}
         <textarea
+          aria-label="Message the selected agent"
           className="composer-input"
           data-testid="composer-input"
           ref={inputRef}

@@ -85,4 +85,21 @@ describe("parsePeerConnectionJson", () => {
       addr: "endpoint://ops",
     });
   });
+
+  it("explains when a runtime cannot supply a P2P connection", () => {
+    expect(() =>
+      parsePeerConnectionJson(
+        JSON.stringify({
+          agent_did: "did:key:z6MkLocalOnly",
+          p2p_transport: "none",
+          p2p: {
+            enabled: false,
+            p2p_listen_addresses: [],
+          },
+        }),
+      ),
+    ).toThrow(
+      "This runtime has P2P disabled. Restart it with --p2p-transport iroh and fetch again.",
+    );
+  });
 });

@@ -90,9 +90,17 @@ async fn reconcile_peer_tick_with_replay(
         }
     };
     let desired_state = desired.clone().unwrap_or_default();
+    let mut applied = store.load_applied(peer_id).await?;
     let mut reconnected = false;
     if desired_state.has_wiring() && !desired_state.replicator_addresses.is_empty() {
-        // Dial only when the peer is not already connected — the Lean
+        // Dial when the peer is not already connected OR its signed endpoint
+        // changed since the last successfully applied replicator. Iroh keeps
+        // the peer identity stable across relaunches while its shareable
+        // address can change. During that window `active_peers` may still
+        // contain the old connection, so peer-id liveness alone is a false
+        // positive and add_replicator reuses a stale route until it times out.
+        //
+        // The unchanged-address case still follows the Lean
         // `PairingReconcile.Transition.dial`/`dialFailed` premises both require
         // `connected = false`; a connected peer proceeds straight to the
         // reconcile ops. A redundant redial is not merely wasted work: on Linux
@@ -101,7 +109,9 @@ async fn reconcile_peer_tick_with_replay(
         // already-paired peer permanently unable to pick up new desired state
         // (e.g. the filtered conversation data-plane replicator on top of an
         // applied control-plane pairing).
-        if peer_already_active(admin, peer_id).await {
+        let endpoint_changed = !applied.replicator_addresses.is_empty()
+            && applied.replicator_addresses != desired_state.replicator_addresses;
+        if !endpoint_changed && peer_already_active(admin, peer_id).await {
             tracing::debug!(peer_id, "pairing peer already connected; skipping redial");
         } else {
             let addresses = desired_state
@@ -114,9 +124,16 @@ async fn reconcile_peer_tick_with_replay(
                 .await
                 .context("connect pairing peer")?;
             reconnected = true;
+            if endpoint_changed {
+                tracing::info!(
+                    peer_id,
+                    previous_addresses = ?applied.replicator_addresses,
+                    desired_addresses = ?desired_state.replicator_addresses,
+                    "pairing endpoint changed; refreshed peer connection before reconcile"
+                );
+            }
         }
     }
-    let mut applied = store.load_applied(peer_id).await?;
     let actual = read_actual(admin).await?;
 
     // All three collection sets are in name-space: `desired_state` carries names,
@@ -918,13 +935,12 @@ fn desired_from_pairing_row(
         return Ok(None);
     }
 
-    // The scope filter value is the row's agent DID. For network-control rows
-    // this is the remote member DID; for data-plane rows the loader first
-    // sanitizes it to this node's DID so the node pushes only its own docs. A
-    // peer-DID-scoped template with a blank agent_did cannot be honored: it would
-    // build an `agent_did == ""` predicate (matches nothing) or, worse, an
-    // unscoped replicator. Refuse the row and skip this peer (caught per-peer by
-    // the sweep), mirroring the discovery-side skip of blank-DID registry entries.
+    // The scope filter's peer value is the row's remote agent DID. Templates
+    // choose which immutable route field receives it (for example,
+    // conversation uses requester_did). A peer-DID-dependent template with a
+    // blank agent_did cannot be honored: it would build an empty predicate
+    // (matches nothing) or, worse, an unscoped replicator. Refuse the row and
+    // skip this peer, mirroring discovery's blank-DID guard.
     let peer_did = row.agent_did.as_deref().map(str::trim).unwrap_or_default();
     if peer_did.is_empty() && scope_requires_peer_did(&template.scope) {
         anyhow::bail!(
@@ -1390,7 +1406,7 @@ mod tests {
     }
 
     #[test]
-    fn data_plane_desired_uses_signed_endpoint_address_and_self_did() {
+    fn data_plane_desired_uses_signed_endpoint_address_and_requester_did() {
         let signed_endpoint = NetworkEndpointEntry {
             peer_id: "peer-b".to_string(),
             agent_did: "did:key:peer-b".to_string(),
@@ -1419,7 +1435,7 @@ mod tests {
                 .replicator_filter
                 .get("AgentRequest")
                 .map(|filter| (filter.field.as_str(), filter.value.as_str())),
-            Some(("agent_did", "did:key:self"))
+            Some(("requester_did", "did:key:peer-b"))
         );
     }
 
@@ -2135,7 +2151,7 @@ mod tests {
     /// null forever). An active peer must skip the redial and still reconcile.
     #[tokio::test]
     async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
-        let conversation_filter = one_filter("AgentRequest", "agent_did", "did:key:host");
+        let conversation_filter = one_filter("AgentRequest", "requester_did", "did:key:requester");
         // Desired now includes the conversation data plane: same address, new
         // collection, and a scoped filter (identity change ⇒ reinstall).
         let store = MockStore::with_desired(Some(PairingDesired {
@@ -2192,6 +2208,54 @@ mod tests {
         assert_eq!(recorded[0].1, conversation_filter);
     }
 
+    /// A stable peer id is not enough to prove that the live transport route
+    /// survived an app relaunch. The phone republishes a signed endpoint with
+    /// the same peer id and a fresh ticket; if applied still records the old
+    /// ticket, the tick must dial the fresh address even when `active_peers`
+    /// contains that peer. Otherwise the subsequent replicator install can
+    /// reuse the stale route and the response never reaches the relaunched app.
+    #[tokio::test]
+    async fn changed_endpoint_redials_active_peer_before_replacing_replicator() {
+        let store = MockStore::with_desired(Some(PairingDesired {
+            replicator_addresses: set(&["addr2"]),
+            replicator_collections: set(&["AgentRequest"]),
+            ..Default::default()
+        }));
+        *store.applied.lock().unwrap() = PairingApplied {
+            replicator_addresses: set(&["addr1"]),
+            ..Default::default()
+        };
+        let admin = MockAdmin {
+            active: Mutex::new(vec!["peer-a".into()]),
+            ..Default::default()
+        };
+        admin.replicators.lock().unwrap().insert(
+            "addr1".into(),
+            RemoteReplicator {
+                id: Some("id-addr1".into()),
+                collections: vec![mock_collection_id("AgentRequest")],
+                address: Some("addr1".into()),
+            },
+        );
+
+        let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+            .await
+            .expect("changed endpoint reconcile");
+
+        assert_eq!(*admin.connects.lock().unwrap(), vec![vec!["addr2"]]);
+        assert_eq!(
+            outcome.ops_applied,
+            vec![
+                DiffOp::InstallReplicator("addr2".into()),
+                DiffOp::TeardownReplicator("addr1".into()),
+            ]
+        );
+        assert_eq!(
+            store.applied.lock().unwrap().replicator_addresses,
+            set(&["addr2"])
+        );
+    }
+
     /// Regression for the demo layer-order race: the data-plane desired lands
     /// before the control-plane layer, so the first tick installs the
     /// replicator carrying only the conversation collections. When the merged
@@ -2204,7 +2268,7 @@ mod tests {
     /// step-8 hang even with a healthy connection).
     #[tokio::test]
     async fn grown_replicator_collection_set_reinstalls_replicator() {
-        let conversation_filter = one_filter("AgentRequest", "agent_did", "did:key:host");
+        let conversation_filter = one_filter("AgentRequest", "requester_did", "did:key:requester");
         // Tick 1: only the data-plane layer is visible (Push template shape:
         // nothing subscribed, the filtered replicator carries the set).
         let store = MockStore::with_desired(Some(PairingDesired {
@@ -2489,7 +2553,7 @@ mod tests {
             .replicator_filter
             .get("AgentRequest")
             .expect("AgentRequest filter");
-        assert_eq!(pred.field, "agent_did");
+        assert_eq!(pred.field, "requester_did");
         assert_eq!(pred.value, "did:key:bob");
     }
 
@@ -2727,7 +2791,7 @@ mod tests {
             .1
             .get("AgentRequest")
             .expect("AgentRequest filter on installed replicator");
-        assert_eq!(pred.field, "agent_did");
+        assert_eq!(pred.field, "requester_did");
         assert_eq!(pred.value, "did:key:bob");
     }
 
@@ -2792,7 +2856,7 @@ mod tests {
             alice_filter.insert(
                 (*col).to_string(),
                 crate::agent::p2p_reconcile::templates::FilterPredicate {
-                    field: "agent_did".to_string(),
+                    field: "requester_did".to_string(),
                     value: "did:key:alice".to_string(),
                 },
             );

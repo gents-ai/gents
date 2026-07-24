@@ -71,6 +71,7 @@ export function ChatHeader({
           isRenamingTitle ? (
             <form className="title-rename-form" onSubmit={submitTitleRename}>
               <input
+                aria-label={`Rename ${visibleConversationTitle}`}
                 autoFocus
                 className="title-rename-input"
                 data-testid="conversation-title-input"
@@ -89,6 +90,7 @@ export function ChatHeader({
             <div className="chat-title-row">
               <h2>{visibleConversationTitle}</h2>
               <button
+                aria-label={`Rename ${visibleConversationTitle}`}
                 className="icon-button"
                 data-testid="conversation-title-edit"
                 disabled={renamingTitle}

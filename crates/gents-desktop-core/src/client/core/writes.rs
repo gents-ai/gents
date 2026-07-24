@@ -82,6 +82,24 @@ fn chat_patch_signature(patch: &ClientStore) -> (usize, usize, u64) {
     }
 }
 
+fn behavior_id_for_write(
+    requested_behavior_id: Option<&str>,
+    peer_record: Option<&PeerRecord>,
+) -> Option<String> {
+    requested_behavior_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            peer_record
+                .filter(|record| record.is_bearer_pairing())
+                .and_then(|record| record.default_behavior_id.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        })
+}
+
 impl ClientCore {
     pub async fn create_conversation(
         &self,
@@ -89,11 +107,14 @@ impl ClientCore {
         behavior_id: Option<&str>,
     ) -> Result<CreatedConversation> {
         let snapshot = self.store.snapshot();
+        let peer_record = self.peer_record_for_agent(agent_did).await;
+        let behavior_id = behavior_id_for_write(behavior_id, peer_record.as_ref());
         match mutations::create_conversation(
             self.node.as_ref(),
             snapshot.as_ref(),
             agent_did,
-            behavior_id,
+            self.principal.did(),
+            behavior_id.as_deref(),
         )
         .await
         {
@@ -139,13 +160,16 @@ impl ClientCore {
         options: SubmitRequestOptions,
     ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
+        let peer_record = self.peer_record_for_agent(agent_did).await;
+        let behavior_id = behavior_id_for_write(behavior_id, peer_record.as_ref());
         match mutations::submit_request(
             self.node.as_ref(),
             snapshot.as_ref(),
             session_id,
             agent_did,
+            self.principal.did(),
             content,
-            behavior_id,
+            behavior_id.as_deref(),
             options,
         )
         .await
@@ -178,13 +202,15 @@ impl ClientCore {
     ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
         let peer_record = self.peer_record_for_agent(agent_did).await;
+        let behavior_id = behavior_id_for_write(behavior_id, peer_record.as_ref());
         match mutations::submit_request_to_graphql(
             graphql,
             snapshot.as_ref(),
             session_id,
             agent_did,
+            self.principal.did(),
             content,
-            behavior_id,
+            behavior_id.as_deref(),
             options,
         )
         .await
@@ -1260,8 +1286,13 @@ impl ClientCore {
 
     pub async fn resend_request(&self, stale_request_id: &str) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
-        match mutations::resend_request(self.node.as_ref(), snapshot.as_ref(), stale_request_id)
-            .await
+        match mutations::resend_request(
+            self.node.as_ref(),
+            snapshot.as_ref(),
+            stale_request_id,
+            self.principal.did(),
+        )
+        .await
         {
             Ok(result) => {
                 self.store
@@ -1299,7 +1330,14 @@ impl ClientCore {
 
     pub async fn retry_request(&self, parent: &AgentRequestRow) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
-        match mutations::retry_request(self.node.as_ref(), snapshot.as_ref(), parent).await {
+        match mutations::retry_request(
+            self.node.as_ref(),
+            snapshot.as_ref(),
+            parent,
+            self.principal.did(),
+        )
+        .await
+        {
             Ok(result) => {
                 self.store
                     .set_focused_request_id(Some(result.request_id.clone()));
@@ -1919,7 +1957,7 @@ impl ClientCore {
         }
     }
 
-    fn update_peer_status(&self, status: ClientPeerStatus) {
+    pub(super) fn update_peer_status(&self, status: ClientPeerStatus) {
         let mut statuses = self
             .peer_statuses
             .write()
@@ -1940,7 +1978,7 @@ impl ClientCore {
         }
     }
 
-    fn clear_mutation_error(&self) {
+    pub(super) fn clear_mutation_error(&self) {
         *self
             .last_mutation_error
             .write()
@@ -2066,10 +2104,14 @@ pub(super) async fn cleanup_saved_peer_p2p(
     p2p: &Arc<dyn P2POps>,
     record: &PeerRecord,
 ) -> Result<()> {
-    let collections = subscribed_collection_names()
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
+    let collections = if super::bearer_pairing::is_bearer_peer(record) {
+        super::bearer_pairing::bearer_replicator_collections()
+    } else {
+        subscribed_collection_names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    };
     let replicator_result = p2p_remove_replicator(p2p, collections, &record.addr).await;
     // The pinned transport defines disconnect as idempotent for absent peers,
     // so always attempt it even when the deployment never connected or the
@@ -2167,6 +2209,37 @@ mod delete_source_tests {
             "subagent_targets": subagent_targets,
         }))
         .expect("tool selection row")
+    }
+
+    fn peer_record(source: Option<&str>, default_behavior_id: Option<&str>) -> PeerRecord {
+        let mut record = PeerRecord::new("Amy", "endpoint-amy", "did:key:amy");
+        record.source = source.map(str::to_owned);
+        record.default_behavior_id = default_behavior_id.map(str::to_owned);
+        record
+    }
+
+    #[test]
+    fn bearer_peer_signed_default_is_used_when_caller_omits_behavior() {
+        let peer = peer_record(
+            Some(super::super::bearer_pairing::BEARER_PAIRING_SOURCE),
+            Some("default"),
+        );
+
+        assert_eq!(
+            behavior_id_for_write(None, Some(&peer)).as_deref(),
+            Some("default")
+        );
+        assert_eq!(
+            behavior_id_for_write(Some(" review "), Some(&peer)).as_deref(),
+            Some("review")
+        );
+    }
+
+    #[test]
+    fn unsigned_legacy_peer_default_is_not_trusted_for_routing() {
+        let peer = peer_record(Some("server-status"), Some("forged"));
+
+        assert_eq!(behavior_id_for_write(None, Some(&peer)), None);
     }
 
     #[test]

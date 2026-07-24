@@ -14,6 +14,33 @@ export type PeerAddRequest = {
   graphql?: string | null;
 };
 
+export type BearerPairingRequest = {
+  token: string;
+  label?: string | null;
+};
+
+export type BearerPairingResult = {
+  peerId: string;
+  label: string;
+  addr: string;
+  issuerDid: string;
+  claimantDid: string;
+  networkId: string;
+  template: string;
+  connected: boolean;
+  claimSubmitted: boolean;
+  endpointPublished: boolean;
+  replicationConfigured: boolean;
+  membershipObserved: boolean;
+  bidirectionalReplicationObserved: boolean;
+};
+
+export type BearerPairingResponse = {
+  bootstrap: BootstrapSummary;
+  client: import("./deployment").RuntimeSnapshot | null;
+  pairing: BearerPairingResult;
+};
+
 export type BootstrapSummary = {
   defaultAgentHome: string;
   initAgentName?: string | null;

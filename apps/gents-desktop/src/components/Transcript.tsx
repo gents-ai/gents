@@ -350,7 +350,7 @@ export function MessageList({
               item.sequence === responseMaterializedSequence;
             return (
               <div className="turn-block" key={timelineKey}>
-                <article className="message-card">
+                <article className="message-card" data-testid="assistant-message">
                   <div className="message-role">
                     assistant
                     {showBadge ? (
@@ -401,7 +401,11 @@ export function MessageList({
               return null;
             }
             return (
-              <article className="message-card" key={timelineKey}>
+              <article
+                className="message-card"
+                data-testid="assistant-message"
+                key={timelineKey}
+              >
                 <div className="message-role">
                   assistant
                   {responseCancelCause != null ? (

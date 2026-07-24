@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentConfigSaveRequest,
   BackendSaveRequest,
@@ -38,6 +39,8 @@ import {
   ToolSelectionConfigPanel,
   ToolServiceConfigPanel,
 } from "./config";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { ConfigNavigationGuardProvider } from "./config/ConfigNavigationGuard";
 import sourceMarkUrl from "../assets/source-mark-light.png";
 
 type ConfigWorkspaceProps = {
@@ -109,6 +112,9 @@ export function ConfigWorkspace({
   onSaveEventTriggerConfig,
   onRunTask,
 }: ConfigWorkspaceProps) {
+  const [configDirty, setConfigDirty] = useState(false);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const pendingNavigation = useRef<(() => void) | null>(null);
   const {
     activeTab,
     savedStatus,
@@ -136,6 +142,48 @@ export function ConfigWorkspace({
     setSelectedToolServiceId,
   } = useConfigWorkspaceSelection(selectedDeployment, selectedBehaviorId);
 
+  const requestNavigation = useCallback(
+    (navigate: () => void) => {
+      if (!configDirty) {
+        navigate();
+        return;
+      }
+      pendingNavigation.current = navigate;
+      setConfirmingDiscard(true);
+    },
+    [configDirty],
+  );
+
+  const navigationGuard = useMemo(
+    () => ({ reportDirty: setConfigDirty, requestNavigation }),
+    [requestNavigation],
+  );
+
+  useEffect(() => {
+    if (!configDirty) {
+      return;
+    }
+    const preventAccidentalClose = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", preventAccidentalClose);
+    return () => window.removeEventListener("beforeunload", preventAccidentalClose);
+  }, [configDirty]);
+
+  const cancelDiscard = useCallback(() => {
+    pendingNavigation.current = null;
+    setConfirmingDiscard(false);
+  }, []);
+
+  const confirmDiscard = useCallback(() => {
+    const navigate = pendingNavigation.current;
+    pendingNavigation.current = null;
+    setConfirmingDiscard(false);
+    setConfigDirty(false);
+    navigate?.();
+  }, []);
+
   if (!selectedDeployment) {
     return (
       <article className="panel centered-panel">
@@ -153,273 +201,304 @@ export function ConfigWorkspace({
   const activeTabControlId = `config-tab-control-${activeTabConfig.id}`;
 
   return (
-    <section className="config-workspace config-workspace-full">
-      <header className="config-header">
-        <div className="config-brand">
-          <img alt="Source" className="config-brand-logo" src={sourceMarkUrl} />
-          <div className="config-title-block">
-            <p className="eyebrow">Source Network Config</p>
-            <h1>{selectedDeployment.label}</h1>
-            <p className="muted mono" title={selectedDeployment.agentDid}>
-              {selectedDeployment.agentDid}
-            </p>
+    <ConfigNavigationGuardProvider value={navigationGuard}>
+      <section className="config-workspace config-workspace-full">
+        <header className="config-header">
+          <div className="config-brand">
+            <img alt="Source" className="config-brand-logo" src={sourceMarkUrl} />
+            <div className="config-title-block">
+              <p className="eyebrow">Source Network Config</p>
+              <h1>{selectedDeployment.label}</h1>
+              <p className="muted mono" title={selectedDeployment.agentDid}>
+                {selectedDeployment.agentDid}
+              </p>
+            </div>
           </div>
-        </div>
-        <div className="config-header-actions">
-          <span
-            aria-hidden="true"
-            className={
-              selectedDeployment.dialSucceeded
-                ? "config-status-dot green"
-                : "config-status-dot yellow"
+          <div className="config-header-actions">
+            <span
+              aria-hidden="true"
+              className={
+                selectedDeployment.dialSucceeded
+                  ? "config-status-dot green"
+                  : "config-status-dot yellow"
+              }
+              title={
+                selectedDeployment.dialSucceeded
+                  ? "P2P connected"
+                  : "P2P connection saved"
+              }
+            />
+            <span className="chip">
+              {selectedDeployment.dialSucceeded ? "connected" : "saved"}
+            </span>
+            <button
+              className="ghost-button"
+              data-testid="config-back-tab"
+              onClick={() => requestNavigation(onBack)}
+              type="button"
+            >
+              Back to Chat
+            </button>
+          </div>
+        </header>
+
+        <nav
+          className="config-screen-nav"
+          role="tablist"
+          aria-label="Configuration"
+          // Roving tabindex needs the arrow keys to actually rove (WAI-ARIA
+          // tabs pattern): Left/Right cycle, Home/End jump, focus follows.
+          onKeyDown={(event) => {
+            const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
+            if (!keys.includes(event.key)) {
+              return;
             }
-            title={
-              selectedDeployment.dialSucceeded
-                ? "P2P connected"
-                : "P2P connection saved"
+            event.preventDefault();
+            const currentIndex = TABS.findIndex((tab) => tab.id === activeTab);
+            const nextIndex =
+              event.key === "Home"
+                ? 0
+                : event.key === "End"
+                  ? TABS.length - 1
+                  : (currentIndex +
+                      (event.key === "ArrowRight" ? 1 : -1) +
+                      TABS.length) %
+                    TABS.length;
+            const next = TABS[nextIndex];
+            if (next.id === activeTab) {
+              document.getElementById(`config-tab-control-${next.id}`)?.focus();
+              return;
             }
-          />
-          <span className="chip">
-            {selectedDeployment.dialSucceeded ? "connected" : "saved"}
-          </span>
-          <button
-            className="ghost-button"
-            data-testid="config-back-tab"
-            onClick={onBack}
-            type="button"
-          >
-            Back to Chat
-          </button>
-        </div>
-      </header>
-
-      <nav
-        className="config-screen-nav"
-        role="tablist"
-        aria-label="Configuration"
-        // Roving tabindex needs the arrow keys to actually rove (WAI-ARIA
-        // tabs pattern): Left/Right cycle, Home/End jump, focus follows.
-        onKeyDown={(event) => {
-          const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
-          if (!keys.includes(event.key)) {
-            return;
-          }
-          event.preventDefault();
-          const currentIndex = TABS.findIndex((tab) => tab.id === activeTab);
-          const nextIndex =
-            event.key === "Home"
-              ? 0
-              : event.key === "End"
-                ? TABS.length - 1
-                : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + TABS.length) %
-                  TABS.length;
-          const next = TABS[nextIndex];
-          setActiveTab(next.id);
-          setSavedStatus(null);
-          document.getElementById(`config-tab-control-${next.id}`)?.focus();
-        }}
-      >
-        {TABS.map((tab) => (
-          <button
-            aria-controls={`config-tab-panel-${tab.id}`}
-            aria-selected={activeTab === tab.id}
-            className={activeTab === tab.id ? "tab-button selected" : "tab-button"}
-            data-testid={`config-tab-${tab.id}`}
-            id={`config-tab-control-${tab.id}`}
-            key={tab.id}
-            onClick={() => {
-              setActiveTab(tab.id);
+            requestNavigation(() => {
+              setActiveTab(next.id);
               setSavedStatus(null);
-            }}
-            role="tab"
-            tabIndex={activeTab === tab.id ? 0 : -1}
-            type="button"
-          >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
+              document.getElementById(`config-tab-control-${next.id}`)?.focus();
+            });
+          }}
+        >
+          {TABS.map((tab) => (
+            <button
+              aria-controls={`config-tab-panel-${tab.id}`}
+              aria-selected={activeTab === tab.id}
+              className={activeTab === tab.id ? "tab-button selected" : "tab-button"}
+              data-testid={`config-tab-${tab.id}`}
+              id={`config-tab-control-${tab.id}`}
+              key={tab.id}
+              onClick={() => {
+                if (tab.id === activeTab) {
+                  return;
+                }
+                requestNavigation(() => {
+                  setActiveTab(tab.id);
+                  setSavedStatus(null);
+                });
+              }}
+              role="tab"
+              tabIndex={activeTab === tab.id ? 0 : -1}
+              type="button"
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
 
-      <section
-        aria-labelledby={activeTabControlId}
-        className="config-tab-panel"
-        id={activeTabPanelId}
-        role="tabpanel"
-      >
-        {activeTab === "agent" ? (
-          <AgentConfigPanel
-            bootstrap={bootstrap}
-            deployment={selectedDeployment}
-            savedStatus={savedStatus}
-            saving={saving}
-            onSaveAgentConfig={onSaveAgentConfig}
-            onSavedStatusChange={setSavedStatus}
-          />
-        ) : null}
+        <section
+          aria-labelledby={activeTabControlId}
+          className="config-tab-panel"
+          id={activeTabPanelId}
+          role="tabpanel"
+        >
+          {activeTab === "agent" ? (
+            <AgentConfigPanel
+              bootstrap={bootstrap}
+              deployment={selectedDeployment}
+              savedStatus={savedStatus}
+              saving={saving}
+              onSaveAgentConfig={onSaveAgentConfig}
+              onSavedStatusChange={setSavedStatus}
+            />
+          ) : null}
 
-        {activeTab === "behavior" ? (
-          <BehaviorConfigPanel
-            onDeleteBehaviorConfig={onDeleteBehaviorConfig}
-            onDeletedBehavior={() => selectConfigBehavior(null)}
-            deployment={selectedDeployment}
-            savedStatus={savedStatus}
-            saving={saving}
-            selectedBehavior={
-              selectedConfigBehaviorId === NEW_DOCUMENT_ID ? null : selectedBehavior
-            }
-            onCreateBehavior={() => setSelectedConfigBehaviorId(NEW_DOCUMENT_ID)}
-            onCreateBackend={() => {
-              setActiveTab("backends");
-              setSelectedBackendId(NEW_DOCUMENT_ID);
-              setSavedStatus(null);
-            }}
-            onCreateProfile={() => {
-              setActiveTab("profiles");
-              setSelectedProfileId(NEW_DOCUMENT_ID);
-              setSavedStatus(null);
-            }}
-            onCreateToolSelection={() => {
-              setActiveTab("toolSelections");
-              setSelectedToolSelectionId(NEW_DOCUMENT_ID);
-              setSavedStatus(null);
-            }}
-            onSaveAgentConfig={onSaveAgentConfig}
-            onSaveBehaviorConfig={onSaveBehaviorConfig}
-            onSavedStatusChange={setSavedStatus}
-            onSelectBehavior={selectConfigBehavior}
-          />
-        ) : null}
+          {activeTab === "behavior" ? (
+            <BehaviorConfigPanel
+              onDeleteBehaviorConfig={onDeleteBehaviorConfig}
+              onDeletedBehavior={() => selectConfigBehavior(null)}
+              deployment={selectedDeployment}
+              savedStatus={savedStatus}
+              saving={saving}
+              selectedBehavior={
+                selectedConfigBehaviorId === NEW_DOCUMENT_ID ? null : selectedBehavior
+              }
+              onCreateBehavior={() => setSelectedConfigBehaviorId(NEW_DOCUMENT_ID)}
+              onCreateBackend={() => {
+                requestNavigation(() => {
+                  setActiveTab("backends");
+                  setSelectedBackendId(NEW_DOCUMENT_ID);
+                  setSavedStatus(null);
+                });
+              }}
+              onCreateProfile={() => {
+                requestNavigation(() => {
+                  setActiveTab("profiles");
+                  setSelectedProfileId(NEW_DOCUMENT_ID);
+                  setSavedStatus(null);
+                });
+              }}
+              onCreateToolSelection={() => {
+                requestNavigation(() => {
+                  setActiveTab("toolSelections");
+                  setSelectedToolSelectionId(NEW_DOCUMENT_ID);
+                  setSavedStatus(null);
+                });
+              }}
+              onSaveAgentConfig={onSaveAgentConfig}
+              onSaveBehaviorConfig={onSaveBehaviorConfig}
+              onSavedStatusChange={setSavedStatus}
+              onSelectBehavior={selectConfigBehavior}
+            />
+          ) : null}
 
-        {activeTab === "skills" ? (
-          <SkillConfigPanel
-            deployment={selectedDeployment}
-            savedStatus={savedStatus}
-            saving={saving}
-            selectedSkillId={selectedSkillId}
-            onCreateSkill={() => setSelectedSkillId(NEW_DOCUMENT_ID)}
-            onDeleteSkillConfig={onDeleteSkillConfig}
-            onDeletedSkill={() => setSelectedSkillId(null)}
-            onSaveSkillConfig={onSaveSkillConfig}
-            onSavedStatusChange={setSavedStatus}
-            onSelectSkill={setSelectedSkillId}
-          />
-        ) : null}
+          {activeTab === "skills" ? (
+            <SkillConfigPanel
+              deployment={selectedDeployment}
+              savedStatus={savedStatus}
+              saving={saving}
+              selectedSkillId={selectedSkillId}
+              onCreateSkill={() => setSelectedSkillId(NEW_DOCUMENT_ID)}
+              onDeleteSkillConfig={onDeleteSkillConfig}
+              onDeletedSkill={() => setSelectedSkillId(null)}
+              onSaveSkillConfig={onSaveSkillConfig}
+              onSavedStatusChange={setSavedStatus}
+              onSelectSkill={setSelectedSkillId}
+            />
+          ) : null}
 
-        {activeTab === "backends" ? (
-          <BackendConfigPanel
-            onDeleteBackendConfig={onDeleteBackendConfig}
-            onDeletedBackend={() => setSelectedBackendId(null)}
-            deployment={selectedDeployment}
-            savedStatus={savedStatus}
-            saving={saving}
-            selectedBackendId={selectedBackendId}
-            onCreateBackend={() => setSelectedBackendId(NEW_DOCUMENT_ID)}
-            onSaveBackendConfig={onSaveBackendConfig}
-            onSavedStatusChange={setSavedStatus}
-            onSelectBackend={setSelectedBackendId}
-          />
-        ) : null}
+          {activeTab === "backends" ? (
+            <BackendConfigPanel
+              onDeleteBackendConfig={onDeleteBackendConfig}
+              onDeletedBackend={() => setSelectedBackendId(null)}
+              deployment={selectedDeployment}
+              savedStatus={savedStatus}
+              saving={saving}
+              selectedBackendId={selectedBackendId}
+              onCreateBackend={() => setSelectedBackendId(NEW_DOCUMENT_ID)}
+              onSaveBackendConfig={onSaveBackendConfig}
+              onSavedStatusChange={setSavedStatus}
+              onSelectBackend={setSelectedBackendId}
+            />
+          ) : null}
 
-        {activeTab === "profiles" ? (
-          <InferenceProfileConfigPanel
-            onDeleteInferenceProfileConfig={onDeleteInferenceProfileConfig}
-            onDeletedProfile={() => setSelectedProfileId(null)}
-            deployment={selectedDeployment}
-            savedStatus={savedStatus}
-            saving={saving}
-            selectedProfileId={selectedProfileId}
-            onCreateProfile={() => setSelectedProfileId(NEW_DOCUMENT_ID)}
-            onSaveInferenceProfileConfig={onSaveInferenceProfileConfig}
-            onSavedStatusChange={setSavedStatus}
-            onSelectProfile={setSelectedProfileId}
-          />
-        ) : null}
+          {activeTab === "profiles" ? (
+            <InferenceProfileConfigPanel
+              onDeleteInferenceProfileConfig={onDeleteInferenceProfileConfig}
+              onDeletedProfile={() => setSelectedProfileId(null)}
+              deployment={selectedDeployment}
+              savedStatus={savedStatus}
+              saving={saving}
+              selectedProfileId={selectedProfileId}
+              onCreateProfile={() => setSelectedProfileId(NEW_DOCUMENT_ID)}
+              onSaveInferenceProfileConfig={onSaveInferenceProfileConfig}
+              onSavedStatusChange={setSavedStatus}
+              onSelectProfile={setSelectedProfileId}
+            />
+          ) : null}
 
-        {activeTab === "toolSelections" ? (
-          <ToolSelectionConfigPanel
-            onDeleteToolSelectionConfig={onDeleteToolSelectionConfig}
-            onDeletedToolSelection={() => setSelectedToolSelectionId(null)}
-            deployment={selectedDeployment}
-            savedStatus={savedStatus}
-            saving={saving}
-            selectedToolSelectionId={selectedToolSelectionId}
-            toolCeiling={bootstrap?.initToolCeiling ?? null}
-            toolRoot={bootstrap?.initToolRoot ?? null}
-            onCreateToolSelection={() => setSelectedToolSelectionId(NEW_DOCUMENT_ID)}
-            onSaveToolSelectionConfig={onSaveToolSelectionConfig}
-            onSavedStatusChange={setSavedStatus}
-            onSelectToolSelection={setSelectedToolSelectionId}
-          />
-        ) : null}
+          {activeTab === "toolSelections" ? (
+            <ToolSelectionConfigPanel
+              onDeleteToolSelectionConfig={onDeleteToolSelectionConfig}
+              onDeletedToolSelection={() => setSelectedToolSelectionId(null)}
+              deployment={selectedDeployment}
+              savedStatus={savedStatus}
+              saving={saving}
+              selectedToolSelectionId={selectedToolSelectionId}
+              toolCeiling={bootstrap?.initToolCeiling ?? null}
+              toolRoot={bootstrap?.initToolRoot ?? null}
+              onCreateToolSelection={() => setSelectedToolSelectionId(NEW_DOCUMENT_ID)}
+              onSaveToolSelectionConfig={onSaveToolSelectionConfig}
+              onSavedStatusChange={setSavedStatus}
+              onSelectToolSelection={setSelectedToolSelectionId}
+            />
+          ) : null}
 
-        {activeTab === "metaTools" ? (
-          <ToolServiceConfigPanel
-            onDeleteToolServiceConfig={onDeleteToolServiceConfig}
-            onDeletedToolService={() => setSelectedToolServiceId(null)}
-            deployment={selectedDeployment}
-            savedStatus={savedStatus}
-            saving={saving}
-            selectedToolServiceId={selectedToolServiceId}
-            onCreateToolService={() => setSelectedToolServiceId(NEW_DOCUMENT_ID)}
-            onSaveToolServiceConfig={onSaveToolServiceConfig}
-            onSavedStatusChange={setSavedStatus}
-            onSelectToolService={setSelectedToolServiceId}
-            onTestToolService={onTestToolService}
-          />
-        ) : null}
+          {activeTab === "metaTools" ? (
+            <ToolServiceConfigPanel
+              onDeleteToolServiceConfig={onDeleteToolServiceConfig}
+              onDeletedToolService={() => setSelectedToolServiceId(null)}
+              deployment={selectedDeployment}
+              savedStatus={savedStatus}
+              saving={saving}
+              selectedToolServiceId={selectedToolServiceId}
+              onCreateToolService={() => setSelectedToolServiceId(NEW_DOCUMENT_ID)}
+              onSaveToolServiceConfig={onSaveToolServiceConfig}
+              onSavedStatusChange={setSavedStatus}
+              onSelectToolService={setSelectedToolServiceId}
+              onTestToolService={onTestToolService}
+            />
+          ) : null}
 
-        {activeTab === "tasks" ? (
-          <TaskConfigPanel
-            deployment={selectedDeployment}
-            runningTask={runningTask}
-            savedStatus={savedStatus}
-            saving={saving}
-            selectedBehavior={selectedBehavior}
-            selectedTaskId={selectedTaskId}
-            onCreateTask={() => setSelectedTaskId(NEW_DOCUMENT_ID)}
-            onDeleteTaskConfig={onDeleteTaskConfig}
-            onDeletedTask={() => setSelectedTaskId(null)}
-            onRunTask={onRunTask}
-            onSaveTaskConfig={onSaveTaskConfig}
-            onSavedStatusChange={setSavedStatus}
-            onSelectTask={setSelectedTaskId}
-          />
-        ) : null}
+          {activeTab === "tasks" ? (
+            <TaskConfigPanel
+              deployment={selectedDeployment}
+              runningTask={runningTask}
+              savedStatus={savedStatus}
+              saving={saving}
+              selectedBehavior={selectedBehavior}
+              selectedTaskId={selectedTaskId}
+              onCreateTask={() => setSelectedTaskId(NEW_DOCUMENT_ID)}
+              onDeleteTaskConfig={onDeleteTaskConfig}
+              onDeletedTask={() => setSelectedTaskId(null)}
+              onRunTask={onRunTask}
+              onSaveTaskConfig={onSaveTaskConfig}
+              onSavedStatusChange={setSavedStatus}
+              onSelectTask={setSelectedTaskId}
+            />
+          ) : null}
 
-        {activeTab === "timerTriggers" ? (
-          <ScheduleConfigPanel
-            onDeleteScheduleConfig={onDeleteScheduleConfig}
-            onDeletedSchedule={() => setSelectedScheduleId(null)}
-            deployment={selectedDeployment}
-            runningTask={runningTask}
-            savedStatus={savedStatus}
-            saving={saving}
-            selectedScheduleId={selectedScheduleId}
-            selectedTaskId={selectedTaskId}
-            onCreateSchedule={() => setSelectedScheduleId(NEW_DOCUMENT_ID)}
-            onRunSchedule={onRunSchedule}
-            onSaveScheduleConfig={onSaveScheduleConfig}
-            onSavedStatusChange={setSavedStatus}
-            onSelectSchedule={setSelectedScheduleId}
-          />
-        ) : null}
+          {activeTab === "timerTriggers" ? (
+            <ScheduleConfigPanel
+              onDeleteScheduleConfig={onDeleteScheduleConfig}
+              onDeletedSchedule={() => setSelectedScheduleId(null)}
+              deployment={selectedDeployment}
+              runningTask={runningTask}
+              savedStatus={savedStatus}
+              saving={saving}
+              selectedScheduleId={selectedScheduleId}
+              selectedTaskId={selectedTaskId}
+              onCreateSchedule={() => setSelectedScheduleId(NEW_DOCUMENT_ID)}
+              onRunSchedule={onRunSchedule}
+              onSaveScheduleConfig={onSaveScheduleConfig}
+              onSavedStatusChange={setSavedStatus}
+              onSelectSchedule={setSelectedScheduleId}
+            />
+          ) : null}
 
-        {activeTab === "eventTriggers" ? (
-          <EventTriggerConfigPanel
-            onDeleteEventTriggerConfig={onDeleteEventTriggerConfig}
-            onDeletedEventTrigger={() => setSelectedEventTriggerId(null)}
-            deployment={selectedDeployment}
-            savedStatus={savedStatus}
-            saving={saving}
-            selectedEventTriggerId={selectedEventTriggerId}
-            selectedTaskId={selectedTaskId}
-            onCreateEventTrigger={() => setSelectedEventTriggerId(NEW_DOCUMENT_ID)}
-            onSaveEventTriggerConfig={onSaveEventTriggerConfig}
-            onSavedStatusChange={setSavedStatus}
-            onSelectEventTrigger={setSelectedEventTriggerId}
-          />
-        ) : null}
+          {activeTab === "eventTriggers" ? (
+            <EventTriggerConfigPanel
+              onDeleteEventTriggerConfig={onDeleteEventTriggerConfig}
+              onDeletedEventTrigger={() => setSelectedEventTriggerId(null)}
+              deployment={selectedDeployment}
+              savedStatus={savedStatus}
+              saving={saving}
+              selectedEventTriggerId={selectedEventTriggerId}
+              selectedTaskId={selectedTaskId}
+              onCreateEventTrigger={() => setSelectedEventTriggerId(NEW_DOCUMENT_ID)}
+              onSaveEventTriggerConfig={onSaveEventTriggerConfig}
+              onSavedStatusChange={setSavedStatus}
+              onSelectEventTrigger={setSelectedEventTriggerId}
+            />
+          ) : null}
+        </section>
       </section>
-    </section>
+      <ConfirmDialog
+        cancelLabel="Keep editing"
+        confirmLabel="Discard changes"
+        danger
+        message="This configuration has unsaved changes. Discard them and continue?"
+        onCancel={cancelDiscard}
+        onConfirm={confirmDiscard}
+        open={confirmingDiscard}
+        title="Discard unsaved changes?"
+      />
+    </ConfigNavigationGuardProvider>
   );
 }

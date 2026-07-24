@@ -151,6 +151,45 @@ theorem scopeFilter_peerDid (f : String) (collections : List String)
 theorem scopeFilter_unscoped (collections : List String) (peerDid localDid : Did) :
     scopeFilter .unscoped collections peerDid localDid = [] := rfl
 
+/-- Conversation pairing carries the complete runtime transcript projection,
+but every artifact is routed only to the peer that originally requested it. -/
+theorem conversation_filter_eq (peerDid localDid : Did) :
+    scopeFilter (.perCollection conversationRules) [] peerDid localDid
+      = [ { collection := "AgentRequest",      field := "requester_did", value := peerDid }
+        , { collection := "AgentResponse",     field := "requester_did", value := peerDid }
+        , { collection := "AgentMessage",      field := "requester_did", value := peerDid }
+        , { collection := "AgentToolCall",     field := "requester_did", value := peerDid }
+        , { collection := "AgentToolResult",   field := "requester_did", value := peerDid }
+        , { collection := "AgentSession",      field := "requester_did", value := peerDid }
+        , { collection := "AgentConversation", field := "requester_did", value := peerDid }
+        , { collection := "CompactionEntry",   field := "requester_did", value := peerDid } ] := by
+  simp [scopeFilter, conversationRules]
+
+/-- Every conversation predicate is keyed to the requesting peer. Sharing an
+agent owner DID is therefore insufficient for unrelated history to cross. -/
+theorem conversation_filters_requester_lineage (peerDid localDid : Did) :
+    (scopeFilter conversationTemplate.scope [] peerDid localDid).all
+      (fun k => k.field = "requester_did" ∧ k.value = peerDid) = true := by
+  simp [scopeFilter, conversationTemplate, conversationRules]
+
+/-- The requester-scoped rules cover every collection declared by the
+conversation template, preventing an accidentally unfiltered transcript
+collection from entering the pairing. -/
+theorem conversation_filters_declared_collections (peerDid localDid : Did) :
+    ((scopeFilter conversationTemplate.scope [] peerDid localDid).map
+        (fun k => k.collection)).toFinset
+      = conversationTemplate.collections := by
+  simp [scopeFilter, conversationTemplate, conversationRules,
+    conversationCollections]
+
+/-- A conversation request is routed by requester lineage, so an unrelated
+peer cannot match merely because it is talking to the same agent. -/
+theorem conversation_request_crossing_is_peer_scoped (peerDid localDid : Did) :
+    (scopeFilter conversationTemplate.scope [] peerDid localDid).find?
+        (fun k => k.collection = "AgentRequest") =
+          some { collection := "AgentRequest", field := "requester_did", value := peerDid } := by
+  simp [scopeFilter, conversationTemplate, conversationRules]
+
 /-- The coordinator subagent leg carries only bridges addressed to the peer
 host. Coordinator-owned parent requests are not pair-specific and therefore
 must not cross every host pairing. -/

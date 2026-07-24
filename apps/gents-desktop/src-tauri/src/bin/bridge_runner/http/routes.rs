@@ -7,6 +7,7 @@ use gents::backend_registry::{derive_display_state, list_all_backends};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
+use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
@@ -14,7 +15,7 @@ use super::protocol::{HttpRequestData, HttpResponse};
 use crate::bridge::cascade::{build_cascade_preview, interrupt_request};
 use crate::bridge::commands::mcp_health::{load_mcp_services_with_health, probe_mcp_service};
 use crate::bridge::commands::{
-    add_peer, rename_conversation, repair_p2p, run_schedule_config, run_task_config,
+    add_peer, pair_bearer, rename_conversation, repair_p2p, run_schedule_config, run_task_config,
     save_agent_config, save_backend_config, save_behavior_config, save_event_trigger_config,
     save_inference_profile_config, save_schedule_config, save_task_config,
     save_tool_selection_config, save_tool_service_config, send_chat_message,
@@ -27,14 +28,14 @@ use crate::bridge::snapshot::subagent_tree::{
     build_local_subagent_tree, effective_subagent_tree_max_depth,
 };
 use crate::bridge::types::{
-    AgentConfigSaveRequest, BackendHealthView, BackendSaveRequest, BehaviorSaveRequest,
-    ChatSendRequest, ConversationRenameRequest, DesktopInterruptRequest,
+    AgentConfigSaveRequest, BackendHealthView, BackendSaveRequest, BearerPairingRequest,
+    BehaviorSaveRequest, ChatSendRequest, ConversationRenameRequest, DesktopInterruptRequest,
     DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
     DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest, EventTriggerSaveRequest,
     InferenceCallSummaryView, InferenceProfileSaveRequest, NativeExecutorStatusView,
-    PeerAddRequest, RuntimeLivenessView, ScheduleRunRequest, ScheduleSaveRequest, SubagentTreeView,
-    TaskRunRequest, TaskSaveRequest, ToolSelectionSaveRequest, ToolServiceSaveRequest,
-    ToolServiceTestRequest,
+    PeerAddRequest, PeerStatusFetchRequest, RuntimeLivenessView, ScheduleRunRequest,
+    ScheduleSaveRequest, SubagentTreeView, TaskRunRequest, TaskSaveRequest,
+    ToolSelectionSaveRequest, ToolServiceSaveRequest, ToolServiceTestRequest,
 };
 use crate::diagnostics::{
     build_desktop_client_snapshot, build_desktop_session_snapshot, build_request_diagnostics_bundle,
@@ -153,6 +154,40 @@ pub(super) fn handle_request(
             let request = decode::<PeerAddRequest>(&request.body, "decoding peer add request")?;
             runtime.block_on(add_peer(fixture.desktop_core().as_ref(), request))?;
             Ok(snapshot_response(runtime, fixture)?)
+        }
+        ("POST", "/desktop/peer/pair-bearer") => {
+            let request =
+                decode::<BearerPairingRequest>(&request.body, "decoding bearer pairing request")?;
+            let pairing =
+                runtime.block_on(pair_bearer(fixture.desktop_core().as_ref(), request))?;
+            let snapshot = runtime.block_on(build_desktop_client_snapshot(fixture));
+            Ok(HttpResponse::json_ok(
+                serde_json::json!({
+                    "bootstrap": snapshot.bootstrap,
+                    "client": snapshot.client,
+                    "pairing": {
+                        "peerId": pairing.peer_id,
+                        "label": pairing.label,
+                        "addr": pairing.addr,
+                        "issuerDid": pairing.issuer_did,
+                        "claimantDid": pairing.claimant_did,
+                        "networkId": pairing.network_id,
+                        "template": pairing.template,
+                        "connected": pairing.connected,
+                        "claimSubmitted": pairing.claim_submitted,
+                        "endpointPublished": pairing.endpoint_published,
+                        "replicationConfigured": pairing.replication_configured,
+                    }
+                })
+                .to_string(),
+            ))
+        }
+        ("POST", "/desktop/peer/status") => {
+            let request =
+                decode::<PeerStatusFetchRequest>(&request.body, "decoding peer status request")?;
+            let payload =
+                runtime.block_on(fetch_runtime_connection_payload(&request.server_address))?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&payload)?))
         }
         ("POST", "/desktop/p2p/repair") => {
             runtime.block_on(repair_p2p(

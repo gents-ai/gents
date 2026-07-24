@@ -42,6 +42,37 @@ describe("session ops", () => {
     expect(screen.queryByTestId("conversation-fork")).not.toBeInTheDocument();
   });
 
+  it("keeps a failed title rename open with the operator's draft", async () => {
+    const onRenameConversationTitle = vi
+      .fn()
+      .mockRejectedValue(new Error("replica unavailable"));
+    render(
+      <ChatHeader
+        selectedSessionId="session-1"
+        selectedConversationTitle="planning"
+        behaviorLabel={null}
+        runtimeHealth={null}
+        onRenameConversationTitle={onRenameConversationTitle}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("conversation-title-edit"));
+    const input = screen.getByTestId("conversation-title-input");
+    expect(input).toHaveAccessibleName("Rename planning");
+    fireEvent.change(input, { target: { value: "revised planning" } });
+    fireEvent.submit(input.closest("form")!);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("conversation-title-input")).toHaveValue(
+        "revised planning",
+      ),
+    );
+    expect(onRenameConversationTitle).toHaveBeenCalledWith(
+      "session-1",
+      "revised planning",
+    );
+  });
+
   it("offers Resend on stuck diagnostics rows", async () => {
     mockedSnapshot.mockReturnValue({
       snapshot: {

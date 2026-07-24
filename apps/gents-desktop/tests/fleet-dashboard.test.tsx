@@ -35,6 +35,7 @@ describe("FleetDashboard add connection flow", () => {
         repairingP2P={false}
         starting={false}
         onAddPeer={vi.fn()}
+        onPairBearer={vi.fn()}
         onFetchPeerStatus={vi.fn()}
         onInitLocalRuntime={onInitLocalRuntime}
         onOpenChat={vi.fn()}
@@ -71,6 +72,7 @@ describe("FleetDashboard add connection flow", () => {
         repairingP2P={false}
         starting={false}
         onAddPeer={onAddPeer}
+        onPairBearer={vi.fn()}
         onFetchPeerStatus={onFetchPeerStatus}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
@@ -112,6 +114,7 @@ describe("FleetDashboard add connection flow", () => {
         repairingP2P={false}
         starting={false}
         onAddPeer={vi.fn()}
+        onPairBearer={vi.fn()}
         onFetchPeerStatus={onFetchPeerStatus}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
@@ -131,7 +134,59 @@ describe("FleetDashboard add connection flow", () => {
         "did:key:z6MkGateway",
       );
       expect(screen.getByTestId("fleet-add-addr")).toHaveValue("iroh://gateway");
+      expect(screen.getByTestId("fleet-import-status")).toHaveTextContent(
+        "Fetched /status",
+      );
+      expect(
+        (screen.getByTestId("fleet-add-connection-json") as HTMLTextAreaElement).value,
+      ).toContain('"agent_name": "api-gateway"');
     });
+  });
+
+  it("surfaces a P2P-disabled discovery result beside the fetch controls", async () => {
+    const onFetchPeerStatus = vi.fn(async () => ({
+      agent_name: "amy",
+      agent_did: "did:key:z6MkAmy",
+      p2p_transport: "none",
+      p2p: {
+        enabled: false,
+        p2p_listen_addresses: [],
+      },
+    }));
+
+    render(
+      <FleetDashboard
+        addingPeer={false}
+        bootstrap={null}
+        deployments={[]}
+        loading={false}
+        p2pHealth={null}
+        repairingP2P={false}
+        starting={false}
+        onAddPeer={vi.fn()}
+        onPairBearer={vi.fn()}
+        onFetchPeerStatus={onFetchPeerStatus}
+        onInitLocalRuntime={vi.fn()}
+        onOpenChat={vi.fn()}
+        onOpenConfig={vi.fn()}
+        onRepairP2P={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("fleet-add-server-address"), {
+      target: { value: "http://amy.local:9191" },
+    });
+    fireEvent.click(screen.getByTestId("fleet-fetch-status"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("fleet-import-status")).toHaveTextContent(
+        "This runtime has P2P disabled",
+      );
+    });
+    expect(screen.getByTestId("fleet-add-label")).toHaveValue("");
+    expect(screen.getByTestId("fleet-add-server-address")).toHaveValue(
+      "http://amy.local:9191",
+    );
   });
 
   it("saves a typed GraphQL endpoint when manually adding a peer", async () => {
@@ -148,6 +203,7 @@ describe("FleetDashboard add connection flow", () => {
         repairingP2P={false}
         starting={false}
         onAddPeer={onAddPeer}
+        onPairBearer={vi.fn()}
         onFetchPeerStatus={onFetchPeerStatus}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
@@ -196,6 +252,7 @@ describe("FleetDashboard fleet-level P2P repair", () => {
         repairingP2P={false}
         starting={false}
         onAddPeer={vi.fn()}
+        onPairBearer={vi.fn()}
         onFetchPeerStatus={vi.fn()}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}

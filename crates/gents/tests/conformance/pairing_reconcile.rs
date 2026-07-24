@@ -136,9 +136,9 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
         collections: set(&["AgentRequest", "AgentResponse"]),
         replicator_addresses: set(&[address]),
         replicator_collections: set(&["AgentRequest", "AgentResponse"]),
-        replicator_filter: one_filter("AgentRequest", "agent_did", "did:key:a")
+        replicator_filter: one_filter("AgentRequest", "requester_did", "did:key:a")
             .into_iter()
-            .chain(one_filter("AgentResponse", "agent_did", "did:key:a"))
+            .chain(one_filter("AgentResponse", "requester_did", "did:key:a"))
             .collect(),
         template_ids: BTreeSet::new(),
     };
@@ -167,14 +167,14 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
             .replicator_filter
             .get("AgentRequest")
             .map(|filter| (filter.field.as_str(), filter.value.as_str())),
-        Some(("agent_did", "did:key:a"))
+        Some(("requester_did", "did:key:a"))
     );
     assert_eq!(
         merged
             .replicator_filter
             .get("AgentResponse")
             .map(|filter| (filter.field.as_str(), filter.value.as_str())),
-        Some(("agent_did", "did:key:a"))
+        Some(("requester_did", "did:key:a"))
     );
     assert!(
         !merged.replicator_filter.contains_key("AgentNetwork"),

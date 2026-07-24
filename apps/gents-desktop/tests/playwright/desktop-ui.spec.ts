@@ -70,6 +70,28 @@ test.describe("desktop UI harness", () => {
     await expect(page.getByRole("heading", { name: "manual ops check" })).toBeVisible();
   });
 
+  test("chat drafts stay scoped to their conversation or new-chat context", async ({
+    page,
+  }) => {
+    await gotoHarness(page);
+    await openChat(page);
+
+    await page.getByTestId("composer-input").fill("existing conversation draft");
+    await page.getByTestId("sidebar-new-chat-ops").click();
+    await expect(page.getByTestId("composer-input")).toHaveValue("");
+
+    await page.getByTestId("composer-input").fill("new ops conversation draft");
+    await page.getByTestId("conversation-session-intro").click();
+    await expect(page.getByTestId("composer-input")).toHaveValue(
+      "existing conversation draft",
+    );
+
+    await page.getByTestId("sidebar-new-chat-ops").click();
+    await expect(page.getByTestId("composer-input")).toHaveValue(
+      "new ops conversation draft",
+    );
+  });
+
   test("config workspace supports core CRUD and run flows", async ({
     page,
   }, testInfo) => {

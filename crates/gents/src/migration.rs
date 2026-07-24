@@ -4266,6 +4266,62 @@ mod patch_kind_tests {
         }
     }
 
+    /// Guard: requester-scoped conversation replication is only safe when the
+    /// routing key cannot be rewritten after document creation.
+    #[test]
+    fn all_conversation_collections_declare_requester_did_immutable() {
+        use gents_protocol::schemas;
+        let conversation_sdls = [
+            ("AgentRequest", schemas::AGENT_REQUEST),
+            ("AgentResponse", schemas::AGENT_RESPONSE),
+            ("AgentToolResult", schemas::AGENT_TOOL_RESULT),
+            ("AgentConversation", schemas::AGENT_CONVERSATION),
+            ("AgentMessage", schemas::AGENT_MESSAGE),
+            ("AgentToolCall", schemas::AGENT_TOOL_CALL),
+            ("AgentSession", schemas::AGENT_SESSION),
+            ("CompactionEntry", schemas::COMPACTION_ENTRY),
+        ];
+        for (name, sdl) in conversation_sdls {
+            let line = sdl
+                .lines()
+                .map(str::trim)
+                .find(|line| line.starts_with("requester_did:"))
+                .unwrap_or_else(|| panic!("{name} SDL must declare a requester_did field"));
+            assert!(
+                line.contains("@immutable"),
+                "{name}.requester_did must be declared @immutable (the filtered-replication requester scope key); got: {line}"
+            );
+        }
+    }
+
+    /// The desktop/mobile bearer bootstrap replicator filters claim and
+    /// endpoint control-plane rows to the claimant device. DefraDB rejects a
+    /// filter over a mutable field, so both canonical SDL route keys must stay
+    /// immutable.
+    #[test]
+    fn bearer_control_plane_filter_keys_are_immutable() {
+        use gents_protocol::schemas;
+        let control_plane_sdls = [
+            (
+                "PairingBearerClaim",
+                schemas::PAIRING_BEARER_CLAIM,
+                "claimant_did:",
+            ),
+            ("PeerEndpoint", schemas::PEER_ENDPOINT, "did:"),
+        ];
+        for (name, sdl, field_prefix) in control_plane_sdls {
+            let line = sdl
+                .lines()
+                .map(str::trim)
+                .find(|line| line.starts_with(field_prefix))
+                .unwrap_or_else(|| panic!("{name} SDL must declare {field_prefix}"));
+            assert!(
+                line.contains("@immutable"),
+                "{name}.{field_prefix} must be immutable for filtered replication; got: {line}"
+            );
+        }
+    }
+
     /// Companion to the SDL guard, FRESH-SDL path: with the defradb.rs #1033 rev
     /// pinned, `@immutable` enforcement is LIVE — a row is created with
     /// `agent_did`, but any later rewrite of the immutable scope key is REJECTED.

@@ -37,6 +37,7 @@ gents-protocol.workspace = true
 defra-node.workspace = true
 defra-p2p-adapter.workspace = true
 futures-util = "0.3"
+flate2 = "1"
 iroh.workspace = true
 query.workspace = true
 hostname.workspace = true

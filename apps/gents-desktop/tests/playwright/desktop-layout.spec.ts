@@ -117,7 +117,11 @@ test.describe("desktop responsive layout guardrails", () => {
     );
 
     await gotoHarness(page, "empty-fleet");
-    await page.getByTestId("fleet-remote-disclosure").locator("summary").click();
+    await page
+      .getByTestId("fleet-remote-disclosure")
+      .locator(":scope > summary")
+      .click();
+    await page.getByText("Advanced manual discovery", { exact: true }).click();
     await page.getByTestId("fleet-add-server-address").fill("http://studio-1:9191");
 
     const submit = page.getByTestId("fleet-add-submit");

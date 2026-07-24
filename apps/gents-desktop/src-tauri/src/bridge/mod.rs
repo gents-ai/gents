@@ -35,10 +35,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             tauri_commands::lifecycle::desktop_bootstrap_summary,
+            tauri_commands::e2e::desktop_native_e2e_config,
+            tauri_commands::e2e::desktop_native_e2e_status,
             tauri_commands::lifecycle::desktop_init_local_standard,
             tauri_commands::lifecycle::desktop_client_start,
             tauri_commands::lifecycle::desktop_client_shutdown,
             tauri_commands::peers::desktop_peer_add,
+            tauri_commands::peers::desktop_peer_pair_bearer,
             tauri_commands::peers::desktop_peer_remove,
             tauri_commands::peers::desktop_peer_rename,
             tauri_commands::peers::desktop_peer_status_fetch,

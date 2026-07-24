@@ -39,6 +39,17 @@
          </BuildableReference>
       </MacroExpansion>
       <Testables>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "C6A04145B332F55AD1B74BC8"
+               BuildableName = "GentsUITests.xctest"
+               BlueprintName = "GentsUITests"
+               ReferencedContainer = "container:gents-desktop-tauri.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>

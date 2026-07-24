@@ -381,6 +381,7 @@ async fn repair_saved_peer_refreshes_network_before_redial() {
             last_error: Some("peer Workshop Bay dial failed".to_string()),
             pairing: Vec::new(),
         }),
+        "did:key:desktop",
         false,
         false,
     )
@@ -415,6 +416,7 @@ async fn repair_saved_peer_forces_reconfiguration_while_peer_is_connected() {
             last_error: None,
             pairing: Vec::new(),
         }),
+        "did:key:desktop",
         true,
         true,
     )

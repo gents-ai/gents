@@ -147,6 +147,7 @@ export function BackendConfigEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backend?.backendId]);
 
+  const base = backendFormValues(backend);
   const dirty = isDirty(
     {
       backendId,
@@ -156,12 +157,19 @@ export function BackendConfigEditor({
       apiKey,
       apiKeyEnvVar,
       clearApiKey,
-      models,
+      // The field accepts comma- or newline-separated models, while storage
+      // projects them back as newline-separated text. Compare the submitted
+      // list so an acknowledged save cannot become "unsaved" on formatting
+      // alone.
+      models: linesToArray(models),
       maxConcurrent,
       maxQueueDepth,
       enabled,
     },
-    backendFormValues(backend),
+    {
+      ...base,
+      models: backend?.models ?? [],
+    },
   );
 
   const maxConcurrentValid = isOptionalInt(maxConcurrent, { min: 1 });
@@ -170,6 +178,7 @@ export function BackendConfigEditor({
   async function submitBackend(event: FormEvent) {
     event.preventDefault();
     const nextId = backendId.trim();
+    const nextModels = linesToArray(models);
     try {
       await onSaveBackendConfig({
         backendId: nextId,
@@ -179,11 +188,16 @@ export function BackendConfigEditor({
         apiKey: apiKey.trim() ? apiKey : undefined,
         apiKeyEnvVar,
         clearApiKey,
-        models: linesToArray(models),
+        models: nextModels,
         maxConcurrent: parseOptionalInt(maxConcurrent),
         maxQueueDepth: parseOptionalInt(maxQueueDepth),
         enabled,
       });
+      // Never retain a successfully persisted secret in the DOM, and render
+      // list formatting exactly as the persisted view will project it.
+      setApiKey("");
+      setClearApiKey(false);
+      setModels(nextModels.join("\n"));
       onSaved(nextId);
       setSaveError(null);
     } catch (error) {

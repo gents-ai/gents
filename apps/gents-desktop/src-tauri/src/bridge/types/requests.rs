@@ -30,6 +30,14 @@ pub(crate) struct PeerStatusFetchRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct BearerPairingRequest {
+    pub token: String,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ChatSendRequest {
     pub agent_did: String,
     pub behavior_id: Option<String>,

@@ -104,6 +104,16 @@ def networkControlCollections : List String :=
 def subagentHostCollections : List String :=
   ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall"]
 
+def conversationRules : List CollectionRule :=
+  [ { collection := "AgentRequest",      field := "requester_did", source := .peerDid }
+  , { collection := "AgentResponse",     field := "requester_did", source := .peerDid }
+  , { collection := "AgentMessage",      field := "requester_did", source := .peerDid }
+  , { collection := "AgentToolCall",     field := "requester_did", source := .peerDid }
+  , { collection := "AgentToolResult",   field := "requester_did", source := .peerDid }
+  , { collection := "AgentSession",      field := "requester_did", source := .peerDid }
+  , { collection := "AgentConversation", field := "requester_did", source := .peerDid }
+  , { collection := "CompactionEntry",   field := "requester_did", source := .peerDid } ]
+
 def subagentCoordinatorRules : List CollectionRule :=
   [ { collection := "AgentToolCall", field := "spawn_target_did", source := .peerDid } ]
 
@@ -116,7 +126,7 @@ def subagentHostRules : List CollectionRule :=
 def conversationTemplate : Template :=
   { id := "conversation"
   , collections := conversationCollections.toFinset
-  , scope := .peerDid "agent_did"
+  , scope := .perCollection conversationRules
   , delivery := .push }
 
 def agentConfigTemplate : Template :=

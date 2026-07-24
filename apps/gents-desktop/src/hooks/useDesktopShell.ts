@@ -1,4 +1,11 @@
-import { useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type SetStateAction,
+} from "react";
 
 import {
   fetchDesktopSnapshot,
@@ -55,11 +62,39 @@ export function useDesktopShell() {
   const [localWorkflow, setLocalWorkflow] = useState<ChatWorkflowState>({
     kind: "ready",
   });
-  const [draft, setDraft] = useState("");
+  const [draftsByContext, setDraftsByContext] = useState<Record<string, string>>({});
 
   const deployments = snapshot?.client?.deployments ?? [];
   const selectedDeployment =
     deployments.find((deployment) => deployment.agentDid === selectedAgentDid) ?? null;
+  const draftContextKey = JSON.stringify(
+    selectedSessionId
+      ? ["session", selectedAgentDid, selectedSessionId]
+      : [
+          "new",
+          selectedAgentDid,
+          selectedBehaviorId ?? selectedDeployment?.defaultBehaviorId ?? null,
+        ],
+  );
+  const draft = draftsByContext[draftContextKey] ?? "";
+  const setDraft = useCallback(
+    (next: SetStateAction<string>) => {
+      setDraftsByContext((current) => {
+        const currentDraft = current[draftContextKey] ?? "";
+        const nextDraft = typeof next === "function" ? next(currentDraft) : next;
+        if (nextDraft === currentDraft) {
+          return current;
+        }
+        if (!nextDraft) {
+          const remaining = { ...current };
+          delete remaining[draftContextKey];
+          return remaining;
+        }
+        return { ...current, [draftContextKey]: nextDraft };
+      });
+    },
+    [draftContextKey],
+  );
   const selectedConversation =
     selectedDeployment?.conversations.find(
       (conversation) => conversation.sessionId === selectedSessionId,
@@ -246,6 +281,7 @@ export function useDesktopShell() {
     onAddPeer,
     onFetchPeerStatus,
     onInitLocalRuntime,
+    onPairBearer,
     onRemovePeer,
     onRenamePeer,
     onRepairP2P,
@@ -258,6 +294,27 @@ export function useDesktopShell() {
     setSnapshot,
     setStarting,
   });
+  const foregroundRepairRef = useRef(onRepairP2P);
+  const foregroundRepairEnabledRef = useRef(Boolean(snapshot?.client));
+  foregroundRepairRef.current = onRepairP2P;
+  foregroundRepairEnabledRef.current = Boolean(snapshot?.client);
+
+  useEffect(() => {
+    function repairAfterForeground() {
+      if (
+        document.visibilityState === "visible" &&
+        foregroundRepairEnabledRef.current
+      ) {
+        void foregroundRepairRef.current().catch(() => {
+          // The peer action renders the actionable error in the shell.
+        });
+      }
+    }
+
+    document.addEventListener("visibilitychange", repairAfterForeground);
+    return () =>
+      document.removeEventListener("visibilitychange", repairAfterForeground);
+  }, []);
 
   const {
     onSaveAgentConfig,
@@ -365,6 +422,7 @@ export function useDesktopShell() {
     onStartNewConversation,
     refreshSnapshot,
     onAddPeer,
+    onPairBearer,
     onRemovePeer,
     onRenamePeer,
     onFetchPeerStatus,

@@ -10,6 +10,21 @@ export function parsePeerConnectionJson(input: string): PeerAddRequest {
     throw new Error("Connection JSON must be an object");
   }
 
+  const p2pTransport =
+    stringAt(record, "p2pTransport") ??
+    stringAt(record, "p2p_transport") ??
+    stringAt(record, "p2p.p2pTransport") ??
+    stringAt(record, "p2p.p2p_transport") ??
+    stringAt(record, "runtime_state.p2p_transport");
+  if (
+    p2pTransport?.toLowerCase() === "none" ||
+    valueAt(record, "p2p.enabled") === false
+  ) {
+    throw new Error(
+      "This runtime has P2P disabled. Restart it with --p2p-transport iroh and fetch again.",
+    );
+  }
+
   const agentDid =
     stringAt(record, "agentDid") ??
     stringAt(record, "agent_did") ??

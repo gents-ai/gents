@@ -35,7 +35,7 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                 .agent_principals
                 .iter()
                 .find(|row| row.agent_did == peer.agent_did);
-            let agent_principal = principal
+            let mut agent_principal = principal
                 .map(|row| AgentPrincipalView {
                     agent_did: row.agent_did.clone(),
                     display_name: normalize_optional(row.display_name.as_deref()),
@@ -52,9 +52,10 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     created_at: None,
                     created_by: None,
                 });
-            let default_behavior_id = store
+            let mut default_behavior_id = store
                 .default_behavior_id_for_agent(&peer.agent_did)
-                .map(str::to_owned);
+                .map(str::to_owned)
+                .or_else(|| normalize_optional(peer.default_behavior_id.as_deref()));
             let runtime = store
                 .latest_runtime(&peer.agent_did)
                 .map(|row| RuntimeView {
@@ -89,6 +90,43 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     skill_excludes: row.skill_excludes.clone(),
                 })
                 .collect::<Vec<_>>();
+            if peer.is_bearer_pairing() && behaviors.is_empty() {
+                let behavior_ids = inferred_bearer_behavior_ids(
+                    store
+                        .conversation_rows(&peer.agent_did)
+                        .into_iter()
+                        .filter_map(|row| row.behavior_id.as_deref())
+                        .chain(peer.default_behavior_id.as_deref()),
+                );
+                default_behavior_id = inferred_default_behavior_id(
+                    &peer.agent_did,
+                    default_behavior_id.as_deref(),
+                    &behavior_ids,
+                );
+                agent_principal.default_behavior_id = default_behavior_id.clone();
+                behaviors = behavior_ids
+                    .into_iter()
+                    .map(|behavior_id| BehaviorView {
+                        display_name: inferred_behavior_display_name(
+                            &behavior_id,
+                            &peer.label,
+                            default_behavior_id.as_deref() == Some(behavior_id.as_str()),
+                        ),
+                        is_default: default_behavior_id.as_deref() == Some(behavior_id.as_str()),
+                        behavior_id,
+                        system_prompt: None,
+                        backend_id: None,
+                        model_name: None,
+                        tool_selection_id: None,
+                        inference_profile_id: None,
+                        compaction_strategy: None,
+                        compaction_threshold: None,
+                        enabled: true,
+                        skill_refs: Vec::new(),
+                        skill_excludes: Vec::new(),
+                    })
+                    .collect();
+            }
             behaviors.sort_by(|left, right| {
                 right
                     .is_default
@@ -471,5 +509,98 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
         row_count: store.row_count(),
         approx_serialized_bytes: store.approx_serialized_bytes(),
         deployments,
+    }
+}
+
+fn inferred_bearer_behavior_ids<'a>(behavior_ids: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut behavior_ids = behavior_ids
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    behavior_ids.sort();
+    behavior_ids.dedup();
+    behavior_ids
+}
+
+fn inferred_default_behavior_id(
+    agent_did: &str,
+    configured_default: Option<&str>,
+    behavior_ids: &[String],
+) -> Option<String> {
+    configured_default
+        .filter(|candidate| behavior_ids.iter().any(|value| value == candidate))
+        .or_else(|| {
+            behavior_ids
+                .iter()
+                .find(|value| value.as_str() == "default")
+                .map(String::as_str)
+        })
+        .or_else(|| {
+            let scoped_default = gents::default_behavior_id_for_agent(agent_did);
+            behavior_ids
+                .iter()
+                .find(|value| value.as_str() == scoped_default)
+                .map(String::as_str)
+        })
+        .or_else(|| behavior_ids.first().map(String::as_str))
+        .map(str::to_owned)
+}
+
+fn inferred_behavior_display_name(behavior_id: &str, peer_label: &str, is_default: bool) -> String {
+    if is_default {
+        return peer_label.to_string();
+    }
+    behavior_id
+        .split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod inferred_bearer_behavior_tests {
+    use super::*;
+
+    #[test]
+    fn deduplicates_behavior_ids_and_prefers_named_default() {
+        let ids =
+            inferred_bearer_behavior_ids(["session-classifier", "default", "default"].into_iter());
+
+        assert_eq!(ids, vec!["default", "session-classifier"]);
+        assert_eq!(
+            inferred_default_behavior_id("did:key:amy", None, &ids).as_deref(),
+            Some("default")
+        );
+    }
+
+    #[test]
+    fn labels_default_as_peer_and_humanizes_other_behaviors() {
+        assert_eq!(
+            inferred_behavior_display_name("default", "Amy", true),
+            "Amy"
+        );
+        assert_eq!(
+            inferred_behavior_display_name("session-classifier", "Amy", false),
+            "Session Classifier"
+        );
+    }
+
+    #[test]
+    fn signed_default_behavior_bootstraps_a_fresh_bearer_peer() {
+        let ids = inferred_bearer_behavior_ids(std::iter::empty::<&str>().chain(Some("default")));
+
+        assert_eq!(ids, vec!["default"]);
+        assert_eq!(
+            inferred_default_behavior_id("did:key:amy", Some("default"), &ids).as_deref(),
+            Some("default")
+        );
     }
 }

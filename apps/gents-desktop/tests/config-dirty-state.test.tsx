@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -78,6 +78,37 @@ describe("config dirty state", () => {
       />,
     );
     expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
+  });
+
+  it("treats model separators semantically and clears a saved API key", async () => {
+    const deployment = makeDeployment();
+    deployment.inferenceBackends[0].models = ["m-1", "m-2"];
+    const onSaveBackendConfig = vi.fn().mockResolvedValue(undefined);
+    render(
+      <BackendConfigPanel
+        deployment={deployment}
+        selectedBackendId="backend-a"
+        {...backendHandlers}
+        onSaveBackendConfig={onSaveBackendConfig}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("backend-models"), {
+      target: { value: "m-1, m-2" },
+    });
+    expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId("backend-api-key"), {
+      target: { value: "temporary-secret" },
+    });
+    expect(screen.getByTestId("unsaved-chip")).toBeInTheDocument();
+    fireEvent.submit(screen.getByTestId("backend-save").closest("form")!);
+
+    await waitFor(() => expect(screen.getByTestId("backend-api-key")).toHaveValue(""));
+    expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
+    expect(onSaveBackendConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ models: ["m-1", "m-2"] }),
+    );
   });
 
   it("marks the skill editor dirty on edit", () => {

@@ -2,6 +2,8 @@ import { useState } from "react";
 
 import type {
   BootstrapSummary,
+  BearerPairingRequest,
+  BearerPairingResponse,
   DeploymentView,
   P2PHealth,
   PeerAddRequest,
@@ -23,6 +25,7 @@ type FleetDashboardProps = {
   repairingP2P: boolean;
   starting: boolean;
   onAddPeer: (request: PeerAddRequest) => Promise<unknown>;
+  onPairBearer: (request: BearerPairingRequest) => Promise<BearerPairingResponse>;
   onFetchPeerStatus: (serverAddress: string) => Promise<unknown>;
   onInitLocalRuntime: (label?: string | null) => Promise<unknown>;
   onOpenChat: (agentDid: string) => void;
@@ -49,6 +52,7 @@ export function FleetDashboard({
   repairingP2P,
   starting,
   onAddPeer,
+  onPairBearer,
   onFetchPeerStatus,
   onInitLocalRuntime,
   onOpenChat,
@@ -89,6 +93,14 @@ export function FleetDashboard({
     }
   }
 
+  async function pairWithBearer(request: BearerPairingRequest) {
+    const response = await onPairBearer(request);
+    setPeerFormError(null);
+    setLocalRuntimeError(null);
+    setShowAddPeer(false);
+    return response;
+  }
+
   async function connectLocalRuntime() {
     setLocalRuntimeError(null);
     setPeerFormError(null);
@@ -122,7 +134,9 @@ export function FleetDashboard({
             className="fleet-remote-disclosure"
             data-testid="fleet-remote-disclosure"
           >
-            <summary>Connect a remote agent instead…</summary>
+            <summary aria-label="Connect a remote agent">
+              Connect a remote agent instead…
+            </summary>
             <AddPeerForm
               addingPeer={addingPeer}
               disabled={starting || loading}
@@ -130,6 +144,7 @@ export function FleetDashboard({
               peerForm={peerForm}
               onPeerFormChange={setPeerForm}
               onFetchPeerStatus={onFetchPeerStatus}
+              onPairBearer={pairWithBearer}
               onSubmit={submitPeer}
             />
           </details>
@@ -181,6 +196,7 @@ export function FleetDashboard({
             peerForm={peerForm}
             onPeerFormChange={setPeerForm}
             onFetchPeerStatus={onFetchPeerStatus}
+            onPairBearer={pairWithBearer}
             onSubmit={submitPeer}
           />
         </section>

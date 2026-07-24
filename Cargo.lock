@@ -8642,6 +8642,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "defra-node",
  "defra-p2p-adapter",
+ "flate2",
  "futures-util",
  "gents",
  "gents-fs-runner",
@@ -8695,6 +8696,7 @@ version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bs58",
  "chrono",
  "crypto",
  "defra-node",

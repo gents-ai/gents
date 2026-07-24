@@ -12,7 +12,7 @@ use super::super::types::{
 use super::emit_config_update_and_snapshot;
 
 #[tauri::command]
-pub(crate) fn desktop_task_save(
+pub(crate) async fn desktop_task_save(
     app: AppHandle,
     request: TaskSaveRequest,
     state: State<'_, DesktopAppState>,
@@ -21,16 +21,14 @@ pub(crate) fn desktop_task_save(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        save_task_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    save_task_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_schedule_save(
+pub(crate) async fn desktop_schedule_save(
     app: AppHandle,
     request: ScheduleSaveRequest,
     state: State<'_, DesktopAppState>,
@@ -39,16 +37,14 @@ pub(crate) fn desktop_schedule_save(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        save_schedule_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    save_schedule_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_schedule_run(
+pub(crate) async fn desktop_schedule_run(
     app: AppHandle,
     request: ScheduleRunRequest,
     state: State<'_, DesktopAppState>,
@@ -57,20 +53,18 @@ pub(crate) fn desktop_schedule_run(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        let result = run_schedule_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        let _ = app.emit(
-            "desktop://client-updated",
-            ClientUpdateEvent { reason: "config" },
-        );
-        Ok(result)
-    })
+    let result = run_schedule_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    let _ = app.emit(
+        "desktop://client-updated",
+        ClientUpdateEvent { reason: "config" },
+    );
+    Ok(result)
 }
 
 #[tauri::command]
-pub(crate) fn desktop_event_trigger_save(
+pub(crate) async fn desktop_event_trigger_save(
     app: AppHandle,
     request: EventTriggerSaveRequest,
     state: State<'_, DesktopAppState>,
@@ -79,16 +73,14 @@ pub(crate) fn desktop_event_trigger_save(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        save_event_trigger_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    save_event_trigger_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_task_run(
+pub(crate) async fn desktop_task_run(
     app: AppHandle,
     request: TaskRunRequest,
     state: State<'_, DesktopAppState>,
@@ -97,14 +89,12 @@ pub(crate) fn desktop_task_run(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        let result = run_task_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        let _ = app.emit(
-            "desktop://client-updated",
-            ClientUpdateEvent { reason: "config" },
-        );
-        Ok(result)
-    })
+    let result = run_task_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    let _ = app.emit(
+        "desktop://client-updated",
+        ClientUpdateEvent { reason: "config" },
+    );
+    Ok(result)
 }

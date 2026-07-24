@@ -64,6 +64,7 @@ export function Sidebar({
         conversations={conversations}
         deployments={deployments}
         selectedAgentDid={selectedAgentDid}
+        selectedBehaviorId={selectedBehaviorId}
         selectedSessionId={selectedSessionId}
         onSelectSession={onSelectSession}
         onRenameConversationTitle={onRenameConversationTitle}

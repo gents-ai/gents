@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { conversationBelongsToBehavior } from "../../lib/conversation-selection";
 import type { ConversationSummary, DeploymentView, TaskView } from "../../lib/types";
 import { displayConversationTitle } from "../../lib/types";
 import { formatRelativeTime } from "../fleet/fleetMetrics";
@@ -13,6 +14,7 @@ export type ConversationListSectionProps = {
   conversations: ConversationSummary[];
   deployments: DeploymentView[];
   selectedAgentDid: string | null;
+  selectedBehaviorId: string | null;
   selectedSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
   onRenameConversationTitle?: (
@@ -25,6 +27,7 @@ export function ConversationListSection({
   conversations,
   deployments,
   selectedAgentDid,
+  selectedBehaviorId,
   selectedSessionId,
   onSelectSession,
   onRenameConversationTitle,
@@ -32,23 +35,59 @@ export function ConversationListSection({
   const [query, setQuery] = useState("");
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [savingRename, setSavingRename] = useState(false);
 
-  function commitRename() {
+  async function commitRename() {
+    if (savingRename) {
+      return;
+    }
     const title = renameDraft.trim();
     const sessionId = renamingSessionId;
-    setRenamingSessionId(null);
-    if (sessionId && title && onRenameConversationTitle) {
-      // Shell handlers rethrow after setting the banner; fire-and-forget
-      // call sites must swallow or the rejection escapes unhandled.
-      void Promise.resolve(onRenameConversationTitle(sessionId, title)).catch(() => {});
+    const conversation = conversations.find(
+      (candidate) => candidate.sessionId === sessionId,
+    );
+    if (
+      !sessionId ||
+      !title ||
+      !onRenameConversationTitle ||
+      title === displayConversationTitle(conversation?.title).trim()
+    ) {
+      setRenamingSessionId(null);
+      return;
+    }
+
+    setSavingRename(true);
+    try {
+      await onRenameConversationTitle(sessionId, title);
+      setRenamingSessionId(null);
+    } catch {
+      // The shell owns the error banner. Keep the draft open so a transient
+      // backend failure never destroys the operator's proposed title.
+    } finally {
+      setSavingRename(false);
     }
   }
   const selectedDeployment = deployments.find(
     (item) => item.agentDid === selectedAgentDid,
   );
   const selectedDeploymentLabel = selectedDeployment?.label ?? "Chat";
+  const defaultBehaviorId =
+    selectedDeployment?.defaultBehaviorId ??
+    selectedDeployment?.behaviors.find((behavior) => behavior.isDefault)?.behaviorId ??
+    null;
+  const behaviorConversations = useMemo(
+    () =>
+      conversations.filter((conversation) =>
+        conversationBelongsToBehavior(
+          conversation,
+          selectedBehaviorId,
+          defaultBehaviorId,
+        ),
+      ),
+    [conversations, defaultBehaviorId, selectedBehaviorId],
+  );
   const tasks = selectedDeployment?.tasks ?? [];
-  const hasUntaskedConversations = conversations.some(
+  const hasUntaskedConversations = behaviorConversations.some(
     (conversation) => !conversation.taskId,
   );
   const taskFilterOptions = useMemo(
@@ -61,6 +100,7 @@ export function ConversationListSection({
     setSelectedTaskFilter(ALL_TASKS_FILTER);
     setQuery("");
     setRenamingSessionId(null);
+    setSavingRename(false);
   }, [selectedAgentDid]);
 
   useEffect(() => {
@@ -78,7 +118,7 @@ export function ConversationListSection({
   }, [hasUntaskedConversations, selectedTaskFilter, taskFilterOptions]);
 
   const filteredConversations = useMemo(() => {
-    let rows = conversations;
+    let rows = behaviorConversations;
     if (selectedTaskFilter === UNTASKED_FILTER) {
       rows = rows.filter((conversation) => !conversation.taskId);
     } else if (selectedTaskFilter !== ALL_TASKS_FILTER) {
@@ -93,10 +133,10 @@ export function ConversationListSection({
       );
     }
     return rows;
-  }, [conversations, query, selectedTaskFilter]);
+  }, [behaviorConversations, query, selectedTaskFilter]);
   const showTaskFilter =
     Boolean(selectedAgentDid) &&
-    conversations.length > 0 &&
+    behaviorConversations.length > 0 &&
     (taskFilterOptions.length > 0 || hasUntaskedConversations);
 
   useEffect(() => {
@@ -149,7 +189,7 @@ export function ConversationListSection({
           </select>
         </label>
       ) : null}
-      {selectedAgentDid && conversations.length > 0 ? (
+      {selectedAgentDid && behaviorConversations.length > 0 ? (
         <input
           className="conversation-search"
           data-testid="conversation-search"
@@ -161,9 +201,10 @@ export function ConversationListSection({
       ) : null}
       {!selectedAgentDid ? (
         <p className="muted">Select a deployment to see conversations.</p>
-      ) : !conversations.length ? (
+      ) : !behaviorConversations.length ? (
         <p className="muted">
-          No conversations yet. Sending the first message will create one automatically.
+          No conversations for this behavior yet. Sending the first message will create
+          one automatically.
         </p>
       ) : !filteredConversations.length ? (
         <p className="muted">
@@ -178,15 +219,18 @@ export function ConversationListSection({
             if (conversation.sessionId === renamingSessionId) {
               return (
                 <input
+                  aria-label={`Rename ${displayConversationTitle(conversation.title)}`}
                   autoFocus
                   className="conversation-rename-input"
                   data-testid={`conversation-rename-input-${conversation.sessionId}`}
+                  disabled={savingRename}
                   key={conversation.sessionId}
-                  onBlur={commitRename}
+                  onBlur={() => void commitRename()}
                   onChange={(event) => setRenameDraft(event.currentTarget.value)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {
-                      commitRename();
+                      event.preventDefault();
+                      void commitRename();
                     } else if (event.key === "Escape") {
                       setRenamingSessionId(null);
                     }
@@ -241,6 +285,7 @@ export function ConversationListSection({
                     aria-label={`Rename ${displayConversationTitle(conversation.title)}`}
                     className="ghost-button conversation-rename"
                     data-testid={`conversation-rename-${conversation.sessionId}`}
+                    disabled={savingRename}
                     onClick={() => {
                       setRenameDraft(displayConversationTitle(conversation.title));
                       setRenamingSessionId(conversation.sessionId);

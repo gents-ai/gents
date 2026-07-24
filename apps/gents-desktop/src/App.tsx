@@ -13,6 +13,7 @@ import { useAppShortcuts } from "./hooks/useAppShortcuts";
 import { Sidebar } from "./components/Sidebar";
 import { useDesktopShell } from "./hooks/useDesktopShell";
 import { installExternalLinkGuard } from "./lib/externalLinks";
+import { startNativeSimulatorE2e } from "./lib/nativeSimulatorE2e";
 import "./App.css";
 
 function App() {
@@ -36,6 +37,9 @@ function AppShell() {
   // External links (e.g. markdown links in the transcript) must open in the
   // OS browser — an unguarded anchor click navigates the whole webview away.
   useEffect(() => installExternalLinkGuard(document), []);
+  useEffect(() => {
+    void startNativeSimulatorE2e();
+  }, []);
   const [workspaceView, setWorkspaceView] = useState<
     "fleet" | "chat" | "config" | "code"
   >("fleet");
@@ -101,6 +105,7 @@ function AppShell() {
           repairingP2P={shell.repairingP2P}
           starting={shell.starting}
           onAddPeer={shell.onAddPeer}
+          onPairBearer={shell.onPairBearer}
           onFetchPeerStatus={shell.onFetchPeerStatus}
           onInitLocalRuntime={shell.onInitLocalRuntime}
           onOpenChat={openChat}
@@ -147,9 +152,7 @@ function AppShell() {
               dialedPeerCount={shell.snapshot?.client?.dialedPeerCount ?? 0}
               draft={shell.draft}
               onDraftChange={shell.setDraft}
-              onRenameConversationTitle={(sessionId, title) =>
-                void shell.onRenameConversationTitle(sessionId, title)
-              }
+              onRenameConversationTitle={shell.onRenameConversationTitle}
               onSend={shell.onSendMessage}
               onRetryMessage={shell.onRetryMessage}
               rowCount={shell.snapshot?.client?.rowCount ?? 0}
