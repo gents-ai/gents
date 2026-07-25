@@ -35,7 +35,7 @@ pub use endpoint::{peer_endpoint_upsert_mutation, run_endpoint_heartbeat};
 pub use engine::{
     merge_layered_desired, reconcile_peer_tick, run_pairing_reconciler,
     update_applied_after_success, GraphqlPairingStateStore, PairingStateStore, PairingTickOutcome,
-    PAIRING_SWEEP_INTERVAL,
+    MAX_CONCURRENT_PEER_PREPARATIONS, PAIRING_SWEEP_INTERVAL,
 };
 pub use error_class::{classify_remote_admin_error, PairingErrorClass};
 pub use network::{

@@ -265,4 +265,69 @@ def nativeFilesystemBoundaryCases : List NativeFilesystemBoundaryCase :=
   , nativeFilesystemBoundaryCase "grep"
   ]
 
+def managedExecToolBoundaryCase
+    (toolName workClass : String) : ManagedExecToolBoundaryCase :=
+  { name := toolName ++ "_routes_through_managed_exec_process_tree_boundary"
+  , toolName := toolName
+  , workClass := workClass
+  , boundary := "managedExecProcessGroupBoundary"
+  , killScope := "processTree"
+  , timeoutRequiresKill := true
+  , cancelRequiresKill := true
+  , descendantsInTerminationScope := true
+  , captureDrainBounded := true
+  }
+
+/-- Every native tool that can launch an OS subprocess must consume the managed
+    executor boundary. Keeping this inventory in the Lean-owned contract makes
+    a raw `Command::spawn` route a conformance failure instead of an implicit
+    implementation convention. -/
+def managedExecToolBoundaryCases : List ManagedExecToolBoundaryCase :=
+  [ managedExecToolBoundaryCase "list_files" "filesystemTraversal"
+  , managedExecToolBoundaryCase "glob" "filesystemTraversal"
+  , managedExecToolBoundaryCase "grep" "filesystemTraversal"
+  , managedExecToolBoundaryCase "bash" "shellCommand"
+  , managedExecToolBoundaryCase "bash_unrestricted" "shellCommand"
+  ]
+
+/-- `PairingReconcile.Transition.crash` abstracts away the implementation's
+    async supervisor boundary. This witness fences that refinement: shutdown
+    must be observable while a sweep is awaiting remote admin work, must drop
+    the current wait and the rest of the peer loop, and must therefore let the
+    runtime's background-task join finish without multiplying the per-RPC
+    timeout by the number of stale peers. -/
+def pairingReconcileShutdownBoundaryCases :
+    List PairingReconcileShutdownBoundaryCase :=
+  [ { name := "shutdown_preempts_in_flight_pairing_reconcile_sweep"
+    , supervisor := "pairingReconciler"
+    , workClass := "p2pReconcileSweep"
+    , boundary := "pairingReconcileSupervisorBoundary"
+    , perAdminCallTimeoutMs := 10000
+    , cancellationObservedInsideSweep := true
+    , currentAdminFutureDropped := true
+    , remainingPeersSkipped := true
+    , shutdownJoinBounded := true
+    }
+  ]
+
+/-- The single-peer `PairingReconcile` machine does not model how a runtime
+    sweep schedules several independent peers. This witness fences that
+    refinement: slow discovery/dial preparation is bounded and concurrent, so
+    one stale peer cannot head-of-line block a ready phone, while topology
+    mutations remain serialized and every peer still updates supervisor
+    accounting exactly once. -/
+def pairingReconcileSweepSchedulingCases :
+    List PairingReconcileSweepSchedulingCase :=
+  [ { name := "stale_peer_dial_does_not_block_ready_peer"
+    , supervisor := "pairingReconciler"
+    , workClass := "p2pReconcileSweep"
+    , boundary := "pairingReconcilePeerPreparationBoundary"
+    , maxConcurrentPeerPreparations := 8
+    , peerPreparationBounded := true
+    , topologyMutationSerialized := true
+    , stalePeerBlocksReadyPeer := false
+    , everyPeerResultAccounted := true
+    }
+  ]
+
 end Conformance.ContractCases

@@ -106,6 +106,16 @@ async function runNativeSimulatorE2e() {
       `${config.agentLabel} response marker ${config.expectedResponse}`,
     );
 
+    await reportStatus({ stage: "waiting-terminal" });
+    await waitFor(
+      () =>
+        isConversationTurnSettled(document, config.expectedResponse)
+          ? document.body
+          : null,
+      180_000,
+      `${config.agentLabel} terminal turn state`,
+    );
+
     await reportStatus({ stage: "passed" });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -194,6 +204,16 @@ export function conversationRowCount(root: ParentNode): number {
   return root.querySelectorAll(
     '.conversation-list .conversation-row > button[data-testid^="conversation-"]',
   ).length;
+}
+
+export function isConversationTurnSettled(
+  root: ParentNode,
+  expectedResponse: string,
+): boolean {
+  return (
+    findAssistantResponseMarker(root, expectedResponse) !== null &&
+    root.querySelector('[data-testid="cancel-button"]') === null
+  );
 }
 
 function setControlledValue(

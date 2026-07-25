@@ -65,10 +65,10 @@ function simulator() {
   );
 }
 
-function mintInvite() {
+function issuerSettings() {
   const supplied = process.env.GENTS_E2E_PAIR_TOKEN?.trim();
   if (supplied) {
-    return supplied;
+    return null;
   }
 
   const remote = process.env.GENTS_E2E_ISSUER_SSH?.trim();
@@ -83,24 +83,121 @@ function mintInvite() {
       throw new Error(`Unsafe character in E2E issuer setting: ${value}`);
     }
   }
+  return { binary, home, remote };
+}
 
+function runIssuer(settings, commandArgs) {
+  return settings.remote
+    ? spawnSync("ssh", [settings.remote, settings.binary, ...commandArgs], {
+        encoding: "utf8",
+      })
+    : spawnSync(settings.binary, commandArgs, { encoding: "utf8" });
+}
+
+function issuerFailureDetail(result) {
+  return (
+    result.error?.message ||
+    result.stderr?.trim() ||
+    `issuer command exited with status ${result.status ?? "unknown"}`
+  );
+}
+
+function mintInvite(settings) {
+  const supplied = process.env.GENTS_E2E_PAIR_TOKEN?.trim();
+  if (supplied) {
+    return supplied;
+  }
+  if (!settings) {
+    throw new Error("Native E2E issuer settings are unavailable");
+  }
   process.stdout.write(
     `\nMinting a fresh single-use pairing invite from ${
-      remote ?? `the local issuer at ${home}`
+      settings.remote ?? `the local issuer at ${settings.home}`
     }…\n`,
   );
-  const inviteArgs = ["p2p", "pairings", "invite", "--home", home, "--bearer"];
-  const result = remote
-    ? spawnSync("ssh", [remote, binary, ...inviteArgs], { encoding: "utf8" })
-    : spawnSync(binary, inviteArgs, { encoding: "utf8" });
+  const inviteArgs = ["p2p", "pairings", "invite", "--home", settings.home, "--bearer"];
+  const result = runIssuer(settings, inviteArgs);
   if (result.status !== 0) {
-    throw new Error(`Could not mint E2E issuer invite: ${result.stderr.trim()}`);
+    throw new Error(`Could not mint E2E issuer invite: ${issuerFailureDetail(result)}`);
   }
   const token = result.stdout.match(/dabear1-[1-9A-HJ-NP-Za-km-z]+/)?.[0];
   if (!token) {
     throw new Error("E2E issuer output did not contain a dabear1 token");
   }
   return token;
+}
+
+function listIssuerPairings(settings) {
+  if (!settings) {
+    return [];
+  }
+  const result = runIssuer(settings, [
+    "p2p",
+    "pairings",
+    "list",
+    "--home",
+    settings.home,
+    "--output",
+    "json",
+  ]);
+  if (result.status !== 0) {
+    throw new Error(
+      `Could not list E2E issuer pairings: ${issuerFailureDetail(result)}`,
+    );
+  }
+  const parsed = JSON.parse(result.stdout);
+  return Array.isArray(parsed.pairings) ? parsed.pairings : [];
+}
+
+function cleanNewIssuerPairings(settings, peerIdsBefore) {
+  if (!settings || settings.remote) {
+    return;
+  }
+
+  let pairings;
+  try {
+    pairings = listIssuerPairings(settings).filter(
+      (pairing) => !peerIdsBefore.has(pairing.peer_id),
+    );
+  } catch (error) {
+    process.stderr.write(`Native E2E pairing cleanup warning: ${error.message}\n`);
+    return;
+  }
+
+  for (const pairing of pairings) {
+    process.stdout.write(`Cleaning E2E pairing ${pairing.peer_id}…\n`);
+    if (pairing.agent_did) {
+      const revoke = runIssuer(settings, [
+        "p2p",
+        "network",
+        "revoke",
+        "--home",
+        settings.home,
+        pairing.agent_did,
+        "--output",
+        "json",
+      ]);
+      if (revoke.status !== 0) {
+        process.stderr.write(
+          `Native E2E membership cleanup warning: ${issuerFailureDetail(revoke)}\n`,
+        );
+      }
+    }
+    const remove = runIssuer(settings, [
+      "p2p",
+      "pairings",
+      "rm",
+      "--home",
+      settings.home,
+      "--peer",
+      pairing.peer_id,
+    ]);
+    if (remove.status !== 0) {
+      process.stderr.write(
+        `Native E2E pairing cleanup warning: ${issuerFailureDetail(remove)}\n`,
+      );
+    }
+  }
 }
 
 function readStatus(statusPath) {
@@ -264,46 +361,54 @@ const dataContainer = capture("xcrun", [
   "data",
 ]).trim();
 const statusPath = join(dataContainer, "tmp", STATUS_FILENAME);
-const invite = mintInvite();
+const managedIssuer = issuerSettings();
+const issuerPeerIdsBefore = new Set(
+  listIssuerPairings(managedIssuer).map((pairing) => pairing.peer_id),
+);
+const invite = mintInvite(managedIssuer);
 
-for (let index = 1; index <= runs; index += 1) {
-  rmSync(statusPath, { force: true });
-  const defaultPrompt = `Reply with only the uppercase underscore form of: isolated iphone simulator e2e run ${index}.`;
-  const defaultExpected = `ISOLATED_IPHONE_SIMULATOR_E2E_RUN_${index}`;
-  const launchEnvironment = {
-    ...process.env,
-    SIMCTL_CHILD_GENTS_NATIVE_E2E: "1",
-    SIMCTL_CHILD_GENTS_E2E_AGENT_LABEL:
-      process.env.GENTS_E2E_AGENT_LABEL?.trim() || "iPhone E2E",
-    SIMCTL_CHILD_GENTS_E2E_PAIR_TOKEN: invite,
-    SIMCTL_CHILD_GENTS_E2E_PROMPT:
-      process.env.GENTS_E2E_PROMPT?.trim() || defaultPrompt,
-    SIMCTL_CHILD_GENTS_E2E_EXPECTED_RESPONSE:
-      process.env.GENTS_E2E_EXPECTED_RESPONSE?.trim() || defaultExpected,
-    SIMCTL_CHILD_GENTS_E2E_EXPECT_EMPTY_CONVERSATIONS:
-      index === 1 && !keepData ? "1" : "0",
-    SIMCTL_CHILD_RUST_BACKTRACE: "full",
-    SIMCTL_CHILD_RUST_LOG: process.env.RUST_LOG?.trim() || "info",
-  };
+try {
+  for (let index = 1; index <= runs; index += 1) {
+    rmSync(statusPath, { force: true });
+    const defaultPrompt = `Reply with only the uppercase underscore form of: isolated iphone simulator e2e run ${index}.`;
+    const defaultExpected = `ISOLATED_IPHONE_SIMULATOR_E2E_RUN_${index}`;
+    const launchEnvironment = {
+      ...process.env,
+      SIMCTL_CHILD_GENTS_NATIVE_E2E: "1",
+      SIMCTL_CHILD_GENTS_E2E_AGENT_LABEL:
+        process.env.GENTS_E2E_AGENT_LABEL?.trim() || "iPhone E2E",
+      SIMCTL_CHILD_GENTS_E2E_PAIR_TOKEN: invite,
+      SIMCTL_CHILD_GENTS_E2E_PROMPT:
+        process.env.GENTS_E2E_PROMPT?.trim() || defaultPrompt,
+      SIMCTL_CHILD_GENTS_E2E_EXPECTED_RESPONSE:
+        process.env.GENTS_E2E_EXPECTED_RESPONSE?.trim() || defaultExpected,
+      SIMCTL_CHILD_GENTS_E2E_EXPECT_EMPTY_CONVERSATIONS:
+        index === 1 && !keepData ? "1" : "0",
+      SIMCTL_CHILD_RUST_BACKTRACE: "full",
+      SIMCTL_CHILD_RUST_LOG: process.env.RUST_LOG?.trim() || "info",
+    };
 
-  process.stdout.write(`\nRunning isolated prompt round-trip ${index}/${runs}…\n`);
-  const launchResult = capture(
-    "xcrun",
-    ["simctl", "launch", "--terminate-running-process", device.udid, APP_BUNDLE_ID],
-    { env: launchEnvironment },
-  );
-  const pid = Number.parseInt(launchResult.match(/: (\d+)\s*$/)?.[1] ?? "", 10);
-  if (!Number.isInteger(pid)) {
-    throw new Error(`Could not parse Gents simulator PID from ${launchResult}`);
+    process.stdout.write(`\nRunning isolated prompt round-trip ${index}/${runs}…\n`);
+    const launchResult = capture(
+      "xcrun",
+      ["simctl", "launch", "--terminate-running-process", device.udid, APP_BUNDLE_ID],
+      { env: launchEnvironment },
+    );
+    const pid = Number.parseInt(launchResult.match(/: (\d+)\s*$/)?.[1] ?? "", 10);
+    if (!Number.isInteger(pid)) {
+      throw new Error(`Could not parse Gents simulator PID from ${launchResult}`);
+    }
+
+    await waitForScenario({
+      deviceId: device.udid,
+      pid,
+      runIndex: index,
+      artifactRoot,
+      statusPath,
+    });
   }
-
-  await waitForScenario({
-    deviceId: device.udid,
-    pid,
-    runIndex: index,
-    artifactRoot,
-    statusPath,
-  });
+} finally {
+  cleanNewIssuerPairings(managedIssuer, issuerPeerIdsBefore);
 }
 
 process.stdout.write(`\nIsolated iPhone Simulator E2E passed ${runs} run(s).\n`);

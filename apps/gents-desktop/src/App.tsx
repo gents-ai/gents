@@ -49,7 +49,12 @@ function AppShell() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   useAppShortcuts({
-    setView: setWorkspaceView,
+    setView: (view) => {
+      if (view === "chat" || view === "code") {
+        setMobileChatPane("conversation");
+      }
+      setWorkspaceView(view);
+    },
     newConversation: () => {
       const behaviorId =
         shell.selectedBehaviorId ?? shell.behaviorOptions[0]?.behaviorId ?? null;
@@ -61,6 +66,7 @@ function AppShell() {
     },
     focusComposer: () => {
       setWorkspaceView("chat");
+      setMobileChatPane("conversation");
       requestAnimationFrame(() => {
         document
           .querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]')
@@ -162,7 +168,9 @@ function AppShell() {
               />
             ) : null}
             <ChatWorkspace
-              activeRequestId={shell.activeRequestId}
+              activeRequestId={
+                shell.activeRequestId ?? shell.session?.latestRequestId ?? null
+              }
               approxSerializedBytes={shell.snapshot?.client?.approxSerializedBytes ?? 0}
               canSend={shell.canSendMessage}
               configuredPeerCount={shell.snapshot?.client?.configuredPeerCount ?? 0}
@@ -188,9 +196,12 @@ function AppShell() {
               selectedSessionId={shell.selectedSessionId}
               sending={shell.sending}
               session={shell.session}
-              turnState={shell.turnState}
+              turnState={shell.turnState ?? shell.session?.turnState ?? null}
               onOpenMobileNavigation={() => setMobileChatPane("navigation")}
               onForkedConversation={shell.onSelectSession}
+              onInterruptAccepted={async () => {
+                await shell.refreshSession(shell.selectedSessionId);
+              }}
             />
           </section>
         </section>

@@ -367,12 +367,12 @@ export function MessageList({
                       />
                     ) : null}
                   </div>
+                  <ReasoningDisclosure value={normalizedReasoning} />
                   {normalizedContent ? (
                     <div className="message-content">
                       <MarkdownContent value={normalizedContent} />
                     </div>
                   ) : null}
-                  <ReasoningDisclosure value={normalizedReasoning} />
                 </article>
               </div>
             );
@@ -415,12 +415,12 @@ export function MessageList({
                     />
                   ) : null}
                 </div>
+                <ReasoningDisclosure value={overlayReasoning} />
                 {overlayContent ? (
                   <div className="message-content">
                     <MarkdownContent value={overlayContent} />
                   </div>
                 ) : null}
-                <ReasoningDisclosure value={overlayReasoning} />
               </article>
             );
           }

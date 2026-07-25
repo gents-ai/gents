@@ -2,6 +2,7 @@ use serde_json::Value;
 
 use std::collections::BTreeMap;
 
+use gents::background_completion::is_background_completion_control_message;
 use gents_protocol::timeline::{
     build_timeline_order, TimelineMessageInput, TimelineRole, TimelineSlot,
 };
@@ -79,6 +80,10 @@ pub(super) fn materialized_user_turn_count(messages: &[MessageView]) -> usize {
                 .unwrap_or_default();
             role.eq_ignore_ascii_case("user")
                 && normalize_optional(message.display_content.as_deref()).is_some()
+                && !message
+                    .display_content
+                    .as_deref()
+                    .is_some_and(is_background_completion_control_message)
         })
         .count()
 }
@@ -143,21 +148,27 @@ pub(super) fn build_rendered_timeline(
     let mut inputs: Vec<TimelineMessageInput> = Vec::new();
     let mut rendered_message: BTreeMap<String, RenderedTimelineItem> = BTreeMap::new();
     for message in messages.iter() {
+        let role = message
+            .display_role
+            .as_deref()
+            .or(message.role.as_deref())
+            .unwrap_or("assistant");
+        let is_user = role.eq_ignore_ascii_case("user");
+        let is_background_control = is_user
+            && message
+                .display_content
+                .as_deref()
+                .is_some_and(is_background_completion_control_message);
         let keep = !message.has_tool_results
+            && !is_background_control
             && (!normalize_timeline_text(message.display_content.as_deref()).is_empty()
                 || !normalize_timeline_text(message.reasoning.as_deref()).is_empty()
                 || message.has_tool_calls);
         if !keep {
             continue;
         }
-        let role = message
-            .display_role
-            .as_deref()
-            .or(message.role.as_deref())
-            .unwrap_or("assistant");
         let normalized_content = normalize_optional(message.display_content.as_deref());
         let normalized_reasoning = normalize_optional(message.reasoning.as_deref());
-        let is_user = role == "user";
         let (emits_item, item) = if is_user {
             match normalized_content.clone() {
                 Some(content) => (
@@ -273,7 +284,25 @@ pub(super) fn build_rendered_timeline(
 
 #[cfg(test)]
 mod tests {
-    use super::tool_status_kind;
+    use super::{
+        build_rendered_timeline, materialized_user_turn_count, tool_status_kind, MessageView,
+        RenderedTimelineItem,
+    };
+
+    fn user_message(key: &str, sequence: i64, content: &str) -> MessageView {
+        MessageView {
+            message_key: key.to_string(),
+            sequence: Some(sequence),
+            role: Some("user".to_string()),
+            content: Some(content.to_string()),
+            display_role: Some("user".to_string()),
+            display_content: Some(content.to_string()),
+            reasoning: None,
+            has_tool_calls: false,
+            has_tool_results: false,
+            timestamp: None,
+        }
+    }
 
     #[test]
     fn status_kind_maps_awaiting_approval_and_terminals() {
@@ -287,5 +316,34 @@ mod tests {
         assert_eq!(tool_status_kind(Some("timedOut")), "error");
         assert_eq!(tool_status_kind(Some("running")), "running");
         assert_eq!(tool_status_kind(None), "running");
+    }
+
+    #[test]
+    fn background_completion_controls_do_not_render_as_user_turns() {
+        let messages = vec![
+            user_message("user-1", 1, "Please classify these sessions."),
+            user_message(
+                "notification",
+                2,
+                r#"<subagent-notification child_request_id="child-1">
+<summary>classification complete</summary>
+</subagent-notification>"#,
+            ),
+            user_message(
+                "wake",
+                3,
+                gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+            ),
+        ];
+
+        let timeline = build_rendered_timeline(&messages, &[], None, None);
+
+        assert_eq!(materialized_user_turn_count(&messages), 1);
+        assert_eq!(timeline.len(), 1);
+        assert!(matches!(
+            &timeline[0],
+            RenderedTimelineItem::UserMessage { content, .. }
+                if content == "Please classify these sessions."
+        ));
     }
 }

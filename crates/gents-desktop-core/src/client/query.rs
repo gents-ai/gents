@@ -397,6 +397,42 @@ pub async fn load_chat_patch_from_graphql(graphql: &str, request_id: &str) -> Re
         execute_remote_graphql_query(&client, graphql, &patch_query, "remote GraphQL chat patch")
             .await?;
 
+    chat_patch_from_data(&data)
+}
+
+/// Load only the selected request's conversation slice from the embedded
+/// replica. This is the bounded polling fallback for a dropped/coalesced
+/// observer event; it does not reload every conversation for the agent.
+pub async fn load_chat_patch(node: &EmbeddedNode, request_id: &str) -> Result<ClientStore> {
+    let request_id = request_id.trim();
+    if request_id.is_empty() {
+        return Ok(ClientStore::default());
+    }
+
+    let lookup_query = remote_request_lookup_query(request_id);
+    let lookup_data =
+        execute_local_graphql_query(node, &lookup_query, "local request lookup").await?;
+    let request_rows: Vec<AgentRequestRow> = parse_remote_rows(&lookup_data, "AgentRequest")?;
+    let Some(session_id) = request_rows
+        .first()
+        .and_then(|row| row.session_id.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(ClientStore::from_rows(ClientStoreRows {
+            requests: request_rows,
+            responses: parse_remote_rows(&lookup_data, "AgentResponse")?,
+            ..ClientStoreRows::default()
+        }));
+    };
+
+    let patch_query = remote_chat_patch_query(&session_id);
+    let data = execute_local_graphql_query(node, &patch_query, "local chat patch").await?;
+    chat_patch_from_data(&data)
+}
+
+fn chat_patch_from_data(data: &Value) -> Result<ClientStore> {
     Ok(ClientStore::from_rows(ClientStoreRows {
         conversations: parse_remote_rows(&data, "AgentConversation")?,
         requests: parse_remote_rows(&data, "AgentRequest")?,
@@ -409,6 +445,28 @@ pub async fn load_chat_patch_from_graphql(graphql: &str, request_id: &str) -> Re
         compaction_entries: parse_remote_rows(&data, "CompactionEntry")?,
         ..ClientStoreRows::default()
     }))
+}
+
+async fn execute_local_graphql_query(
+    node: &EmbeddedNode,
+    query: &str,
+    operation: &str,
+) -> Result<Value> {
+    let response = node.execute(query).await;
+    if response.has_errors() {
+        bail!(
+            "{operation} failed: {}",
+            response
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    response
+        .data
+        .with_context(|| format!("{operation} returned no data"))
 }
 
 async fn load_rows<T>(node: &EmbeddedNode, root: &str, query: &str) -> Result<Vec<T>>
@@ -1103,6 +1161,68 @@ mod tests {
             .await
             .expect("fetch_doc_patch");
         assert_eq!(patch.messages.len(), 1, "expected exactly one row");
+    }
+
+    #[tokio::test]
+    async fn load_chat_patch_reads_only_the_selected_local_session() {
+        let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
+
+        let mutation = r#"mutation {
+            first_request: create_AgentRequest(input: {
+                request_id: "req-selected",
+                agent_did: "did:test:agent",
+                behavior_id: "default",
+                session_id: "sess-selected",
+                content: "selected",
+                status: "processing",
+                lifecycle_state: "processing",
+                created_at: "2026-07-24T00:00:00Z"
+            }) { _docID }
+            first_response: create_AgentResponse(input: {
+                response_key: "req-selected",
+                request_id: "req-selected",
+                agent_did: "did:test:agent",
+                behavior_id: "default",
+                session_id: "sess-selected",
+                content: "partial",
+                reasoning: "",
+                status: "streaming",
+                error_message: "",
+                token_count: 1,
+                progress_seq: 1,
+                created_at: "2026-07-24T00:00:00Z"
+            }) { _docID }
+            second_request: create_AgentRequest(input: {
+                request_id: "req-unrelated",
+                agent_did: "did:test:agent",
+                behavior_id: "default",
+                session_id: "sess-unrelated",
+                content: "unrelated",
+                status: "completed",
+                lifecycle_state: "completed",
+                created_at: "2026-07-24T00:00:00Z"
+            }) { _docID }
+        }"#;
+        let response = node.execute(mutation).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+
+        let patch = load_chat_patch(node.as_ref(), "req-selected")
+            .await
+            .expect("selected local chat patch");
+        assert_eq!(patch.requests.len(), 1);
+        assert_eq!(patch.requests[0].request_id, "req-selected");
+        assert_eq!(patch.responses.len(), 1);
+        assert_eq!(patch.responses[0].content.as_deref(), Some("partial"));
+        assert!(
+            patch
+                .requests
+                .iter()
+                .all(|row| row.session_id.as_deref() == Some("sess-selected")),
+            "unrelated session leaked into selected patch"
+        );
     }
 
     #[tokio::test]

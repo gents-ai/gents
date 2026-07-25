@@ -293,6 +293,7 @@ pub struct ClientCore {
     p2p_health: watch::Sender<P2PHealth>,
     selected_agent_did: watch::Sender<Option<String>>,
     last_loaded_for: tokio::sync::Mutex<HashMap<String, std::time::Instant>>,
+    request_patch_signatures: tokio::sync::Mutex<HashMap<String, (usize, usize, u64)>>,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
     last_mutation_error: StdRwLock<Option<String>>,
     local_peer_id: String,

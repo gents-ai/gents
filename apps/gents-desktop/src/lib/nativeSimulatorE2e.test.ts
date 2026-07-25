@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   conversationRowCount,
   findAssistantResponseMarker,
+  isConversationTurnSettled,
 } from "./nativeSimulatorE2e";
 
 describe("findAssistantResponseMarker", () => {
@@ -30,6 +31,33 @@ describe("findAssistantResponseMarker", () => {
     `;
 
     expect(findAssistantResponseMarker(document, "UNIQUE_MARKER")).not.toBeNull();
+  });
+});
+
+describe("isConversationTurnSettled", () => {
+  it("waits for the interrupt control to clear after the response arrives", () => {
+    document.body.innerHTML = `
+      <article data-testid="assistant-message">
+        <div class="message-content">UNIQUE_MARKER</div>
+      </article>
+      <button data-testid="cancel-button">Interrupt</button>
+    `;
+
+    expect(isConversationTurnSettled(document, "UNIQUE_MARKER")).toBe(false);
+
+    document.querySelector('[data-testid="cancel-button"]')?.remove();
+
+    expect(isConversationTurnSettled(document, "UNIQUE_MARKER")).toBe(true);
+  });
+
+  it("does not declare a turn settled before the expected response arrives", () => {
+    document.body.innerHTML = `
+      <article data-testid="assistant-message">
+        <div class="message-content">some other response</div>
+      </article>
+    `;
+
+    expect(isConversationTurnSettled(document, "UNIQUE_MARKER")).toBe(false);
   });
 });
 

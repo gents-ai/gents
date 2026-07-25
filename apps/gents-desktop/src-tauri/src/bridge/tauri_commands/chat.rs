@@ -8,7 +8,7 @@ use super::super::types::{
 };
 
 #[tauri::command]
-pub(crate) fn desktop_session_snapshot(
+pub(crate) async fn desktop_session_snapshot(
     session_id: String,
     agent_did: Option<String>,
     request_id: Option<String>,
@@ -18,6 +18,26 @@ pub(crate) fn desktop_session_snapshot(
         return Ok(None);
     };
 
+    if let (Some(agent_did), Some(request_id)) = (agent_did.as_deref(), request_id.as_deref()) {
+        if let Err(error) = core.refresh_remote_request(agent_did, request_id).await {
+            tracing::warn!(
+                target: "gents_desktop::chat",
+                agent_did,
+                request_id,
+                error = %error,
+                "selected remote request refresh failed; returning the last observed session"
+            );
+        }
+        if let Err(error) = core.refresh_local_request(agent_did, request_id).await {
+            tracing::warn!(
+                target: "gents_desktop::chat",
+                agent_did,
+                request_id,
+                error = %error,
+                "selected local request refresh failed; returning the last observed session"
+            );
+        }
+    }
     let snapshot = core.store().snapshot();
     Ok(build_session_snapshot_from_store_for_agent(
         snapshot.as_ref(),

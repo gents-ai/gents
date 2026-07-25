@@ -46,6 +46,7 @@ export type ChatWorkspaceProps = {
   onRetryMessage?: (content: string) => void;
   onForkedConversation?: (sessionId: string) => void;
   onOpenMobileNavigation?: () => void;
+  onInterruptAccepted?: () => void | Promise<void>;
 };
 
 export type ActiveChatWorkspaceProps = Omit<
@@ -95,6 +96,7 @@ export function ActiveChatWorkspace({
   onRetryMessage,
   onForkedConversation,
   onOpenMobileNavigation,
+  onInterruptAccepted,
 }: ActiveChatWorkspaceProps) {
   const activeBehaviorId =
     selectedBehaviorId ?? selectedDeployment.defaultBehaviorId ?? null;
@@ -193,9 +195,10 @@ export function ActiveChatWorkspace({
             cause: "userCancelled",
             cascade: false,
           });
-          if (result.accepted)
-            setInterruptResultBanner({ text: "Interrupted", tone: "info" });
-          else if (result.alreadyInterrupted)
+          if (result.accepted) {
+            setInterruptResultBanner({ text: "Interrupt requested", tone: "info" });
+            void onInterruptAccepted?.();
+          } else if (result.alreadyInterrupted)
             setInterruptResultBanner({ text: "Already interrupted", tone: "info" });
           return;
         }
@@ -207,7 +210,7 @@ export function ActiveChatWorkspace({
         });
       }
     },
-    [selectedDeployment.agentDid],
+    [onInterruptAccepted, selectedDeployment.agentDid],
   );
 
   // Workspace-level poll so the closed drawer can still raise attention —
@@ -312,6 +315,8 @@ export function ActiveChatWorkspace({
     <OperationsRailProvider tabs={operationsRailTabs}>
       <ChatHeader
         behaviorLabel={behaviorLabel}
+        configuredPeerCount={configuredPeerCount}
+        dialedPeerCount={dialedPeerCount}
         onOpenMobileNavigation={onOpenMobileNavigation}
         runtimeHealth={runtimeHealth}
         selectedConversationTitle={selectedConversationTitle}
@@ -376,7 +381,8 @@ export function ActiveChatWorkspace({
           onAccepted={(at) => {
             setCascade(null);
             void at;
-            setInterruptResultBanner({ text: "Interrupted", tone: "info" });
+            setInterruptResultBanner({ text: "Interrupt requested", tone: "info" });
+            void onInterruptAccepted?.();
           }}
           onAlreadyInterrupted={() => {
             setCascade(null);

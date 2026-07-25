@@ -167,6 +167,42 @@ structure NativeFilesystemBoundaryCase where
   queueAdvancesBeforeBlockerReturns : Bool
   deriving Repr
 
+structure ManagedExecToolBoundaryCase where
+  name : String
+  toolName : String
+  workClass : String
+  boundary : String
+  killScope : String
+  timeoutRequiresKill : Bool
+  cancelRequiresKill : Bool
+  descendantsInTerminationScope : Bool
+  captureDrainBounded : Bool
+  deriving Repr
+
+structure PairingReconcileShutdownBoundaryCase where
+  name : String
+  supervisor : String
+  workClass : String
+  boundary : String
+  perAdminCallTimeoutMs : Nat
+  cancellationObservedInsideSweep : Bool
+  currentAdminFutureDropped : Bool
+  remainingPeersSkipped : Bool
+  shutdownJoinBounded : Bool
+  deriving Repr
+
+structure PairingReconcileSweepSchedulingCase where
+  name : String
+  supervisor : String
+  workClass : String
+  boundary : String
+  maxConcurrentPeerPreparations : Nat
+  peerPreparationBounded : Bool
+  topologyMutationSerialized : Bool
+  stalePeerBlocksReadyPeer : Bool
+  everyPeerResultAccounted : Bool
+  deriving Repr
+
 structure ManagedExecLivenessCase where
   name : String
   trigger : String

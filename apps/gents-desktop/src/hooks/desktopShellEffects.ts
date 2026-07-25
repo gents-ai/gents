@@ -9,6 +9,7 @@ import type {
   P2PHealth,
 } from "../lib/types";
 import {
+  createTrailingRefreshQueue,
   logShellEvent,
   shouldAutoRestartP2P,
   timingConfig,
@@ -150,22 +151,19 @@ export function useDesktopShellEffects({
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    const refreshQueue = createTrailingRefreshQueue(async () => {
+      await refreshSnapshot();
+      const sessionId = selectedSessionIdRef.current;
+      if (sessionId) {
+        await refreshSession(sessionId);
+      }
+    });
 
-    void listenToDesktopClientUpdates(async (event) => {
+    void listenToDesktopClientUpdates(async () => {
       if (disposed) {
         return;
       }
-      if (event.reason === "store" && selectedAgentDid) {
-        await refreshSnapshot();
-        if (selectedSessionId) {
-          await refreshSession(selectedSessionId);
-        }
-        return;
-      }
-      await refreshSnapshot();
-      if (selectedSessionId) {
-        await refreshSession(selectedSessionId);
-      }
+      await refreshQueue.request();
     }).then((cleanup) => {
       if (disposed) {
         cleanup();
@@ -176,6 +174,7 @@ export function useDesktopShellEffects({
 
     return () => {
       disposed = true;
+      refreshQueue.dispose();
       unlisten?.();
     };
   }, [selectedAgentDid, selectedSessionId, selectedTrackedRequestId]);
@@ -285,6 +284,55 @@ export function useDesktopShellEffects({
   useEffect(() => {
     void refreshSession(selectedSessionId);
   }, [selectedSessionId, selectedTrackedRequestId]);
+
+  useEffect(() => {
+    if (!clientAvailable || !selectedSessionId || !selectedTrackedRequestId) {
+      return;
+    }
+
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      await refreshSession(selectedSessionId);
+      if (!disposed) {
+        timer = setTimeout(poll, timingConfig().activeSessionPollMs);
+      }
+    };
+    timer = setTimeout(poll, timingConfig().activeSessionPollMs);
+
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [clientAvailable, selectedSessionId, selectedTrackedRequestId]);
+
+  useEffect(() => {
+    if (!clientAvailable) {
+      return;
+    }
+
+    const refreshForegroundState = () => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+      void refreshSnapshot();
+      if (selectedSessionId) {
+        void refreshSession(selectedSessionId);
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refreshForegroundState();
+      }
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", refreshForegroundState);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", refreshForegroundState);
+    };
+  }, [clientAvailable, selectedSessionId, selectedTrackedRequestId]);
 
   useEffect(() => {
     if (localWorkflow.kind === "submittingRequest" && !sending) {

@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use defra_node::{EmbeddedNode, EventName, QueryResponse};
+use futures::{stream, StreamExt};
 use p2p::iroh::parse_public_peer_addr;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
@@ -26,6 +27,7 @@ use super::{
 };
 
 pub const PAIRING_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
+pub const MAX_CONCURRENT_PEER_PREPARATIONS: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingTickOutcome {
@@ -73,24 +75,61 @@ async fn reconcile_peer_tick_with_replay(
     peer_id: &str,
     force_replay: bool,
 ) -> Result<PairingTickOutcome> {
-    let desired = match store.load_desired(peer_id).await {
+    let prepared =
+        prepare_pairing_peer(admin, store, peer_id.to_string(), None, force_replay).await;
+    reconcile_prepared_peer(admin, store, prepared).await
+}
+
+enum PreparedPairingState {
+    DesiredReadFailed,
+    Ready {
+        desired: Option<PairingDesired>,
+        applied: PairingApplied,
+        reconnected: bool,
+        force_replay: bool,
+    },
+}
+
+struct PairingPeerPreparation {
+    peer_id: String,
+    active_before: bool,
+    state: Result<PreparedPairingState>,
+}
+
+async fn prepare_pairing_peer(
+    admin: &dyn RemoteP2pAdmin,
+    store: &dyn PairingStateStore,
+    peer_id: String,
+    observed_active_before: Option<bool>,
+    force_replay: bool,
+) -> PairingPeerPreparation {
+    let desired = match store.load_desired(&peer_id).await {
         Ok(desired) => desired,
         Err(error) => {
             tracing::warn!(
-                peer_id,
+                peer_id = %peer_id,
                 error = %error,
-                "pairing desired state read failed; skipping reconcile tick"
+                "pairing desired state read failed; skipping reconcile preparation"
             );
-            return Ok(PairingTickOutcome {
-                peer_id: peer_id.to_string(),
-                ops_applied: Vec::new(),
-                replayed_replicators: Vec::new(),
-                desired_read_failed: true,
-            });
+            return PairingPeerPreparation {
+                peer_id,
+                active_before: observed_active_before.unwrap_or(false),
+                state: Ok(PreparedPairingState::DesiredReadFailed),
+            };
         }
     };
     let desired_state = desired.clone().unwrap_or_default();
-    let mut applied = store.load_applied(peer_id).await?;
+    let applied = match store.load_applied(&peer_id).await {
+        Ok(applied) => applied,
+        Err(error) => {
+            return PairingPeerPreparation {
+                peer_id,
+                active_before: observed_active_before.unwrap_or(false),
+                state: Err(error),
+            };
+        }
+    };
+    let mut active_before = observed_active_before.unwrap_or(false);
     let mut reconnected = false;
     if desired_state.has_wiring() && !desired_state.replicator_addresses.is_empty() {
         // Dial when the peer is not already connected OR its signed endpoint
@@ -111,22 +150,32 @@ async fn reconcile_peer_tick_with_replay(
         // applied control-plane pairing).
         let endpoint_changed = !applied.replicator_addresses.is_empty()
             && applied.replicator_addresses != desired_state.replicator_addresses;
-        if !endpoint_changed && peer_already_active(admin, peer_id).await {
-            tracing::debug!(peer_id, "pairing peer already connected; skipping redial");
+        if observed_active_before.is_none() {
+            active_before = peer_already_active(admin, &peer_id).await;
+        }
+        if !endpoint_changed && active_before {
+            tracing::debug!(peer_id = %peer_id, "pairing peer already connected; skipping redial");
         } else {
             let addresses = desired_state
                 .replicator_addresses
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>();
-            admin
+            if let Err(error) = admin
                 .connect(&addresses)
                 .await
-                .context("connect pairing peer")?;
+                .context("connect pairing peer")
+            {
+                return PairingPeerPreparation {
+                    peer_id,
+                    active_before,
+                    state: Err(error),
+                };
+            }
             reconnected = true;
             if endpoint_changed {
                 tracing::info!(
-                    peer_id,
+                    peer_id = %peer_id,
                     previous_addresses = ?applied.replicator_addresses,
                     desired_addresses = ?desired_state.replicator_addresses,
                     "pairing endpoint changed; refreshed peer connection before reconcile"
@@ -134,6 +183,40 @@ async fn reconcile_peer_tick_with_replay(
             }
         }
     }
+
+    PairingPeerPreparation {
+        peer_id,
+        active_before,
+        state: Ok(PreparedPairingState::Ready {
+            desired,
+            applied,
+            reconnected,
+            force_replay,
+        }),
+    }
+}
+
+async fn reconcile_prepared_peer(
+    admin: &dyn RemoteP2pAdmin,
+    store: &dyn PairingStateStore,
+    prepared: PairingPeerPreparation,
+) -> Result<PairingTickOutcome> {
+    let peer_id = prepared.peer_id;
+    let PreparedPairingState::Ready {
+        desired,
+        mut applied,
+        reconnected,
+        force_replay,
+    } = prepared.state?
+    else {
+        return Ok(PairingTickOutcome {
+            peer_id,
+            ops_applied: Vec::new(),
+            replayed_replicators: Vec::new(),
+            desired_read_failed: true,
+        });
+    };
+    let desired_state = desired.clone().unwrap_or_default();
     let actual = read_actual(admin).await?;
 
     // All three collection sets are in name-space: `desired_state` carries names,
@@ -178,16 +261,16 @@ async fn reconcile_peer_tick_with_replay(
     for op in ops {
         apply_op(admin, &op, &desired_state, &actual).await?;
         update_applied_after_success(&mut applied, &op, &desired_state);
-        persist_applied(store, peer_id, &applied).await?;
+        persist_applied(store, &peer_id, &applied).await?;
         ops_applied.push(op);
     }
 
     if desired.is_none() && !applied.is_empty() {
-        store.delete_applied(peer_id).await?;
+        store.delete_applied(&peer_id).await?;
     }
 
     Ok(PairingTickOutcome {
-        peer_id: peer_id.to_string(),
+        peer_id,
         ops_applied,
         replayed_replicators,
         desired_read_failed: false,
@@ -239,13 +322,32 @@ pub async fn run_pairing_reconciler(
     let mut replay_connections = BTreeMap::new();
     let mut failing_peers = BTreeSet::<String>::new();
 
-    sweep_pairings(&admin, &store, &mut replay_connections, &mut failing_peers).await?;
+    if !sweep_pairings_until_cancelled(
+        &admin,
+        &store,
+        &mut replay_connections,
+        &mut failing_peers,
+        &cancel,
+    )
+    .await?
+    {
+        return Ok(());
+    }
 
     loop {
         tokio::select! {
+            biased;
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => {
-                sweep_pairings_logged(&admin, &store, &mut replay_connections, &mut failing_peers).await;
+                if !sweep_pairings_logged_until_cancelled(
+                    &admin,
+                    &store,
+                    &mut replay_connections,
+                    &mut failing_peers,
+                    &cancel,
+                ).await {
+                    return Ok(());
+                }
             }
             message = subscription.recv() => {
                 if message.is_none() {
@@ -256,9 +358,55 @@ pub async fn run_pairing_reconciler(
                 if dropped > 0 {
                     tracing::warn!(dropped, "pairing reconciler update subscription dropped messages");
                 }
-                sweep_pairings_logged(&admin, &store, &mut replay_connections, &mut failing_peers).await;
+                if !sweep_pairings_logged_until_cancelled(
+                    &admin,
+                    &store,
+                    &mut replay_connections,
+                    &mut failing_peers,
+                    &cancel,
+                ).await {
+                    return Ok(());
+                }
             }
         }
+    }
+}
+
+/// Run one full sweep while keeping the supervisor cancellation boundary live.
+///
+/// Each remote admin call has its own timeout, but a sweep can visit many stale
+/// peers. Awaiting the sweep directly therefore multiplies shutdown latency by
+/// the number of peers. Dropping the sweep future on cancellation preempts the
+/// current admin wait and skips the remaining peer loop; the outer runtime can
+/// then join this task promptly.
+async fn sweep_pairings_until_cancelled(
+    admin: &dyn RemoteP2pAdmin,
+    store: &dyn PairingStateStore,
+    replay_connections: &mut BTreeMap<String, bool>,
+    failing_peers: &mut BTreeSet<String>,
+    cancel: &CancellationToken,
+) -> Result<bool> {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Ok(false),
+        result = sweep_pairings(admin, store, replay_connections, failing_peers) => {
+            result?;
+            Ok(true)
+        }
+    }
+}
+
+async fn sweep_pairings_logged_until_cancelled(
+    admin: &dyn RemoteP2pAdmin,
+    store: &dyn PairingStateStore,
+    replay_connections: &mut BTreeMap<String, bool>,
+    failing_peers: &mut BTreeSet<String>,
+    cancel: &CancellationToken,
+) -> bool {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => false,
+        _ = sweep_pairings_logged(admin, store, replay_connections, failing_peers) => true,
     }
 }
 
@@ -287,24 +435,38 @@ async fn sweep_pairings(
     // (avoids re-verifying every signature per peer). Non-fatal on failure: the
     // per-peer gate falls back to a live read.
     store.begin_sweep().await?;
-    for peer_id in store.list_peer_ids().await? {
-        let active_before = peer_already_active(admin, &peer_id).await;
-        // Replay once on daemon startup, and on an inactive -> active edge even
-        // when the remote peer established the connection first. The latter is
-        // essential for bidirectional pairing: relying only on our own dial
-        // would repair whichever direction won the reconnect race and could
-        // leave the opposite direction stale beyond its request-write cap.
-        let force_replay = replay_connections
-            .get(&peer_id)
-            .is_none_or(|was_active| !was_active && active_before);
-        let tick_succeeded = match reconcile_peer_tick_with_replay(
-            admin,
-            store,
-            &peer_id,
-            force_replay,
-        )
-        .await
-        {
+    let preparation_inputs = store
+        .list_peer_ids()
+        .await?
+        .into_iter()
+        .map(|peer_id| {
+            let was_active = replay_connections.get(&peer_id).copied();
+            (peer_id, was_active)
+        })
+        .collect::<Vec<_>>();
+    // Discovery and dial preparation may wait on a stale mobile peer for the
+    // full remote-admin timeout. Prepare independent peers concurrently so a
+    // ready phone can enter the serialized topology-mutation section without
+    // waiting behind every stale peer in lexical order. `buffer_unordered`
+    // bounds remote pressure and yields whichever preparation finishes first.
+    let mut preparations = stream::iter(preparation_inputs.into_iter().map(
+        |(peer_id, was_active)| async move {
+            let active_before = peer_already_active(admin, &peer_id).await;
+            // Replay once on daemon startup, and on an inactive -> active edge
+            // even when the remote peer established the connection first.
+            let force_replay = was_active.is_none_or(|active| !active && active_before);
+            prepare_pairing_peer(admin, store, peer_id, Some(active_before), force_replay).await
+        },
+    ))
+    .buffer_unordered(MAX_CONCURRENT_PEER_PREPARATIONS);
+
+    while let Some(prepared) = preparations.next().await {
+        let peer_id = prepared.peer_id.clone();
+        let active_before = prepared.active_before;
+        // Reconciliation mutates shared DefraDB topology. Consume one prepared
+        // result at a time so those mutations remain ordered even though
+        // discovery/dial preparation is concurrent.
+        let tick_succeeded = match reconcile_prepared_peer(admin, store, prepared).await {
             Ok(outcome) => {
                 if outcome.desired_read_failed {
                     // Desired-state failure performs no topology work, so a
@@ -1600,6 +1762,45 @@ mod tests {
         }
     }
 
+    struct MultiPeerStore {
+        desired: BTreeMap<String, PairingDesired>,
+        applied: Mutex<BTreeMap<String, PairingApplied>>,
+    }
+
+    #[async_trait]
+    impl PairingStateStore for MultiPeerStore {
+        async fn load_desired(&self, peer_id: &str) -> Result<Option<PairingDesired>> {
+            Ok(self.desired.get(peer_id).cloned())
+        }
+
+        async fn load_applied(&self, peer_id: &str) -> Result<PairingApplied> {
+            Ok(self
+                .applied
+                .lock()
+                .unwrap()
+                .get(peer_id)
+                .cloned()
+                .unwrap_or_default())
+        }
+
+        async fn save_applied(&self, peer_id: &str, applied: &PairingApplied) -> Result<()> {
+            self.applied
+                .lock()
+                .unwrap()
+                .insert(peer_id.to_string(), applied.clone());
+            Ok(())
+        }
+
+        async fn delete_applied(&self, peer_id: &str) -> Result<()> {
+            self.applied.lock().unwrap().remove(peer_id);
+            Ok(())
+        }
+
+        async fn list_peer_ids(&self) -> Result<BTreeSet<String>> {
+            Ok(self.desired.keys().cloned().collect())
+        }
+    }
+
     #[derive(Default)]
     struct MockAdmin {
         collections: Mutex<BTreeSet<String>>,
@@ -1613,9 +1814,19 @@ mod tests {
         active: Mutex<Vec<String>>,
         /// When set, `active_peers` fails, exercising the degraded-read path.
         fail_active_peers: bool,
+        /// Test-only barrier proving supervisor cancellation can drop an
+        /// in-flight admin wait instead of waiting for its per-RPC timeout.
+        active_peers_started: Option<Arc<tokio::sync::Notify>>,
+        active_peers_release: Option<Arc<tokio::sync::Notify>>,
         /// When set, `connect` fails after recording the call — modeling the
         /// Linux redial-timeout that motivated the active-peer gate.
         fail_connect: bool,
+        /// Optional address-specific barrier used to prove that one stale
+        /// peer's dial does not head-of-line block a ready peer's sweep.
+        blocked_connect_address: Option<String>,
+        blocked_connect_started: Option<Arc<tokio::sync::Notify>>,
+        blocked_connect_release: Option<Arc<tokio::sync::Notify>>,
+        replicator_installed: Option<Arc<tokio::sync::Notify>>,
         /// Number of upcoming replicator installs to fail. This models the
         /// torn reconnect-replay window where delete succeeds but reinstall
         /// transiently fails; the next topology diff must heal it.
@@ -1629,6 +1840,12 @@ mod tests {
         }
 
         async fn active_peers(&self) -> RemoteP2pAdminResult<Vec<String>> {
+            if let Some(started) = &self.active_peers_started {
+                started.notify_one();
+            }
+            if let Some(release) = &self.active_peers_release {
+                release.notified().await;
+            }
             if self.fail_active_peers {
                 return Err(RemoteP2pAdminError::RpcError("active_peers down".into()));
             }
@@ -1637,6 +1854,18 @@ mod tests {
 
         async fn connect(&self, addresses: &[String]) -> RemoteP2pAdminResult<()> {
             self.connects.lock().unwrap().push(addresses.to_vec());
+            if self
+                .blocked_connect_address
+                .as_ref()
+                .is_some_and(|blocked| addresses.iter().any(|address| address == blocked))
+            {
+                if let Some(started) = &self.blocked_connect_started {
+                    started.notify_one();
+                }
+                if let Some(release) = &self.blocked_connect_release {
+                    release.notified().await;
+                }
+            }
             if self.fail_connect {
                 return Err(RemoteP2pAdminError::RpcTimeout);
             }
@@ -1681,6 +1910,9 @@ mod tests {
                     .lock()
                     .unwrap()
                     .push(DiffOp::InstallReplicator(address.clone()));
+                if let Some(installed) = &self.replicator_installed {
+                    installed.notify_one();
+                }
             }
             Ok(())
         }
@@ -1794,6 +2026,91 @@ mod tests {
         ) -> RemoteP2pAdminResult<()> {
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn cancellation_preempts_in_flight_pairing_sweep_admin_wait() {
+        let store = MockStore::with_desired(Some(PairingDesired::default()));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let admin = MockAdmin {
+            active_peers_started: Some(started.clone()),
+            active_peers_release: Some(release),
+            ..Default::default()
+        };
+        let cancel = CancellationToken::new();
+        let mut replay_connections = BTreeMap::new();
+        let mut failing_peers = BTreeSet::new();
+        let sweep = sweep_pairings_until_cancelled(
+            &admin,
+            &store,
+            &mut replay_connections,
+            &mut failing_peers,
+            &cancel,
+        );
+        tokio::pin!(sweep);
+
+        tokio::select! {
+            _ = started.notified() => {}
+            result = &mut sweep => panic!("sweep returned before admin barrier: {result:?}"),
+        }
+
+        cancel.cancel();
+        let completed = tokio::time::timeout(Duration::from_millis(100), &mut sweep)
+            .await
+            .expect("cancellation must preempt the in-flight admin wait")
+            .expect("cancelled sweep result");
+        assert!(!completed, "cancelled sweep must skip its remaining peers");
+    }
+
+    #[tokio::test]
+    async fn stale_peer_dial_does_not_head_of_line_block_ready_peer() {
+        let desired_for = |address: &str| PairingDesired {
+            replicator_addresses: set(&[address]),
+            replicator_collections: set(&["AgentRequest"]),
+            template_ids: set(&["conversation"]),
+            ..Default::default()
+        };
+        let store = MultiPeerStore {
+            desired: BTreeMap::from([
+                ("peer-a-stale".into(), desired_for("stale-addr")),
+                ("peer-z-ready".into(), desired_for("ready-addr")),
+            ]),
+            applied: Mutex::new(BTreeMap::new()),
+        };
+        let stale_started = Arc::new(tokio::sync::Notify::new());
+        let stale_release = Arc::new(tokio::sync::Notify::new());
+        let replicator_installed = Arc::new(tokio::sync::Notify::new());
+        let admin = MockAdmin {
+            blocked_connect_address: Some("stale-addr".into()),
+            blocked_connect_started: Some(stale_started.clone()),
+            blocked_connect_release: Some(stale_release.clone()),
+            replicator_installed: Some(replicator_installed.clone()),
+            ..Default::default()
+        };
+        let mut replay_connections = BTreeMap::new();
+        let mut failing_peers = BTreeSet::new();
+        let sweep = sweep_pairings(&admin, &store, &mut replay_connections, &mut failing_peers);
+        tokio::pin!(sweep);
+
+        tokio::select! {
+            _ = stale_started.notified() => {}
+            result = &mut sweep => panic!("sweep returned before stale dial barrier: {result:?}"),
+        }
+        tokio::time::timeout(Duration::from_millis(500), replicator_installed.notified())
+            .await
+            .expect("ready peer must install while stale peer dial remains blocked");
+        assert!(
+            admin.replicators.lock().unwrap().contains_key("ready-addr"),
+            "ready peer topology must converge before stale dial is released"
+        );
+
+        stale_release.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), &mut sweep)
+            .await
+            .expect("sweep must finish after stale dial is released")
+            .expect("sweep result");
+        assert!(admin.replicators.lock().unwrap().contains_key("stale-addr"));
     }
 
     #[tokio::test]

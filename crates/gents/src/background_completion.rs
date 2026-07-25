@@ -31,8 +31,21 @@ use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass, ToolCal
 use crate::watcher::{validate_agent_request_subagent_coherence, AgentRequest};
 
 const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";
-const BACKGROUND_COMPLETION_WAKE_PROMPT: &str =
+pub const BACKGROUND_COMPLETION_WAKE_PROMPT: &str =
     "Review pending subagent completion notifications in this session and continue the task if needed.";
+
+/// Returns true when `content` is a runtime-authored background-completion
+/// control message rather than a user-authored chat turn.
+///
+/// These messages remain in the durable transcript because the provider needs
+/// them to resume the parent after a background child finishes. Presentation
+/// adapters should not render them as ordinary user messages.
+pub fn is_background_completion_control_message(content: &str) -> bool {
+    let content = content.trim();
+    content == BACKGROUND_COMPLETION_WAKE_PROMPT
+        || (content.starts_with("<subagent-notification ")
+            && content.ends_with("</subagent-notification>"))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackgroundCompletionOutcome {
@@ -1534,6 +1547,24 @@ mod tests {
 
     const LOCAL_DID: &str = "did:test:local-owner";
     const FOREIGN_DID: &str = "did:test:foreign-owner";
+
+    #[test]
+    fn recognizes_only_reserved_background_completion_control_messages() {
+        assert!(is_background_completion_control_message(
+            BACKGROUND_COMPLETION_WAKE_PROMPT
+        ));
+        assert!(is_background_completion_control_message(
+            r#"<subagent-notification child_request_id="child-1">
+<summary>done</summary>
+</subagent-notification>"#
+        ));
+        assert!(!is_background_completion_control_message(
+            "Please review the completed subagent."
+        ));
+        assert!(!is_background_completion_control_message(
+            "<subagent-notification is only a partial example"
+        ));
+    }
 
     async fn test_node() -> Arc<EmbeddedNode> {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());

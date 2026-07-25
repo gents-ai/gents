@@ -12,6 +12,30 @@ vi.mock("../src/components/backgroundedTools/useOperationsSnapshot", async (orig
 const mockedSnapshot = vi.mocked(useOperationsSnapshot);
 
 describe("session ops", () => {
+  it("reports pairing progress instead of calling an idle transport healthy", () => {
+    render(
+      <ChatHeader
+        selectedSessionId="session-1"
+        selectedConversationTitle="planning"
+        behaviorLabel={null}
+        runtimeHealth={{
+          status: "healthy",
+          connectedPeerCount: 0,
+          replicatorCount: 1,
+          consecutiveFailures: 0,
+        }}
+        configuredPeerCount={2}
+        dialedPeerCount={1}
+        onRenameConversationTitle={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Reconnecting 1/2")).toHaveAttribute(
+      "title",
+      "Transport healthy; 1/2 saved peers dialed; 0 active connections; 1 replicators",
+    );
+  });
+
   it("offers a phone navigation control without changing desktop chat semantics", () => {
     const onOpenMobileNavigation = vi.fn();
     render(

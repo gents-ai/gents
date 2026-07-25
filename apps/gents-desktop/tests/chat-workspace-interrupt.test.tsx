@@ -64,6 +64,7 @@ const baseProps = {
   onRenameConversationTitle: vi.fn(),
   onDraftChange: vi.fn(),
   onSend: vi.fn(),
+  onInterruptAccepted: vi.fn(),
 };
 
 beforeEach(() => {
@@ -127,6 +128,10 @@ describe("ActiveChatWorkspace interrupt flow", () => {
         cause: "userCancelled",
         cascade: false,
       }),
+    );
+    expect(baseProps.onInterruptAccepted).toHaveBeenCalledOnce();
+    expect(await screen.findByTestId("chat-toast")).toHaveTextContent(
+      "Interrupt requested",
     );
   });
 });

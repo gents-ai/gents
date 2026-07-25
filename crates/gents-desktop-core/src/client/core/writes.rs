@@ -15,7 +15,7 @@ use super::super::mutations::{
 };
 use super::super::observe::ObservedStore;
 use super::super::peer_directory::PeerRecord;
-use super::super::query::load_chat_patch_from_graphql;
+use super::super::query::{load_chat_patch, load_chat_patch_from_graphql};
 use super::super::schema::subscribed_collection_names;
 use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::{
@@ -29,6 +29,7 @@ use super::{ClientCore, ClientPeerStatus, PEER_ADD_OPERATION_TIMEOUT};
 
 const REMOTE_REQUEST_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const REMOTE_REQUEST_REFRESH_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
 
 fn is_terminal_lifecycle_state(value: Option<&str>) -> bool {
     matches!(
@@ -570,6 +571,117 @@ impl ClientCore {
             .iter()
             .find(|record| record.agent_did == agent_did)
             .cloned()
+    }
+
+    /// Refresh one selected legacy GraphQL request. Unlike the submit-time
+    /// poller, this path survives app relaunch because the UI can invoke it
+    /// while reconstructing an already-active session.
+    pub async fn refresh_remote_request(
+        &self,
+        agent_did: &str,
+        request_id: &str,
+    ) -> Result<Option<u64>> {
+        let Some(record) = self.peer_record_for_agent(agent_did).await else {
+            return Ok(None);
+        };
+        let Some(graphql) = record
+            .graphql
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(None);
+        };
+        let request_id = request_id.trim();
+        if request_id.is_empty() {
+            return Ok(None);
+        }
+
+        let mut patch = load_chat_patch_from_graphql(graphql, request_id).await?;
+        patch.stamp_source_agent_did(agent_did);
+        let signature = chat_patch_signature(&patch);
+        let cache_key = format!("{agent_did}\0{request_id}");
+        {
+            let mut signatures = self.request_patch_signatures.lock().await;
+            if signatures.get(&cache_key) == Some(&signature) {
+                return Ok(None);
+            }
+            if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
+                signatures.clear();
+            }
+            signatures.insert(cache_key, signature);
+        }
+
+        let (rows, bytes, _hash) = signature;
+        let terminal = patch
+            .request_row(request_id)
+            .is_some_and(|row| is_terminal_lifecycle_state(row.lifecycle_state.as_deref()));
+        let version = self.store.merge_chat_patch(patch);
+        tracing::info!(
+            target: "gents_desktop_core::writes",
+            request_id,
+            agent_did,
+            peer_id = %record.peer_id,
+            peer_label = %record.label,
+            graphql,
+            version,
+            rows,
+            bytes,
+            terminal,
+            "desktop selected remote request patch merged"
+        );
+        Ok(Some(version))
+    }
+
+    /// Re-read one active conversation from the embedded replica. The normal
+    /// observer remains the fast path; this bounded query is a watchdog for
+    /// missed/coalesced notifications during P2P-heavy turns.
+    pub async fn refresh_local_request(
+        &self,
+        agent_did: &str,
+        request_id: &str,
+    ) -> Result<Option<u64>> {
+        let agent_did = agent_did.trim();
+        let request_id = request_id.trim();
+        if agent_did.is_empty() || request_id.is_empty() {
+            return Ok(None);
+        }
+
+        let mut patch = load_chat_patch(self.node.as_ref(), request_id).await?;
+        let rows = patch.row_count();
+        if rows == 0 {
+            return Ok(None);
+        }
+        patch.stamp_source_agent_did(agent_did);
+        let signature = chat_patch_signature(&patch);
+        let cache_key = format!("local\0{agent_did}\0{request_id}");
+        {
+            let mut signatures = self.request_patch_signatures.lock().await;
+            if signatures.get(&cache_key) == Some(&signature) {
+                return Ok(None);
+            }
+            if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
+                signatures.clear();
+            }
+            signatures.insert(cache_key, signature);
+        }
+
+        let (_rows, bytes, _hash) = signature;
+        let terminal = patch
+            .request_row(request_id)
+            .is_some_and(|row| is_terminal_lifecycle_state(row.lifecycle_state.as_deref()));
+        let version = self.store.merge_chat_patch(patch);
+        tracing::debug!(
+            target: "gents_desktop_core::replication",
+            request_id,
+            agent_did,
+            version,
+            rows,
+            bytes,
+            terminal,
+            "desktop selected local request patch merged"
+        );
+        Ok(Some(version))
     }
 
     pub async fn rename_conversation(&self, session_id: &str, title: &str) -> Result<()> {

@@ -11,10 +11,15 @@ test.describe("desktop code experience", () => {
     // edit becomes a diff and its bash call becomes a terminal block.
     const fileEdit = page.getByTestId("code-file-edit");
     await expect(fileEdit).toContainText("src/parser.rs");
+    await expect(fileEdit).not.toHaveAttribute("open", "");
+    await fileEdit.locator("summary").click();
     await expect(page.getByTestId("code-diff")).toContainText("Ast::default()");
 
-    await expect(page.getByTestId("code-command")).toContainText("cargo test parser");
+    const command = page.getByTestId("code-command");
+    await expect(command).toContainText("cargo test parser");
     await expect(page.getByTestId("code-exit")).toHaveText("exit 0");
+    await expect(command).not.toHaveAttribute("open", "");
+    await command.locator("summary").click();
     await expect(page.getByTestId("code-terminal")).toContainText("2 passed");
   });
 
@@ -33,6 +38,7 @@ test.describe("desktop code experience", () => {
     );
     await expect(page.getByTestId("code-context-files")).toHaveText("read-only");
     // The code-aware diff renders inside Code mode as well.
+    await page.getByTestId("code-file-edit").locator("summary").click();
     await expect(page.getByTestId("code-diff")).toBeVisible();
 
     // Back to Chat returns to the plain chat surface (header gone, composer live).

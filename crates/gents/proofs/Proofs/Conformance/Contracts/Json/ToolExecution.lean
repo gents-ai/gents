@@ -32,6 +32,24 @@ def nativeFilesystemBoundaryCaseJson
       ++ boolString witness.queueAdvancesBeforeBlockerReturns
     ++ "}"
 
+def managedExecToolBoundaryCaseJson
+    (witness : ManagedExecToolBoundaryCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"tool_name\":" ++ jsonString witness.toolName ++ ","
+    ++ "\"work_class\":" ++ jsonString witness.workClass ++ ","
+    ++ "\"boundary\":" ++ jsonString witness.boundary ++ ","
+    ++ "\"kill_scope\":" ++ jsonString witness.killScope ++ ","
+    ++ "\"timeout_requires_kill\":"
+      ++ boolString witness.timeoutRequiresKill ++ ","
+    ++ "\"cancel_requires_kill\":"
+      ++ boolString witness.cancelRequiresKill ++ ","
+    ++ "\"descendants_in_termination_scope\":"
+      ++ boolString witness.descendantsInTerminationScope ++ ","
+    ++ "\"capture_drain_bounded\":"
+      ++ boolString witness.captureDrainBounded
+    ++ "}"
+
 def managedExecLivenessCaseJson
     (witness : ManagedExecLivenessCase) : String :=
   "{"

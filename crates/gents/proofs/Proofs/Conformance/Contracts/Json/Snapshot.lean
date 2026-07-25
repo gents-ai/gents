@@ -89,6 +89,17 @@ def snapshotJson : String :=
     ++ "\"native_filesystem_boundary_cases\":"
       ++ jsonArray
         (nativeFilesystemBoundaryCases.map nativeFilesystemBoundaryCaseJson) ++ ","
+    ++ "\"managed_exec_tool_boundary_cases\":"
+      ++ jsonArray
+        (managedExecToolBoundaryCases.map managedExecToolBoundaryCaseJson) ++ ","
+    ++ "\"pairing_reconcile_shutdown_boundary_cases\":"
+      ++ jsonArray
+        (pairingReconcileShutdownBoundaryCases.map
+          pairingReconcileShutdownBoundaryCaseJson) ++ ","
+    ++ "\"pairing_reconcile_sweep_scheduling_cases\":"
+      ++ jsonArray
+        (pairingReconcileSweepSchedulingCases.map
+          pairingReconcileSweepSchedulingCaseJson) ++ ","
     ++ "\"managed_exec_liveness_cases\":"
       ++ jsonArray
         (managedExecLivenessCases.map managedExecLivenessCaseJson) ++ ","
