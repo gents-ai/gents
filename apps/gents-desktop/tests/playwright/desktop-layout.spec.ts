@@ -157,4 +157,40 @@ test.describe("desktop responsive layout guardrails", () => {
     expect(shellScrollTop).toBeGreaterThan(0);
     await expectNoPageHorizontalOverflow(page);
   });
+
+  test("populated-fleet status discovery stays reachable on mobile", async ({
+    page,
+  }) => {
+    test.skip(
+      (page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) > 760,
+      "mobile viewport guardrail",
+    );
+
+    await gotoHarness(page);
+    await page.getByRole("button", { name: "Add Agent", exact: true }).click();
+    await page.getByText("Advanced manual discovery", { exact: true }).click();
+
+    const address = page.getByTestId("fleet-add-server-address");
+    const fetchStatus = page.getByTestId("fleet-fetch-status");
+    await address.scrollIntoViewIfNeeded();
+    await expect(address).toBeVisible();
+    await address.fill("http://studio-1:9191");
+
+    await fetchStatus.scrollIntoViewIfNeeded();
+    await expect(fetchStatus).toBeVisible();
+    await fetchStatus.click({ trial: true });
+
+    const dashboardScroll = await page
+      .getByTestId("fleet-dashboard")
+      .evaluate((element) => ({
+        clientHeight: element.clientHeight,
+        overflowY: getComputedStyle(element).overflowY,
+        scrollHeight: element.scrollHeight,
+        scrollTop: element.scrollTop,
+      }));
+    expect(dashboardScroll.overflowY).toBe("auto");
+    expect(dashboardScroll.scrollHeight).toBeGreaterThan(dashboardScroll.clientHeight);
+    expect(dashboardScroll.scrollTop).toBeGreaterThan(0);
+    await expectNoPageHorizontalOverflow(page);
+  });
 });

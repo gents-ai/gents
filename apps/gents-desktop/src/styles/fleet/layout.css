@@ -397,6 +397,10 @@
   @media (max-width: 760px) {
     .fleet-dashboard {
       gap: var(--space-5);
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior-y: contain;
+      -webkit-overflow-scrolling: touch;
     }
 
     .fleet-brand {
