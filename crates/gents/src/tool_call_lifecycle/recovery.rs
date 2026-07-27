@@ -84,7 +84,7 @@ struct RunningToolCallRow {
     unclaimed_deadline_at: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct ParentRequestRow {
     agent_did: String,
     status: String,
@@ -237,6 +237,11 @@ impl super::ToolCallLifecycle {
     /// already terminal (#837). Unlike full startup `recover_all`, this does
     /// **not** interrupt live-parent background tools (restart-only path).
     ///
+    /// Ordering matches startup `recover_stuck_running_tool_calls` for bridges:
+    /// project an already-terminal child onto the bridge first, so a completed
+    /// child under a just-interrupted parent converges to the same terminal as
+    /// restart recovery rather than being overwritten as cancelled/failed.
+    ///
     /// Covers the durable bad state observed for `fan_out_and_synthesize`:
     /// parent interrupted, outer composite still `running`, no executor active.
     pub async fn reconcile_terminal_parent_owned_tools(
@@ -245,14 +250,37 @@ impl super::ToolCallLifecycle {
     ) -> Result<TerminalParentToolReport> {
         let rows = load_running_tool_call_rows(node).await?;
         let mut report = TerminalParentToolReport::default();
+        let mut parent_cache: std::collections::HashMap<String, Option<ParentRequestRow>> =
+            std::collections::HashMap::new();
 
         for row in rows {
+            // Same precedence as startup recovery: a terminal child owns the
+            // bridge projection even when the parent is already terminal.
+            if recover_bridge_terminal_child(node, agent_did, &row).await? {
+                report.tool_calls_terminalized += 1;
+                tracing::info!(
+                    doc_id = %row.doc_id,
+                    request_id = row.request_id.as_deref().unwrap_or(""),
+                    tool_call_id = %row.tool_call_id,
+                    "reconciled running bridge from already-terminal child"
+                );
+                continue;
+            }
+
             let parent = match row
                 .request_id
                 .as_deref()
                 .filter(|request_id| !request_id.is_empty())
             {
-                Some(request_id) => lookup_parent_request(node, agent_did, request_id).await?,
+                Some(request_id) => {
+                    if let Some(cached) = parent_cache.get(request_id) {
+                        cached.clone()
+                    } else {
+                        let loaded = lookup_parent_request(node, agent_did, request_id).await?;
+                        parent_cache.insert(request_id.to_string(), loaded.clone());
+                        loaded
+                    }
+                }
                 None => None,
             };
             let Some(parent) = parent else {

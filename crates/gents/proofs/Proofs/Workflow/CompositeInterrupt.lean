@@ -24,8 +24,8 @@ pending child cleanup. The bad state — parent terminal while outer is eligible
 as active — is *representable*. Bounded interrupt cleanup excludes it, and
 late normal terminalization cannot overwrite an interrupt terminal.
 
-Meaningfulness comes from induction over `Step` / `Trace`, not from baking
-"outer is cancelled" into a constructor premise.
+Meaningfulness comes from step preservation (and its trace lift), not from
+baking "outer is cancelled" into a constructor premise.
 -/
 
 namespace Workflow
@@ -419,6 +419,17 @@ theorem Step.preserves_interrupt_terminal
       exact ⟨h_canc, h_cause, h_owned⟩
   | recoverTerminalParent h_parent h_outer h_post =>
       rw [h_canc] at h_outer; cases h_outer
+
+/-- Trace lift of `Step.preserves_interrupt_terminal`. -/
+theorem Trace.preserves_interrupt_terminal
+    {pre post : State}
+    (h_term : interruptTerminal pre)
+    (h_trace : Trace pre post) :
+    interruptTerminal post := by
+  induction h_trace with
+  | refl => exact h_term
+  | step h_step _ ih =>
+      exact ih (h_step.preserves_interrupt_terminal h_term)
 
 /-- Explicit cleanup invariant after interrupt post-state construction. -/
 theorem interrupt_post_satisfies_cleanup_invariant (pre : State) :

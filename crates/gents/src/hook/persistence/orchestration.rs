@@ -183,43 +183,67 @@ impl DefraSessionHook {
             }
         };
 
-        if lifecycle.is_cancelled() || lifecycle.is_terminal() {
-            // Interrupt (or recovery) already won the durable race.
+        if lifecycle.is_terminal() {
+            // Interrupt, deadline sweep, or recovery already won the durable race.
             self.discard_in_flight_lifecycle(internal_call_id).await;
-            return Ok(match lifecycle.state() {
-                crate::tool_call_lifecycle::ToolCallState::Cancelled => {
-                    crate::tool_call_lifecycle::runtime::cancelled_result()
-                }
-                crate::tool_call_lifecycle::ToolCallState::TimedOut => {
-                    "tool call deadline exceeded".to_string()
-                }
-                crate::tool_call_lifecycle::ToolCallState::Failed => "tool call failed".to_string(),
-                crate::tool_call_lifecycle::ToolCallState::Completed => {
-                    // Extremely narrow race: another path completed it.
-                    "tool call completed".to_string()
-                }
-                _ => crate::tool_call_lifecycle::runtime::cancelled_result(),
-            });
+            return Ok(self
+                .composite_terminal_payload(session_id, &lifecycle)
+                .await);
         }
 
         match run_result {
             Ok(result) => {
                 lifecycle.complete(&result).await?;
-                if lifecycle.is_cancelled() {
-                    Ok(crate::tool_call_lifecycle::runtime::cancelled_result())
-                } else {
-                    Ok(result)
+                if !lifecycle.is_running() {
+                    // Lost CAS to cancel/timeout/fail: return the durable terminal
+                    // payload, not the would-be success string (#837 review #2).
+                    return Ok(self
+                        .composite_terminal_payload(session_id, &lifecycle)
+                        .await);
                 }
+                Ok(result)
             }
             Err(error) => {
                 let (failure_class, payload) = classify_workflow_run_error(&error);
                 lifecycle.fail(&payload, failure_class).await?;
-                if lifecycle.is_cancelled() {
-                    Ok(crate::tool_call_lifecycle::runtime::cancelled_result())
-                } else {
-                    Ok(payload)
+                if !lifecycle.is_running()
+                    && lifecycle.state() != crate::tool_call_lifecycle::ToolCallState::Failed
+                {
+                    // Lost CAS to cancel/timeout: do not report our failure payload.
+                    return Ok(self
+                        .composite_terminal_payload(session_id, &lifecycle)
+                        .await);
                 }
+                Ok(payload)
             }
+        }
+    }
+
+    /// Model-facing tool result for a durable terminal composite row.
+    async fn composite_terminal_payload(
+        &self,
+        session_id: &str,
+        lifecycle: &ToolCallLifecycle,
+    ) -> String {
+        match lifecycle.state() {
+            crate::tool_call_lifecycle::ToolCallState::Cancelled => {
+                crate::tool_call_lifecycle::runtime::cancelled_result()
+            }
+            crate::tool_call_lifecycle::ToolCallState::TimedOut => {
+                "tool call deadline exceeded".to_string()
+            }
+            crate::tool_call_lifecycle::ToolCallState::Failed => "tool call failed".to_string(),
+            crate::tool_call_lifecycle::ToolCallState::Completed => {
+                // Prefer the durable result when another path completed first.
+                crate::tool_call_lifecycle::query::load_tool_call_result(
+                    &self.node,
+                    session_id,
+                    lifecycle.tool_call_id(),
+                )
+                .await
+                .unwrap_or_else(|_| "tool call completed".to_string())
+            }
+            _ => crate::tool_call_lifecycle::runtime::cancelled_result(),
         }
     }
 
