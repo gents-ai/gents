@@ -7,8 +7,8 @@ shared frontend state, fixture-first sequencing, feature-gating mechanics; read/
 permission splits, E2E capability activation, trust-boundary and
 forward-compatibility language, external distribution-access validation; explicit
 capability enumeration and tag-vs-revision fetch sequencing). Base: the
-iPhone/bearer-pairing
-series (`agent/iphone-amy-bearer-pairing`, six commits ending `e3d19f7a`), which this
+iPhone/bearer-pairing series, merged to `main` as
+[#875](https://github.com/source-inc/gents/pull/875) (squash `1a5e23d5`), which this
 design treats as load-bearing evidence, not incidental history.*
 
 Gents Desktop already keeps its reusable runtime behavior in
@@ -898,8 +898,10 @@ Stated openly rather than buried as implementation detail:
 ## References
 
 Issue: [#877](https://github.com/source-inc/gents/issues/877). Base series:
-`agent/iphone-amy-bearer-pairing` (`54edbe3e…e3d19f7a`) — mobile bearer pairing,
-chat recovery/interrupt routing, responsive shell, agent-browser harness, native
+[#875](https://github.com/source-inc/gents/pull/875) (squash-merged as `1a5e23d5`,
+formerly `agent/iphone-amy-bearer-pairing`) — mobile bearer pairing with
+cryptographically verified reciprocal readiness and relaunch revalidation, chat
+recovery/interrupt routing, responsive shell, agent-browser harness, native
 Simulator E2E. Downstream design: *Amygdala App Platform — Downstream Product on
 Gents* (2026-07-26, Amygdala repository,
 `docs/superpowers/specs/2026-07-26-amygdala-app-platform-design.md`) — two
