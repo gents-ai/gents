@@ -311,7 +311,7 @@ pub struct McpServiceProbeResult {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DerivedCancelCauseView {
     pub cause: String,      // "userCancelled" | "interrupted" | "deadline" | "unknown"

@@ -1,13 +1,14 @@
 use serde::Serialize;
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolServiceToolView {
     pub name: String,
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolServiceTestResult {
     pub service_id: String,
@@ -18,7 +19,7 @@ pub struct ToolServiceTestResult {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskRunResult {
     pub request_doc_id: String,
@@ -30,7 +31,7 @@ pub struct TaskRunResult {
     pub lifecycle_state: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatSendResult {
     pub session_id: String,
@@ -39,8 +40,10 @@ pub struct ChatSendResult {
     pub behavior_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientUpdateEvent {
+    /// Coarse ping reason: store | health | lifecycle | config.
+    #[ts(type = "string")]
     pub reason: &'static str,
 }

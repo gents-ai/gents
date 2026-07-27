@@ -20,6 +20,15 @@ serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# Phase-2 spike chose ts-rs over typeshare: serde-compat handles rename_all /
+# tagged enums (RenderedTimelineItem) without hand-written attributes; chrono
+# and uuid have first-party features. Full view-model coverage lands as types
+# grow #[derive(TS)] in the phase-3 window.
+ts-rs = { version = "10.1", default-features = false, features = [
+    "serde-compat",
+    "chrono-impl",
+    "no-serde-warnings",
+] }
 uuid.workspace = true
 
 [dev-dependencies]

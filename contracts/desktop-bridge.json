@@ -1,0 +1,334 @@
+{
+  "commands": [
+    {
+      "name": "desktop_bridge_contract",
+      "permissionSet": "core"
+    },
+    {
+      "name": "desktop_bootstrap_summary",
+      "permissionSet": "core"
+    },
+    {
+      "name": "desktop_client_snapshot",
+      "permissionSet": "core"
+    },
+    {
+      "name": "desktop_observer_metrics",
+      "permissionSet": "core"
+    },
+    {
+      "name": "desktop_client_start",
+      "permissionSet": "client-lifecycle"
+    },
+    {
+      "name": "desktop_client_shutdown",
+      "permissionSet": "client-lifecycle"
+    },
+    {
+      "name": "desktop_set_selected_agent",
+      "permissionSet": "client-lifecycle"
+    },
+    {
+      "name": "desktop_init_local_standard",
+      "permissionSet": "runtime-admin"
+    },
+    {
+      "name": "desktop_session_snapshot",
+      "permissionSet": "session-read"
+    },
+    {
+      "name": "desktop_request_timeline",
+      "permissionSet": "trace-read"
+    },
+    {
+      "name": "desktop_tool_surface_explain",
+      "permissionSet": "tool-surface-read"
+    },
+    {
+      "name": "desktop_chat_send",
+      "permissionSet": "chat-write"
+    },
+    {
+      "name": "desktop_conversation_rename",
+      "permissionSet": "chat-write"
+    },
+    {
+      "name": "desktop_session_fork",
+      "permissionSet": "chat-write"
+    },
+    {
+      "name": "desktop_request_resend",
+      "permissionSet": "resend-control"
+    },
+    {
+      "name": "desktop_peer_status_fetch",
+      "permissionSet": "fleet-read"
+    },
+    {
+      "name": "desktop_network_status",
+      "permissionSet": "fleet-read"
+    },
+    {
+      "name": "desktop_workspace_list",
+      "permissionSet": "workspace-read"
+    },
+    {
+      "name": "desktop_peer_add",
+      "permissionSet": "fleet-admin"
+    },
+    {
+      "name": "desktop_peer_pair_bearer",
+      "permissionSet": "fleet-admin"
+    },
+    {
+      "name": "desktop_peer_remove",
+      "permissionSet": "fleet-admin"
+    },
+    {
+      "name": "desktop_peer_rename",
+      "permissionSet": "fleet-admin"
+    },
+    {
+      "name": "desktop_p2p_repair",
+      "permissionSet": "fleet-admin"
+    },
+    {
+      "name": "desktop_operations_snapshot",
+      "permissionSet": "operations-read"
+    },
+    {
+      "name": "desktop_list_subagent_tree",
+      "permissionSet": "operations-read"
+    },
+    {
+      "name": "desktop_list_backends_with_health",
+      "permissionSet": "operations-read"
+    },
+    {
+      "name": "desktop_list_mcp_services_with_health",
+      "permissionSet": "operations-read"
+    },
+    {
+      "name": "desktop_probe_mcp_service",
+      "permissionSet": "operations-read"
+    },
+    {
+      "name": "desktop_preview_interrupt_cascade",
+      "permissionSet": "interrupt-read"
+    },
+    {
+      "name": "desktop_interrupt_request",
+      "permissionSet": "interrupt-control"
+    },
+    {
+      "name": "desktop_list_tool_call_holds",
+      "permissionSet": "holds-read"
+    },
+    {
+      "name": "desktop_resolve_tool_call_hold",
+      "permissionSet": "holds-control"
+    },
+    {
+      "name": "desktop_agent_config_save",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_behavior_save",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_skill_save",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_skill_delete",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_task_delete",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_schedule_delete",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_event_trigger_delete",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_backend_delete",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_inference_profile_delete",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_tool_selection_delete",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_tool_service_delete",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_behavior_delete",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_backend_save",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_inference_profile_save",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_tool_selection_save",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_tool_service_save",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_tool_service_test",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_task_save",
+      "permissionSet": "tasks"
+    },
+    {
+      "name": "desktop_schedule_save",
+      "permissionSet": "tasks"
+    },
+    {
+      "name": "desktop_schedule_run",
+      "permissionSet": "tasks"
+    },
+    {
+      "name": "desktop_event_trigger_save",
+      "permissionSet": "tasks"
+    },
+    {
+      "name": "desktop_task_run",
+      "permissionSet": "tasks"
+    },
+    {
+      "name": "desktop_native_e2e_config",
+      "permissionSet": "native-e2e"
+    },
+    {
+      "name": "desktop_native_e2e_status",
+      "permissionSet": "native-e2e"
+    }
+  ],
+  "contractVersion": "0.1",
+  "errorCodes": [
+    "clientNotRunning",
+    "clientStartFailed",
+    "notFound",
+    "invalidArgument",
+    "unsupported",
+    "endpointUnreachable",
+    "stalePreview",
+    "cascadeDepthExceeded",
+    "pathEscapesRoot",
+    "backend",
+    "unknown"
+  ],
+  "eventReasons": [
+    "store",
+    "health",
+    "lifecycle",
+    "config"
+  ],
+  "events": [
+    "desktop://client-updated"
+  ],
+  "packageVersion": "0.8.0",
+  "permissionSets": [
+    {
+      "kind": "read",
+      "name": "core"
+    },
+    {
+      "kind": "mutate",
+      "name": "client-lifecycle"
+    },
+    {
+      "kind": "mutate",
+      "name": "runtime-admin"
+    },
+    {
+      "kind": "read",
+      "name": "session-read"
+    },
+    {
+      "kind": "read",
+      "name": "trace-read"
+    },
+    {
+      "kind": "read",
+      "name": "tool-surface-read"
+    },
+    {
+      "kind": "mutate",
+      "name": "chat-write"
+    },
+    {
+      "kind": "mutate",
+      "name": "resend-control"
+    },
+    {
+      "kind": "read",
+      "name": "fleet-read"
+    },
+    {
+      "kind": "read",
+      "name": "workspace-read"
+    },
+    {
+      "kind": "mutate",
+      "name": "fleet-admin"
+    },
+    {
+      "kind": "read",
+      "name": "operations-read"
+    },
+    {
+      "kind": "read",
+      "name": "interrupt-read"
+    },
+    {
+      "kind": "mutate",
+      "name": "interrupt-control"
+    },
+    {
+      "kind": "read",
+      "name": "holds-read"
+    },
+    {
+      "kind": "mutate",
+      "name": "holds-control"
+    },
+    {
+      "kind": "read",
+      "name": "config-read"
+    },
+    {
+      "kind": "mutate",
+      "name": "config-write"
+    },
+    {
+      "kind": "mutate",
+      "name": "tasks"
+    },
+    {
+      "kind": "mutate",
+      "name": "native-e2e"
+    }
+  ]
+}

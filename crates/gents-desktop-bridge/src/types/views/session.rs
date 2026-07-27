@@ -1,4 +1,5 @@
 use serde::Serialize;
+use ts_rs::TS;
 
 use super::operations::DerivedCancelCauseView;
 
@@ -40,7 +41,7 @@ pub struct ToolCallView {
     pub cancel_cause: Option<DerivedCancelCauseView>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandDenialView {
     pub category: String,
@@ -56,21 +57,21 @@ pub struct CommandDenialView {
     pub diagnostic: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolDetailFieldView {
     pub key: String,
     pub value: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolDetailValueView {
     pub raw_text: String,
     pub fields: Vec<ToolDetailFieldView>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderedToolCallView {
     pub item_key: String,
@@ -127,15 +128,17 @@ pub struct PendingTurnView {
     pub created_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum RenderedTimelineItem {
+    #[serde(rename_all = "camelCase")]
     UserMessage {
         item_key: String,
         sequence: Option<i64>,
         content: String,
         timestamp: Option<String>,
     },
+    #[serde(rename_all = "camelCase")]
     AssistantMessage {
         item_key: String,
         sequence: Option<i64>,
@@ -143,11 +146,13 @@ pub enum RenderedTimelineItem {
         reasoning: Option<String>,
         timestamp: Option<String>,
     },
+    #[serde(rename_all = "camelCase")]
     ToolGroup {
         item_key: String,
         message_sequence: Option<i64>,
         tools: Vec<RenderedToolCallView>,
     },
+    #[serde(rename_all = "camelCase")]
     PendingUserTurn {
         item_key: String,
         request_id: String,
@@ -156,6 +161,7 @@ pub enum RenderedTimelineItem {
         lifecycle_state: Option<String>,
         created_at: Option<String>,
     },
+    #[serde(rename_all = "camelCase")]
     LiveAssistant {
         item_key: String,
         content: Option<String>,
