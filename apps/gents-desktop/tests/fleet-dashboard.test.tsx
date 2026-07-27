@@ -40,7 +40,7 @@ describe("FleetDashboard add connection flow", () => {
         starting={false}
         onAddPeer={vi.fn()}
         onPairBearer={vi.fn()}
-        onFetchPeerStatus={vi.fn()}
+        onProbePeerAddress={vi.fn()}
         onInitLocalRuntime={onInitLocalRuntime}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -56,7 +56,7 @@ describe("FleetDashboard add connection flow", () => {
   });
 
   it("discovers peer connection details from a server /status address", async () => {
-    const onFetchPeerStatus = vi.fn(async () => ({
+    const onProbePeerAddress = vi.fn(async () => ({
       agent_name: "worker-a",
       agent_did: "did:key:z6MkWorkerA",
       desktop_graphql: "http://127.0.0.1:9181/api/v0/graphql",
@@ -77,7 +77,7 @@ describe("FleetDashboard add connection flow", () => {
         starting={false}
         onAddPeer={onAddPeer}
         onPairBearer={vi.fn()}
-        onFetchPeerStatus={onFetchPeerStatus}
+        onProbePeerAddress={onProbePeerAddress}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -91,7 +91,7 @@ describe("FleetDashboard add connection flow", () => {
     fireEvent.click(screen.getByTestId("fleet-add-submit"));
 
     await waitFor(() => {
-      expect(onFetchPeerStatus).toHaveBeenCalledWith("http://127.0.0.1:9181");
+      expect(onProbePeerAddress).toHaveBeenCalledWith("http://127.0.0.1:9181");
       expect(onAddPeer).toHaveBeenCalledWith({
         label: "worker-a",
         agentDid: "did:key:z6MkWorkerA",
@@ -102,7 +102,7 @@ describe("FleetDashboard add connection flow", () => {
   });
 
   it("lets users preview discovered /status details before adding", async () => {
-    const onFetchPeerStatus = vi.fn(async () => ({
+    const onProbePeerAddress = vi.fn(async () => ({
       agent_name: "api-gateway",
       agent_did: "did:key:z6MkGateway",
       p2p_shareable_address: "iroh://gateway",
@@ -119,7 +119,7 @@ describe("FleetDashboard add connection flow", () => {
         starting={false}
         onAddPeer={vi.fn()}
         onPairBearer={vi.fn()}
-        onFetchPeerStatus={onFetchPeerStatus}
+        onProbePeerAddress={onProbePeerAddress}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -148,7 +148,7 @@ describe("FleetDashboard add connection flow", () => {
   });
 
   it("surfaces a P2P-disabled discovery result beside the fetch controls", async () => {
-    const onFetchPeerStatus = vi.fn(async () => ({
+    const onProbePeerAddress = vi.fn(async () => ({
       agent_name: "amy",
       agent_did: "did:key:z6MkAmy",
       p2p_transport: "none",
@@ -169,7 +169,7 @@ describe("FleetDashboard add connection flow", () => {
         starting={false}
         onAddPeer={vi.fn()}
         onPairBearer={vi.fn()}
-        onFetchPeerStatus={onFetchPeerStatus}
+        onProbePeerAddress={onProbePeerAddress}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -194,7 +194,7 @@ describe("FleetDashboard add connection flow", () => {
   });
 
   it("saves a typed GraphQL endpoint when manually adding a peer", async () => {
-    const onFetchPeerStatus = vi.fn();
+    const onProbePeerAddress = vi.fn();
     const onAddPeer = vi.fn(async () => undefined);
 
     render(
@@ -208,7 +208,7 @@ describe("FleetDashboard add connection flow", () => {
         starting={false}
         onAddPeer={onAddPeer}
         onPairBearer={vi.fn()}
-        onFetchPeerStatus={onFetchPeerStatus}
+        onProbePeerAddress={onProbePeerAddress}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -233,7 +233,7 @@ describe("FleetDashboard add connection flow", () => {
     fireEvent.click(screen.getByTestId("fleet-add-submit"));
 
     await waitFor(() => {
-      expect(onFetchPeerStatus).not.toHaveBeenCalled();
+      expect(onProbePeerAddress).not.toHaveBeenCalled();
       expect(onAddPeer).toHaveBeenCalledWith({
         label: "studio-1-steward",
         agentDid: "did:key:z6MkStudio",
@@ -275,7 +275,7 @@ describe("FleetDashboard add connection flow", () => {
         starting={false}
         onAddPeer={vi.fn()}
         onPairBearer={onPairBearer}
-        onFetchPeerStatus={vi.fn()}
+        onProbePeerAddress={vi.fn()}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -314,7 +314,7 @@ describe("FleetDashboard fleet-level P2P repair", () => {
         starting={false}
         onAddPeer={vi.fn()}
         onPairBearer={vi.fn()}
-        onFetchPeerStatus={vi.fn()}
+        onProbePeerAddress={vi.fn()}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}

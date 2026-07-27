@@ -40,13 +40,16 @@ describe("previewInterruptCascade", () => {
       agentDid: "did:test:op",
       includeTerminal: true,
     });
-    expect(mockedInvoke).toHaveBeenCalledWith("desktop_preview_interrupt_cascade", {
-      request: {
-        requestId: "req_root",
-        agentDid: "did:test:op",
-        includeTerminal: true,
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "plugin:gents-desktop-bridge|desktop_preview_interrupt_cascade",
+      {
+        request: {
+          requestId: "req_root",
+          agentDid: "did:test:op",
+          includeTerminal: true,
+        },
       },
-    });
+    );
     expect(result.rootRequestId).toBe("req_root");
   });
 });
@@ -69,14 +72,17 @@ describe("interruptRequest", () => {
       cause: "userCancelled",
       cascade: false,
     });
-    expect(mockedInvoke).toHaveBeenCalledWith("desktop_interrupt_request", {
-      request: {
-        requestId: "req_root",
-        agentDid: "did:test:op",
-        cause: "userCancelled",
-        cascade: false,
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "plugin:gents-desktop-bridge|desktop_interrupt_request",
+      {
+        request: {
+          requestId: "req_root",
+          agentDid: "did:test:op",
+          cause: "userCancelled",
+          cascade: false,
+        },
       },
-    });
+    );
     expect(result.accepted).toBe(true);
   });
 
@@ -93,13 +99,16 @@ describe("interruptRequest", () => {
       cascade: true,
       expectedPreviewSignature: "sig123",
     });
-    expect(mockedInvoke).toHaveBeenCalledWith("desktop_interrupt_request", {
-      request: {
-        requestId: "req_root",
-        cause: "userCancelled",
-        cascade: true,
-        expectedPreviewSignature: "sig123",
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "plugin:gents-desktop-bridge|desktop_interrupt_request",
+      {
+        request: {
+          requestId: "req_root",
+          cause: "userCancelled",
+          cascade: true,
+          expectedPreviewSignature: "sig123",
+        },
       },
-    });
+    );
   });
 });
