@@ -333,9 +333,11 @@ manages its own state, declares its own permissions, and composes with any numbe
 host plugins and commands without touching the host's invoke handler. The cost is
 that invoke paths change from `desktop_chat_send` to
 `plugin:gents-desktop-bridge|desktop_chat_send`. That rename is contained entirely
-inside `@source-inc/gents-desktop-client` (the only code that speaks command
-strings) and lands in the same PR that plugin-izes the bridge, so no consumer outside
-the client package ever observes it.
+inside the transport layer — the only code that speaks command strings —
+which is `desktop-api.ts` when the rename lands (phase 3) and
+`@source-inc/gents-desktop-client` once it is extracted (phase 5); it ships in the
+same PR that plugin-izes the bridge, so no consumer outside that layer ever
+observes it.
 
 ### Capability-scoped permissions
 
