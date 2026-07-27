@@ -393,6 +393,12 @@ fn rebind_manifest_agent_did(manifest: &mut DesiredStateManifest, target_did: &s
 /// Rewrite DIDs embedded in `subagent_targets` JSON entries that match a
 /// source/local DID being rebound. Malformed entries are preserved so desired-
 /// state validation can still report the precise parse error.
+///
+/// Rebound entries are round-tripped through [`gents::SubagentTarget`], so key
+/// order is normalized and any unknown JSON fields on the original entry are
+/// dropped. Extra fields are inert under today's validation (which parses the
+/// same struct); if the type gains optionals, older CLIs rebinding newer
+/// manifests would strip those fields on rewrite.
 fn rebind_subagent_target_dids(
     entries: &mut [String],
     source_local_dids: &BTreeSet<String>,

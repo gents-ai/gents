@@ -644,7 +644,6 @@ async fn config_validate_bind_home_rebinds_same_deployment_subagent_target_dids(
             ),
             ("glm52", source_did, "glm52", None),
         ],
-        false,
     )?;
 
     let output = run_cli_json(
@@ -710,7 +709,6 @@ async fn config_validate_bind_home_still_rejects_remote_subagent_target() -> Res
             "amy-research",
             None,
         )],
-        false,
     )?;
 
     let report = run_cli_failure_stdout_json(
@@ -748,14 +746,13 @@ async fn config_validate_bind_home_still_rejects_remote_subagent_target() -> Res
 }
 
 fn write_rebindable_manifest_root(root: &std::path::Path, agent_did: &str) -> Result<()> {
-    write_rebindable_manifest_root_with_subagent_targets(root, agent_did, &[], false)
+    write_rebindable_manifest_root_with_subagent_targets(root, agent_did, &[])
 }
 
 fn write_rebindable_manifest_root_with_subagent_targets(
     root: &std::path::Path,
     agent_did: &str,
     targets: &[(&str, &str, &str, Option<&str>)],
-    allow_cross_deployment: bool,
 ) -> Result<()> {
     fs::create_dir_all(root)?;
     let default_behavior_id = "default";
@@ -821,7 +818,7 @@ fn write_rebindable_manifest_root_with_subagent_targets(
             "enable_meta_tools": true,
             "subagent_spawn_enabled": subagent_spawn_enabled,
             "subagent_targets": subagent_targets,
-            "subagent_allow_cross_deployment": allow_cross_deployment
+            "subagent_allow_cross_deployment": false
         }),
     )?;
     write_json_file(
