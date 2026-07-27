@@ -394,23 +394,34 @@ fn rebind_manifest_agent_did(manifest: &mut DesiredStateManifest, target_did: &s
 /// source/local DID being rebound. Malformed entries are preserved so desired-
 /// state validation can still report the precise parse error.
 ///
-/// Rebound entries are round-tripped through [`gents::SubagentTarget`], so key
-/// order is normalized and any unknown JSON fields on the original entry are
-/// dropped. Extra fields are inert under today's validation (which parses the
-/// same struct); if the type gains optionals, older CLIs rebinding newer
-/// manifests would strip those fields on rewrite.
+/// Only the `agent_did` field is mutated on the raw JSON object so unknown
+/// fields, key order, and optional extensions survive rebind (and so already-
+/// bound entries that already equal `target_did` are left byte-identical).
 fn rebind_subagent_target_dids(
     entries: &mut [String],
     source_local_dids: &BTreeSet<String>,
     target_did: &str,
 ) {
     for entry in entries {
-        let Ok(mut target) = gents::SubagentTarget::parse(entry) else {
+        let Ok(mut value) = serde_json::from_str::<Value>(entry) else {
             continue;
         };
-        if source_local_dids.contains(target.agent_did.trim()) {
-            target.agent_did = target_did.to_string();
-            *entry = target.to_entry();
+        let Some(object) = value.as_object_mut() else {
+            continue;
+        };
+        let Some(current_did) = object.get("agent_did").and_then(Value::as_str) else {
+            continue;
+        };
+        let current_did = current_did.trim();
+        if current_did == target_did || !source_local_dids.contains(current_did) {
+            continue;
+        }
+        object.insert(
+            "agent_did".to_string(),
+            Value::String(target_did.to_string()),
+        );
+        if let Ok(rewritten) = serde_json::to_string(&value) {
+            *entry = rewritten;
         }
     }
 }
@@ -429,7 +440,7 @@ mod tests {
     };
     use gents::{subagent_target_entry, SubagentTarget};
 
-    const SOURCE_DID: &str = "did:defra-agent:amy";
+    const SOURCE_DID: &str = "did:test:amy";
     const TARGET_DID: &str = "did:key:z6MkiResolvedRuntimeDid";
     const REMOTE_DID: &str = "did:key:z6MkRemoteOtherDeployment";
 
@@ -626,6 +637,53 @@ mod tests {
         // The well-formed same-deployment target was still rebound.
         let ok = SubagentTarget::parse(&selection.subagent_targets[0]).unwrap();
         assert_eq!(ok.agent_did, TARGET_DID);
+    }
+
+    #[test]
+    fn rebind_preserves_unknown_subagent_target_fields() {
+        // Future optional fields / author extensions must survive rebind; only
+        // agent_did is rewritten on the raw JSON object.
+        let entry_with_extension = format!(
+            r#"{{"name":"helper","agent_did":"{SOURCE_DID}","behavior_id":"helper","description":"keeps me","future_flag":true,"extra_meta":{{"k":1}}}}"#
+        );
+        let mut manifest = empty_manifest(SOURCE_DID);
+        manifest.agent_behaviors.push(sample_behavior(SOURCE_DID));
+        manifest
+            .tool_selections
+            .push(sample_selection(SOURCE_DID, vec![entry_with_extension]));
+
+        rebind_manifest_agent_did(&mut manifest, TARGET_DID);
+
+        let rewritten = &manifest.tool_selections[0].subagent_targets[0];
+        let value: Value = serde_json::from_str(rewritten).unwrap();
+        assert_eq!(
+            value.get("agent_did").and_then(Value::as_str),
+            Some(TARGET_DID)
+        );
+        assert_eq!(value.get("name").and_then(Value::as_str), Some("helper"));
+        assert_eq!(
+            value.get("behavior_id").and_then(Value::as_str),
+            Some("helper")
+        );
+        assert_eq!(
+            value.get("description").and_then(Value::as_str),
+            Some("keeps me")
+        );
+        assert_eq!(value.get("future_flag").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value
+                .pointer("/extra_meta/k")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+
+        // Already-bound entry must not be reserialized (byte-identical).
+        let already_bound = rewritten.clone();
+        rebind_manifest_agent_did(&mut manifest, TARGET_DID);
+        assert_eq!(
+            manifest.tool_selections[0].subagent_targets[0], already_bound,
+            "second rebind must leave already-bound target entry byte-identical"
+        );
     }
 
     #[test]

@@ -631,7 +631,7 @@ async fn config_validate_bind_home_rebinds_same_deployment_subagent_target_dids(
     let init = run_init_json(&home_dir, &["--identity-only", "--agent-name", "amy"])?;
     let agent_did = agent_did_from_init(&init)?;
     let explicit_home = home_dir.join(".gents");
-    let source_did = "did:defra-agent:amy";
+    let source_did = "did:test:amy";
     write_rebindable_manifest_root_with_subagent_targets(
         &root,
         source_did,
@@ -699,7 +699,7 @@ async fn config_validate_bind_home_still_rejects_remote_subagent_target() -> Res
 
     run_init_json(&home_dir, &["--identity-only", "--agent-name", "amy"])?;
     let explicit_home = home_dir.join(".gents");
-    let source_did = "did:defra-agent:amy";
+    let source_did = "did:test:amy";
     write_rebindable_manifest_root_with_subagent_targets(
         &root,
         source_did,
