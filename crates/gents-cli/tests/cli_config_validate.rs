@@ -618,7 +618,142 @@ async fn config_validate_bind_home_rejects_concrete_manifest_did_without_force()
     Ok(())
 }
 
+/// Regression for #876: same-deployment `subagent_targets` DIDs must rebind
+/// with the selection DID so post-bind validation no longer misclassifies them
+/// as remote cross-deployment targets.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_validate_bind_home_rebinds_same_deployment_subagent_target_dids() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("amy");
+    fs::create_dir_all(&home_dir)?;
+
+    let init = run_init_json(&home_dir, &["--identity-only", "--agent-name", "amy"])?;
+    let agent_did = agent_did_from_init(&init)?;
+    let explicit_home = home_dir.join(".gents");
+    let source_did = "did:test:amy";
+    write_rebindable_manifest_root_with_subagent_targets(
+        &root,
+        source_did,
+        &[
+            (
+                "session-classifier",
+                source_did,
+                "session-classifier",
+                Some("Classifies the active session"),
+            ),
+            ("glm52", source_did, "glm52", None),
+        ],
+    )?;
+
+    let output = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "validate",
+            "--root",
+            root.to_str().expect("utf-8 manifest root"),
+            "--home",
+            explicit_home.to_str().expect("utf-8 home"),
+            "--bind-agent-did",
+            "home",
+            "--force-rebind-concrete-did",
+        ],
+    )?;
+
+    assert_eq!(
+        output.get("status").and_then(Value::as_str),
+        Some("validated"),
+        "post-bind validation must succeed for same-deployment subagent targets: {output}"
+    );
+    assert_eq!(output.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        output.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    let errors = output
+        .get("errors")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !errors.iter().any(|error| {
+            error
+                .as_str()
+                .is_some_and(|msg| msg.contains("cross-deployment subagent delegation is deferred"))
+        }),
+        "same-deployment targets must not be misclassified as remote after rebind: {errors:?}"
+    );
+
+    Ok(())
+}
+
+/// Cross-deployment guard must still reject a truly remote target after rebind
+/// when `subagent_allow_cross_deployment` is false.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_validate_bind_home_still_rejects_remote_subagent_target() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("amy");
+    fs::create_dir_all(&home_dir)?;
+
+    run_init_json(&home_dir, &["--identity-only", "--agent-name", "amy"])?;
+    let explicit_home = home_dir.join(".gents");
+    let source_did = "did:test:amy";
+    write_rebindable_manifest_root_with_subagent_targets(
+        &root,
+        source_did,
+        &[(
+            "remote-researcher",
+            "did:key:z6MkRemoteOtherDeployment",
+            "amy-research",
+            None,
+        )],
+    )?;
+
+    let report = run_cli_failure_stdout_json(
+        &home_dir,
+        &[
+            "config",
+            "validate",
+            "--root",
+            root.to_str().expect("utf-8 manifest root"),
+            "--home",
+            explicit_home.to_str().expect("utf-8 home"),
+            "--bind-agent-did",
+            "home",
+            "--force-rebind-concrete-did",
+        ],
+    )?;
+
+    assert_eq!(report.get("ok").and_then(Value::as_bool), Some(false));
+    let errors = report
+        .get("errors")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        errors.iter().any(|error| {
+            error.as_str().is_some_and(|msg| {
+                msg.contains("cross-deployment subagent delegation is deferred")
+                    && msg.contains("remote-researcher")
+            })
+        }),
+        "expected remote target rejection after rebind, got {errors:?}"
+    );
+
+    Ok(())
+}
+
 fn write_rebindable_manifest_root(root: &std::path::Path, agent_did: &str) -> Result<()> {
+    write_rebindable_manifest_root_with_subagent_targets(root, agent_did, &[])
+}
+
+fn write_rebindable_manifest_root_with_subagent_targets(
+    root: &std::path::Path,
+    agent_did: &str,
+    targets: &[(&str, &str, &str, Option<&str>)],
+) -> Result<()> {
     fs::create_dir_all(root)?;
     let default_behavior_id = "default";
     let tool_selection_id = "default-tools";
@@ -651,6 +786,20 @@ fn write_rebindable_manifest_root(root: &std::path::Path, agent_did: &str) -> Re
             "enabled": true
         }),
     )?;
+
+    let subagent_targets: Vec<String> = targets
+        .iter()
+        .map(|(name, target_did, behavior_id, description)| {
+            gents::subagent_target_entry(
+                *name,
+                *target_did,
+                *behavior_id,
+                description.map(str::to_string),
+            )
+        })
+        .collect();
+    let subagent_spawn_enabled = !subagent_targets.is_empty();
+
     write_json_file(
         &root
             .join("tool-selections")
@@ -666,7 +815,10 @@ fn write_rebindable_manifest_root(root: &std::path::Path, agent_did: &str) -> Re
             "enable_bash": true,
             "bash_mode": "ReadOnly",
             "cli_tool_names": [],
-            "enable_meta_tools": true
+            "enable_meta_tools": true,
+            "subagent_spawn_enabled": subagent_spawn_enabled,
+            "subagent_targets": subagent_targets,
+            "subagent_allow_cross_deployment": false
         }),
     )?;
     write_json_file(
