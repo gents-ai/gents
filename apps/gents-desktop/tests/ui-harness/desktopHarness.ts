@@ -630,6 +630,14 @@ export function createDesktopUiHarness(
         graphql: "http://127.0.0.1:9181/api/v0/graphql",
       };
     },
+    async probePeerAddress() {
+      return {
+        label: "Bombadil UI Agent",
+        agentDid: AGENT_DID,
+        addr: "/ip4/127.0.0.1/tcp/9292",
+        graphql: "http://127.0.0.1:9181/api/v0/graphql",
+      };
+    },
     async repairP2P() {
       notify("runtime");
       return snapshot();

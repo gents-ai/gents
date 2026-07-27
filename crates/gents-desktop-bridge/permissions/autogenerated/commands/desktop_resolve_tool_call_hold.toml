@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-resolve-tool-call-hold"
+description = "Enables the desktop_resolve_tool_call_hold command without any pre-configured scope."
+commands.allow = ["desktop_resolve_tool_call_hold"]
+
+[[permission]]
+identifier = "deny-desktop-resolve-tool-call-hold"
+description = "Denies the desktop_resolve_tool_call_hold command without any pre-configured scope."
+commands.deny = ["desktop_resolve_tool_call_hold"]

@@ -1,0 +1,1098 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PermissionFile",
+  "description": "Permission file that can define a default permission, a set of permissions or a list of inlined permissions.",
+  "type": "object",
+  "properties": {
+    "default": {
+      "description": "The default permission set for the plugin",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/DefaultPermission"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "set": {
+      "description": "A list of permissions sets defined",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/PermissionSet"
+      }
+    },
+    "permission": {
+      "description": "A list of inlined permissions",
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Permission"
+      }
+    }
+  },
+  "definitions": {
+    "DefaultPermission": {
+      "description": "The default permission set of the plugin.\n\nWorks similarly to a permission with the \"default\" identifier.",
+      "type": "object",
+      "required": [
+        "permissions"
+      ],
+      "properties": {
+        "version": {
+          "description": "The version of the permission.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1.0
+        },
+        "description": {
+          "description": "Human-readable description of what the permission does. Tauri convention is to use `<h4>` headings in markdown content for Tauri documentation generation purposes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permissions": {
+          "description": "All permissions this set contains.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "PermissionSet": {
+      "description": "A set of direct permissions grouped together under a new name.",
+      "type": "object",
+      "required": [
+        "description",
+        "identifier",
+        "permissions"
+      ],
+      "properties": {
+        "identifier": {
+          "description": "A unique identifier for the permission.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Human-readable description of what the permission does.",
+          "type": "string"
+        },
+        "permissions": {
+          "description": "All permissions this set contains.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PermissionKind"
+          }
+        }
+      }
+    },
+    "Permission": {
+      "description": "Descriptions of explicit privileges of commands.\n\nIt can enable commands to be accessible in the frontend of the application.\n\nIf the scope is defined it can be used to fine grain control the access of individual or multiple commands.",
+      "type": "object",
+      "required": [
+        "identifier"
+      ],
+      "properties": {
+        "version": {
+          "description": "The version of the permission.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1.0
+        },
+        "identifier": {
+          "description": "A unique identifier for the permission.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Human-readable description of what the permission does. Tauri internal convention is to use `<h4>` headings in markdown content for Tauri documentation generation purposes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commands": {
+          "description": "Allowed or denied commands when using this permission.",
+          "default": {
+            "allow": [],
+            "deny": []
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Commands"
+            }
+          ]
+        },
+        "scope": {
+          "description": "Allowed or denied scoped when using this permission.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Scopes"
+            }
+          ]
+        },
+        "platforms": {
+          "description": "Target platforms this permission applies. By default all platforms are affected by this permission.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Target"
+          }
+        }
+      }
+    },
+    "Commands": {
+      "description": "Allowed and denied commands inside a permission.\n\nIf two commands clash inside of `allow` and `deny`, it should be denied by default.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "Allowed command.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deny": {
+          "description": "Denied command, which takes priority.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "Scopes": {
+      "description": "An argument for fine grained behavior control of Tauri commands.\n\nIt can be of any serde serializable type and is used to allow or prevent certain actions inside a Tauri command. The configured scope is passed to the command and will be enforced by the command implementation.\n\n## Example\n\n```json { \"allow\": [{ \"path\": \"$HOME/**\" }], \"deny\": [{ \"path\": \"$HOME/secret.txt\" }] } ```",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "Data that defines what is allowed by the scope.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Value"
+          }
+        },
+        "deny": {
+          "description": "Data that defines what is denied by the scope. This should be prioritized by validation logic.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Value"
+          }
+        }
+      }
+    },
+    "Value": {
+      "description": "All supported ACL values.",
+      "anyOf": [
+        {
+          "description": "Represents a null JSON value.",
+          "type": "null"
+        },
+        {
+          "description": "Represents a [`bool`].",
+          "type": "boolean"
+        },
+        {
+          "description": "Represents a valid ACL [`Number`].",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Number"
+            }
+          ]
+        },
+        {
+          "description": "Represents a [`String`].",
+          "type": "string"
+        },
+        {
+          "description": "Represents a list of other [`Value`]s.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Value"
+          }
+        },
+        {
+          "description": "Represents a map of [`String`] keys to [`Value`]s.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/Value"
+          }
+        }
+      ]
+    },
+    "Number": {
+      "description": "A valid ACL number.",
+      "anyOf": [
+        {
+          "description": "Represents an [`i64`].",
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "description": "Represents a [`f64`].",
+          "type": "number",
+          "format": "double"
+        }
+      ]
+    },
+    "Target": {
+      "description": "Platform target.",
+      "oneOf": [
+        {
+          "description": "MacOS.",
+          "type": "string",
+          "enum": [
+            "macOS"
+          ]
+        },
+        {
+          "description": "Windows.",
+          "type": "string",
+          "enum": [
+            "windows"
+          ]
+        },
+        {
+          "description": "Linux.",
+          "type": "string",
+          "enum": [
+            "linux"
+          ]
+        },
+        {
+          "description": "Android.",
+          "type": "string",
+          "enum": [
+            "android"
+          ]
+        },
+        {
+          "description": "iOS.",
+          "type": "string",
+          "enum": [
+            "iOS"
+          ]
+        }
+      ]
+    },
+    "PermissionKind": {
+      "type": "string",
+      "oneOf": [
+        {
+          "description": "Enables the desktop_agent_config_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-agent-config-save",
+          "markdownDescription": "Enables the desktop_agent_config_save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_agent_config_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-agent-config-save",
+          "markdownDescription": "Denies the desktop_agent_config_save command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_backend_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-backend-delete",
+          "markdownDescription": "Enables the desktop_backend_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_backend_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-backend-delete",
+          "markdownDescription": "Denies the desktop_backend_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_backend_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-backend-save",
+          "markdownDescription": "Enables the desktop_backend_save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_backend_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-backend-save",
+          "markdownDescription": "Denies the desktop_backend_save command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_behavior_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-behavior-delete",
+          "markdownDescription": "Enables the desktop_behavior_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_behavior_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-behavior-delete",
+          "markdownDescription": "Denies the desktop_behavior_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_behavior_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-behavior-save",
+          "markdownDescription": "Enables the desktop_behavior_save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_behavior_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-behavior-save",
+          "markdownDescription": "Denies the desktop_behavior_save command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_bootstrap_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-bootstrap-summary",
+          "markdownDescription": "Enables the desktop_bootstrap_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_bootstrap_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-bootstrap-summary",
+          "markdownDescription": "Denies the desktop_bootstrap_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_bridge_contract command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-bridge-contract",
+          "markdownDescription": "Enables the desktop_bridge_contract command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_bridge_contract command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-bridge-contract",
+          "markdownDescription": "Denies the desktop_bridge_contract command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_chat_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-chat-send",
+          "markdownDescription": "Enables the desktop_chat_send command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_chat_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-chat-send",
+          "markdownDescription": "Denies the desktop_chat_send command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_client_shutdown command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-client-shutdown",
+          "markdownDescription": "Enables the desktop_client_shutdown command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_client_shutdown command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-client-shutdown",
+          "markdownDescription": "Denies the desktop_client_shutdown command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_client_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-client-snapshot",
+          "markdownDescription": "Enables the desktop_client_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_client_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-client-snapshot",
+          "markdownDescription": "Denies the desktop_client_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_client_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-client-start",
+          "markdownDescription": "Enables the desktop_client_start command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_client_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-client-start",
+          "markdownDescription": "Denies the desktop_client_start command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_conversation_rename command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-conversation-rename",
+          "markdownDescription": "Enables the desktop_conversation_rename command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_conversation_rename command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-conversation-rename",
+          "markdownDescription": "Denies the desktop_conversation_rename command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_event_trigger_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-event-trigger-delete",
+          "markdownDescription": "Enables the desktop_event_trigger_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_event_trigger_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-event-trigger-delete",
+          "markdownDescription": "Denies the desktop_event_trigger_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_event_trigger_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-event-trigger-save",
+          "markdownDescription": "Enables the desktop_event_trigger_save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_event_trigger_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-event-trigger-save",
+          "markdownDescription": "Denies the desktop_event_trigger_save command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_inference_profile_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-inference-profile-delete",
+          "markdownDescription": "Enables the desktop_inference_profile_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_inference_profile_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-inference-profile-delete",
+          "markdownDescription": "Denies the desktop_inference_profile_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_inference_profile_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-inference-profile-save",
+          "markdownDescription": "Enables the desktop_inference_profile_save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_inference_profile_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-inference-profile-save",
+          "markdownDescription": "Denies the desktop_inference_profile_save command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_init_local_standard command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-init-local-standard",
+          "markdownDescription": "Enables the desktop_init_local_standard command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_init_local_standard command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-init-local-standard",
+          "markdownDescription": "Denies the desktop_init_local_standard command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_interrupt_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-interrupt-request",
+          "markdownDescription": "Enables the desktop_interrupt_request command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_interrupt_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-interrupt-request",
+          "markdownDescription": "Denies the desktop_interrupt_request command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_list_backends_with_health command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-list-backends-with-health",
+          "markdownDescription": "Enables the desktop_list_backends_with_health command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_list_backends_with_health command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-list-backends-with-health",
+          "markdownDescription": "Denies the desktop_list_backends_with_health command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_list_mcp_services_with_health command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-list-mcp-services-with-health",
+          "markdownDescription": "Enables the desktop_list_mcp_services_with_health command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_list_mcp_services_with_health command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-list-mcp-services-with-health",
+          "markdownDescription": "Denies the desktop_list_mcp_services_with_health command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_list_subagent_tree command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-list-subagent-tree",
+          "markdownDescription": "Enables the desktop_list_subagent_tree command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_list_subagent_tree command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-list-subagent-tree",
+          "markdownDescription": "Denies the desktop_list_subagent_tree command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_list_tool_call_holds command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-list-tool-call-holds",
+          "markdownDescription": "Enables the desktop_list_tool_call_holds command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_list_tool_call_holds command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-list-tool-call-holds",
+          "markdownDescription": "Denies the desktop_list_tool_call_holds command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_native_e2e_config command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-native-e2e-config",
+          "markdownDescription": "Enables the desktop_native_e2e_config command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_native_e2e_config command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-native-e2e-config",
+          "markdownDescription": "Denies the desktop_native_e2e_config command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_native_e2e_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-native-e2e-status",
+          "markdownDescription": "Enables the desktop_native_e2e_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_native_e2e_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-native-e2e-status",
+          "markdownDescription": "Denies the desktop_native_e2e_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_network_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-network-status",
+          "markdownDescription": "Enables the desktop_network_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_network_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-network-status",
+          "markdownDescription": "Denies the desktop_network_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_observer_metrics command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-observer-metrics",
+          "markdownDescription": "Enables the desktop_observer_metrics command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_observer_metrics command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-observer-metrics",
+          "markdownDescription": "Denies the desktop_observer_metrics command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_operations_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-operations-snapshot",
+          "markdownDescription": "Enables the desktop_operations_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_operations_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-operations-snapshot",
+          "markdownDescription": "Denies the desktop_operations_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_p2p_repair command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-p2p-repair",
+          "markdownDescription": "Enables the desktop_p2p_repair command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_p2p_repair command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-p2p-repair",
+          "markdownDescription": "Denies the desktop_p2p_repair command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_peer_add command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-peer-add",
+          "markdownDescription": "Enables the desktop_peer_add command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_peer_add command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-peer-add",
+          "markdownDescription": "Denies the desktop_peer_add command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_peer_pair_bearer command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-peer-pair-bearer",
+          "markdownDescription": "Enables the desktop_peer_pair_bearer command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_peer_pair_bearer command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-peer-pair-bearer",
+          "markdownDescription": "Denies the desktop_peer_pair_bearer command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_peer_probe_address command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-peer-probe-address",
+          "markdownDescription": "Enables the desktop_peer_probe_address command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_peer_probe_address command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-peer-probe-address",
+          "markdownDescription": "Denies the desktop_peer_probe_address command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_peer_remove command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-peer-remove",
+          "markdownDescription": "Enables the desktop_peer_remove command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_peer_remove command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-peer-remove",
+          "markdownDescription": "Denies the desktop_peer_remove command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_peer_rename command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-peer-rename",
+          "markdownDescription": "Enables the desktop_peer_rename command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_peer_rename command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-peer-rename",
+          "markdownDescription": "Denies the desktop_peer_rename command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_peer_status_fetch command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-peer-status-fetch",
+          "markdownDescription": "Enables the desktop_peer_status_fetch command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_peer_status_fetch command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-peer-status-fetch",
+          "markdownDescription": "Denies the desktop_peer_status_fetch command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_preview_interrupt_cascade command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-preview-interrupt-cascade",
+          "markdownDescription": "Enables the desktop_preview_interrupt_cascade command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_preview_interrupt_cascade command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-preview-interrupt-cascade",
+          "markdownDescription": "Denies the desktop_preview_interrupt_cascade command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_probe_mcp_service command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-probe-mcp-service",
+          "markdownDescription": "Enables the desktop_probe_mcp_service command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_probe_mcp_service command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-probe-mcp-service",
+          "markdownDescription": "Denies the desktop_probe_mcp_service command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_request_resend command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-request-resend",
+          "markdownDescription": "Enables the desktop_request_resend command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_request_resend command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-request-resend",
+          "markdownDescription": "Denies the desktop_request_resend command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_request_timeline command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-request-timeline",
+          "markdownDescription": "Enables the desktop_request_timeline command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_request_timeline command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-request-timeline",
+          "markdownDescription": "Denies the desktop_request_timeline command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_resolve_tool_call_hold command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-resolve-tool-call-hold",
+          "markdownDescription": "Enables the desktop_resolve_tool_call_hold command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_resolve_tool_call_hold command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-resolve-tool-call-hold",
+          "markdownDescription": "Denies the desktop_resolve_tool_call_hold command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_schedule_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-schedule-delete",
+          "markdownDescription": "Enables the desktop_schedule_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_schedule_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-schedule-delete",
+          "markdownDescription": "Denies the desktop_schedule_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_schedule_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-schedule-run",
+          "markdownDescription": "Enables the desktop_schedule_run command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_schedule_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-schedule-run",
+          "markdownDescription": "Denies the desktop_schedule_run command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_schedule_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-schedule-save",
+          "markdownDescription": "Enables the desktop_schedule_save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_schedule_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-schedule-save",
+          "markdownDescription": "Denies the desktop_schedule_save command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_session_fork command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-session-fork",
+          "markdownDescription": "Enables the desktop_session_fork command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_session_fork command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-session-fork",
+          "markdownDescription": "Denies the desktop_session_fork command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_session_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-session-snapshot",
+          "markdownDescription": "Enables the desktop_session_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_session_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-session-snapshot",
+          "markdownDescription": "Denies the desktop_session_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_set_selected_agent command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-set-selected-agent",
+          "markdownDescription": "Enables the desktop_set_selected_agent command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_set_selected_agent command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-set-selected-agent",
+          "markdownDescription": "Denies the desktop_set_selected_agent command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_skill_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-skill-delete",
+          "markdownDescription": "Enables the desktop_skill_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_skill_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-skill-delete",
+          "markdownDescription": "Denies the desktop_skill_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_skill_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-skill-save",
+          "markdownDescription": "Enables the desktop_skill_save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_skill_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-skill-save",
+          "markdownDescription": "Denies the desktop_skill_save command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_task_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-task-delete",
+          "markdownDescription": "Enables the desktop_task_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_task_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-task-delete",
+          "markdownDescription": "Denies the desktop_task_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_task_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-task-run",
+          "markdownDescription": "Enables the desktop_task_run command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_task_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-task-run",
+          "markdownDescription": "Denies the desktop_task_run command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_task_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-task-save",
+          "markdownDescription": "Enables the desktop_task_save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_task_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-task-save",
+          "markdownDescription": "Denies the desktop_task_save command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_tool_selection_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-tool-selection-delete",
+          "markdownDescription": "Enables the desktop_tool_selection_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_tool_selection_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-tool-selection-delete",
+          "markdownDescription": "Denies the desktop_tool_selection_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_tool_selection_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-tool-selection-save",
+          "markdownDescription": "Enables the desktop_tool_selection_save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_tool_selection_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-tool-selection-save",
+          "markdownDescription": "Denies the desktop_tool_selection_save command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_tool_service_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-tool-service-delete",
+          "markdownDescription": "Enables the desktop_tool_service_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_tool_service_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-tool-service-delete",
+          "markdownDescription": "Denies the desktop_tool_service_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_tool_service_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-tool-service-save",
+          "markdownDescription": "Enables the desktop_tool_service_save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_tool_service_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-tool-service-save",
+          "markdownDescription": "Denies the desktop_tool_service_save command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_tool_service_test command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-tool-service-test",
+          "markdownDescription": "Enables the desktop_tool_service_test command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_tool_service_test command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-tool-service-test",
+          "markdownDescription": "Denies the desktop_tool_service_test command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_tool_surface_explain command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-tool-surface-explain",
+          "markdownDescription": "Enables the desktop_tool_surface_explain command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_tool_surface_explain command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-tool-surface-explain",
+          "markdownDescription": "Denies the desktop_tool_surface_explain command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_workspace_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-workspace-list",
+          "markdownDescription": "Enables the desktop_workspace_list command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_workspace_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-workspace-list",
+          "markdownDescription": "Denies the desktop_workspace_list command without any pre-configured scope."
+        },
+        {
+          "description": "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)\n#### This default permission set includes:\n\n- `allow-desktop-bridge-contract`\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`",
+          "type": "string",
+          "const": "default",
+          "markdownDescription": "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)\n#### This default permission set includes:\n\n- `allow-desktop-bridge-contract`\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`"
+        },
+        {
+          "description": "Session/conversation snapshot read\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`",
+          "type": "string",
+          "const": "session-read",
+          "markdownDescription": "Session/conversation snapshot read\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`"
+        },
+        {
+          "description": "Request timeline read\n#### This permission set includes:\n\n- `allow-desktop-request-timeline`",
+          "type": "string",
+          "const": "trace-read",
+          "markdownDescription": "Request timeline read\n#### This permission set includes:\n\n- `allow-desktop-request-timeline`"
+        },
+        {
+          "description": "Tool-surface explain (config family)\n#### This permission set includes:\n\n- `allow-desktop-tool-surface-explain`",
+          "type": "string",
+          "const": "tool-surface-read",
+          "markdownDescription": "Tool-surface explain (config family)\n#### This permission set includes:\n\n- `allow-desktop-tool-surface-explain`"
+        },
+        {
+          "description": "Chat send, rename, fork\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-conversation-rename`\n- `allow-desktop-session-fork`",
+          "type": "string",
+          "const": "chat-write",
+          "markdownDescription": "Chat send, rename, fork\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-conversation-rename`\n- `allow-desktop-session-fork`"
+        },
+        {
+          "description": "Request resend / retry\n#### This permission set includes:\n\n- `allow-desktop-request-resend`",
+          "type": "string",
+          "const": "resend-control",
+          "markdownDescription": "Request resend / retry\n#### This permission set includes:\n\n- `allow-desktop-request-resend`"
+        },
+        {
+          "description": "Peer status (by saved id) and network status\n#### This permission set includes:\n\n- `allow-desktop-peer-status-fetch`\n- `allow-desktop-network-status`",
+          "type": "string",
+          "const": "fleet-read",
+          "markdownDescription": "Peer status (by saved id) and network status\n#### This permission set includes:\n\n- `allow-desktop-peer-status-fetch`\n- `allow-desktop-network-status`"
+        },
+        {
+          "description": "Workspace browser\n#### This permission set includes:\n\n- `allow-desktop-workspace-list`",
+          "type": "string",
+          "const": "workspace-read",
+          "markdownDescription": "Workspace browser\n#### This permission set includes:\n\n- `allow-desktop-workspace-list`"
+        },
+        {
+          "description": "Peer add/remove/rename, bearer pairing, address probe, P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-add`\n- `allow-desktop-peer-pair-bearer`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-peer-probe-address`\n- `allow-desktop-p2p-repair`",
+          "type": "string",
+          "const": "fleet-admin",
+          "markdownDescription": "Peer add/remove/rename, bearer pairing, address probe, P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-add`\n- `allow-desktop-peer-pair-bearer`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-peer-probe-address`\n- `allow-desktop-p2p-repair`"
+        },
+        {
+          "description": "Operations snapshot, health, subagent tree, MCP probe\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-list-subagent-tree`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`",
+          "type": "string",
+          "const": "operations-read",
+          "markdownDescription": "Operations snapshot, health, subagent tree, MCP probe\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-list-subagent-tree`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`"
+        },
+        {
+          "description": "Interrupt cascade preview\n#### This permission set includes:\n\n- `allow-desktop-preview-interrupt-cascade`",
+          "type": "string",
+          "const": "interrupt-read",
+          "markdownDescription": "Interrupt cascade preview\n#### This permission set includes:\n\n- `allow-desktop-preview-interrupt-cascade`"
+        },
+        {
+          "description": "Interrupt request execution\n#### This permission set includes:\n\n- `allow-desktop-interrupt-request`",
+          "type": "string",
+          "const": "interrupt-control",
+          "markdownDescription": "Interrupt request execution\n#### This permission set includes:\n\n- `allow-desktop-interrupt-request`"
+        },
+        {
+          "description": "List tool-call holds\n#### This permission set includes:\n\n- `allow-desktop-list-tool-call-holds`",
+          "type": "string",
+          "const": "holds-read",
+          "markdownDescription": "List tool-call holds\n#### This permission set includes:\n\n- `allow-desktop-list-tool-call-holds`"
+        },
+        {
+          "description": "Resolve tool-call holds\n#### This permission set includes:\n\n- `allow-desktop-resolve-tool-call-hold`",
+          "type": "string",
+          "const": "holds-control",
+          "markdownDescription": "Resolve tool-call holds\n#### This permission set includes:\n\n- `allow-desktop-resolve-tool-call-hold`"
+        },
+        {
+          "description": "Local runtime provisioning\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`",
+          "type": "string",
+          "const": "runtime-admin",
+          "markdownDescription": "Local runtime provisioning\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`"
+        },
+        {
+          "description": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`",
+          "type": "string",
+          "const": "config-write",
+          "markdownDescription": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`"
+        },
+        {
+          "description": "Task/schedule/event-trigger save and run\n#### This permission set includes:\n\n- `allow-desktop-task-save`\n- `allow-desktop-schedule-save`\n- `allow-desktop-schedule-run`\n- `allow-desktop-event-trigger-save`\n- `allow-desktop-task-run`",
+          "type": "string",
+          "const": "tasks",
+          "markdownDescription": "Task/schedule/event-trigger save and run\n#### This permission set includes:\n\n- `allow-desktop-task-save`\n- `allow-desktop-schedule-save`\n- `allow-desktop-schedule-run`\n- `allow-desktop-event-trigger-save`\n- `allow-desktop-task-run`"
+        },
+        {
+          "description": "Debug-only native E2E commands\n#### This permission set includes:\n\n- `allow-desktop-native-e2e-config`\n- `allow-desktop-native-e2e-status`",
+          "type": "string",
+          "const": "native-e2e",
+          "markdownDescription": "Debug-only native E2E commands\n#### This permission set includes:\n\n- `allow-desktop-native-e2e-config`\n- `allow-desktop-native-e2e-status`"
+        },
+        {
+          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `runtime-admin`\n- `session-read`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `holds-read`\n- `holds-control`\n- `config-write`\n- `tasks`",
+          "type": "string",
+          "const": "full",
+          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `runtime-admin`\n- `session-read`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `holds-read`\n- `holds-control`\n- `config-write`\n- `tasks`"
+        }
+      ]
+    }
+  }
+}

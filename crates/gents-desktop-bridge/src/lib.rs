@@ -1,24 +1,35 @@
-//! Tauri-agnostic desktop bridge logic extracted from the Gents Desktop app.
+//! Gents desktop bridge: Tauri plugin + view models + command logic.
 //!
-//! Phase 1 of the reusable-desktop-packages design: command implementations,
-//! snapshot builders, view models, cascade/interrupt logic, and logging live
-//! here. The `#[tauri::command]` wrappers and managed state remain in the app
-//! until plugin-ization (phase 3).
+//! Hosts compose with:
+//! ```ignore
+//! gents_desktop_bridge::install_runtime();
+//! tauri::Builder::default()
+//!     .plugin(gents_desktop_bridge::init(BridgeConfig::default()))
+//! ```
 //!
-//! Phase 2 adds the contract fingerprint, `BridgeError` taxonomy, and the
-//! type-generation spike (`ts-rs`) that phase 3 consumes.
+//! Invoke paths: `plugin:gents-desktop-bridge|<command>`.
 
 pub mod cascade;
 pub mod cause_derivation;
 pub mod commands;
+pub mod config;
 pub mod contract;
 pub mod error;
 pub mod logging;
+pub mod plugin;
+pub mod runtime_setup;
 pub mod snapshot;
+pub mod state;
+pub mod tauri_commands;
 pub mod types;
 
+pub use config::{
+    AgentHomePolicy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, TracingConfig,
+};
 pub use contract::{current_contract, BridgeContract, CONTRACT_VERSION, PACKAGE_VERSION};
 pub use error::{BridgeError, BridgeErrorCode};
+pub use plugin::init;
+pub use runtime_setup::{init_tracing, install_runtime};
 
 #[cfg(test)]
 mod tests;

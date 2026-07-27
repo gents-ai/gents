@@ -7,7 +7,10 @@ use serde::{Deserialize, Serialize};
 use crate::error::BridgeErrorCode;
 
 /// `MAJOR.MINOR` contract version. MINOR = additive; MAJOR = breaking.
-pub const CONTRACT_VERSION: &str = "0.1";
+// 0.2: additive — desktop_bridge_contract, desktop_peer_probe_address; peer_status
+// re-keyed to peer_id (breaking shape of that one request — MAJOR would be 1.0;
+// we ship as 0.2 during pre-1.0 with documented migration in phase 3).
+pub const CONTRACT_VERSION: &str = "0.2";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -82,6 +85,7 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_peer_pair_bearer", "fleet-admin"),
         ("desktop_peer_remove", "fleet-admin"),
         ("desktop_peer_rename", "fleet-admin"),
+        ("desktop_peer_probe_address", "fleet-admin"),
         ("desktop_p2p_repair", "fleet-admin"),
         // operations-read
         ("desktop_operations_snapshot", "operations-read"),

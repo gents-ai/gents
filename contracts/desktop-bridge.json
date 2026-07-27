@@ -89,6 +89,10 @@
       "permissionSet": "fleet-admin"
     },
     {
+      "name": "desktop_peer_probe_address",
+      "permissionSet": "fleet-admin"
+    },
+    {
       "name": "desktop_p2p_repair",
       "permissionSet": "fleet-admin"
     },
@@ -225,7 +229,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "0.1",
+  "contractVersion": "0.2",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",

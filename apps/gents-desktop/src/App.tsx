@@ -118,7 +118,7 @@ function AppShell() {
           starting={shell.starting}
           onAddPeer={shell.onAddPeer}
           onPairBearer={shell.onPairBearer}
-          onFetchPeerStatus={shell.onFetchPeerStatus}
+          onProbePeerAddress={shell.onProbePeerAddress}
           onInitLocalRuntime={shell.onInitLocalRuntime}
           onOpenChat={openChat}
           onOpenCode={openCode}

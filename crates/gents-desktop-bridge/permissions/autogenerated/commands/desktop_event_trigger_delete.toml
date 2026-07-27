@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-event-trigger-delete"
+description = "Enables the desktop_event_trigger_delete command without any pre-configured scope."
+commands.allow = ["desktop_event_trigger_delete"]
+
+[[permission]]
+identifier = "deny-desktop-event-trigger-delete"
+description = "Denies the desktop_event_trigger_delete command without any pre-configured scope."
+commands.deny = ["desktop_event_trigger_delete"]

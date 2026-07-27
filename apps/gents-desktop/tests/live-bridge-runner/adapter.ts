@@ -57,7 +57,9 @@ export function createBridgeHttpAdapter(
       client.postJson<DesktopClientSnapshot>("/desktop/peer/add", request),
     pairBearer: async (request) =>
       client.postJson<BearerPairingResponse>("/desktop/peer/pair-bearer", request),
-    fetchPeerStatus: async (serverAddress) =>
+    fetchPeerStatus: async (peerId) =>
+      client.postJson("/desktop/peer/status", { peerId }),
+    probePeerAddress: async (serverAddress) =>
       client.postJson("/desktop/peer/status", { serverAddress }),
     repairP2P: async () =>
       client.postJson<DesktopClientSnapshot>("/desktop/p2p/repair", {}),

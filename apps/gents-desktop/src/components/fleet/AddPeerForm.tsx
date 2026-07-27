@@ -15,7 +15,8 @@ export type AddPeerFormProps = {
   localError: string | null;
   peerForm: PeerAddRequest;
   onPeerFormChange: (value: PeerAddRequest) => void;
-  onFetchPeerStatus: (serverAddress: string) => Promise<unknown>;
+  /** Fleet-admin address probe (not the saved-peer-id read path). */
+  onProbePeerAddress: (serverAddress: string) => Promise<unknown>;
   onPairBearer: (request: BearerPairingRequest) => Promise<BearerPairingResponse>;
   onSubmit: (request: PeerAddRequest) => Promise<void>;
 };
@@ -26,7 +27,7 @@ export function AddPeerForm({
   localError,
   peerForm,
   onPeerFormChange,
-  onFetchPeerStatus,
+  onProbePeerAddress,
   onPairBearer,
   onSubmit,
 }: AddPeerFormProps) {
@@ -118,7 +119,7 @@ export function AddPeerForm({
     setFetchingStatus(true);
     setImportStatus(null);
     try {
-      const status = await onFetchPeerStatus(trimmed);
+      const status = await onProbePeerAddress(trimmed);
       const request = parsePeerConnectionJson(JSON.stringify(status));
       onPeerFormChange(request);
       setConnectionJson(JSON.stringify(status, null, 2));

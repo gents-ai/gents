@@ -11,26 +11,32 @@ fn log_rate_ceiling() -> RateLimitFilter {
     RateLimitFilter::new(RateLimitConfig::default())
 }
 
+/// Legacy convenience: discover log path via DesktopPaths (Gents Desktop default).
+/// Prefer [`init_tracing_with_config`] for hosts that own their storage home.
 pub fn init_tracing() {
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        with_default_transport_noise_filters(EnvFilter::new(
-            "warn,\
-                 gents_desktop_core=info,\
-                 gents_desktop_bridge=info,\
-                 gents_desktop_tauri=info,\
-                 gents=info,\
-                 defra_node=info",
-        ))
-    });
     let log_path = DesktopPaths::discover()
         .map(|paths| paths.log_file_path())
         .unwrap_or_else(|_| std::env::temp_dir().join("gents-desktop.log"));
+    init_tracing_with_config(crate::config::TracingConfig {
+        log_path,
+        filter: None,
+        console: desktop_console_log_enabled(),
+    });
+}
+
+/// Initialize tracing with an explicit log path (plugin host contract).
+pub fn init_tracing_with_config(config: crate::config::TracingConfig) {
+    let env_filter = match config.filter {
+        Some(ref filter) => EnvFilter::try_new(filter).unwrap_or_else(|_| default_env_filter()),
+        None => EnvFilter::try_from_default_env().unwrap_or_else(|_| default_env_filter()),
+    };
+    let log_path = config.log_path;
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let writer_path = log_path.clone();
 
-    if desktop_console_log_enabled() {
+    if config.console {
         let file_writer_path = writer_path.clone();
         let file_layer = tracing_subscriber::fmt::layer()
             .with_ansi(false)
@@ -60,6 +66,17 @@ pub fn init_tracing() {
     }
 
     tracing::info!(path = %log_path.display(), "desktop logs initialized");
+}
+
+fn default_env_filter() -> EnvFilter {
+    with_default_transport_noise_filters(EnvFilter::new(
+        "warn,\
+             gents_desktop_core=info,\
+             gents_desktop_bridge=info,\
+             gents_desktop_tauri=info,\
+             gents=info,\
+             defra_node=info",
+    ))
 }
 
 fn desktop_console_log_enabled() -> bool {

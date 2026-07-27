@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-workspace-list"
+description = "Enables the desktop_workspace_list command without any pre-configured scope."
+commands.allow = ["desktop_workspace_list"]
+
+[[permission]]
+identifier = "deny-desktop-workspace-list"
+description = "Denies the desktop_workspace_list command without any pre-configured scope."
+commands.deny = ["desktop_workspace_list"]

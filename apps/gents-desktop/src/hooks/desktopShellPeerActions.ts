@@ -3,6 +3,7 @@ import type { Dispatch, SetStateAction } from "react";
 import {
   addPeer,
   fetchPeerStatus,
+  probePeerAddress,
   initLocalStandardRuntime,
   pairBearer,
   removePeer,
@@ -117,10 +118,22 @@ export function createDesktopShellPeerActions({
     }
   }
 
-  async function onFetchPeerStatus(serverAddress: string) {
+  async function onFetchPeerStatus(peerId: string) {
     setError(null);
     try {
-      return await fetchPeerStatus(serverAddress);
+      return await fetchPeerStatus(peerId);
+    } catch (err) {
+      const message = formatPeerConnectionError(err, "peer-status");
+      setError(message);
+      throw new Error(message);
+    }
+  }
+
+  /** Fleet-admin: probe an address before the peer is saved (AddPeerForm). */
+  async function onProbePeerAddress(serverAddress: string) {
+    setError(null);
+    try {
+      return await probePeerAddress(serverAddress);
     } catch (err) {
       const message = formatPeerConnectionError(err, "peer-status");
       setError(message);
@@ -173,6 +186,7 @@ export function createDesktopShellPeerActions({
   return {
     onAddPeer,
     onFetchPeerStatus,
+    onProbePeerAddress,
     onInitLocalRuntime,
     onPairBearer,
     onRemovePeer,

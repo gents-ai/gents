@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-task-run"
+description = "Enables the desktop_task_run command without any pre-configured scope."
+commands.allow = ["desktop_task_run"]
+
+[[permission]]
+identifier = "deny-desktop-task-run"
+description = "Denies the desktop_task_run command without any pre-configured scope."
+commands.deny = ["desktop_task_run"]

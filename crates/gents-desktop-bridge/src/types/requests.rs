@@ -1,12 +1,10 @@
-use std::path::PathBuf;
-
 use serde::Deserialize;
 
+/// Local-runtime init request. Filesystem paths are **not** accepted from the
+/// webview — they come from `BridgeConfig` resolved at plugin init.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopInitRequest {
-    pub agent_home: Option<PathBuf>,
-    pub desktop_home: Option<PathBuf>,
     pub label: Option<String>,
     pub dangerously_overwrite: bool,
     pub reset: bool,
@@ -24,9 +22,19 @@ pub struct PeerAddRequest {
     pub default_behavior_id: Option<String>,
 }
 
+/// Fetch peer runtime status by **saved peer id** only — read grants never
+/// accept arbitrary addresses (SSRF).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PeerStatusFetchRequest {
+    pub peer_id: String,
+}
+
+/// Fleet-admin probe of an arbitrary address before the peer is saved.
+/// Lives only in `fleet-admin` — not a read grant.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerProbeRequest {
     pub server_address: String,
 }
 

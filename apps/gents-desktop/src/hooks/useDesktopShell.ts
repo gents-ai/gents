@@ -294,6 +294,7 @@ export function useDesktopShell() {
   const {
     onAddPeer,
     onFetchPeerStatus,
+    onProbePeerAddress,
     onInitLocalRuntime,
     onPairBearer,
     onRemovePeer,
@@ -446,6 +447,7 @@ export function useDesktopShell() {
     onRemovePeer,
     onRenamePeer,
     onFetchPeerStatus,
+    onProbePeerAddress,
     onInitLocalRuntime,
     onRepairP2P,
     onSendMessage,

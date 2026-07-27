@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-set-selected-agent"
+description = "Enables the desktop_set_selected_agent command without any pre-configured scope."
+commands.allow = ["desktop_set_selected_agent"]
+
+[[permission]]
+identifier = "deny-desktop-set-selected-agent"
+description = "Denies the desktop_set_selected_agent command without any pre-configured scope."
+commands.deny = ["desktop_set_selected_agent"]

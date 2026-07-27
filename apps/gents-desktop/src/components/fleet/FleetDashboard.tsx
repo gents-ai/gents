@@ -26,7 +26,7 @@ type FleetDashboardProps = {
   starting: boolean;
   onAddPeer: (request: PeerAddRequest) => Promise<unknown>;
   onPairBearer: (request: BearerPairingRequest) => Promise<BearerPairingResponse>;
-  onFetchPeerStatus: (serverAddress: string) => Promise<unknown>;
+  onProbePeerAddress: (serverAddress: string) => Promise<unknown>;
   onInitLocalRuntime: (label?: string | null) => Promise<unknown>;
   onOpenChat: (agentDid: string) => void;
   onOpenCode?: (agentDid: string) => void;
@@ -53,7 +53,7 @@ export function FleetDashboard({
   starting,
   onAddPeer,
   onPairBearer,
-  onFetchPeerStatus,
+  onProbePeerAddress,
   onInitLocalRuntime,
   onOpenChat,
   onOpenCode,
@@ -147,7 +147,7 @@ export function FleetDashboard({
               localError={peerFormError}
               peerForm={peerForm}
               onPeerFormChange={setPeerForm}
-              onFetchPeerStatus={onFetchPeerStatus}
+              onProbePeerAddress={onProbePeerAddress}
               onPairBearer={pairWithBearer}
               onSubmit={submitPeer}
             />
@@ -212,7 +212,7 @@ export function FleetDashboard({
             localError={peerFormError}
             peerForm={peerForm}
             onPeerFormChange={setPeerForm}
-            onFetchPeerStatus={onFetchPeerStatus}
+            onProbePeerAddress={onProbePeerAddress}
             onPairBearer={pairWithBearer}
             onSubmit={submitPeer}
           />

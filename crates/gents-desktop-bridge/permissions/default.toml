@@ -1,0 +1,13 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)"
+permissions = [
+  "allow-desktop-bridge-contract",
+  "allow-desktop-bootstrap-summary",
+  "allow-desktop-client-snapshot",
+  "allow-desktop-observer-metrics",
+  "allow-desktop-client-start",
+  "allow-desktop-client-shutdown",
+  "allow-desktop-set-selected-agent",
+]

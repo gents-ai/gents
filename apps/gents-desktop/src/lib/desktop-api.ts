@@ -69,6 +69,17 @@ function hasTauriInvokeBridge() {
   );
 }
 
+/** Tauri 2 plugin invoke path for gents-desktop-bridge commands. */
+const BRIDGE_PLUGIN = "gents-desktop-bridge";
+
+function bridgeCommand(command: string): string {
+  // Plugin commands: plugin:<name>|<command>
+  if (command.startsWith("plugin:")) {
+    return command;
+  }
+  return `plugin:${BRIDGE_PLUGIN}|${command}`;
+}
+
 function invokeDesktop<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!hasTauriInvokeBridge()) {
     return Promise.reject(
@@ -78,7 +89,7 @@ function invokeDesktop<T>(command: string, args?: Record<string, unknown>): Prom
     );
   }
 
-  return invoke<T>(command, args);
+  return invoke<T>(bridgeCommand(command), args);
 }
 
 type InitSummaryWire = InitSummary & {
@@ -129,7 +140,10 @@ export type DesktopApiAdapter = {
   pairBearer: (request: BearerPairingRequest) => Promise<BearerPairingResponse>;
   removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
-  fetchPeerStatus: (serverAddress: string) => Promise<unknown>;
+  /** Fetch status for a **saved** peer by id (read grants never take raw addresses). */
+  fetchPeerStatus: (peerId: string) => Promise<unknown>;
+  /** Fleet-admin: probe an arbitrary address before the peer is saved. */
+  probePeerAddress: (serverAddress: string) => Promise<unknown>;
   repairP2P: () => Promise<DesktopClientSnapshot>;
   listWorkspace: (subpath?: string | null) => Promise<WorkspaceListingView>;
   fetchRequestTimeline: (
@@ -258,8 +272,13 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
       label,
     });
   },
-  fetchPeerStatus(serverAddress) {
+  fetchPeerStatus(peerId) {
     return invokeDesktop<unknown>("desktop_peer_status_fetch", {
+      request: { peerId },
+    });
+  },
+  probePeerAddress(serverAddress) {
+    return invokeDesktop<unknown>("desktop_peer_probe_address", {
       request: { serverAddress },
     });
   },
@@ -495,8 +514,12 @@ export async function renamePeer(peerId: string, label: string) {
   return desktopApiAdapter().renamePeer(peerId, label);
 }
 
-export async function fetchPeerStatus(serverAddress: string) {
-  return desktopApiAdapter().fetchPeerStatus(serverAddress);
+export async function fetchPeerStatus(peerId: string) {
+  return desktopApiAdapter().fetchPeerStatus(peerId);
+}
+
+export async function probePeerAddress(serverAddress: string) {
+  return desktopApiAdapter().probePeerAddress(serverAddress);
 }
 
 export async function repairP2P() {

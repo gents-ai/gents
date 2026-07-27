@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-p2p-repair"
+description = "Enables the desktop_p2p_repair command without any pre-configured scope."
+commands.allow = ["desktop_p2p_repair"]
+
+[[permission]]
+identifier = "deny-desktop-p2p-repair"
+description = "Denies the desktop_p2p_repair command without any pre-configured scope."
+commands.deny = ["desktop_p2p_repair"]

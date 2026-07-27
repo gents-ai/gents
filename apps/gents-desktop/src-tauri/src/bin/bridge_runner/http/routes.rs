@@ -33,7 +33,7 @@ use gents_desktop_bridge::types::{
     DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
     DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest, EventTriggerSaveRequest,
     InferenceCallSummaryView, InferenceProfileSaveRequest, NativeExecutorStatusView,
-    PeerAddRequest, PeerStatusFetchRequest, RuntimeLivenessView, ScheduleRunRequest,
+    PeerAddRequest, PeerProbeRequest, RuntimeLivenessView, ScheduleRunRequest,
     ScheduleSaveRequest, SubagentTreeView, TaskRunRequest, TaskSaveRequest,
     ToolSelectionSaveRequest, ToolServiceSaveRequest, ToolServiceTestRequest,
 };
@@ -183,8 +183,9 @@ pub(super) fn handle_request(
             ))
         }
         ("POST", "/desktop/peer/status") => {
+            // Live harness probes by address (fleet-admin probe path).
             let request =
-                decode::<PeerStatusFetchRequest>(&request.body, "decoding peer status request")?;
+                decode::<PeerProbeRequest>(&request.body, "decoding peer status request")?;
             let payload =
                 runtime.block_on(fetch_runtime_connection_payload(&request.server_address))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&payload)?))

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-session-snapshot"
+description = "Enables the desktop_session_snapshot command without any pre-configured scope."
+commands.allow = ["desktop_session_snapshot"]
+
+[[permission]]
+identifier = "deny-desktop-session-snapshot"
+description = "Denies the desktop_session_snapshot command without any pre-configured scope."
+commands.deny = ["desktop_session_snapshot"]

@@ -1,0 +1,155 @@
+use tauri::State;
+
+use crate::commands::{rename_conversation, send_chat_message};
+use crate::snapshot::build_session_snapshot_from_store_for_agent;
+use crate::state::{current_core, DesktopAppState};
+use crate::types::{
+    ChatSendRequest, ChatSendResult, ConversationRenameRequest, DesktopSessionSnapshot,
+};
+
+#[tauri::command]
+pub async fn desktop_session_snapshot(
+    session_id: String,
+    agent_did: Option<String>,
+    request_id: Option<String>,
+    state: State<'_, DesktopAppState>,
+) -> Result<Option<DesktopSessionSnapshot>, String> {
+    let Some(core) = current_core(&state) else {
+        return Ok(None);
+    };
+
+    if let (Some(agent_did), Some(request_id)) = (agent_did.as_deref(), request_id.as_deref()) {
+        if let Err(error) = core.refresh_remote_request(agent_did, request_id).await {
+            tracing::warn!(
+                target: "gents_desktop::chat",
+                agent_did,
+                request_id,
+                error = %error,
+                "selected remote request refresh failed; returning the last observed session"
+            );
+        }
+        if let Err(error) = core.refresh_local_request(agent_did, request_id).await {
+            tracing::warn!(
+                target: "gents_desktop::chat",
+                agent_did,
+                request_id,
+                error = %error,
+                "selected local request refresh failed; returning the last observed session"
+            );
+        }
+    }
+    let snapshot = core.store().snapshot();
+    Ok(build_session_snapshot_from_store_for_agent(
+        snapshot.as_ref(),
+        agent_did.as_deref(),
+        &session_id,
+        request_id.as_deref(),
+    ))
+}
+
+#[tauri::command]
+pub async fn desktop_chat_send(
+    request: ChatSendRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<ChatSendResult, String> {
+    let Some(core) = current_core(&state) else {
+        return Err("desktop client is not running".to_string());
+    };
+
+    send_chat_message(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn desktop_conversation_rename(
+    request: ConversationRenameRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<(), String> {
+    let Some(core) = current_core(&state) else {
+        return Err("desktop client is not running".to_string());
+    };
+
+    rename_conversation(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionForkResultView {
+    pub session_id: String,
+    pub copied_messages: u32,
+    pub copied_tool_calls: u32,
+}
+
+#[tauri::command]
+pub async fn desktop_session_fork(
+    agent_did: String,
+    session_id: String,
+    at_user_turn: u32,
+    behavior_id: Option<String>,
+    state: State<'_, DesktopAppState>,
+) -> Result<SessionForkResultView, String> {
+    let Some(core) = current_core(&state) else {
+        return Err("desktop client is not running".to_string());
+    };
+
+    let outcome = core
+        .fork_session(
+            &agent_did,
+            &session_id,
+            at_user_turn,
+            behavior_id.as_deref(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(SessionForkResultView {
+        session_id: outcome.session_id,
+        copied_messages: outcome.copied_messages,
+        copied_tool_calls: outcome.copied_tool_calls,
+    })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestResendResultView {
+    pub request_id: String,
+    pub session_id: String,
+}
+
+#[tauri::command]
+pub async fn desktop_request_resend(
+    request_id: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<RequestResendResultView, String> {
+    let Some(core) = current_core(&state) else {
+        return Err("desktop client is not running".to_string());
+    };
+
+    let submitted = core
+        .resend_request(&request_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(RequestResendResultView {
+        request_id: submitted.request_id,
+        session_id: submitted.session_id,
+    })
+}
+
+#[tauri::command]
+pub async fn desktop_request_timeline(
+    agent_did: String,
+    request_id: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<serde_json::Value, String> {
+    let Some(core) = current_core(&state) else {
+        return Err("desktop client is not running".to_string());
+    };
+
+    let timeline = core
+        .request_timeline(&agent_did, &request_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    serde_json::to_value(&timeline).map_err(|error| error.to_string())
+}
