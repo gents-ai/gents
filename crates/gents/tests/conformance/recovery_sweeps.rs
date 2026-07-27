@@ -8,7 +8,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        30,
+        31,
         "Lean should emit one row per registered recovery predicate witness"
     );
 
@@ -51,7 +51,7 @@ pub(super) fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence
     );
     assert_eq!(
         equivalence_cases.len(),
-        30,
+        31,
         "Lean recovery equivalence witness count drifted"
     );
 
@@ -1121,6 +1121,26 @@ async fn seed_tool_parent_and_row(
                 "slow_tool".to_string(),
                 "{}".to_string(),
                 future_deadline,
+            )
+        }
+        "live_detached_bridge_parent_completed_to_failed" => {
+            set_request_status_and_lifecycle(&node, &parent_doc_id, "completed", "completed").await;
+            let child_request_id = format!("{tool_call_id}-detached-child");
+            seed_child_request(&node, &child_request_id, "processing").await;
+            ToolCallLifecycle::new_subagent(
+                node.clone(),
+                parent_request_id.to_string(),
+                parent_session_id.to_string(),
+                "did:test:test".to_string(),
+                tool_call_id.to_string(),
+                1,
+                "spawn_subagent".to_string(),
+                "{}".to_string(),
+                future_deadline,
+                AwaitMode::Background,
+                CancelPolicy::Detach,
+                child_request_id,
+                "did:test:target".to_string(),
             )
         }
         "tool_running_unclaimed_cross_deployment_spawn_to_failed" => {

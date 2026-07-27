@@ -91,6 +91,14 @@ def recoverySweepCases : List RecoverySweepCase :=
       "running"
       "failed"
       "gents-837-terminalize-interrupted-composites"
+  , -- Detached under non-interrupt terminal parent is still stale for this
+    -- sweep (product: only interrupted parents leave detached bridges running).
+    recoveryCase
+      terminalParentOwnedToolSweep
+      "live_detached_bridge_parent_completed_to_failed"
+      "running"
+      "failed"
+      "gents-837-terminalize-interrupted-composites"
   , recoveryCase
       toolCallRecoverySweep
       "tool_backgrounded_running_live_parent_to_cancelled"

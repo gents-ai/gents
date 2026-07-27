@@ -194,27 +194,28 @@ impl DefraSessionHook {
         match run_result {
             Ok(result) => {
                 lifecycle.complete(&result).await?;
-                if !lifecycle.is_running() {
-                    // Lost CAS to cancel/timeout/fail: return the durable terminal
-                    // payload, not the would-be success string (#837 review #2).
-                    return Ok(self
+                if lifecycle.state() == crate::tool_call_lifecycle::ToolCallState::Completed {
+                    // Happy path: our CAS won — return the real result without a
+                    // redundant durable re-read.
+                    Ok(result)
+                } else {
+                    // Lost CAS to cancel/timeout/fail: durable terminal wins.
+                    Ok(self
                         .composite_terminal_payload(session_id, &lifecycle)
-                        .await);
+                        .await)
                 }
-                Ok(result)
             }
             Err(error) => {
                 let (failure_class, payload) = classify_workflow_run_error(&error);
                 lifecycle.fail(&payload, failure_class).await?;
-                if !lifecycle.is_running()
-                    && lifecycle.state() != crate::tool_call_lifecycle::ToolCallState::Failed
-                {
+                if lifecycle.state() == crate::tool_call_lifecycle::ToolCallState::Failed {
+                    Ok(payload)
+                } else {
                     // Lost CAS to cancel/timeout: do not report our failure payload.
-                    return Ok(self
+                    Ok(self
                         .composite_terminal_payload(session_id, &lifecycle)
-                        .await);
+                        .await)
                 }
-                Ok(payload)
             }
         }
     }

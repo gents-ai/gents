@@ -237,10 +237,14 @@ impl super::ToolCallLifecycle {
     /// already terminal (#837). Unlike full startup `recover_all`, this does
     /// **not** interrupt live-parent background tools (restart-only path).
     ///
-    /// Ordering matches startup `recover_stuck_running_tool_calls` for bridges:
-    /// project an already-terminal child onto the bridge first, so a completed
-    /// child under a just-interrupted parent converges to the same terminal as
-    /// restart recovery rather than being overwritten as cancelled/failed.
+    /// Scope and ordering:
+    /// 1. Resolve the parent under `agent_did` first — rows whose parent is
+    ///    missing or foreign are skipped (no cross-principal mutation).
+    /// 2. Require a terminal parent before any write.
+    /// 3. Detached bridges under an *interrupted* parent are left running
+    ///    (same product rule as startup recovery).
+    /// 4. Then project already-terminal children onto bridges (matches startup
+    ///    child-precedence so restart and live ticks converge).
     ///
     /// Covers the durable bad state observed for `fan_out_and_synthesize`:
     /// parent interrupted, outer composite still `running`, no executor active.
@@ -254,19 +258,6 @@ impl super::ToolCallLifecycle {
             std::collections::HashMap::new();
 
         for row in rows {
-            // Same precedence as startup recovery: a terminal child owns the
-            // bridge projection even when the parent is already terminal.
-            if recover_bridge_terminal_child(node, agent_did, &row).await? {
-                report.tool_calls_terminalized += 1;
-                tracing::info!(
-                    doc_id = %row.doc_id,
-                    request_id = row.request_id.as_deref().unwrap_or(""),
-                    tool_call_id = %row.tool_call_id,
-                    "reconciled running bridge from already-terminal child"
-                );
-                continue;
-            }
-
             let parent = match row
                 .request_id
                 .as_deref()
@@ -283,24 +274,38 @@ impl super::ToolCallLifecycle {
                 }
                 None => None,
             };
+            // Ownership gate: parent must resolve under this agent's DID.
             let Some(parent) = parent else {
                 continue;
             };
+            // Live parents are out of scope for this sweep.
+            if !request_is_terminal(&parent) {
+                continue;
+            }
 
-            // Detached bridges may outlive an interrupted parent by design.
+            // Detached bridges may outlive an interrupted parent by design
+            // (startup recovery leaves them running too). Other terminal
+            // parents still force recovery so detached work cannot strand.
             if is_detached_subagent_tool(&row) && request_is_interrupted(&parent) {
                 continue;
             }
 
-            let outcome = if request_is_interrupted(&parent) {
-                Some(RecoveryOutcome::Cancelled)
-            } else if request_is_terminal(&parent) {
-                Some(RecoveryOutcome::Failed)
-            } else {
-                None
-            };
-            let Some(outcome) = outcome else {
+            // Child-terminal precedence only after owner + terminal-parent gates.
+            if recover_bridge_terminal_child(node, agent_did, &row).await? {
+                report.tool_calls_terminalized += 1;
+                tracing::info!(
+                    doc_id = %row.doc_id,
+                    request_id = row.request_id.as_deref().unwrap_or(""),
+                    tool_call_id = %row.tool_call_id,
+                    "reconciled running bridge from already-terminal child"
+                );
                 continue;
+            }
+
+            let outcome = if request_is_interrupted(&parent) {
+                RecoveryOutcome::Cancelled
+            } else {
+                RecoveryOutcome::Failed
             };
 
             // Cascade to linked children before terminalizing the tool row.
@@ -323,17 +328,29 @@ impl super::ToolCallLifecycle {
             }
 
             let deadline_at = parse_datetime(row.deadline_at.as_deref());
-            if let Err(error) =
-                recover_tool_call_row(node, &row, deadline_at, outcome, remote_cancel_intent_at)
-                    .await
+            let updated = match recover_tool_call_row(
+                node,
+                &row,
+                deadline_at,
+                outcome,
+                remote_cancel_intent_at,
+            )
+            .await
             {
-                tracing::warn!(
-                    doc_id = %row.doc_id,
-                    request_id = row.request_id.as_deref().unwrap_or(""),
-                    tool_call_id = %row.tool_call_id,
-                    error = %error,
-                    "failed to terminalize running tool owned by terminal parent"
-                );
+                Ok(updated) => updated,
+                Err(error) => {
+                    tracing::warn!(
+                        doc_id = %row.doc_id,
+                        request_id = row.request_id.as_deref().unwrap_or(""),
+                        tool_call_id = %row.tool_call_id,
+                        error = %error,
+                        "failed to terminalize running tool owned by terminal parent"
+                    );
+                    continue;
+                }
+            };
+            if !updated {
+                // Lost CAS: concurrent complete/fail/cancel already terminalized.
                 continue;
             }
 
@@ -681,17 +698,26 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
             }
         }
 
-        if let Err(error) =
-            recover_tool_call_row(node, &row, deadline_at, outcome, remote_cancel_intent_at).await
-        {
-            tracing::warn!(
-                doc_id = %row.doc_id,
-                request_id = row.request_id.as_deref().unwrap_or(""),
-                session_id = %row.session_id,
-                tool_call_id = %row.tool_call_id,
-                error = %error,
-                "failed to recover running tool call"
-            );
+        let updated =
+            match recover_tool_call_row(node, &row, deadline_at, outcome, remote_cancel_intent_at)
+                .await
+            {
+                Ok(updated) => updated,
+                Err(error) => {
+                    tracing::warn!(
+                        doc_id = %row.doc_id,
+                        request_id = row.request_id.as_deref().unwrap_or(""),
+                        session_id = %row.session_id,
+                        tool_call_id = %row.tool_call_id,
+                        error = %error,
+                        "failed to recover running tool call"
+                    );
+                    continue;
+                }
+            };
+        if !updated {
+            // Lost CAS against a concurrent terminal writer — leave the durable
+            // terminal untouched (first-writer-wins).
             continue;
         }
 
@@ -1528,13 +1554,16 @@ async fn recover_bridge_failed_row(
     Ok(())
 }
 
+/// Terminalize a running tool-call row. Returns `Ok(true)` when the
+/// compare-and-set updated the row, `Ok(false)` when a concurrent writer
+/// already left `running` (first terminal wins — do not overwrite).
 async fn recover_tool_call_row(
     node: &EmbeddedNode,
     row: &RunningToolCallRow,
     deadline_at: Option<DateTime<Utc>>,
     outcome: RecoveryOutcome,
     remote_cancel_intent_at: Option<DateTime<Utc>>,
-) -> Result<()> {
+) -> Result<bool> {
     let now = Utc::now();
     let started_at = parse_datetime(row.started_at.as_deref()).unwrap_or(now);
     let latency_ms = (now - started_at).num_milliseconds().max(0);
@@ -1565,7 +1594,10 @@ async fn recover_tool_call_row(
     let mutation = format!(
         r#"mutation {{
             update_AgentToolCall(
-                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                filter: {{
+                    _docID: {{ _eq: "{escaped_doc_id}" }},
+                    lifecycle_state: {{ _eq: "running" }}
+                }},
                 input: {{
                     result: "{escaped_result}",
                     status: "completed",
@@ -1580,10 +1612,14 @@ async fn recover_tool_call_row(
         lifecycle_state = outcome.lifecycle_state().as_str(),
     );
 
-    execute_mutation_with_retry(node, &mutation, "recover_running_tool_call")
+    let response = execute_mutation_with_retry(node, &mutation, "recover_running_tool_call")
         .await
         .context("recover running tool call mutation")?;
-    Ok(())
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("update_AgentToolCall"))
+        .is_some_and(response_has_documents))
 }
 
 fn parse_datetime(value: Option<&str>) -> Option<DateTime<Utc>> {

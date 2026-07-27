@@ -159,10 +159,17 @@ structure TerminalParentToolRow where
   parentInterrupted : Bool
   deriving Repr
 
+/-- Matches Rust live + startup product rule for this sweep:
+
+    * running, and
+    * parent is interrupted **or** otherwise terminal, and
+    * **not** (detached bridge ∧ parent interrupted) — detached may outlive an
+      interrupted parent; under a completed/failed parent the row is still stale.
+-/
 def terminalParentToolStale (row : TerminalParentToolRow) : Prop :=
   row.call.state = .running ∧
-  ¬ isDetachedBridgeCall row.call ∧
-  (row.parentInterrupted = true ∨ row.parentTerminal = true)
+  (row.parentInterrupted = true ∨ row.parentTerminal = true) ∧
+  ¬ (isDetachedBridgeCall row.call ∧ row.parentInterrupted = true)
 
 instance (row : TerminalParentToolRow) : Decidable (terminalParentToolStale row) := by
   unfold terminalParentToolStale
@@ -199,8 +206,9 @@ theorem terminalParentToolRecover_terminal :
   by_cases h_int : row.parentInterrupted
   · simp [h_int, ToolRecoveryCause.terminalState,
       HasTerminal.isTerminal, ToolCallState.instHasTerminal]
-  · have h_term : row.parentTerminal = true := by
-      rcases h_stale with ⟨_, _, h_parent⟩
+  · -- not interrupted: parentTerminal must hold for staleness
+    have h_term : row.parentTerminal = true := by
+      rcases h_stale with ⟨_, h_parent, _⟩
       cases h_parent with
       | inl h => exact absurd h (by simpa using h_int)
       | inr h => exact h
