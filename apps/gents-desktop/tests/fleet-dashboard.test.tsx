@@ -9,6 +9,16 @@ import type {
 } from "../src/lib/types";
 import { deployment } from "./config-panel-wiring/fixtures";
 
+// The guided-inference props are exercised by their own suite below; the
+// connection-flow and P2P tests only need inert stubs to satisfy the contract.
+const inferenceProps = {
+  onSaveBackendConfig: vi.fn(async () => undefined),
+  onSaveBehaviorConfig: vi.fn(async () => undefined),
+  onProbeInferenceEndpoint: vi.fn(async () => ({ reachable: false, models: [] })),
+  onCodexLogin: vi.fn(),
+  onCancelCodexLogin: vi.fn(async () => undefined),
+};
+
 const bootstrap: BootstrapSummary = {
   defaultAgentHome: "/Users/test/.gents",
   initAgentName: "local-agent",
@@ -45,6 +55,7 @@ describe("FleetDashboard add connection flow", () => {
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
         onRepairP2P={vi.fn()}
+        {...inferenceProps}
       />,
     );
 
@@ -82,6 +93,7 @@ describe("FleetDashboard add connection flow", () => {
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
         onRepairP2P={vi.fn()}
+        {...inferenceProps}
       />,
     );
 
@@ -124,6 +136,7 @@ describe("FleetDashboard add connection flow", () => {
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
         onRepairP2P={vi.fn()}
+        {...inferenceProps}
       />,
     );
 
@@ -213,6 +226,7 @@ describe("FleetDashboard add connection flow", () => {
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
         onRepairP2P={vi.fn()}
+        {...inferenceProps}
       />,
     );
 
@@ -319,6 +333,7 @@ describe("FleetDashboard fleet-level P2P repair", () => {
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
         onRepairP2P={onRepairP2P}
+        {...inferenceProps}
       />,
     );
     return onRepairP2P;
@@ -334,5 +349,41 @@ describe("FleetDashboard fleet-level P2P repair", () => {
     const repair = screen.getByTestId("fleet-repair-p2p");
     fireEvent.click(repair);
     expect(onRepairP2P).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("FleetDashboard guided inference callout", () => {
+  function renderFleet(deployments: DeploymentView[]) {
+    render(
+      <FleetDashboard
+        addingPeer={false}
+        bootstrap={bootstrap}
+        deployments={deployments}
+        loading={false}
+        p2pHealth={null}
+        repairingP2P={false}
+        starting={false}
+        onAddPeer={vi.fn()}
+        onFetchPeerStatus={vi.fn()}
+        onInitLocalRuntime={vi.fn()}
+        onOpenChat={vi.fn()}
+        onOpenConfig={vi.fn()}
+        onRepairP2P={vi.fn()}
+        {...inferenceProps}
+      />,
+    );
+  }
+
+  it("hides the callout when the agent already has a usable backend", () => {
+    renderFleet([deployment]);
+    expect(screen.queryByTestId("fleet-inference-callout")).not.toBeInTheDocument();
+  });
+
+  it("prompts inference setup and opens the wizard when no backend exists", () => {
+    renderFleet([{ ...deployment, inferenceBackends: [] }]);
+    expect(screen.getByTestId("fleet-inference-callout")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("fleet-inference-setup"));
+    expect(screen.getByTestId("inference-wizard")).toBeInTheDocument();
+    expect(screen.getByTestId("inference-option-codex")).toBeInTheDocument();
   });
 });

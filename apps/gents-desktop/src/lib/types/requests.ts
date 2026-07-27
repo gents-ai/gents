@@ -24,6 +24,7 @@ export type BackendSaveRequest = {
   backendId: string;
   name: string;
   providerKind: string;
+  openaiWireApi?: string | null;
   endpoint: string;
   apiKey?: string | null;
   apiKeyEnvVar?: string | null;
@@ -32,6 +33,23 @@ export type BackendSaveRequest = {
   maxConcurrent?: number | null;
   maxQueueDepth?: number | null;
   enabled?: boolean | null;
+};
+
+export type InferenceProbeResult = {
+  reachable: boolean;
+  models: string[];
+};
+
+export type CodexLoginResult = {
+  docId: string;
+  credentialId: string;
+  agentDid: string;
+  provider: string;
+  accountId?: string | null;
+  chatgptPlanType?: string | null;
+  isFedramp: boolean;
+  accessTokenExpiresAt: string;
+  enabled: boolean;
 };
 
 export type InferenceProfileSaveRequest = {

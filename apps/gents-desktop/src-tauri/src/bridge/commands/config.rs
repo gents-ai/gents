@@ -286,6 +286,11 @@ pub(crate) async fn save_backend_config(
         });
     row.name = Some(name);
     row.provider_kind = Some(provider_kind);
+    // Only overwrite the wire API when the caller sends one, so the raw backend
+    // editor (which omits it) preserves whatever the backend already had.
+    if request.openai_wire_api.is_some() {
+        row.openai_wire_api = trim_optional(request.openai_wire_api);
+    }
     row.endpoint = Some(endpoint);
     if request.clear_api_key.unwrap_or(false) {
         row.api_key = None;

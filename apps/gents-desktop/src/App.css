@@ -20,6 +20,7 @@
 @import "./styles/code-context.css";
 @import "./styles/fleet/layout.css";
 @import "./styles/fleet/table.css";
+@import "./styles/fleet/inference-wizard.css";
 @import "./styles/mcp-health.css";
 @import "./styles/config/workspace.css";
 @import "./styles/config/agent-behavior.css";
