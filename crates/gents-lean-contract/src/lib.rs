@@ -46,31 +46,45 @@ pub fn load_contract_json() -> Result<String> {
 }
 
 pub fn load_contract_stdout() -> Result<String> {
-    if let Some(cached) = PROCESS_STDOUT_CACHE.get() {
+    load_contract_stdout_for(
+        &proofs_dir()?,
+        &PROCESS_STDOUT_CACHE,
+        &PROCESS_LOAD_MUTEX,
+        &run_lake_build_unlocked,
+        &run_contract_generator_unlocked,
+    )
+}
+
+/// Single-flight + cross-process-locked load core.
+///
+/// Production `load_contract_stdout` and concurrency tests share this path so
+/// regressions cannot pass against a parallel reimplementation that omits the
+/// lock. Callers inject build/generate (real Lake, or fixtures).
+fn load_contract_stdout_for(
+    proofs_dir: &Path,
+    cache: &OnceLock<String>,
+    flight: &Mutex<()>,
+    build: &dyn Fn(&Path) -> Result<()>,
+    generate: &dyn Fn(&Path) -> Result<String>,
+) -> Result<String> {
+    if let Some(cached) = cache.get() {
         return Ok(cached.clone());
     }
 
-    let _in_process = PROCESS_LOAD_MUTEX
+    let _in_process = flight
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    if let Some(cached) = PROCESS_STDOUT_CACHE.get() {
+    if let Some(cached) = cache.get() {
         return Ok(cached.clone());
     }
 
-    let proofs_dir = proofs_dir()?;
-    let stdout = load_contract_stdout_uncached(&proofs_dir)?;
-    let _ = PROCESS_STDOUT_CACHE.set(stdout.clone());
+    let stdout = with_proofs_dir_lock(proofs_dir, || {
+        build(proofs_dir)?;
+        generate(proofs_dir)
+    })?;
+    let _ = cache.set(stdout.clone());
     Ok(stdout)
-}
-
-/// Build + generate under the cross-process proofs lock, without the process
-/// cache. Used by the public loader after the single-flight gate, and by tests.
-fn load_contract_stdout_uncached(proofs_dir: &Path) -> Result<String> {
-    with_proofs_dir_lock(proofs_dir, || {
-        run_lake_build_unlocked(proofs_dir)?;
-        run_contract_generator_unlocked(proofs_dir)
-    })
 }
 
 /// Run `lake build` for the contract target under the proofs-dir lock.
@@ -213,6 +227,7 @@ fn acquire_exclusive_lock(lock_path: &Path) -> Result<File> {
 
     let file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(lock_path)
@@ -367,32 +382,12 @@ mod tests {
         dir
     }
 
-    /// In-process single-flight + cross-process lock with injectable build/generate.
-    fn load_with_injectable_ops(
-        cache: &Mutex<Option<String>>,
-        proofs_dir: &Path,
-        build: &dyn Fn(&Path) -> Result<()>,
-        generate: &dyn Fn(&Path) -> Result<String>,
-    ) -> Result<String> {
-        let mut guard = cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(cached) = guard.as_ref() {
-            return Ok(cached.clone());
-        }
-
-        let stdout = with_proofs_dir_lock(proofs_dir, || {
-            build(proofs_dir)?;
-            generate(proofs_dir)
-        })?;
-        *guard = Some(stdout.clone());
-        Ok(stdout)
-    }
-
     #[test]
     fn concurrent_threads_single_flight_same_payload() {
         let proofs_dir = unique_temp_dir("single-flight");
-        let cache = Mutex::new(None);
+        // Shared cache/flight: same production wiring as load_contract_stdout.
+        let cache = OnceLock::new();
+        let flight = Mutex::new(());
         let build_count = AtomicUsize::new(0);
         let generate_count = AtomicUsize::new(0);
         let payload =
@@ -413,7 +408,8 @@ mod tests {
             let mut handles = Vec::new();
             for _ in 0..8 {
                 handles.push(scope.spawn(|| {
-                    load_with_injectable_ops(&cache, &proofs_dir, &build, &generate).unwrap()
+                    load_contract_stdout_for(&proofs_dir, &cache, &flight, &build, &generate)
+                        .unwrap()
                 }));
             }
             let results: Vec<String> = handles.into_iter().map(|h| h.join().unwrap()).collect();
@@ -440,10 +436,16 @@ mod tests {
     fn failed_protected_operation_releases_lock_for_next_caller() {
         let proofs_dir = unique_temp_dir("fail-release");
         let lock_path = lock_path_for(&proofs_dir).unwrap();
+        let flight = Mutex::new(());
 
-        let err = with_proofs_dir_lock(&proofs_dir, || -> Result<()> {
-            anyhow::bail!("intentional protected failure")
-        })
+        // Failures must not be cached, so each attempt uses a fresh OnceLock.
+        let err = load_contract_stdout_for(
+            &proofs_dir,
+            &OnceLock::new(),
+            &flight,
+            &|_| anyhow::bail!("intentional protected failure"),
+            &|_| unreachable!("generate must not run after build fails"),
+        )
         .unwrap_err();
         let err = format!("{err:#}");
         assert!(
@@ -456,8 +458,11 @@ mod tests {
             "failure should retain lock diagnostics, got: {err}"
         );
 
-        // Lock must be free immediately for the next caller.
-        with_proofs_dir_lock(&proofs_dir, || Ok(())).unwrap();
+        // Lock must be free immediately for the next production-core caller.
+        load_contract_stdout_for(&proofs_dir, &OnceLock::new(), &flight, &|_| Ok(()), &|_| {
+            Ok(String::from("ok"))
+        })
+        .unwrap();
 
         let _ = std::fs::remove_dir_all(&proofs_dir);
     }
@@ -473,13 +478,40 @@ mod tests {
             "distinct proof checkouts need distinct locks"
         );
 
-        let guard_a = acquire_exclusive_lock(&lock_a).unwrap();
-        // Holding A must not block acquisition of B.
-        let guard_b = acquire_exclusive_lock(&lock_b).unwrap();
+        // Hold A's lock via the production load path (build blocks until released).
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let (held_tx, held_rx) = std::sync::mpsc::channel::<()>();
+        let dir_a_thread = dir_a.clone();
+        let holder = thread::spawn(move || {
+            load_contract_stdout_for(
+                &dir_a_thread,
+                &OnceLock::new(),
+                &Mutex::new(()),
+                &|_| {
+                    held_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(())
+                },
+                &|_| Ok(String::from("a")),
+            )
+            .unwrap()
+        });
+        held_rx.recv().unwrap();
+
+        // B must still load while A is held.
+        load_contract_stdout_for(
+            &dir_b,
+            &OnceLock::new(),
+            &Mutex::new(()),
+            &|_| Ok(()),
+            &|_| Ok(String::from("b")),
+        )
+        .unwrap();
 
         // Same directory must contend while A is held.
         let contended = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&lock_a)
@@ -489,10 +521,8 @@ mod tests {
             other => panic!("expected WouldBlock on same proofs lock, got {other:?}"),
         }
 
-        drop(guard_a);
-        drop(guard_b);
-        // After release, same path is acquirable again.
-        let _reacquired = acquire_exclusive_lock(&lock_a).unwrap();
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
 
         let _ = std::fs::remove_dir_all(&dir_a);
         let _ = std::fs::remove_dir_all(&dir_b);
@@ -519,9 +549,15 @@ mod tests {
         let lake_as_file = base.join(".lake");
         std::fs::write(&lake_as_file, b"not a directory").unwrap();
 
-        let err = with_proofs_dir_lock(&base, || Ok(()))
-            .unwrap_err()
-            .to_string();
+        let err = load_contract_stdout_for(
+            &base,
+            &OnceLock::new(),
+            &Mutex::new(()),
+            &|_| Ok(()),
+            &|_| Ok(String::from("unused")),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(
             err.contains("lock") || err.contains(".lake"),
             "expected lock-path diagnostics, got: {err}"
@@ -534,12 +570,18 @@ mod tests {
     fn protected_op_failure_includes_lock_and_proofs_context() {
         let proofs_dir = unique_temp_dir("diag");
         let lock_path = lock_path_for(&proofs_dir).unwrap();
-        let err = with_proofs_dir_lock(&proofs_dir, || -> Result<String> {
-            anyhow::bail!(
-                "Lean conformance contract build failed\n  cwd: {}\n  status: exit 1\n  stderr:\nbogus",
-                proofs_dir.display()
-            )
-        })
+        let err = load_contract_stdout_for(
+            &proofs_dir,
+            &OnceLock::new(),
+            &Mutex::new(()),
+            &|dir| {
+                anyhow::bail!(
+                    "Lean conformance contract build failed\n  cwd: {}\n  status: exit 1\n  stderr:\nbogus",
+                    dir.display()
+                )
+            },
+            &|_| unreachable!("generate must not run after build fails"),
+        )
         .unwrap_err();
         let err = format!("{err:#}");
 
@@ -573,8 +615,8 @@ mod tests {
             let overlap_path = fixture.join("overlap");
             let done_dir = fixture.join("done");
 
-            with_proofs_dir_lock(&proofs_dir, || {
-                // If another process is inside the critical section, holder exists.
+            // Drive the production load core so a disconnect from the lock fails.
+            let build = |_: &Path| -> Result<()> {
                 if holder_path.exists() {
                     std::fs::write(&overlap_path, b"overlap detected").ok();
                     anyhow::bail!("overlapping critical section: holder already present");
@@ -589,7 +631,14 @@ mod tests {
                 std::fs::remove_file(&holder_path)?;
                 std::fs::write(done_dir.join(std::process::id().to_string()), b"ok")?;
                 Ok(())
-            })
+            };
+            load_contract_stdout_for(
+                &proofs_dir,
+                &OnceLock::new(),
+                &Mutex::new(()),
+                &build,
+                &|_| Ok(String::from("child-payload")),
+            )
             .expect("child critical section");
             return;
         }
@@ -657,6 +706,8 @@ mod tests {
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
 
+        // Independent caches so each thread enters the production locked path
+        // rather than collapsing into single-flight.
         thread::scope(|scope| {
             let mut handles = Vec::new();
             for i in 0..6 {
@@ -664,13 +715,20 @@ mod tests {
                 let active = Arc::clone(&active);
                 let max_active = Arc::clone(&max_active);
                 handles.push(scope.spawn(move || {
-                    with_proofs_dir_lock(proofs_dir, || {
+                    let build = |_: &Path| -> Result<()> {
                         let now = active.fetch_add(1, Ordering::SeqCst) + 1;
                         max_active.fetch_max(now, Ordering::SeqCst);
                         thread::sleep(Duration::from_millis(50));
                         active.fetch_sub(1, Ordering::SeqCst);
-                        Ok(i)
-                    })
+                        Ok(())
+                    };
+                    load_contract_stdout_for(
+                        proofs_dir,
+                        &OnceLock::new(),
+                        &Mutex::new(()),
+                        &build,
+                        &|_| Ok(i.to_string()),
+                    )
                     .unwrap()
                 }));
             }
