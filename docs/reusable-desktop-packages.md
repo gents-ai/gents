@@ -20,7 +20,12 @@ tests, not runtime ACL reflection. Per-caller projection is a filed follow-up.
 
 **Other recorded deviations:** `bridge_runner` remains in `gents-desktop-tauri`
 (not yet `test-harness` on the bridge crate). Live-lane verification of the
-phase-2 serde camelCase fix still owed.
+phase-2 serde camelCase fix still owed: a wire-format fence is in place in
+`test:live:chat` (`itemKey` must arrive camelCase over real IPC), but the suite
+fails before reaching it on this branch **and at main HEAD** — a pre-existing
+backgrounded-tools liveness assertion failure tracked as
+[#884](https://github.com/source-inc/gents/issues/884); the fence discharges
+this obligation once #884 is fixed.
 
 Design approved 2026-07-27 after three review passes; security-hardened across
 PR #878 rounds. Base: [#875](https://github.com/source-inc/gents/pull/875)
