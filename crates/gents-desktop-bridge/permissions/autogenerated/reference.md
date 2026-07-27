@@ -310,6 +310,58 @@ Denies the desktop_client_start command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-codex-login`
+
+</td>
+<td>
+
+Enables the desktop_codex_login command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-codex-login`
+
+</td>
+<td>
+
+Denies the desktop_codex_login command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-codex-login-cancel`
+
+</td>
+<td>
+
+Enables the desktop_codex_login_cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-codex-login-cancel`
+
+</td>
+<td>
+
+Denies the desktop_codex_login_cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-conversation-rename`
 
 </td>
@@ -927,6 +979,32 @@ Enables the desktop_preview_interrupt_cascade command without any pre-configured
 <td>
 
 Denies the desktop_preview_interrupt_cascade command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-probe-inference-endpoint`
+
+</td>
+<td>
+
+Enables the desktop_probe_inference_endpoint command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-probe-inference-endpoint`
+
+</td>
+<td>
+
+Denies the desktop_probe_inference_endpoint command without any pre-configured scope.
 
 </td>
 </tr>

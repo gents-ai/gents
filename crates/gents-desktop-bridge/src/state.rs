@@ -28,6 +28,9 @@ pub struct DesktopAppState {
 pub struct DesktopBridge {
     pub core: Option<Arc<ClientCore>>,
     pub updates_task: Option<JoinHandle<()>>,
+    /// Cancel handle for an in-flight ChatGPT/Codex login server, so a closed
+    /// browser can be aborted instead of hanging the callback wait.
+    pub codex_login_cancel: Option<codex_login::ShutdownHandle>,
 }
 
 impl DesktopAppState {
@@ -36,6 +39,7 @@ impl DesktopAppState {
             bridge: Mutex::new(DesktopBridge {
                 core: None,
                 updates_task: None,
+                codex_login_cancel: None,
             }),
             policy,
         }

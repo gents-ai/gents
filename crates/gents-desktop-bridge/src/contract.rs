@@ -7,11 +7,13 @@ use serde::{Deserialize, Serialize};
 use crate::error::BridgeErrorCode;
 
 /// `MAJOR.MINOR` contract version. MINOR = additive; MAJOR = breaking.
+// 0.5: additive — inference onboarding (probe endpoint, Codex login/cancel in
+// config-write) merged from main (#871); desktop://codex-login-url event.
 // 0.4: additive — Pairing error code; fingerprint set inventory aligned with
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "0.4";
+pub const CONTRACT_VERSION: &str = "0.5";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -45,6 +47,9 @@ pub struct PermissionSetContract {
 
 /// Production event name emitted by the update pump.
 pub const CLIENT_UPDATED_EVENT: &str = "desktop://client-updated";
+
+/// One-shot auth URL emission during the guided Codex login flow.
+pub const CODEX_LOGIN_URL_EVENT: &str = "desktop://codex-login-url";
 
 /// Coarse ping reasons on `desktop://client-updated`.
 pub const EVENT_REASONS: &[&str] = &["store", "health", "lifecycle", "config"];
@@ -118,6 +123,9 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_tool_selection_save", "config-write"),
         ("desktop_tool_service_save", "config-write"),
         ("desktop_tool_service_test", "config-write"),
+        ("desktop_probe_inference_endpoint", "config-write"),
+        ("desktop_codex_login", "config-write"),
+        ("desktop_codex_login_cancel", "config-write"),
         // tasks
         ("desktop_task_save", "tasks"),
         ("desktop_schedule_save", "tasks"),
@@ -200,7 +208,10 @@ pub fn current_contract() -> BridgeContract {
     BridgeContract {
         contract_version: CONTRACT_VERSION.to_string(),
         package_version: PACKAGE_VERSION.to_string(),
-        events: vec![CLIENT_UPDATED_EVENT.to_string()],
+        events: vec![
+            CLIENT_UPDATED_EVENT.to_string(),
+            CODEX_LOGIN_URL_EVENT.to_string(),
+        ],
         event_reasons: EVENT_REASONS.iter().map(|s| (*s).to_string()).collect(),
         error_codes: error_code_inventory(),
         commands: command_inventory(),
@@ -307,6 +318,9 @@ mod tests {
             ("desktop_tool_selection_save", "mutate"),
             ("desktop_tool_service_save", "mutate"),
             ("desktop_tool_service_test", "mutate"),
+            ("desktop_probe_inference_endpoint", "mutate"),
+            ("desktop_codex_login", "mutate"),
+            ("desktop_codex_login_cancel", "mutate"),
             ("desktop_task_save", "mutate"),
             ("desktop_schedule_save", "mutate"),
             ("desktop_schedule_run", "mutate"),

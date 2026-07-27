@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-codex-login"
+description = "Enables the desktop_codex_login command without any pre-configured scope."
+commands.allow = ["desktop_codex_login"]
+
+[[permission]]
+identifier = "deny-desktop-codex-login"
+description = "Denies the desktop_codex_login command without any pre-configured scope."
+commands.deny = ["desktop_codex_login"]

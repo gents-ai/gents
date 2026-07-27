@@ -47,47 +47,43 @@ impl ToolCallLifecycle {
         let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
         let message_sequence = self.message_sequence;
 
-        // Persist bridge fields for both R4 subagent bridges and R6 ordinary
-        // backgrounded tool rows. Native foreground calls omit them for
-        // back-compat with older rows.
-        let bridge_fields = if self.is_bridge() {
-            let await_mode_str = self.await_mode.as_str();
-            let cancel_policy_str = self.cancel_policy.as_str();
-            let child_field = self
-                .child_request_id
-                .as_ref()
-                .map(|crid| {
-                    let escaped_crid = escape_graphql_string(crid);
-                    format!(r#"child_request_id: "{escaped_crid}","#)
-                })
-                .unwrap_or_default();
-            let spawn_target_field = self
-                .spawn_target_did
-                .as_ref()
-                .map(|did| {
-                    let escaped_did = escape_graphql_string(did);
-                    format!(r#"spawn_target_did: "{escaped_did}","#)
-                })
-                .unwrap_or_default();
-            let unclaimed_deadline_field = self
-                .unclaimed_deadline_at
-                .map(|deadline| {
-                    let escaped_deadline = escape_graphql_string(
-                        &deadline.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                    );
-                    format!(r#"unclaimed_deadline_at: "{escaped_deadline}","#)
-                })
-                .unwrap_or_default();
-            format!(
-                r#"{child_field}
+        // Persist await_mode / cancel_policy for every tool call so composites
+        // and native calls are not projected as `unknown` (#837). Child link,
+        // spawn target, and unclaimed deadline remain bridge-only fields.
+        let await_mode_str = self.await_mode.as_str();
+        let cancel_policy_str = self.cancel_policy.as_str();
+        let child_field = self
+            .child_request_id
+            .as_ref()
+            .map(|crid| {
+                let escaped_crid = escape_graphql_string(crid);
+                format!(r#"child_request_id: "{escaped_crid}","#)
+            })
+            .unwrap_or_default();
+        let spawn_target_field = self
+            .spawn_target_did
+            .as_ref()
+            .map(|did| {
+                let escaped_did = escape_graphql_string(did);
+                format!(r#"spawn_target_did: "{escaped_did}","#)
+            })
+            .unwrap_or_default();
+        let unclaimed_deadline_field = self
+            .unclaimed_deadline_at
+            .map(|deadline| {
+                let escaped_deadline = escape_graphql_string(
+                    &deadline.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                );
+                format!(r#"unclaimed_deadline_at: "{escaped_deadline}","#)
+            })
+            .unwrap_or_default();
+        let bridge_fields = format!(
+            r#"{child_field}
                     {spawn_target_field}
                     {unclaimed_deadline_field}
                     await_mode: "{await_mode_str}",
                     cancel_policy: "{cancel_policy_str}","#
-            )
-        } else {
-            String::new()
-        };
+        );
         let requester_did_field = self.requester_did_fragment();
         let workflow_fields = self.workflow_fields_fragment();
 
@@ -161,7 +157,10 @@ impl ToolCallLifecycle {
         let mutation = format!(
             r#"mutation {{
                 update_AgentToolCall(
-                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    filter: {{
+                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        lifecycle_state: {{ _eq: "running" }}
+                    }},
                     input: {{
                         result: "{escaped_result}",
                         status: "completed",
@@ -176,9 +175,19 @@ impl ToolCallLifecycle {
             }}"#
         );
 
-        execute_mutation_with_retry(&self.node, &mutation, "complete")
+        let response = execute_mutation_with_retry(&self.node, &mutation, "complete")
             .await
             .context("complete mutation")?;
+        if !response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentToolCall"))
+            .is_some_and(response_has_documents)
+        {
+            // Interrupt/timeout won the race — adopt the durable terminal.
+            self.sync_after_lost_running_compare("complete").await?;
+            return Ok(());
+        }
 
         self.state = ToolCallState::Completed;
         Ok(())
@@ -232,7 +241,10 @@ impl ToolCallLifecycle {
         let mutation = format!(
             r#"mutation {{
                 update_AgentToolCall(
-                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    filter: {{
+                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        lifecycle_state: {{ _eq: "running" }}
+                    }},
                     input: {{
                         result: "{escaped_result}",
                         status: "completed",
@@ -249,9 +261,19 @@ impl ToolCallLifecycle {
             }}"#
         );
 
-        execute_mutation_with_retry(&self.node, &mutation, "fail")
+        let response = execute_mutation_with_retry(&self.node, &mutation, "fail")
             .await
             .context("fail mutation")?;
+        if !response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentToolCall"))
+            .is_some_and(response_has_documents)
+        {
+            // Interrupt/timeout won the race — adopt the durable terminal.
+            self.sync_after_lost_running_compare("fail").await?;
+            return Ok(());
+        }
 
         self.state = ToolCallState::Failed;
         self.failure_class = Some(failure);

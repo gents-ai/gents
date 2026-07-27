@@ -9,12 +9,14 @@ import type {
   BehaviorSaveRequest,
   CascadeCancelPreview,
   ChatSendResult,
+  CodexLoginResult,
   DesktopClientSnapshot,
   DesktopInterruptRequestRequest,
   DesktopListSubagentTreeRequest,
   DesktopPreviewInterruptCascadeRequest,
   DesktopSessionSnapshot,
   EventTriggerSaveRequest,
+  InferenceProbeResult,
   InferenceProfileSaveRequest,
   InitSummary,
   InterruptRequestResult,
@@ -258,6 +260,9 @@ export type DesktopApiAdapter = {
     request: BehaviorDeleteRequest,
   ) => Promise<DesktopClientSnapshot>;
   saveBackendConfig: (request: BackendSaveRequest) => Promise<DesktopClientSnapshot>;
+  probeInferenceEndpoint: (endpoint: string) => Promise<InferenceProbeResult>;
+  codexLogin: (agentDid: string, provider?: string | null) => Promise<CodexLoginResult>;
+  cancelCodexLogin: () => Promise<void>;
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
@@ -434,6 +439,19 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   saveBackendConfig(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_backend_save", { request });
+  },
+  probeInferenceEndpoint(endpoint) {
+    return invokeDesktop<InferenceProbeResult>("desktop_probe_inference_endpoint", {
+      request: { endpoint },
+    });
+  },
+  codexLogin(agentDid, provider) {
+    return invokeDesktop<CodexLoginResult>("desktop_codex_login", {
+      request: { agentDid, provider: provider ?? null },
+    });
+  },
+  cancelCodexLogin() {
+    return invokeDesktop<void>("desktop_codex_login_cancel");
   },
   saveInferenceProfileConfig(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_save", {
@@ -688,6 +706,18 @@ export async function deleteBehaviorConfig(request: BehaviorDeleteRequest) {
 
 export async function saveBackendConfig(request: BackendSaveRequest) {
   return desktopApiAdapter().saveBackendConfig(request);
+}
+
+export async function probeInferenceEndpoint(endpoint: string) {
+  return desktopApiAdapter().probeInferenceEndpoint(endpoint);
+}
+
+export async function codexLogin(agentDid: string, provider?: string | null) {
+  return desktopApiAdapter().codexLogin(agentDid, provider);
+}
+
+export async function cancelCodexLogin() {
+  return desktopApiAdapter().cancelCodexLogin();
 }
 
 export async function saveInferenceProfileConfig(request: InferenceProfileSaveRequest) {

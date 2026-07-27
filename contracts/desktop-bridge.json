@@ -201,6 +201,18 @@
       "permissionSet": "config-write"
     },
     {
+      "name": "desktop_probe_inference_endpoint",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_codex_login",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_codex_login_cancel",
+      "permissionSet": "config-write"
+    },
+    {
       "name": "desktop_task_save",
       "permissionSet": "tasks"
     },
@@ -229,7 +241,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "0.4",
+  "contractVersion": "0.5",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -251,7 +263,8 @@
     "config"
   ],
   "events": [
-    "desktop://client-updated"
+    "desktop://client-updated",
+    "desktop://codex-login-url"
   ],
   "packageVersion": "0.8.0",
   "permissionSets": [

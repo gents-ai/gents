@@ -2379,10 +2379,22 @@
           "markdownDescription": "Chat send, rename, fork\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-conversation-rename`\n- `allow-desktop-session-fork`"
         },
         {
-          "description": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`",
+          "description": "Client start/shutdown and selected-agent\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`",
+          "type": "string",
+          "const": "gents-desktop-bridge:client-lifecycle",
+          "markdownDescription": "Client start/shutdown and selected-agent\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`"
+        },
+        {
+          "description": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`",
           "type": "string",
           "const": "gents-desktop-bridge:config-write",
-          "markdownDescription": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`"
+          "markdownDescription": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`"
+        },
+        {
+          "description": "Contract, bootstrap summary, aggregate snapshot, observer metrics\n#### This permission set includes:\n\n- `allow-desktop-bridge-contract`\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`",
+          "type": "string",
+          "const": "gents-desktop-bridge:core",
+          "markdownDescription": "Contract, bootstrap summary, aggregate snapshot, observer metrics\n#### This permission set includes:\n\n- `allow-desktop-bridge-contract`\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`"
         },
         {
           "description": "Peer add/remove/rename, bearer pairing, address probe, P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-add`\n- `allow-desktop-peer-pair-bearer`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-peer-probe-address`\n- `allow-desktop-p2p-repair`",
@@ -2547,6 +2559,18 @@
           "markdownDescription": "Enables the desktop_client_start command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_codex_login command without any pre-configured scope.",
+          "type": "string",
+          "const": "gents-desktop-bridge:allow-desktop-codex-login",
+          "markdownDescription": "Enables the desktop_codex_login command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_codex_login_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "gents-desktop-bridge:allow-desktop-codex-login-cancel",
+          "markdownDescription": "Enables the desktop_codex_login_cancel command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_conversation_rename command without any pre-configured scope.",
           "type": "string",
           "const": "gents-desktop-bridge:allow-desktop-conversation-rename",
@@ -2689,6 +2713,12 @@
           "type": "string",
           "const": "gents-desktop-bridge:allow-desktop-preview-interrupt-cascade",
           "markdownDescription": "Enables the desktop_preview_interrupt_cascade command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_probe_inference_endpoint command without any pre-configured scope.",
+          "type": "string",
+          "const": "gents-desktop-bridge:allow-desktop-probe-inference-endpoint",
+          "markdownDescription": "Enables the desktop_probe_inference_endpoint command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_probe_mcp_service command without any pre-configured scope.",
@@ -2889,6 +2919,18 @@
           "markdownDescription": "Denies the desktop_client_start command without any pre-configured scope."
         },
         {
+          "description": "Denies the desktop_codex_login command without any pre-configured scope.",
+          "type": "string",
+          "const": "gents-desktop-bridge:deny-desktop-codex-login",
+          "markdownDescription": "Denies the desktop_codex_login command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_codex_login_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "gents-desktop-bridge:deny-desktop-codex-login-cancel",
+          "markdownDescription": "Denies the desktop_codex_login_cancel command without any pre-configured scope."
+        },
+        {
           "description": "Denies the desktop_conversation_rename command without any pre-configured scope.",
           "type": "string",
           "const": "gents-desktop-bridge:deny-desktop-conversation-rename",
@@ -3031,6 +3073,12 @@
           "type": "string",
           "const": "gents-desktop-bridge:deny-desktop-preview-interrupt-cascade",
           "markdownDescription": "Denies the desktop_preview_interrupt_cascade command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_probe_inference_endpoint command without any pre-configured scope.",
+          "type": "string",
+          "const": "gents-desktop-bridge:deny-desktop-probe-inference-endpoint",
+          "markdownDescription": "Denies the desktop_probe_inference_endpoint command without any pre-configured scope."
         },
         {
           "description": "Denies the desktop_probe_mcp_service command without any pre-configured scope.",

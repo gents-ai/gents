@@ -6,7 +6,9 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
-### Bridge contract 0.4
+### Bridge contract
+
+- 0.5 (additive): merged #871 inference onboarding — `desktop_probe_inference_endpoint`, `desktop_codex_login`, `desktop_codex_login_cancel` under `config-write`; new one-shot `desktop://codex-login-url` event. 0.4
 
 - Additive: `Pairing` error code; fingerprint permission inventory aligned with
   grantable `[[set]]` entries (`core`, `client-lifecycle`, bundles).

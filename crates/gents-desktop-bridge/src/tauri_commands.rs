@@ -1,6 +1,7 @@
 pub mod chat;
 pub mod config;
 pub mod e2e;
+pub mod inference_setup;
 pub mod lifecycle;
 pub mod operations;
 pub mod peers;

@@ -80,6 +80,26 @@ def recoverySweepCases : List RecoverySweepCase :=
       "failed"
       "deadline-plumbing-audit-2026-05-12-tool-call-persisted-deadline"
   , recoveryCase
+      terminalParentOwnedToolSweep
+      "live_running_composite_parent_interrupted_to_cancelled"
+      "running"
+      "cancelled"
+      "gents-837-terminalize-interrupted-composites"
+  , recoveryCase
+      terminalParentOwnedToolSweep
+      "live_running_tool_parent_terminal_to_failed"
+      "running"
+      "failed"
+      "gents-837-terminalize-interrupted-composites"
+  , -- Detached under a *failed* parent is still stale (clean completion would
+    -- exempt linked children; fail is cancel-worthy).
+    recoveryCase
+      terminalParentOwnedToolSweep
+      "live_detached_bridge_parent_failed_to_failed"
+      "running"
+      "failed"
+      "gents-837-terminalize-interrupted-composites"
+  , recoveryCase
       toolCallRecoverySweep
       "tool_backgrounded_running_live_parent_to_cancelled"
       "running"
@@ -280,6 +300,8 @@ def recoveryEquivalenceTheorem (sweepId : String) : String :=
     "Recovery.responseRecover_matches_uninterrupted"
   else if sweepId = toolCallRecoverySweep.sweepId then
     "Recovery.toolCallRecover_matches_uninterrupted"
+  else if sweepId = terminalParentOwnedToolSweep.sweepId then
+    "Recovery.terminalParentToolRecover_matches_uninterrupted"
   else if sweepId = detachedBridgeRecoverySweep.sweepId then
     "Recovery.detachedBridgeRecover_matches_uninterrupted"
   else if sweepId = inferenceCallRecoverySweep.sweepId then

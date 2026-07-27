@@ -134,6 +134,9 @@ permissions = [
   "allow-desktop-tool-selection-save",
   "allow-desktop-tool-service-save",
   "allow-desktop-tool-service-test",
+  "allow-desktop-probe-inference-endpoint",
+  "allow-desktop-codex-login",
+  "allow-desktop-codex-login-cancel",
 ]
 
 [[set]]
