@@ -7,6 +7,10 @@ It is intentionally a local-first client. The app pairs with a running
 `gents-desktop-core`, and renders conversation, configuration, runtime,
 and fleet views from that local store.
 
+The design for extracting this app's Tauri bridge and chat/fleet/operations
+workflows into reusable packages (#877) lives in
+[docs/reusable-desktop-packages.md](../../docs/reusable-desktop-packages.md).
+
 ## Development
 
 Prerequisites:
