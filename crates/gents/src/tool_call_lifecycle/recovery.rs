@@ -60,6 +60,10 @@ struct RunningToolCallRow {
     doc_id: String,
     #[serde(default)]
     request_id: Option<String>,
+    /// Immutable owner principal stamped at create. Recovery scopes by this
+    /// field — `request_id` alone is not unique across agents.
+    #[serde(default)]
+    agent_did: Option<String>,
     session_id: String,
     tool_call_id: String,
     #[serde(default)]
@@ -238,12 +242,15 @@ impl super::ToolCallLifecycle {
     /// **not** interrupt live-parent background tools (restart-only path).
     ///
     /// Scope and ordering:
-    /// 1. Resolve the parent under `agent_did` first — rows whose parent is
-    ///    missing or foreign are skipped (no cross-principal mutation).
-    /// 2. Require a terminal parent before any write.
-    /// 3. Detached bridges under an *interrupted* parent are left running
-    ///    (same product rule as startup recovery).
-    /// 4. Then project already-terminal children onto bridges (matches startup
+    /// 1. Load only tool rows stamped with this agent's immutable `agent_did`
+    ///    (not global `request_id` matches — that field is not unique).
+    /// 2. Resolve the parent under the same DID; skip missing/foreign parents.
+    /// 3. Require a terminal parent before any write.
+    /// 4. Detached bridges under an *interrupted* parent are left running.
+    /// 5. Child-linked bridges under a *cleanly completed* parent are left
+    ///    running — clean completion is not a cancel signal (live cascade and
+    ///    recovery only cancel on cancel-worthy terminals).
+    /// 6. Then project already-terminal children onto bridges (matches startup
     ///    child-precedence so restart and live ticks converge).
     ///
     /// Covers the durable bad state observed for `fan_out_and_synthesize`:
@@ -252,12 +259,17 @@ impl super::ToolCallLifecycle {
         node: &EmbeddedNode,
         agent_did: &str,
     ) -> Result<TerminalParentToolReport> {
-        let rows = load_running_tool_call_rows(node).await?;
+        let rows = load_running_tool_call_rows_for_agent(node, agent_did).await?;
         let mut report = TerminalParentToolReport::default();
         let mut parent_cache: std::collections::HashMap<String, Option<ParentRequestRow>> =
             std::collections::HashMap::new();
 
         for row in rows {
+            // Defense in depth: never mutate a row whose stamped owner differs.
+            if row.agent_did.as_deref() != Some(agent_did) {
+                continue;
+            }
+
             let parent = match row
                 .request_id
                 .as_deref()
@@ -284,8 +296,7 @@ impl super::ToolCallLifecycle {
             }
 
             // Detached bridges may outlive an interrupted parent by design
-            // (startup recovery leaves them running too). Other terminal
-            // parents still force recovery so detached work cannot strand.
+            // (startup recovery leaves them running too).
             if is_detached_subagent_tool(&row) && request_is_interrupted(&parent) {
                 continue;
             }
@@ -302,28 +313,38 @@ impl super::ToolCallLifecycle {
                 continue;
             }
 
+            // Clean parent completion is not a cancel signal for linked
+            // background/cascade children — leave the bridge running.
+            if request_is_cleanly_completed(&parent) && child_request_id(&row).is_some() {
+                continue;
+            }
+
             let outcome = if request_is_interrupted(&parent) {
                 RecoveryOutcome::Cancelled
             } else {
+                // Cancel-worthy non-interrupt terminals, or a native composite
+                // stranded under a cleanly-completed parent.
                 RecoveryOutcome::Failed
             };
 
-            // Cascade to linked children before terminalizing the tool row.
+            // Cascade only for cancel-worthy terminals — never on clean complete.
             let mut remote_cancel_intent_at = None;
-            if let Some(child_request_id) = cascade_child_request_id(&row) {
-                if child_request_is_locally_owned(node, agent_did, child_request_id).await? {
-                    if let Err(error) = interrupt_request(node, child_request_id).await {
-                        tracing::warn!(
-                            doc_id = %row.doc_id,
-                            request_id = row.request_id.as_deref().unwrap_or(""),
-                            tool_call_id = %row.tool_call_id,
-                            child_request_id,
-                            error = %error,
-                            "failed to cascade live terminal-parent cancel to child request"
-                        );
+            if request_is_cancel_worthy_terminal(&parent) {
+                if let Some(child_request_id) = cascade_child_request_id(&row) {
+                    if child_request_is_locally_owned(node, agent_did, child_request_id).await? {
+                        if let Err(error) = interrupt_request(node, child_request_id).await {
+                            tracing::warn!(
+                                doc_id = %row.doc_id,
+                                request_id = row.request_id.as_deref().unwrap_or(""),
+                                tool_call_id = %row.tool_call_id,
+                                child_request_id,
+                                error = %error,
+                                "failed to cascade live terminal-parent cancel to child request"
+                            );
+                        }
+                    } else {
+                        remote_cancel_intent_at = Some(Utc::now());
                     }
-                } else {
-                    remote_cancel_intent_at = Some(Utc::now());
                 }
             }
 
@@ -389,10 +410,13 @@ mod tests {
 }
 
 async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
-    let rows = load_running_tool_call_rows(node).await?;
+    let rows = load_running_tool_call_rows_for_agent(node, agent_did).await?;
     let mut materialized = 0;
 
     for row in rows {
+        if row.agent_did.as_deref() != Some(agent_did) {
+            continue;
+        }
         let Some(child_request_id) = child_request_id(&row).map(str::to_string) else {
             continue;
         };
@@ -612,10 +636,14 @@ async fn fail_unauthorized_orphan_subagent_tool_call(
 }
 
 async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
-    let rows = load_running_tool_call_rows(node).await?;
+    let rows = load_running_tool_call_rows_for_agent(node, agent_did).await?;
 
     let mut recovered = 0;
     for row in rows {
+        if row.agent_did.as_deref() != Some(agent_did) {
+            continue;
+        }
+
         let deadline_at = parse_datetime(row.deadline_at.as_deref());
         let unclaimed_deadline_at = parse_datetime(row.unclaimed_deadline_at.as_deref());
         let parent = match row
@@ -652,6 +680,11 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
                 .is_some_and(|parent| request_is_interrupted(parent))
         {
             None
+        } else if parent.as_ref().is_some_and(request_is_cleanly_completed)
+            && child_request_id(&row).is_some()
+        {
+            // Clean parent completion is not a cancel signal for linked children.
+            None
         } else if parent
             .as_ref()
             .is_some_and(|parent| request_is_interrupted(parent))
@@ -677,8 +710,13 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
             continue;
         };
 
+        // Cascade only on cancel-worthy parent terminals (not clean completion).
         let mut remote_cancel_intent_at = None;
-        if outcome != RecoveryOutcome::UnclaimedCrossDeploymentSpawn {
+        let should_cascade = outcome != RecoveryOutcome::UnclaimedCrossDeploymentSpawn
+            && parent
+                .as_ref()
+                .is_none_or(|p| !request_is_cleanly_completed(p));
+        if should_cascade {
             if let Some(child_request_id) = cascade_child_request_id(&row) {
                 if child_request_is_locally_owned(node, agent_did, child_request_id).await? {
                     if let Err(error) = interrupt_request(node, child_request_id).await {
@@ -761,8 +799,17 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
     Ok(recovered)
 }
 
-async fn load_running_tool_call_rows(node: &EmbeddedNode) -> Result<Vec<RunningToolCallRow>> {
-    load_running_tool_call_rows_with_filter(node, "").await
+/// Running tool rows owned by `agent_did` (immutable scope key on create).
+async fn load_running_tool_call_rows_for_agent(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Result<Vec<RunningToolCallRow>> {
+    let escaped = escape_graphql_string(agent_did);
+    load_running_tool_call_rows_with_filter(
+        node,
+        &format!(r#", agent_did: {{ _eq: "{escaped}" }}"#),
+    )
+    .await
 }
 
 /// Running bridge rows only (`child_request_id` set) — the periodic liveness
@@ -783,6 +830,7 @@ async fn load_running_tool_call_rows_with_filter(
         ) {{
             _docID
             request_id
+            agent_did
             session_id
             tool_call_id
             tool_name
@@ -1649,6 +1697,22 @@ fn effective_deadline(
 
 fn request_is_interrupted(parent: &ParentRequestRow) -> bool {
     parent.status == "interrupted" || parent.lifecycle_state.as_deref() == Some("interrupted")
+}
+
+/// Parent reached a successful terminal without interrupt — not a cancel signal
+/// for linked background/cascade children.
+fn request_is_cleanly_completed(parent: &ParentRequestRow) -> bool {
+    matches!(parent.status.as_str(), "completed" | "complete")
+        || matches!(
+            parent.lifecycle_state.as_deref(),
+            Some("completed" | "complete")
+        )
+}
+
+/// Terminal parent whose terminal is cancel-worthy (interrupt, failure, dead,
+/// supersede, …) — clean completion is excluded.
+fn request_is_cancel_worthy_terminal(parent: &ParentRequestRow) -> bool {
+    request_is_terminal(parent) && !request_is_cleanly_completed(parent)
 }
 
 fn request_is_terminal(parent: &ParentRequestRow) -> bool {

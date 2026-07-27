@@ -1053,8 +1053,9 @@ async fn seed_tool_parent_and_row(
             };
             seed_child_request(&node, &child_request_id, child_state).await;
             if case.name == "detached_bridge_terminal_parent_to_failed" {
-                set_request_status_and_lifecycle(&node, &parent_doc_id, "completed", "completed")
-                    .await;
+                // Cancel-worthy terminal (not clean completion): clean complete
+                // must leave linked children running (#880 / #377 policy).
+                set_request_status_and_lifecycle(&node, &parent_doc_id, "error", "failed").await;
             }
             ToolCallLifecycle::new_subagent(
                 node.clone(),
@@ -1123,8 +1124,8 @@ async fn seed_tool_parent_and_row(
                 future_deadline,
             )
         }
-        "live_detached_bridge_parent_completed_to_failed" => {
-            set_request_status_and_lifecycle(&node, &parent_doc_id, "completed", "completed").await;
+        "live_detached_bridge_parent_failed_to_failed" => {
+            set_request_status_and_lifecycle(&node, &parent_doc_id, "error", "failed").await;
             let child_request_id = format!("{tool_call_id}-detached-child");
             seed_child_request(&node, &child_request_id, "processing").await;
             ToolCallLifecycle::new_subagent(

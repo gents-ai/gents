@@ -157,19 +157,33 @@ structure TerminalParentToolRow where
   call : ToolCallContext
   parentTerminal : Bool
   parentInterrupted : Bool
+  /-- Parent reached a successful completed terminal (not interrupt/fail/dead).
+      Clean completion is **not** a cancel signal for linked children. -/
+  parentCleanCompleted : Bool
   deriving Repr
+
+/-- Linked subagent bridge (has a child request id). -/
+def isChildLinkedBridge (call : ToolCallContext) : Prop :=
+  call.childRequestId.isSome
+
+instance (call : ToolCallContext) : Decidable (isChildLinkedBridge call) := by
+  unfold isChildLinkedBridge
+  infer_instance
 
 /-- Matches Rust live + startup product rule for this sweep:
 
     * running, and
     * parent is interrupted **or** otherwise terminal, and
     * **not** (detached bridge ∧ parent interrupted) — detached may outlive an
-      interrupted parent; under a completed/failed parent the row is still stale.
+      interrupted parent, and
+    * **not** (child-linked bridge ∧ parent cleanly completed) — clean completion
+      does not cancel background cascade children.
 -/
 def terminalParentToolStale (row : TerminalParentToolRow) : Prop :=
   row.call.state = .running ∧
   (row.parentInterrupted = true ∨ row.parentTerminal = true) ∧
-  ¬ (isDetachedBridgeCall row.call ∧ row.parentInterrupted = true)
+  ¬ (isDetachedBridgeCall row.call ∧ row.parentInterrupted = true) ∧
+  ¬ (isChildLinkedBridge row.call ∧ row.parentCleanCompleted = true)
 
 instance (row : TerminalParentToolRow) : Decidable (terminalParentToolStale row) := by
   unfold terminalParentToolStale
@@ -208,7 +222,7 @@ theorem terminalParentToolRecover_terminal :
       HasTerminal.isTerminal, ToolCallState.instHasTerminal]
   · -- not interrupted: parentTerminal must hold for staleness
     have h_term : row.parentTerminal = true := by
-      rcases h_stale with ⟨_, h_parent, _⟩
+      rcases h_stale with ⟨_, h_parent, _, _⟩
       cases h_parent with
       | inl h => exact absurd h (by simpa using h_int)
       | inr h => exact h
@@ -221,7 +235,7 @@ theorem terminalParentToolRecover_zero :
   intro row h_stale
   have h_not : ¬ terminalParentToolStale (terminalParentToolRecover row) := by
     intro h
-    rcases h with ⟨h_running, _, _⟩
+    rcases h with ⟨h_running, _, _, _⟩
     unfold terminalParentToolRecover at h_running
     by_cases h_int : row.parentInterrupted
     · simp [h_int, ToolRecoveryCause.terminalState] at h_running
