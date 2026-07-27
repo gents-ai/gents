@@ -1,3 +1,10 @@
+/*
+ * Phase 6 token contract (docs/reusable-desktop-packages.md):
+ * - Semantic slots (--color-bg/surface/text/accent, spacing, radii) are the
+ *   theming API for packaged CSS. See @source-inc/gents-desktop-tokens.
+ * - Brand values (--source-*) stay host-private and map into semantic slots.
+ * Packaged components must not reference --source-* vars.
+ */
 @layer tokens {
   :root {
     color-scheme: dark;
@@ -19,6 +26,7 @@
     --font-body: "Inter Variable", "Inter", "SF Pro Text", system-ui, sans-serif;
     --font-mono:
       ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+    /* --- Brand (host-private) --- */
     --source-black: #000000;
     --source-green: #06b250;
     --source-dark-green: #1c2724;

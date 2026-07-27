@@ -1,0 +1,31 @@
+{
+  "name": "@source-inc/gents-desktop-chat",
+  "version": "0.8.0",
+  "license": "Apache-2.0",
+  "description": "Headless chat projection and workflow helpers for Gents desktop",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "@source-inc/gents-desktop-client": "0.8.0"
+  },
+  "devDependencies": {
+    "@source-inc/gents-desktop-client": "0.8.0",
+    "@types/react": "^19.1.8",
+    "typescript": "~5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

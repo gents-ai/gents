@@ -31,6 +31,7 @@ pub use error::{BridgeError, BridgeErrorCode};
 pub use plugin::init;
 pub use runtime_setup::{init_tracing, install_runtime};
 pub use snapshot::projection::SnapshotGrants;
+pub use state::resolve_policy;
 
 #[cfg(test)]
 mod tests;

@@ -1,0 +1,22 @@
+[package]
+name = "fixture-domain-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fixture co-resident domain plugin for reusable desktop packages (phase 4)"
+links = "tauri-plugin-fixture-domain"
+build = "build.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = [] }
+tokio.workspace = true
+tracing.workspace = true
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
+
+[dev-dependencies]
+tempfile = "3"

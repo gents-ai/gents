@@ -1,7 +1,4 @@
-// Headless projection also published as @source-inc/gents-desktop-chat.
-// App keeps a copy so unit tests and shell composition stay path-stable;
-// package is the public boundary for downstream hosts.
-import type { ConversationSummary, DesktopSessionSnapshot } from "./types";
+import type { ConversationSummary, DesktopSessionSnapshot } from "./types.js";
 
 export type TurnState =
   | "waitingForClaim"

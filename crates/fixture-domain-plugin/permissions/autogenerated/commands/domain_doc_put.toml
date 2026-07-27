@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-domain-doc-put"
+description = "Enables the domain_doc_put command without any pre-configured scope."
+commands.allow = ["domain_doc_put"]
+
+[[permission]]
+identifier = "deny-domain-doc-put"
+description = "Denies the domain_doc_put command without any pre-configured scope."
+commands.deny = ["domain_doc_put"]

@@ -1,7 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
+    "apps/fixture-host/src-tauri",
     "apps/gents-desktop/src-tauri",
+    "crates/fixture-domain-plugin",
     "crates/gents",
     "crates/gents-cli",
     "crates/gents-desktop",
@@ -28,7 +30,9 @@ exclude = [
 # wasm32-unknown-unknown`. The rlib target (used by tests via the
 # default-features=false dev-dep) is unaffected.
 default-members = [
+    "apps/fixture-host/src-tauri",
     "apps/gents-desktop/src-tauri",
+    "crates/fixture-domain-plugin",
     "crates/gents",
     "crates/gents-cli",
     "crates/gents-desktop",

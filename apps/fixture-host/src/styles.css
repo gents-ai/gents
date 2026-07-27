@@ -1,0 +1,44 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  line-height: 1.4;
+}
+
+body {
+  margin: 0;
+  background: #0f1410;
+  color: #e8f0e9;
+}
+
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+h1 {
+  font-size: 1.25rem;
+  margin: 0 0 0.5rem;
+}
+
+.panel {
+  border: 1px solid #2a3a2e;
+  border-radius: 8px;
+  padding: 1rem;
+  margin: 1rem 0;
+  background: #151c17;
+}
+
+button {
+  margin-right: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+code,
+pre {
+  font-size: 0.85rem;
+}
+
+.error {
+  color: #ff8a80;
+}

@@ -1,0 +1,63 @@
+/**
+ * Semantic tokens only — packages must not reference brand vars (--source-*).
+ * Hosts (Gents Desktop, Amygdala, fixture) supply brand values that map onto
+ * these semantic slots.
+ */
+@layer tokens {
+  :root {
+    /* Typography (hosts may override with brand fonts) */
+    --font-heading: system-ui, sans-serif;
+    --font-body: system-ui, sans-serif;
+    --font-mono: ui-monospace, monospace;
+
+    /* Surfaces & text */
+    --color-bg: #000000;
+    --color-surface: #1c2724;
+    --color-surface-strong: #07110e;
+    --color-surface-deep: #020504;
+    --color-surface-muted: #1c2724;
+    --color-surface-row: #09110e;
+    --color-text: #ffffff;
+    --color-text-muted: #95a49d;
+    --color-text-soft: #d6ddda;
+    --color-text-warm: #dff8e8;
+
+    /* Accent & status */
+    --color-accent: #06b250;
+    --color-accent-strong: #39e27a;
+    --color-accent-muted: #58c779;
+    --color-success: #8df2b4;
+    --color-success-strong: #06b250;
+    --color-warning: #ffa011;
+    --color-warning-soft: #ffd089;
+    --color-info: #10cbff;
+    --color-error: #ffad9d;
+    --color-error-strong: #ff6f5f;
+    --color-error-soft: #ffe2de;
+    --color-error-tint: #ffbfb8;
+
+    /* Borders & radii */
+    --border-subtle: rgb(6 178 80 / 0.12);
+    --border-default: rgb(6 178 80 / 0.18);
+    --border-strong: rgb(6 178 80 / 0.28);
+    --border-selected: rgb(6 178 80 / 0.48);
+    --radius-sm: 8px;
+    --radius-md: 8px;
+    --radius-lg: 8px;
+    --radius-pill: 999px;
+
+    /* Spacing scale */
+    --space-1: 4px;
+    --space-2: 6px;
+    --space-3: 8px;
+    --space-4: 10px;
+    --space-5: 12px;
+    --space-6: 16px;
+    --space-7: 20px;
+    --space-8: 24px;
+
+    /* Layout contract: packages use this breakpoint; CSS custom props cannot
+       parameterize @media, so hosts document the same literal. */
+    --gents-narrow-breakpoint: 760px;
+  }
+}

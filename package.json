@@ -1,0 +1,19 @@
+{
+  "name": "gents-desktop-workspace",
+  "private": true,
+  "version": "0.8.0",
+  "description": "npm workspaces for Gents desktop reusable packages",
+  "workspaces": [
+    "packages/*",
+    "apps/gents-desktop",
+    "apps/fixture-host"
+  ],
+  "scripts": {
+    "build:packages": "npm run build -w @source-inc/gents-desktop-tokens -w @source-inc/gents-desktop-client -w @source-inc/gents-desktop-chat -w @source-inc/gents-desktop-fleet -w @source-inc/gents-desktop-operations",
+    "test:packages": "npm run test -w @source-inc/gents-desktop-client --if-present",
+    "pack:packages": "npm pack -w @source-inc/gents-desktop-client -w @source-inc/gents-desktop-chat -w @source-inc/gents-desktop-fleet -w @source-inc/gents-desktop-operations -w @source-inc/gents-desktop-tokens"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

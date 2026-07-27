@@ -1,0 +1,41 @@
+{
+  "name": "@source-inc/gents-desktop-client",
+  "version": "0.8.0",
+  "license": "Apache-2.0",
+  "description": "Transport, shared store, and view-model contract for Gents desktop packages",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
+    },
+    "./generated/*": "./src/generated/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src/generated",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "typescript": "~5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
