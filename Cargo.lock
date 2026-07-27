@@ -8691,6 +8691,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "gents-desktop-bridge"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "chrono",
+ "gents",
+ "gents-desktop-core",
+ "gents-lean-contract",
+ "gents-protocol",
+ "hostname",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "gents-desktop-core"
 version = "0.8.0"
 dependencies = [
@@ -8729,6 +8751,7 @@ dependencies = [
  "chrono",
  "clap",
  "gents",
+ "gents-desktop-bridge",
  "gents-desktop-core",
  "gents-lean-contract",
  "gents-protocol",

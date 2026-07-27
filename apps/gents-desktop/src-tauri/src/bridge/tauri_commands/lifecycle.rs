@@ -7,9 +7,9 @@ use gents_desktop_core::local_runtime::{
 };
 use tauri::{AppHandle, Emitter, State};
 
-use super::super::snapshot::{build_bootstrap_summary, build_client_snapshot};
+use gents_desktop_bridge::snapshot::{build_bootstrap_summary, build_client_snapshot};
 use super::super::state::{current_core, spawn_client_update_task, DesktopAppState};
-use super::super::types::{
+use gents_desktop_bridge::types::{
     ClientUpdateEvent, DesktopBootstrapSummary, DesktopClientSnapshot, DesktopInitRequest,
 };
 

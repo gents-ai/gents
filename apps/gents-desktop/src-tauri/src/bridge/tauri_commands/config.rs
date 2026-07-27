@@ -1,6 +1,6 @@
 use tauri::{AppHandle, State};
 
-use super::super::commands::{
+use gents_desktop_bridge::commands::{
     delete_backend_config, delete_behavior_config, delete_event_trigger_config,
     delete_inference_profile_config, delete_schedule_config, delete_skill_config,
     delete_task_config, delete_tool_selection_config, delete_tool_service_config,
@@ -9,7 +9,7 @@ use super::super::commands::{
     test_tool_service_config,
 };
 use super::super::state::{current_core, DesktopAppState};
-use super::super::types::{
+use gents_desktop_bridge::types::{
     AgentConfigSaveRequest, BackendDeleteRequest, BackendSaveRequest, BehaviorDeleteRequest,
     BehaviorSaveRequest, DesktopClientSnapshot, EventTriggerDeleteRequest,
     InferenceProfileDeleteRequest, InferenceProfileSaveRequest, ScheduleDeleteRequest,

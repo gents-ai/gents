@@ -3,9 +3,9 @@ use std::time::Duration;
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
 use tauri::{AppHandle, State};
 
-use super::super::commands::{add_peer, pair_bearer, remove_peer, rename_peer, repair_p2p};
+use gents_desktop_bridge::commands::{add_peer, pair_bearer, remove_peer, rename_peer, repair_p2p};
 use super::super::state::{current_core, DesktopAppState};
-use super::super::types::{
+use gents_desktop_bridge::types::{
     BearerPairingRequest, BearerPairingResponse, DesktopClientSnapshot, NetworkReplicatorView,
     NetworkSavedPeerView, NetworkStatusView, PeerAddRequest, PeerRemoveResponse,
     PeerStatusFetchRequest,

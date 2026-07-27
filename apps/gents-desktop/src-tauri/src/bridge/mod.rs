@@ -1,17 +1,18 @@
-mod cascade;
-pub(crate) mod cause_derivation;
-mod commands;
-mod logging;
-mod snapshot;
+//! Desktop app bridge shell.
+//!
+//! Tauri-agnostic command logic, snapshots, and view models live in
+//! `gents_desktop_bridge`. This module owns the Tauri builder, managed state,
+//! and `#[tauri::command]` wrappers until plugin-ization.
+
 mod state;
 mod tauri_commands;
 #[cfg(test)]
 mod tests;
-mod types;
 
 use std::sync::OnceLock;
 
-use self::logging::init_tracing;
+use gents_desktop_bridge::logging::init_tracing;
+
 use self::state::DesktopAppState;
 
 static TAURI_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();

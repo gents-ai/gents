@@ -20,6 +20,7 @@ clap.workspace = true
 chrono.workspace = true
 blake3 = "1"
 gents = { path = "../../../crates/gents" }
+gents-desktop-bridge.workspace = true
 gents-desktop-core.workspace = true
 gents-protocol = { path = "../../../crates/gents-protocol" }
 hostname.workspace = true

@@ -4,8 +4,6 @@
 //! #276) and the MCP-health commands (panel #278) are live.
 
 use std::sync::Arc;
-#[cfg(test)]
-use std::time::Duration;
 
 use chrono::Utc;
 use gents::backend_registry::{derive_display_state, list_all_backends};
@@ -16,15 +14,15 @@ use gents_desktop_core::client::ClientCore;
 use reqwest::Url;
 use tauri::State;
 
-use super::super::commands::mcp_health::{load_mcp_services_with_health, probe_mcp_service};
-use super::super::snapshot::operations_snapshot::{
+use gents_desktop_bridge::commands::mcp_health::{load_mcp_services_with_health, probe_mcp_service};
+use gents_desktop_bridge::snapshot::operations_snapshot::{
     project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
 };
-use super::super::snapshot::subagent_tree::{
+use gents_desktop_bridge::snapshot::subagent_tree::{
     build_subagent_tree, effective_subagent_tree_max_depth, SubagentTreeAccess, TreeQueryAccess,
 };
 use super::super::state::{current_core, DesktopAppState};
-use super::super::types::{
+use gents_desktop_bridge::types::{
     BackendHealthView, CascadeCancelPreview, DesktopInterruptRequest, DesktopListHoldsRequest,
     DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
     DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest,
@@ -33,8 +31,6 @@ use super::super::types::{
     RuntimeLivenessView, SubagentTreeView,
 };
 
-#[cfg(test)]
-const SUBAGENT_TREE_TIMEOUT: Duration = Duration::from_secs(10);
 const BACKGROUND_TOOL_CALL_LIMIT: usize = 256;
 
 /// Number of most-recent `InferenceCall` rows surfaced per backend in the
@@ -401,7 +397,7 @@ pub(crate) async fn desktop_preview_interrupt_cascade(
 ) -> Result<CascadeCancelPreview, String> {
     let core = super::super::state::current_core(&state)
         .ok_or_else(|| "desktop bridge core not initialized".to_string())?;
-    crate::bridge::cascade::build_cascade_preview(&core, &request).await
+    gents_desktop_bridge::cascade::build_cascade_preview(&core, &request).await
 }
 
 #[tauri::command]
@@ -418,7 +414,7 @@ pub(crate) async fn desktop_interrupt_request(
         cascade = request.cascade,
         "desktop interrupt action received"
     );
-    let result = crate::bridge::cascade::interrupt_request(&core, &request).await;
+    let result = gents_desktop_bridge::cascade::interrupt_request(&core, &request).await;
     match &result {
         Ok(result) => tracing::info!(
             target: "gents_desktop::interrupt",

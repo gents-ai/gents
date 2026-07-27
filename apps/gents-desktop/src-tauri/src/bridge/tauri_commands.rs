@@ -16,8 +16,8 @@ use std::sync::Arc;
 use gents_desktop_core::client::ClientCore;
 use tauri::{AppHandle, Emitter};
 
-use super::snapshot::build_client_snapshot;
-use super::types::{ClientUpdateEvent, DesktopClientSnapshot};
+use gents_desktop_bridge::snapshot::build_client_snapshot;
+use gents_desktop_bridge::types::{ClientUpdateEvent, DesktopClientSnapshot};
 
 pub(super) async fn emit_config_update_and_snapshot(
     app: &AppHandle,

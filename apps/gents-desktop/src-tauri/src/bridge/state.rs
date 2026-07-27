@@ -5,7 +5,7 @@ use gents_desktop_core::client::ClientCore;
 use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::{AppHandle, Emitter, State};
 
-use super::types::ClientUpdateEvent;
+use gents_desktop_bridge::types::ClientUpdateEvent;
 
 #[derive(Default)]
 pub(crate) struct DesktopAppState {

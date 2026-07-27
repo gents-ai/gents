@@ -7,7 +7,7 @@ use crate::bridge::tauri_commands::operations::{
     list_tool_call_holds_for_core, resolve_tool_call_hold_for_core,
 };
 use crate::bridge::tests::support::boot_core;
-use crate::bridge::types::{DesktopListHoldsRequest, DesktopResolveHoldRequest};
+use gents_desktop_bridge::types::{DesktopListHoldsRequest, DesktopResolveHoldRequest};
 
 const AGENT_DID: &str = "did:test:holds-agent";
 

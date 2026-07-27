@@ -19,7 +19,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 use tracing_subscriber::prelude::*;
 
-use crate::bridge::types::{DesktopBootstrapSummary, SavedPeerView};
+use gents_desktop_bridge::types::{DesktopBootstrapSummary, SavedPeerView};
 
 use self::agent::{spawn_live_agent, RunningAgent};
 use self::backend::AgentBackendConfig;
@@ -433,9 +433,9 @@ mod tests {
     use tokio::sync::oneshot;
 
     use super::{LiveBackendOverride, LiveBridgeFixture};
-    use crate::bridge::commands::{delete_skill_config, save_skill_config, send_chat_message};
-    use crate::bridge::snapshot::build_session_snapshot_from_store_for_agent;
-    use crate::bridge::types::{ChatSendRequest, SkillDeleteRequest, SkillSaveRequest};
+    use gents_desktop_bridge::commands::{delete_skill_config, save_skill_config, send_chat_message};
+    use gents_desktop_bridge::snapshot::build_session_snapshot_from_store_for_agent;
+    use gents_desktop_bridge::types::{ChatSendRequest, SkillDeleteRequest, SkillSaveRequest};
 
     const MODEL_NAME: &str = "desktop-live-skill-mock";
 

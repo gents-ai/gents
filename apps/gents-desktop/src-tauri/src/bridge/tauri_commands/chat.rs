@@ -1,9 +1,9 @@
 use tauri::State;
 
-use super::super::commands::{rename_conversation, send_chat_message};
-use super::super::snapshot::build_session_snapshot_from_store_for_agent;
+use gents_desktop_bridge::commands::{rename_conversation, send_chat_message};
+use gents_desktop_bridge::snapshot::build_session_snapshot_from_store_for_agent;
 use super::super::state::{current_core, DesktopAppState};
-use super::super::types::{
+use gents_desktop_bridge::types::{
     ChatSendRequest, ChatSendResult, ConversationRenameRequest, DesktopSessionSnapshot,
 };
 

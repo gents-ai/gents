@@ -1,11 +1,11 @@
 use tauri::{AppHandle, Emitter, State};
 
-use super::super::commands::{
+use gents_desktop_bridge::commands::{
     run_schedule_config, run_task_config, save_event_trigger_config, save_schedule_config,
     save_task_config,
 };
 use super::super::state::{current_core, DesktopAppState};
-use super::super::types::{
+use gents_desktop_bridge::types::{
     ClientUpdateEvent, DesktopClientSnapshot, EventTriggerSaveRequest, ScheduleRunRequest,
     ScheduleSaveRequest, TaskRunRequest, TaskRunResult, TaskSaveRequest,
 };
