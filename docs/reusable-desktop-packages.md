@@ -2,13 +2,13 @@
 
 *Design spec — 2026-07-27. Issue [#877](https://github.com/source-inc/gents/issues/877)
 (`design` label: design-only spec PR). Status: design approved by the issue author
-2026-07-27 after three review passes; revised same day for two PR #878 review
-rounds (bootstrap-vs-`runtime-admin` authorization, `HomePolicy::Default` path
-fidelity to `DesktopPaths::discover()`, package grant profiles, phases 3–4 as a
-stacked pair, release-tarball npm fallback; then client-store bootstrap vs runtime
-provisioning, webview-supplied home paths removed, permission-projected snapshots,
-opt-in fleet onboarding, cascade preview reclassified read-only, stacked-pair entry
-rule). Base: the
+2026-07-27 after three review passes; hardened same day across three PR #878
+security-review rounds — permission-set scoping (read/write splits,
+interrupt-vs-hold separation, grant profiles), storage-path and network-address
+authority (no webview-supplied `desktop_home`/`agent_home`/peer addresses), and
+projection boundaries (permission-projected snapshot and bootstrap summary,
+redacted chat/fleet metadata) — see git history for the pass-by-pass detail. Base:
+the
 iPhone/bearer-pairing series, merged to `main` as
 [#875](https://github.com/source-inc/gents/pull/875) (squash `1a5e23d5`), which this
 design treats as load-bearing evidence, not incidental history.*
@@ -192,8 +192,10 @@ repo currently has a single `package.json`):
   `@gents/*` names were illustrative.
 - **`@source-inc/gents-desktop-chat`** — headless first: `chat-shell.ts` projection
   (`projectChatShell`, `ChatWorkflowState`, turn/send state), conversation selection,
-  chat/task actions rehomed as selectors/actions over the shared store
-  (`useChatWorkflow`), and the presentational components (`ChatComposer`,
+  chat actions rehomed as selectors/actions over the shared store
+  (`useChatWorkflow`) — task/schedule actions stay **app-private** (they belong to
+  the config/tasks surface and their grants, not to chat) — and the presentational
+  components (`ChatComposer`,
   `ChatHeader`, `ChatTranscriptPanel`, `Transcript`, `cancelUx/*`, `slashSkills`).
   Streaming, retry, interrupt, reconnect, and recovery behavior comes with the
   projection + actions, not reimplemented.
@@ -296,17 +298,21 @@ tauri::Builder::default()
     .run(tauri::generate_context!())       // host's context: bundle id, icons, windows
 ```
 
-**`HomePolicy` is authoritative over storage — the webview can never supply a
-path.** The home is resolved exactly once, from `BridgeConfig.home`, at plugin init,
-and every command — start, initialization, bootstrap summary, reset/overwrite —
-operates on that one resolved home. This is a deliberate contract change: today's
-IPC surface accepts a `desktop_home` field that `desktop_init_local_standard` uses
-directly (`bridge/types/requests.rs`, `tauri_commands/lifecycle.rs`), which would
-let a `runtime-admin` webview point initialization — including the
-reset/overwrite flags — at an arbitrary filesystem path, bypassing
-`AppDataDir`/`FixedRoot` entirely. Plugin-ization removes those fields from the
-request payloads; Gents Desktop's env-based flexibility survives on the native side
-via `HomePolicy::Default`.
+**Native policy is authoritative over storage — the webview can never supply a
+path.** The client home is resolved exactly once, from `BridgeConfig.home`, at
+plugin init, and every command — start, initialization, bootstrap summary,
+reset/overwrite — operates on that one resolved home. This is a deliberate contract
+change: today's `DesktopInitRequest` accepts **two** path fields, `desktop_home`
+*and* `agent_home` (`bridge/types/requests.rs:7`), which `desktop_init_local_standard`
+uses directly (`tauri_commands/lifecycle.rs`) — so a `runtime-admin` webview could
+point initialization, including the reset/overwrite flags, at arbitrary filesystem
+paths, bypassing `AppDataDir`/`FixedRoot` entirely. Plugin-ization removes **both**
+fields (and every other filesystem-path field) from IPC payloads: the client home
+comes from `HomePolicy`, and the local runtime home comes from
+`BootstrapPolicy::LocalRuntimeAllowed { agent_home: AgentHomePolicy }` (`Default` =
+the existing `~/.gents` conventions, or `Fixed(PathBuf)`), resolved natively. Gents
+Desktop's env-based flexibility survives on the native side via the `Default`
+policies.
 
 Why a plugin instead of an exported handler list: Tauri 2's supported cross-crate
 composition mechanism is the plugin API — it carries its own `generate_handler!`,
@@ -327,16 +333,19 @@ split, and hosts opt into each in their capability files:
 
 | Permission set | Commands (grouped) |
 |---|---|
-| `core` | `desktop_bridge_contract`, `desktop_bootstrap_summary`, `desktop_client_snapshot` (**permission-projected** — sections require the matching read grants, see below), `desktop_observer_metrics` |
-| `client-lifecycle` | `desktop_client_start`, `desktop_set_selected_agent` |
-| `runtime-admin` | `desktop_init_local_standard`, `desktop_client_shutdown` |
+| `core` | `desktop_bridge_contract`, `desktop_bootstrap_summary` (**lifecycle-projected** — see below), `desktop_client_snapshot` (**permission-projected** — sections require the matching read grants, see below), `desktop_observer_metrics` |
+| `client-lifecycle` | `desktop_client_start`, `desktop_client_shutdown`, `desktop_set_selected_agent` |
+| `runtime-admin` | `desktop_init_local_standard` |
 | `chat-read` | session snapshot, request timeline, tool-surface explain |
 | `chat-write` | send, conversation rename, session fork, request resend |
-| `fleet-read` | peer status fetch, network status |
+| `fleet-read` | peer status fetch (**by saved peer id only** — see below), network status |
 | `workspace-read` | workspace list |
-| `fleet-admin` | peer add/remove/rename, bearer pairing, P2P repair |
-| `operations-read` | operations snapshot, subagent tree, interrupt-cascade preview, backend/MCP health lists, MCP probe, hold list |
-| `operations-control` | interrupt request, hold resolve |
+| `fleet-admin` | peer add/remove/rename, bearer pairing, P2P repair (all address-accepting flows live only here) |
+| `operations-read` | operations snapshot, subagent tree, backend/MCP health lists, MCP probe |
+| `interrupt-read` | interrupt-cascade preview |
+| `interrupt-control` | interrupt request |
+| `holds-read` | tool-call hold list |
+| `holds-control` | tool-call hold resolve |
 | `config-read` | config sections of the projected snapshot (backends, profiles, tools, skills, behaviors, tasks, schedules, triggers) |
 | `config-write` | all 17 config save/delete/test commands |
 | `tasks` | task/schedule/event-trigger save + run |
@@ -344,7 +353,11 @@ split, and hosts opt into each in their capability files:
 
 The shipped `default` set is minimal: `core` + `client-lifecycle`. Notably it
 excludes `runtime-admin` — a webview should not be able to provision a local
-runtime or shut the client down unless the host grants that explicitly. The line
+runtime unless the host grants that explicitly. `desktop_client_shutdown` sits in
+`client-lifecycle`, not `runtime-admin`, deliberately: the restart/backoff loop the
+client package owns calls shutdown-then-start (`useDesktopShell.ts:208` today), and
+the worst a webview can do with shutdown is stop its own client — denial of its own
+service, which any webview can already achieve, not an escalation. The line
 `desktop_client_start` walks is precise: it performs **client-store bootstrap**
 (create the home dirs, mint/load the principal identity, open the embedded node) —
 without which a clean-install paired-remote host could never start, pair, or chat —
@@ -368,16 +381,43 @@ just lifecycle/runtime status. A projection test in the fixture (run with
 default-only grants) asserts ungranted sections are absent — that test is what
 makes the least-privilege claim checkable rather than aspirational.
 
+Three refinements keep the projection honest without forcing broad grants:
+
+- **Redacted metadata projections.** Chat needs behavior selection and slash-skill
+  suggestions (`ChatWorkspace.tsx:104` today), and fleet rows show behavior and
+  tool-selection labels — but neither package should hold `config-read` for that.
+  The `chat-read` and `fleet-read` scopes therefore include **redacted metadata**
+  for those objects: identity and display fields only (ids, labels, model label,
+  slash triggers, tool-selection names). Content stays behind `config-read`:
+  system prompts, skill instruction bodies, backend endpoints, credentials, and
+  every other authoring-surface field. The redaction split is part of the contract
+  fingerprint, so widening a metadata projection is a visible contract change.
+- **`desktop_bootstrap_summary` is lifecycle-projected the same way.** Its current
+  payload (`bridge/types/views/bootstrap.rs`) includes filesystem paths, the tool
+  root, saved peer addresses, GraphQL endpoints, and agent identity — far more
+  than `core` should hand out. Under the plugin, the base (`core`) response is
+  init/run state, the local principal DID (the app's own public identity), and
+  `app_meta`; the `fleet-read` scope adds saved-peer summaries; the
+  `runtime-admin` scope adds filesystem paths, tool root, and endpoint URLs.
+- **No webview-supplied network addresses.** `desktop_peer_status_fetch` today
+  performs a native HTTP fetch against a webview-provided address
+  (`tauri_commands/peers.rs:49`) — an SSRF/LAN-scanning primitive if it sat in a
+  read grant. Under the plugin it is re-keyed to a **saved peer id**; the native
+  side resolves the address from the peer directory, and the address-accepting
+  variants exist only inside `fleet-admin` flows (adding a peer inherently takes
+  an address). This is the same family of change as the storage-path removal:
+  webviews name objects, never paths or addresses.
+
 Fine-grained sets are the enforcement unit, but the *supported setup* unit is the
 **package grant profile** — the sets a frontend package's full surface needs. A host
 following a package's documented install must never hit permission-denied:
 
 | Package | Required permission sets |
 |---|---|
-| `-client` | `default` (`core` + `client-lifecycle`) |
-| `-chat` | `default` + `chat-read` + `chat-write` + `operations-read` (cascade preview for the cancel dialog) + `operations-control` (interrupt is part of the promised chat UX) |
+| `-client` | `default` (`core` + `client-lifecycle`, which covers the restart/backoff loop's shutdown-then-start) |
+| `-chat` | `default` + `chat-read` + `chat-write` + `interrupt-read` (cascade preview for the cancel dialog) + `interrupt-control` (interrupt is part of the promised chat UX). **Never the hold sets** — enumerating or approving held tool executions is not a chat capability |
 | `-fleet` | `default` + `fleet-read`; add `fleet-admin` for the pairing surfaces (`AddPeerForm`, QR pairing). The local-runtime onboarding affordance ("Connect Local Agent", today inside `FleetDashboard`) is extracted as an **opt-in subcomponent** with its own declared requirement of `runtime-admin` + `BootstrapPolicy::LocalRuntimeAllowed`; the base fleet profile never includes `runtime-admin`, and paired-remote hosts simply don't render it |
-| `-operations` | `default` + `operations-read` + `operations-control` + `chat-read` (`RequestTracePanel` timelines) + `workspace-read` (`WorkspaceTreePanel`) |
+| `-operations` | `default` + `operations-read` + `interrupt-read` + `interrupt-control` + `holds-read` + `holds-control` + `chat-read` (`RequestTracePanel` timelines) + `workspace-read` (`WorkspaceTreePanel`) |
 
 Each package ships a machine-readable manifest of the commands its code can invoke;
 a contract test checks manifest ⊆ declared profile (using the fingerprint's
@@ -734,7 +774,9 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
    `state.rs` into the bridge crate behind `gents_desktop_bridge::init(BridgeConfig)`
    with `HomePolicy` (Default/AppDataDir/FixedRoot), `BootstrapPolicy`, and the
    `install_runtime()`/`init_tracing()` host helpers; resolve the home once from
-   `BridgeConfig` and strip the `desktop_home` fields from IPC request payloads;
+   `BridgeConfig` and strip every filesystem-path field (`desktop_home` **and**
+   `agent_home`) from IPC request payloads, re-keying `desktop_peer_status_fetch`
+   to saved peer ids;
    declare the capability-scoped permission sets and implement snapshot
    permission-projection via scoped read grants; introduce `BridgeError` and
    `desktop_bridge_contract`; move
@@ -848,7 +890,7 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
 | Minimal downstream app owns binary, identity, storage home, schema registration, extra commands | `gents-desktop-bridge::init(BridgeConfig)` + `HomePolicy`; domain plugins own their stores/schemas (co-residence contract) | 3–4 | Fixture-host CI: co-residence smoke (bridge + domain plugin, two stores), home-isolation test, clean-install iOS lane under host bundle id |
 | Working chat surface: streaming, retry, interrupt, reconnect, recovery — no copied source | `@source-inc/gents-desktop-chat` selectors/components over the `-client` shared store | 7 | Agent-browser deterministic + live chat journeys (`iphone`), `test:live:chat`, fixture-host chat journey + iOS lane |
 | Fleet pairing, health, peer management via package API | `@source-inc/gents-desktop-fleet` (+ bridge `fleet-*` permission sets) | 8 | `test:live:fleet`, QR/bearer agent-browser journeys, fixture-host pairing, iOS clean-install pairing |
-| Operator holds/traces/cancellation via package API | `@source-inc/gents-desktop-operations` (+ `operations-*` permission sets) | 9 | `test:live:operations`/`interrupt`/`cascade`, deterministic operations scenarios, fixture rail-tab registration |
+| Operator holds/traces/cancellation via package API | `@source-inc/gents-desktop-operations` (+ `operations-read`, interrupt, and hold permission sets) | 9 | `test:live:operations`/`interrupt`/`cascade`, deterministic operations scenarios, fixture rail-tab registration |
 | Own branding, semantic theme, navigation, domain routes without patching components | Semantic tokens contract (split before extraction), `brand` slots, host-owned navigation, rail-tab registry | 6–9 | Token-override smoke, fixture-host distinct branding + domain module, visual suite |
 | Gents Desktop builds and passes its checks consuming the extracted packages | App consumes all four packages + plugin | every phase | Standing exit gates on each phase (app is the first consumer throughout) |
 | Documented version-bump/update workflow | Lockstep train, exact pins, `CHANGELOG.md`, compat matrix, contract handshake with additive/breaking semantics | 10 | Dry-run tag publish + fixture pin-bump rehearsal; packed-artifact gate from phase 5 |
@@ -866,10 +908,11 @@ the design, not an oversight.
 
 **Permissions make the boundary enforceable at the webview line.** The
 capability-scoped sets mean a compromised or merely buggy host webview granted the
-chat profile cannot invoke pairing, config mutation, runtime initialization, or
-shutdown (it does hold `operations-control`, deliberately — interrupt is part of
-the chat contract); the blanket-default alternative was rejected during review for
-exactly this reason. Runtime provisioning is additionally double-gated: the
+chat profile cannot invoke pairing, config mutation, or runtime provisioning; it
+holds the interrupt sets deliberately (interrupt is part of the chat contract) but
+never the hold sets — enumerating or approving privileged held tool executions is
+an operator capability, not a chat one. The blanket-default alternative was
+rejected during review for exactly this reason. Runtime provisioning is additionally double-gated: the
 `runtime-admin` permission at the webview boundary and `BootstrapPolicy` as the
 host-side ceiling, with `desktop_client_start` limited to client-store bootstrap
 and structurally unable to provision a runtime. And the webview never chooses
