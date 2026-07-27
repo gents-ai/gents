@@ -1,12 +1,11 @@
 # Reusable desktop packages
 
 *Design spec — 2026-07-27. Issue [#877](https://github.com/source-inc/gents/issues/877)
-(`design` label: design-only spec PR). Status: **approved by the issue author,
-2026-07-27**, after three review passes (domain-storage model, permission scoping,
-shared frontend state, fixture-first sequencing, feature-gating mechanics; read/write
-permission splits, E2E capability activation, trust-boundary and
-forward-compatibility language, external distribution-access validation; explicit
-capability enumeration and tag-vs-revision fetch sequencing). Base: the
+(`design` label: design-only spec PR). Status: design approved by the issue author
+2026-07-27 after three review passes; revised again same day for PR #878 review
+findings (bootstrap-vs-`runtime-admin` authorization, `HomePolicy::Default`
+path fidelity to `DesktopPaths::discover()`, package grant profiles, phases 3–4 as
+a stacked pair, release-tarball npm fallback). Base: the
 iPhone/bearer-pairing series, merged to `main` as
 [#875](https://github.com/source-inc/gents/pull/875) (squash `1a5e23d5`), which this
 design treats as load-bearing evidence, not incidental history.*
@@ -145,7 +144,7 @@ gents (runtime)        gents-protocol
   lanes exercise the extracted crate, not the app.
 - **`gents-desktop-core` is unchanged in role**: no Tauri, no view models. It gains
   additive host-policy options (§ Native composition contract): a `HomePolicy` in
-  place of the implicit `GENTS_DESKTOP_HOME`/`~/.gents` defaults.
+  place of the implicit `GENTS_DESKTOP_HOME`/platform-data-dir defaults.
 - **`gents-desktop-tauri` shrinks to an app shell**: `tauri::Builder`,
   `generate_context!` (bundle identity `com.source-inc.gents`, icons, window,
   capabilities), the plugin registration, and any Gents-app-specific commands. Its
@@ -241,15 +240,24 @@ phase 6), so branded CSS is never extracted and revisited.
 pub struct BridgeConfig {
     /// Where the client's storage home comes from.
     pub home: HomePolicy,
-    /// Whether desktop_client_start may auto-init a standard local runtime,
-    /// or the host is paired-remote-only.
+    /// Host-side ceiling on runtime initialization. This is NOT an alternate
+    /// init path: desktop_client_start never initializes anything (an
+    /// uninitialized home fails with BridgeError::NotInitialized). All
+    /// initialization goes through desktop_init_local_standard (permission set
+    /// `runtime-admin`); LocalRuntimeAllowed permits that command,
+    /// PairedRemoteOnly makes it fail with BridgeError::Unsupported even when
+    /// the permission is granted.
     pub bootstrap: BootstrapPolicy,
     /// Host identity metadata for logs/diagnostics (not payloads): app name, version.
     pub app_meta: AppMeta,
 }
 
 pub enum HomePolicy {
-    /// GENTS_DESKTOP_HOME env override, else ~/.gents — Gents Desktop's behavior.
+    /// Delegates to the existing DesktopPaths::discover() behavior, verbatim:
+    /// GENTS_DESKTOP_HOME env override, else dirs::data_local_dir()/gents/desktop
+    /// (client/paths.rs). Delegation — not a re-specification — is the contract:
+    /// any deviation would make existing installs appear fresh and mint a new
+    /// principal identity.
     Default,
     /// Resolved via the Tauri AppHandle path resolver into the host's app-data
     /// directory (sandbox/macOS/iOS-safe). Recommended for downstream hosts.
@@ -319,13 +327,33 @@ split, and hosts opt into each in their capability files:
 
 The shipped `default` set is minimal: `core` + `client-lifecycle`. Notably it
 excludes `runtime-admin` — a webview should not be able to initialize a local
-runtime or shut the client down unless the host grants that explicitly. A chat-only
-host grants `default` + `chat-read` + `chat-write` + `fleet-read` and can neither
-mutate configuration nor initiate pairing from its webview; Gents Desktop grants
-everything except `native-e2e` (production builds), plus `native-e2e` in its E2E
-capability overlay (below). The exact command-to-set assignment is finalized in the
-plugin-ization PR from the inventory above; the review rule is that no set may mix
-read with mutate.
+runtime or shut the client down unless the host grants that explicitly. That
+guarantee only holds because `desktop_client_start` **never initializes**: start on
+an uninitialized home fails with `BridgeError::NotInitialized`, and
+`BootstrapPolicy` is a host-side ceiling on the `runtime-admin` init command, not an
+alternate init path (§ contract in `BridgeConfig` above). Without that rule, a
+default-only webview could bootstrap a runtime through start and the split would be
+cosmetic.
+
+Fine-grained sets are the enforcement unit, but the *supported setup* unit is the
+**package grant profile** — the sets a frontend package's full surface needs. A host
+following a package's documented install must never hit permission-denied:
+
+| Package | Required permission sets |
+|---|---|
+| `-client` | `default` (`core` + `client-lifecycle`) |
+| `-chat` | `default` + `chat-read` + `chat-write` + `operations-control` (interrupt/cancel is part of the promised chat UX) |
+| `-fleet` | `default` + `fleet-read`; add `fleet-admin` for the pairing surfaces (`AddPeerForm`, QR pairing) |
+| `-operations` | `default` + `operations-read` + `operations-control` + `chat-read` (`RequestTracePanel` timelines) + `workspace-read` (`WorkspaceTreePanel`) |
+
+Each package ships a machine-readable manifest of the commands its code can invoke;
+a contract test checks manifest ⊆ declared profile (using the fingerprint's
+command→set mapping), and the fixture host runs with **exactly** its profile grants
+so an undeclared command surfaces as a CI failure, not a downstream bug report.
+Gents Desktop grants everything except `native-e2e` (production builds), plus
+`native-e2e` in its E2E capability overlay (below). The exact command-to-set
+assignment is finalized in the plugin-ization PR from the inventory above; the
+review rule is that no set may mix read with mutate.
 
 ### Domain storage and co-resident plugins
 
@@ -602,10 +630,15 @@ of the release version and is what compatibility decisions key on.
   phase 10 — not assumed.
 - **npm: GitHub Packages** under the `@source-inc` scope, published by the release
   workflow on tag — **conditional on validating, before phase 5 commits to it, that
-  Amygdala's CI can authenticate to the org registry**. The fallback is npm git
-  dependencies with a `prepare` build, at the cost of slower installs and worse
-  lockfile ergonomics. Either way, what downstream installs is the packed artifact,
-  and the packed artifact is what CI tests (§ Migration).
+  Amygdala's CI can authenticate to the org registry**. The fallback is **release
+  tarball URLs**: the release workflow uploads each package's `npm pack` tarball as
+  a GitHub Release asset, and downstream pins the asset URL per package
+  (`"@source-inc/gents-desktop-client": "https://github.com/source-inc/gents/releases/download/vX.Y.Z/source-inc-gents-desktop-client-X.Y.Z.tgz"`).
+  npm git dependencies are **not** a viable fallback — a Git URL installs only the
+  repository-root package and explicitly does not install its workspaces, so it
+  cannot address four nested `@source-inc/gents-desktop-*` packages. Either way,
+  what downstream installs is the packed artifact, and the packed artifact is what
+  CI tests (§ Migration).
 
 **Compatibility matrix.** A table in this document (moving to `CHANGELOG.md` once it
 exists) with one row per release: tag, bridge crate version, npm package versions,
@@ -629,9 +662,12 @@ Each phase is one reviewable PR (or a small stack), lands green on the full exis
 gate set, and keeps `apps/gents-desktop` behavior-identical unless stated. The
 ordering follows two review directives: contract inputs (generated types, error
 codes) land **before** the one breaking window so command names, errors, and types
-change together; and the downstream fixture exists from the plugin-ization phase
-onward, growing with every package, so an incomplete external boundary is discovered
-in the same PR that creates it — not in phase 9.
+change together; and the downstream fixture guards the external boundary from its
+creation onward. Phases 3 and 4 are a **stacked PR pair** to make that guard real:
+the fixture (phase 4) is developed on top of the plugin-ization PR (phase 3), and
+phase 3 does not merge until phase 4 is green atop it — so an incomplete external
+boundary is discovered before the breaking change lands, not in a later phase. From
+phase 4 onward the fixture grows with every package.
 
 Entry criterion for every phase: previous phase merged. Standing exit criteria for
 every phase: `cargo check --workspace --all-targets`, `cargo test -p gents`, affected
@@ -676,8 +712,10 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
    changed, built with `--features native-e2e` + the E2E capability overlay);
    release build verified to exclude both the E2E commands and the `native-e2e`
    grant by inspecting the effective compiled capability set; permission sets
-   reviewed against the no-read/mutate-mixing rule.
-4. **Minimal downstream fixture host — co-residence proof.** `apps/fixture-host`
+   reviewed against the no-read/mutate-mixing rule; the phase-4 fixture green
+   atop this PR (stacked-pair rule) before merge.
+4. **Minimal downstream fixture host — co-residence proof (stacked on phase 3;
+   phase 3 merges only with this green atop it).** `apps/fixture-host`
    (name open): a minimal Tauri app with a different bundle id, product name, icon,
    and `HomePolicy::AppDataDir` home, granting only `default + chat-read +
    chat-write + fleet-read + fleet-admin` permissions (no `runtime-admin`, no
@@ -784,9 +822,12 @@ the design, not an oversight.
 
 **Permissions make the boundary enforceable at the webview line.** The
 capability-scoped sets mean a compromised or merely buggy host webview granted the
-chat sets cannot invoke pairing, config mutation, cancellation, runtime
-initialization, or shutdown; the blanket-default alternative was rejected during
-review for exactly this reason.
+chat profile cannot invoke pairing, config mutation, runtime initialization, or
+shutdown (it does hold `operations-control`, deliberately — interrupt is part of
+the chat contract); the blanket-default alternative was rejected during review for
+exactly this reason. Runtime initialization is additionally double-gated: the
+`runtime-admin` permission at the webview boundary and `BootstrapPolicy` as the
+host-side ceiling, with `desktop_client_start` structurally unable to initialize.
 
 **Identity and ACP boundaries stay explicit.** Principals are minted per storage
 home by `PrincipalIdentity`; bearer pairing keeps its full verification chain
@@ -806,9 +847,10 @@ not this contract.
 config, and renames invoke paths. It does not change legal runtime transitions,
 invariants, or provider inputs, so it requires no speculative proof changes. Two
 watchpoints where implementation could drift into Lean territory, called out so
-follow-up PRs treat them correctly: (1) `BootstrapPolicy` must only *select among*
-existing bootstrap paths (`init_standard_local_runtime` vs paired-only), never add a
-new lifecycle; (2) any temptation to enrich the event contract beyond the coarse
+follow-up PRs treat them correctly: (1) `BootstrapPolicy` must only *gate* the
+existing `init_standard_local_runtime` path behind the `runtime-admin` command —
+never add a new lifecycle and never let `desktop_client_start` become an
+initialization path; (2) any temptation to enrich the event contract beyond the coarse
 `client-updated` ping into semantic lifecycle events would put event ordering into
 the contract and must go through the Lean model → conformance test → Rust flow
 before shipping. The future `BridgeHandle`/document-store API is a third: shared
@@ -865,8 +907,9 @@ Stated openly rather than buried as implementation detail:
 1. **npm scope and final names** (`@source-inc/gents-desktop-*` proposed; separate
    `-tokens` package or tokens-in-client). Owner: maintainers, at design review.
    GitHub Packages forces the `@source-inc` scope if that registry is chosen.
-2. **Distribution access: GitHub Packages vs git dependencies for npm, and external
-   Cargo access to the private git chain.** Recommended: GitHub Packages, **decided
+2. **Distribution access: GitHub Packages vs release-tarball URLs for npm, and
+   external Cargo access to the private git chain.** Recommended: GitHub Packages,
+   **decided
    by the phase-5 validation from Amygdala CI** — neither the registry nor the
    git-tag Rust story is committed to until Amygdala CI has authenticated to the
    npm registry *and* fetched `gents-desktop-bridge` (with transitive `gents` +
