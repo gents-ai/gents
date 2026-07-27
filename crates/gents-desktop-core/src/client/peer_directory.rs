@@ -16,6 +16,12 @@ pub struct PeerRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pairing_network_id: Option<String>,
+    /// Bearer peers earn readiness only after the active membership and the
+    /// issuer-signed reciprocal-replicator acknowledgement are both verified.
+    #[serde(default)]
+    pub pairing_ready: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graphql: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -24,6 +30,10 @@ pub struct PeerRecord {
 impl PeerRecord {
     pub fn is_bearer_pairing(&self) -> bool {
         self.source.as_deref() == Some(super::core::bearer_pairing::BEARER_PAIRING_SOURCE)
+    }
+
+    pub fn is_chat_ready(&self) -> bool {
+        !self.is_bearer_pairing() || self.pairing_ready
     }
 
     pub fn new(
@@ -39,6 +49,8 @@ impl PeerRecord {
             agent_did: agent_did.into(),
             default_behavior_id: None,
             source: None,
+            pairing_network_id: None,
+            pairing_ready: false,
             graphql: None,
             created_at: now.clone(),
             updated_at: now,
@@ -184,11 +196,13 @@ impl PeerDirectory {
         label: &str,
         addr: &str,
         agent_did: &str,
+        network_id: &str,
         default_behavior_id: Option<&str>,
     ) -> Result<PeerRecord> {
         let label = normalize_non_empty("label", label)?;
         let addr = normalize_non_empty("addr", addr)?;
         let agent_did = normalize_non_empty("agent_did", agent_did)?;
+        let network_id = normalize_non_empty("network_id", network_id)?;
         let default_behavior_id = normalize_optional(default_behavior_id);
 
         let mut record = self
@@ -205,12 +219,35 @@ impl PeerDirectory {
         record.agent_did = agent_did.to_string();
         record.default_behavior_id = default_behavior_id.map(str::to_owned);
         record.source = Some(super::core::bearer_pairing::BEARER_PAIRING_SOURCE.to_string());
+        record.pairing_network_id = Some(network_id.to_string());
+        record.pairing_ready = false;
         // Bearer pairing is transport-native. An unauthenticated HTTP endpoint
         // discovered earlier must not remain attached to the trusted record.
         record.graphql = None;
 
         self.upsert(record.clone()).await?;
         Ok(record)
+    }
+
+    pub async fn set_bearer_pairing_ready(
+        &mut self,
+        peer_id: &str,
+        ready: bool,
+    ) -> Result<Option<PeerRecord>> {
+        let Some(mut record) = self
+            .peers
+            .iter()
+            .find(|record| record.peer_id == peer_id && record.is_bearer_pairing())
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if record.pairing_ready == ready {
+            return Ok(Some(record));
+        }
+        record.pairing_ready = ready;
+        self.upsert(record.clone()).await?;
+        Ok(Some(record))
     }
 
     pub async fn upsert(&mut self, mut record: PeerRecord) -> Result<()> {
@@ -423,6 +460,7 @@ mod tests {
                 "Amy",
                 "iroh://fresh-ticket",
                 "did:test:amy",
+                "network-amy",
                 Some("default"),
             )
             .await
@@ -432,6 +470,8 @@ mod tests {
         assert_eq!(directory.records().len(), 1);
         assert_eq!(paired.addr, "iroh://fresh-ticket");
         assert_eq!(paired.default_behavior_id.as_deref(), Some("default"));
+        assert_eq!(paired.pairing_network_id.as_deref(), Some("network-amy"));
+        assert!(!paired.pairing_ready);
         assert_eq!(
             paired.source.as_deref(),
             Some(crate::client::core::bearer_pairing::BEARER_PAIRING_SOURCE)

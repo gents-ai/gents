@@ -2,7 +2,6 @@ use serde_json::Value;
 
 use std::collections::BTreeMap;
 
-use gents::background_completion::is_background_completion_control_message;
 use gents_protocol::timeline::{
     build_timeline_order, TimelineMessageInput, TimelineRole, TimelineSlot,
 };
@@ -80,10 +79,7 @@ pub(super) fn materialized_user_turn_count(messages: &[MessageView]) -> usize {
                 .unwrap_or_default();
             role.eq_ignore_ascii_case("user")
                 && normalize_optional(message.display_content.as_deref()).is_some()
-                && !message
-                    .display_content
-                    .as_deref()
-                    .is_some_and(is_background_completion_control_message)
+                && !message.runtime_control
         })
         .count()
 }
@@ -154,11 +150,7 @@ pub(super) fn build_rendered_timeline(
             .or(message.role.as_deref())
             .unwrap_or("assistant");
         let is_user = role.eq_ignore_ascii_case("user");
-        let is_background_control = is_user
-            && message
-                .display_content
-                .as_deref()
-                .is_some_and(is_background_completion_control_message);
+        let is_background_control = is_user && message.runtime_control;
         let keep = !message.has_tool_results
             && !is_background_control
             && (!normalize_timeline_text(message.display_content.as_deref()).is_empty()
@@ -300,6 +292,7 @@ mod tests {
             reasoning: None,
             has_tool_calls: false,
             has_tool_results: false,
+            runtime_control: false,
             timestamp: None,
         }
     }
@@ -322,18 +315,24 @@ mod tests {
     fn background_completion_controls_do_not_render_as_user_turns() {
         let messages = vec![
             user_message("user-1", 1, "Please classify these sessions."),
-            user_message(
-                "notification",
-                2,
-                r#"<subagent-notification child_request_id="child-1">
+            MessageView {
+                runtime_control: true,
+                ..user_message(
+                    "notification",
+                    2,
+                    r#"<subagent-notification child_request_id="child-1">
 <summary>classification complete</summary>
 </subagent-notification>"#,
-            ),
-            user_message(
-                "wake",
-                3,
-                gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
-            ),
+                )
+            },
+            MessageView {
+                runtime_control: true,
+                ..user_message(
+                    "wake",
+                    3,
+                    gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+                )
+            },
         ];
 
         let timeline = build_rendered_timeline(&messages, &[], None, None);
@@ -344,6 +343,23 @@ mod tests {
             &timeline[0],
             RenderedTimelineItem::UserMessage { content, .. }
                 if content == "Please classify these sessions."
+        ));
+    }
+
+    #[test]
+    fn user_text_that_looks_like_a_control_message_still_renders() {
+        let content = gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
+        let messages = vec![user_message("literal-user-text", 1, content)];
+
+        let timeline = build_rendered_timeline(&messages, &[], None, None);
+
+        assert_eq!(materialized_user_turn_count(&messages), 1);
+        assert!(matches!(
+            &timeline[0],
+            RenderedTimelineItem::UserMessage {
+                content: rendered,
+                ..
+            } if rendered == content
         ));
     }
 }

@@ -33,18 +33,17 @@ use crate::watcher::{validate_agent_request_subagent_coherence, AgentRequest};
 const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";
 pub const BACKGROUND_COMPLETION_WAKE_PROMPT: &str =
     "Review pending subagent completion notifications in this session and continue the task if needed.";
+pub const BACKGROUND_COMPLETION_NOTIFICATION_REQUEST_PREFIX: &str =
+    "background-completion-notification:";
 
-/// Returns true when `content` is a runtime-authored background-completion
-/// control message rather than a user-authored chat turn.
-///
-/// These messages remain in the durable transcript because the provider needs
-/// them to resume the parent after a background child finishes. Presentation
-/// adapters should not render them as ordinary user messages.
-pub fn is_background_completion_control_message(content: &str) -> bool {
-    let content = content.trim();
-    content == BACKGROUND_COMPLETION_WAKE_PROMPT
-        || (content.starts_with("<subagent-notification ")
-            && content.ends_with("</subagent-notification>"))
+pub fn background_completion_notification_request_id(stable_id: &str) -> String {
+    format!("{BACKGROUND_COMPLETION_NOTIFICATION_REQUEST_PREFIX}{stable_id}")
+}
+
+pub fn is_background_completion_notification_request_id(request_id: Option<&str>) -> bool {
+    request_id.is_some_and(|request_id| {
+        request_id.starts_with(BACKGROUND_COMPLETION_NOTIFICATION_REQUEST_PREFIX)
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -701,6 +700,8 @@ pub(crate) async fn append_background_tool_completion(
             None => {
                 let notification =
                     render_tool_completion(tool_call_id, tool_name, status, result, reason);
+                let notification_request_id =
+                    background_completion_notification_request_id(tool_call_id);
                 let sequence = session::append_message_with_requester_did(
                     node,
                     parent_session_id,
@@ -709,7 +710,7 @@ pub(crate) async fn append_background_tool_completion(
                     "user",
                     &notification,
                     None,
-                    None,
+                    Some(&notification_request_id),
                 )
                 .await?;
                 let timestamp = load_message_timestamp(node, parent_session_id, sequence).await?;
@@ -770,6 +771,8 @@ async fn ensure_projection_side_effects(
             Some(existing) => (existing.sequence, existing.timestamp, false),
             None => {
                 let notification = render_notification(edge, status, summary);
+                let notification_request_id =
+                    background_completion_notification_request_id(&edge.child_request_id);
                 let sequence = session::append_message_with_requester_did(
                     node,
                     parent_session_id,
@@ -778,7 +781,7 @@ async fn ensure_projection_side_effects(
                     "user",
                     &notification,
                     None,
-                    None,
+                    Some(&notification_request_id),
                 )
                 .await?;
                 let timestamp = load_message_timestamp(node, parent_session_id, sequence).await?;
@@ -1549,21 +1552,15 @@ mod tests {
     const FOREIGN_DID: &str = "did:test:foreign-owner";
 
     #[test]
-    fn recognizes_only_reserved_background_completion_control_messages() {
-        assert!(is_background_completion_control_message(
+    fn recognizes_only_reserved_background_completion_notification_ids() {
+        let request_id = background_completion_notification_request_id("child-1");
+        assert!(is_background_completion_notification_request_id(Some(
+            &request_id
+        )));
+        assert!(!is_background_completion_notification_request_id(Some(
             BACKGROUND_COMPLETION_WAKE_PROMPT
-        ));
-        assert!(is_background_completion_control_message(
-            r#"<subagent-notification child_request_id="child-1">
-<summary>done</summary>
-</subagent-notification>"#
-        ));
-        assert!(!is_background_completion_control_message(
-            "Please review the completed subagent."
-        ));
-        assert!(!is_background_completion_control_message(
-            "<subagent-notification is only a partial example"
-        ));
+        )));
+        assert!(!is_background_completion_notification_request_id(None));
     }
 
     async fn test_node() -> Arc<EmbeddedNode> {

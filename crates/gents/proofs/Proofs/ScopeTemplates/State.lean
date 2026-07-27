@@ -87,7 +87,8 @@ abbrev Catalog := List Template
 
 def conversationCollections : List String :=
   ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall",
-   "AgentToolResult", "AgentSession", "AgentConversation", "CompactionEntry"]
+   "AgentToolResult", "AgentSession", "AgentConversation", "CompactionEntry",
+   "BearerPairingReady"]
 
 def agentConfigCollections : List String :=
   ["AgentBehavior", "ToolSelection", "InferenceBackend", "InferenceProfile",
@@ -112,7 +113,8 @@ def conversationRules : List CollectionRule :=
   , { collection := "AgentToolResult",   field := "requester_did", source := .peerDid }
   , { collection := "AgentSession",      field := "requester_did", source := .peerDid }
   , { collection := "AgentConversation", field := "requester_did", source := .peerDid }
-  , { collection := "CompactionEntry",   field := "requester_did", source := .peerDid } ]
+  , { collection := "CompactionEntry",   field := "requester_did", source := .peerDid }
+  , { collection := "BearerPairingReady", field := "claimant_did", source := .peerDid } ]
 
 def subagentCoordinatorRules : List CollectionRule :=
   [ { collection := "AgentToolCall", field := "spawn_target_did", source := .peerDid } ]

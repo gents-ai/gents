@@ -1494,6 +1494,7 @@ function createDeployment(): DeploymentView {
     source: "bombadil-harness",
     graphql: "http://127.0.0.1:9181/api/v0/graphql",
     dialSucceeded: true,
+    pairingReady: true,
     lastError: null,
     defaultBehaviorId: DEFAULT_BEHAVIOR_ID,
     agentPrincipal: {

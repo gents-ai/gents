@@ -39,6 +39,15 @@ export function deploymentStatus(deployment: DeploymentView): {
     return { title, tone: "red", label: "Not connected", lastError };
   }
 
+  if (!deployment.pairingReady) {
+    return {
+      title: `${title} | awaiting signed reciprocal readiness`,
+      tone: "yellow",
+      label: "Pairing",
+      lastError,
+    };
+  }
+
   if (reconcile !== "idle" && reconcile !== "unknown") {
     return { title, tone: "yellow", label: "Syncing", lastError };
   }

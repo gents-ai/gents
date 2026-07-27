@@ -263,6 +263,7 @@ pub(crate) struct DeploymentView {
     pub source: Option<String>,
     pub graphql: Option<String>,
     pub dial_succeeded: bool,
+    pub pairing_ready: bool,
     pub last_error: Option<String>,
     pub default_behavior_id: Option<String>,
     pub agent_principal: AgentPrincipalView,

@@ -19,7 +19,8 @@ use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::principal_identity::PrincipalIdentity;
 use super::super::schema::subscribed_collection_names;
 use super::bearer_pairing::{
-    install_bearer_replicator_for_record, is_bearer_peer, publish_local_endpoint,
+    current_local_endpoint, install_bearer_replicator_for_record, is_bearer_peer,
+    observe_bearer_pairing_readiness, publish_local_endpoint,
 };
 use super::bootstrap::{
     add_replicator_with_retry, connect_peer_with_retry, force_connect_peer_with_retry,
@@ -50,7 +51,9 @@ pub(super) fn spawn_p2p_supervisor_task(
         let mut ticker = tokio::time::interval(P2P_SUPERVISOR_INTERVAL);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let endpoint_refresh_interval = endpoint_interval();
-        let mut last_endpoint_refresh = Instant::now();
+        // Publish immediately after launch so a saved pending pairing can
+        // resume without waiting a full heartbeat interval.
+        let mut last_endpoint_refresh = Instant::now() - endpoint_refresh_interval;
 
         loop {
             let manual_repair = tokio::select! {
@@ -181,17 +184,6 @@ async fn run_saved_peer_repair_cycle(
                 force_repair,
             )
             .await;
-            let mut updated = updated;
-            if is_bearer_peer(&record) && updated.dial_succeeded {
-                if let Err(error) =
-                    publish_local_endpoint(node.as_ref(), p2p, remote_admin_actor.as_ref()).await
-                {
-                    updated.last_error = Some(format!(
-                        "peer {} signed endpoint refresh failed: {}",
-                        record.label, error
-                    ));
-                }
-            }
             still_saved = peer_directory
                 .read()
                 .await
@@ -203,6 +195,18 @@ async fn run_saved_peer_repair_cycle(
             }
         }
 
+        if still_saved && is_bearer_peer(&record) {
+            revalidate_bearer_pairing_readiness(
+                node,
+                p2p,
+                peer_directory,
+                peer_statuses,
+                remote_admin_actor,
+                &record,
+            )
+            .await;
+        }
+
         if still_saved {
             run_pairing_reconcile_for_peer(
                 node,
@@ -212,6 +216,84 @@ async fn run_saved_peer_repair_cycle(
             )
             .await;
         }
+    }
+}
+
+async fn revalidate_bearer_pairing_readiness(
+    node: &Arc<EmbeddedNode>,
+    p2p: &Arc<dyn P2POps>,
+    peer_directory: &Arc<RwLock<PeerDirectory>>,
+    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    remote_admin_actor: &Arc<PrincipalIdentity>,
+    record: &PeerRecord,
+) {
+    let result = async {
+        let network_id = record
+            .pairing_network_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("saved bearer peer has no signed network id"))?;
+        let local_endpoint = current_local_endpoint(p2p, remote_admin_actor.as_ref()).await?;
+        observe_bearer_pairing_readiness(
+            node.as_ref(),
+            remote_admin_actor.as_ref(),
+            &record.agent_did,
+            network_id,
+            &local_endpoint,
+        )
+        .await
+    }
+    .await;
+
+    let (ready, error) = match result {
+        Ok(ready) => (ready, None),
+        Err(error) => (
+            false,
+            Some(format!(
+                "peer {} bearer readiness check failed: {}",
+                record.label, error
+            )),
+        ),
+    };
+    if let Err(error) = peer_directory
+        .write()
+        .await
+        .set_bearer_pairing_ready(&record.peer_id, ready)
+        .await
+    {
+        tracing::warn!(
+            target: "gents_desktop_core::peer_maintenance",
+            peer_id = %record.peer_id,
+            error = %error,
+            "failed to persist bearer pairing readiness"
+        );
+    }
+
+    let mut status = peer_statuses
+        .read()
+        .expect("peer status lock poisoned")
+        .iter()
+        .find(|status| status.peer_id == record.peer_id)
+        .cloned()
+        .unwrap_or_else(|| ClientPeerStatus {
+            peer_id: record.peer_id.clone(),
+            label: record.label.clone(),
+            agent_did: record.agent_did.clone(),
+            addr: record.addr.clone(),
+            dial_succeeded: false,
+            last_error: None,
+            pairing: Vec::new(),
+        });
+    if let Some(error) = error {
+        status.last_error = Some(error);
+        replace_peer_status(peer_statuses, status);
+    } else if status
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("bearer readiness check failed"))
+    {
+        status.last_error = None;
+        replace_peer_status(peer_statuses, status);
     }
 }
 

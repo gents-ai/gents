@@ -19,7 +19,6 @@
 		A49DADAEA00825152FA18A1E /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 63D599966BF164B2E3721580 /* SystemConfiguration.framework */; };
 		AB4DEA7CDE0EF8AEEEB51066 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 9550978DF0AC0816DF1CC6DF /* main.mm */; };
 		ABBC6FAC9160FA4A18515F68 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A5DAD3CA911F8C2F902D01BC /* WebKit.framework */; };
-		C3C30D69637D15D6DFE9B8E1 /* libapp.a in Resources */ = {isa = PBXBuildFile; fileRef = 7CA4BD3DDA60BCC1B015D9E4 /* libapp.a */; };
 		F19ADFFB68E1FEAE6E78893E /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 62176889B485E53F753CA7C2 /* Security.framework */; };
 		FA4E95488594095CF8C4159F /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BD70A9B920D4EF2F217086B4 /* QuartzCore.framework */; };
 /* End PBXBuildFile section */
@@ -84,7 +83,6 @@
 		73895FFC4AB1F95CBD8E852F /* logging.rs */ = {isa = PBXFileReference; path = logging.rs; sourceTree = "<group>"; };
 		73E0CA87EE1AC083EBCAA14B /* bootstrap.rs */ = {isa = PBXFileReference; path = bootstrap.rs; sourceTree = "<group>"; };
 		77DA72D0507C153C811F9678 /* gents-desktop-tauri_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "gents-desktop-tauri_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		7CA4BD3DDA60BCC1B015D9E4 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		7E209A2DC97CECD8A16D7B04 /* workspace.rs */ = {isa = PBXFileReference; path = workspace.rs; sourceTree = "<group>"; };
 		802645E191828B3D41B8ED9D /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 		803FB81044FE66714147718E /* runtime_tasks.rs */ = {isa = PBXFileReference; path = runtime_tasks.rs; sourceTree = "<group>"; };
@@ -150,7 +148,6 @@
 				DF999997666534D30CBC7799 /* assets */,
 				4AA87E72BB6F6E6A9013ED37 /* Assets.xcassets */,
 				4B930D4D1CC1491CC8188CAD /* LaunchScreen.storyboard */,
-				A451FFEA485414052E4266F7 /* Externals */,
 				E578A9CE50CAD151F94E888C /* gents-desktop-tauri_iOS */,
 				0F8C42C2795F7E73E8279429 /* ios */,
 				E1F731CFA4D72A5157CF32D7 /* Sources */,
@@ -204,14 +201,6 @@
 				51817CA0164D4602186D3A1D /* views */,
 			);
 			path = types;
-			sourceTree = "<group>";
-		};
-		2EBE99C6F26B49030B38898D /* arm64 */ = {
-			isa = PBXGroup;
-			children = (
-				E0D9C88F944FB64F7CD244F4 /* debug */,
-			);
-			path = arm64;
 			sourceTree = "<group>";
 		};
 		3132E128926DDE6BF96FEB6E /* operations_snapshot */ = {
@@ -306,14 +295,6 @@
 			path = live_fixture;
 			sourceTree = "<group>";
 		};
-		A451FFEA485414052E4266F7 /* Externals */ = {
-			isa = PBXGroup;
-			children = (
-				2EBE99C6F26B49030B38898D /* arm64 */,
-			);
-			path = Externals;
-			sourceTree = "<group>";
-		};
 		C3F98401656EFA6C28A17CEF /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -367,14 +348,6 @@
 				FDE61B711ED917DCE5677618 /* GentsUITests.xctest */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		E0D9C88F944FB64F7CD244F4 /* debug */ = {
-			isa = PBXGroup;
-			children = (
-				7CA4BD3DDA60BCC1B015D9E4 /* libapp.a */,
-			);
-			path = debug;
 			sourceTree = "<group>";
 		};
 		E1F731CFA4D72A5157CF32D7 /* Sources */ = {
@@ -533,7 +506,6 @@
 				71C6080565821E5F55BC7BC4 /* Assets.xcassets in Resources */,
 				88EFB05DB5D303BB4A995A0B /* LaunchScreen.storyboard in Resources */,
 				3DB3C858BF3C14FFFE4EC35D /* assets in Resources */,
-				C3C30D69637D15D6DFE9B8E1 /* libapp.a in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

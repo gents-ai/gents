@@ -1382,6 +1382,28 @@ pub async fn ensure_pairing_bearer_claim_migrations(node: Arc<EmbeddedNode>) -> 
     }
 }
 
+/// Idempotent migration ensuring the signed bearer readiness acknowledgement
+/// collection exists. Fresh databases receive it from `schemas::ALL`; upgraded
+/// clients and runtimes add it before pairing reconciliation starts.
+pub async fn ensure_bearer_pairing_ready_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    if node
+        .get_collection("BearerPairingReady")
+        .context("get BearerPairingReady collection")?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    match node
+        .add_schema(gents_protocol::schemas::BEARER_PAIRING_READY)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
+        Err(error) => Err(error).context("add BearerPairingReady schema"),
+    }
+}
+
 /// Idempotent migration ensuring the `AgentNetwork` control-plane collection
 /// exists (cut-2 network membership, Task 1). A fresh database created from
 /// `schemas::ALL` already has this collection, so the migration is a no-op
@@ -2814,6 +2836,9 @@ pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()
     ensure_pairing_bearer_claim_migrations(node.clone())
         .await
         .context("ensure PairingBearerClaim migrations")?;
+    ensure_bearer_pairing_ready_migrations(node.clone())
+        .await
+        .context("ensure BearerPairingReady migrations")?;
     ensure_inference_profile_migrations(node.clone())
         .await
         .context("ensure InferenceProfile migrations")?;
@@ -4889,6 +4914,10 @@ mod patch_kind_tests {
         assert!(
             node.get_collection("PairingBearerClaim").unwrap().is_some(),
             "PairingBearerClaim must exist after ensure_all_runtime_migrations"
+        );
+        assert!(
+            node.get_collection("BearerPairingReady").unwrap().is_some(),
+            "BearerPairingReady must exist after ensure_all_runtime_migrations"
         );
     }
 

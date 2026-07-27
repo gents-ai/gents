@@ -11,6 +11,7 @@ export type MessageView = {
   reasoning?: string | null;
   hasToolCalls: boolean;
   hasToolResults: boolean;
+  runtimeControl: boolean;
   timestamp?: string | null;
 };
 

@@ -24,6 +24,12 @@ pub use task_title::task_run_conversation_title;
 
 pub const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 
+/// Presentation adapters use the durable queue metadata, not prompt text, to
+/// identify runtime-authored background-completion wake turns.
+pub fn is_background_completion_request(metadata: Option<&str>) -> bool {
+    queue::is_automated_wakeup(metadata)
+}
+
 fn graphql_retry_root_request(retry_root_request: Option<&str>, request_id: &str) -> String {
     escape_graphql_string(retry_root_request.unwrap_or(request_id))
 }

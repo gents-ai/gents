@@ -64,7 +64,7 @@ export function AddPeerForm({
     }
 
     setPairingStatus(
-      "Verifying invite, connecting, and waiting for the signed membership grant…",
+      "Pairing phases: 1 verify invite → 2 connect → 3 submit claim → 4 verify signed membership and reciprocal replication. This can take up to 60 seconds…",
     );
     setPairingError(false);
     try {
@@ -178,7 +178,7 @@ export function AddPeerForm({
             data-testid="fleet-pair-label"
             disabled={busy}
             onChange={(event) => setPairLabel(event.currentTarget.value)}
-            placeholder="Amy"
+            placeholder="My agent"
             value={pairLabel}
           />
         </label>

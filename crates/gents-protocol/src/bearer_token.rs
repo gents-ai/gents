@@ -27,6 +27,7 @@ use std::io::Cursor;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::network_token::NetworkRecord;
 use crate::pairing_token::check_issued_at_freshness;
@@ -157,6 +158,44 @@ impl BearerClaimRecord {
     }
 }
 
+/// Deterministic key for the issuer's latest readiness acknowledgement for one
+/// claimant. The issuer and claimant are both included so acknowledgements
+/// from multiple paired agents can coexist in a client's replicated store.
+pub fn derive_bearer_readiness_key(issuer_did: &str, claimant_did: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(issuer_did.as_bytes());
+    digest.update(b"\x1f");
+    digest.update(claimant_did.as_bytes());
+    let digest = digest.finalize();
+    format!("ready-{}", bs58::encode(&digest[..16]).into_string())
+}
+
+/// Issuer-signed evidence that the reciprocal conversation replicator for a
+/// bearer claimant was applied. This acknowledgement is necessary but not
+/// sufficient for Chat: the client also verifies its active signed membership.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BearerPairingReadyRecord {
+    pub issuer_did: String,
+    pub claimant_did: String,
+    pub peer_id: String,
+    pub address: String,
+    pub template: String,
+    pub acknowledged_at: String,
+    /// Issuer DID's signature over the record with this field zeroed.
+    pub sig: Vec<u8>,
+}
+
+impl BearerPairingReadyRecord {
+    pub fn signing_payload(&self) -> Vec<u8> {
+        let mut unsigned = self.clone();
+        unsigned.sig = Vec::new();
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(&unsigned, &mut bytes)
+            .expect("CBOR serialisation of bearer readiness is infallible");
+        bytes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,6 +280,47 @@ mod tests {
             bearer_signing_payload(&b),
             "version must be signed (downgrade guard)"
         );
+    }
+
+    #[test]
+    fn readiness_key_is_deterministic_and_party_bound() {
+        let key = derive_bearer_readiness_key("did:key:issuer", "did:key:claimant");
+        assert_eq!(
+            key,
+            derive_bearer_readiness_key("did:key:issuer", "did:key:claimant")
+        );
+        assert_ne!(
+            key,
+            derive_bearer_readiness_key("did:key:other", "did:key:claimant")
+        );
+        assert_ne!(
+            key,
+            derive_bearer_readiness_key("did:key:issuer", "did:key:other")
+        );
+    }
+
+    #[test]
+    fn readiness_signing_payload_covers_reciprocal_endpoint() {
+        let record = BearerPairingReadyRecord {
+            issuer_did: "did:key:issuer".into(),
+            claimant_did: "did:key:claimant".into(),
+            peer_id: "peer-claimant".into(),
+            address: "ticket-claimant".into(),
+            template: "conversation".into(),
+            acknowledged_at: "2026-07-27T00:00:00Z".into(),
+            sig: vec![1, 2, 3],
+        };
+        let mut resigned = record.clone();
+        resigned.sig = vec![9, 9, 9];
+        assert_eq!(
+            record.signing_payload(),
+            resigned.signing_payload(),
+            "signature bytes are excluded"
+        );
+
+        let mut changed = record.clone();
+        changed.address = "ticket-other".into();
+        assert_ne!(record.signing_payload(), changed.signing_payload());
     }
 
     #[test]

@@ -20,8 +20,8 @@ use gents::agent::p2p_reconcile::{
 use gents::graphql::escape_graphql_string;
 use gents::identity::AgentIdentity;
 use gents_protocol::bearer_token::{
-    bearer_signing_payload, check_bearer_freshness, decode_bearer, BearerClaimRecord,
-    BearerInviteToken,
+    bearer_signing_payload, check_bearer_freshness, decode_bearer, derive_bearer_readiness_key,
+    BearerClaimRecord, BearerInviteToken, BearerPairingReadyRecord,
 };
 use gents_protocol::network_token::{EndpointRecord, MembershipRecord, NetworkRecord};
 use p2p::iroh::parse_public_peer_addr;
@@ -131,7 +131,8 @@ impl ClientCore {
 
         ensure_local_network_match(self.node.as_ref(), token).await?;
         write_agent_network(self.node.as_ref(), &token.network).await?;
-        publish_local_endpoint(self.node.as_ref(), &self.p2p, &self.principal).await?;
+        let local_endpoint =
+            publish_local_endpoint(self.node.as_ref(), &self.p2p, &self.principal).await?;
         write_bearer_claim_if_absent(
             self.node.as_ref(),
             &self.p2p,
@@ -147,6 +148,7 @@ impl ClientCore {
                     &label,
                     &token.ticket,
                     &token.issuer_did,
+                    &token.network_id,
                     token.default_behavior_id.as_deref(),
                 )
                 .await?
@@ -164,14 +166,22 @@ impl ClientCore {
             remove_incompatible_replicators(&self.p2p, address).await?;
         }
         install_bearer_replicator(&self.p2p, &token.ticket, self.principal.did()).await?;
-        wait_for_active_membership(
+        wait_for_bearer_readiness(
             self.node.as_ref(),
             &self.principal,
             &token.issuer_did,
             &token.network_id,
+            &local_endpoint,
             BEARER_GRANT_TIMEOUT,
         )
         .await?;
+        let record = {
+            let mut directory = self.peer_directory.write().await;
+            directory
+                .set_bearer_pairing_ready(&record.peer_id, true)
+                .await?
+                .context("saved bearer peer disappeared before readiness could be persisted")?
+        };
         self.update_peer_status(ClientPeerStatus {
             peer_id: record.peer_id.clone(),
             label: record.label.clone(),
@@ -206,71 +216,182 @@ impl ClientCore {
             endpoint_published: true,
             replication_configured: true,
             membership_observed: true,
-            // The local combined conversation replicator was installed before
-            // this wait. Observing the issuer-signed membership locally proves
-            // the claim crossed client -> issuer and the issuer's network
-            // control plane crossed issuer -> client. The immediate-prompt E2E
-            // gate verifies the same path with conversation documents.
+            // Earned only after verifying the issuer-signed acknowledgement
+            // written after its reciprocal conversation replicator applied.
             bidirectional_replication_observed: true,
         })
     }
 }
 
-async fn wait_for_active_membership(
+async fn wait_for_bearer_readiness(
     node: &EmbeddedNode,
     identity: &dyn AgentIdentity,
     issuer_did: &str,
     network_id: &str,
+    local_endpoint: &EndpointRecord,
     wait_timeout: Duration,
 ) -> Result<()> {
     let deadline = Instant::now() + wait_timeout;
     loop {
-        let escaped_network_id = escape_graphql_string(network_id);
-        let escaped_member_did = escape_graphql_string(identity.did());
-        let query = format!(
-            r#"{{
-                NetworkMembership(
-                    filter: {{
-                        network_id: {{ _eq: "{escaped_network_id}" }},
-                        member_did: {{ _eq: "{escaped_member_did}" }}
-                    }},
-                    limit: 1
-                ) {{
-                    network_id
-                    member_did
-                    status
-                    granted_at
-                    revoked_at
-                    admin_sig
-                }}
-            }}"#
-        );
-        let response = node.execute(&query).await;
-        ensure_no_errors(
-            &response,
-            "checking for the issuer-signed bearer membership grant",
-        )?;
-        let rows = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("NetworkMembership"))
-            .cloned()
-            .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
-        let rows = serde_json::from_value::<Vec<MembershipObservationRow>>(rows)
-            .context("decoding the replicated bearer membership grant")?;
-        if let Some(row) = rows.first() {
-            verify_active_membership_row(identity, issuer_did, network_id, identity.did(), row)
-                .await?;
+        if observe_bearer_pairing_readiness(node, identity, issuer_did, network_id, local_endpoint)
+            .await?
+        {
             return Ok(());
         }
 
         if Instant::now() >= deadline {
             bail!(
-                "timed out after {}s waiting for the issuer-signed membership grant and reverse P2P path; verify that the server is running with P2P and pairing reconcilers enabled, then relaunch to resume the saved pairing (mint a fresh invite only if the server rejected this nonce)",
+                "timed out after {}s waiting for the issuer-signed membership grant and reciprocal-replication acknowledgement; verify that the server is running with P2P, bearer-claim, reciprocal, and pairing reconcilers enabled, then relaunch to resume the saved pairing (mint a fresh invite only if the server rejected this nonce)",
                 wait_timeout.as_secs()
             );
         }
         sleep(BEARER_GRANT_POLL_INTERVAL).await;
+    }
+}
+
+/// Re-check the durable evidence used by both the foreground pairing flow and
+/// the supervisor after a relaunch. Missing rows mean "not ready yet"; present
+/// but invalid or revoked rows are hard failures and must close the chat gate.
+pub(super) async fn observe_bearer_pairing_readiness(
+    node: &EmbeddedNode,
+    identity: &dyn AgentIdentity,
+    issuer_did: &str,
+    network_id: &str,
+    local_endpoint: &EndpointRecord,
+) -> Result<bool> {
+    let escaped_network_id = escape_graphql_string(network_id);
+    let escaped_member_did = escape_graphql_string(identity.did());
+    let readiness_key =
+        escape_graphql_string(&derive_bearer_readiness_key(issuer_did, identity.did()));
+    let query = format!(
+        r#"{{
+            NetworkMembership(
+                filter: {{
+                    network_id: {{ _eq: "{escaped_network_id}" }},
+                    member_did: {{ _eq: "{escaped_member_did}" }}
+                }},
+                limit: 1
+            ) {{
+                network_id
+                member_did
+                status
+                granted_at
+                revoked_at
+                admin_sig
+            }}
+            BearerPairingReady(
+                filter: {{ readiness_key: {{ _eq: "{readiness_key}" }} }},
+                limit: 1
+            ) {{
+                issuer_did
+                claimant_did
+                peer_id
+                address
+                template
+                acknowledged_at
+                issuer_sig
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    ensure_no_errors(
+        &response,
+        "checking issuer-signed bearer readiness evidence",
+    )?;
+    let membership_rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("NetworkMembership"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+    let membership_rows = serde_json::from_value::<Vec<MembershipObservationRow>>(membership_rows)
+        .context("decoding the replicated bearer membership grant")?;
+    let Some(membership) = membership_rows.first() else {
+        return Ok(false);
+    };
+    verify_active_membership_row(identity, issuer_did, network_id, identity.did(), membership)
+        .await?;
+
+    let readiness_rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("BearerPairingReady"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+    let readiness_rows =
+        serde_json::from_value::<Vec<BearerPairingReadyObservationRow>>(readiness_rows)
+            .context("decoding the replicated bearer readiness acknowledgement")?;
+    let Some(readiness) = readiness_rows.first() else {
+        return Ok(false);
+    };
+    verify_bearer_pairing_ready_row(
+        identity,
+        issuer_did,
+        identity.did(),
+        local_endpoint,
+        readiness,
+    )
+    .await?;
+    Ok(true)
+}
+
+async fn verify_bearer_pairing_ready_row(
+    identity: &dyn AgentIdentity,
+    issuer_did: &str,
+    claimant_did: &str,
+    local_endpoint: &EndpointRecord,
+    row: &BearerPairingReadyObservationRow,
+) -> Result<()> {
+    let record = BearerPairingReadyRecord {
+        issuer_did: required_membership_field(
+            row.issuer_did.as_deref(),
+            "BearerPairingReady.issuer_did",
+        )?,
+        claimant_did: required_membership_field(
+            row.claimant_did.as_deref(),
+            "BearerPairingReady.claimant_did",
+        )?,
+        peer_id: required_membership_field(row.peer_id.as_deref(), "BearerPairingReady.peer_id")?,
+        address: required_membership_field(row.address.as_deref(), "BearerPairingReady.address")?,
+        template: required_membership_field(
+            row.template.as_deref(),
+            "BearerPairingReady.template",
+        )?,
+        acknowledged_at: required_membership_field(
+            row.acknowledged_at.as_deref(),
+            "BearerPairingReady.acknowledged_at",
+        )?,
+        sig: bs58::decode(required_membership_field(
+            row.issuer_sig.as_deref(),
+            "BearerPairingReady.issuer_sig",
+        )?)
+        .into_vec()
+        .context("decoding the bearer readiness signature")?,
+    };
+    if record.issuer_did != issuer_did
+        || record.claimant_did != claimant_did
+        || record.peer_id != local_endpoint.node_id
+        || record.address != local_endpoint.address
+        || record.template != "conversation"
+    {
+        bail!(
+            "bearer readiness acknowledgement does not match issuer, claimant, or the current signed endpoint; pairing rejected"
+        );
+    }
+    match identity
+        .verify(issuer_did, &record.signing_payload(), &record.sig)
+        .await
+    {
+        Ok(true) => Ok(()),
+        Ok(false) => bail!(
+            "bearer readiness acknowledgement signature is invalid for issuer {}; pairing rejected",
+            issuer_did
+        ),
+        Err(error) => bail!(
+            "bearer readiness acknowledgement signature is invalid for issuer {}: {}",
+            issuer_did,
+            error
+        ),
     }
 }
 
@@ -352,6 +473,17 @@ struct MembershipObservationRow {
     granted_at: Option<String>,
     revoked_at: Option<String>,
     admin_sig: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BearerPairingReadyObservationRow {
+    issuer_did: Option<String>,
+    claimant_did: Option<String>,
+    peer_id: Option<String>,
+    address: Option<String>,
+    template: Option<String>,
+    acknowledged_at: Option<String>,
+    issuer_sig: Option<String>,
 }
 
 async fn remove_incompatible_replicators(p2p: &Arc<dyn P2POps>, address: &str) -> Result<()> {
@@ -484,9 +616,14 @@ fn conversation_template_is_requester_scoped(
     };
     rules.len() == template.collections.len()
         && template.collections.iter().all(|collection| {
+            let expected_field = if *collection == "BearerPairingReady" {
+                "claimant_did"
+            } else {
+                "requester_did"
+            };
             rules.iter().any(|rule| {
                 rule.collection == *collection
-                    && rule.field == "requester_did"
+                    && rule.field == expected_field
                     && rule.source == DidSource::PeerDid
             })
         })
@@ -582,6 +719,20 @@ pub(super) async fn publish_local_endpoint(
     p2p: &Arc<dyn P2POps>,
     identity: &dyn AgentIdentity,
 ) -> Result<EndpointRecord> {
+    let mut record = current_local_endpoint(p2p, identity).await?;
+    record.sig = identity
+        .sign(&record.signing_payload())
+        .await
+        .context("signing desktop PeerEndpoint")?;
+    let response = node.execute(&peer_endpoint_upsert_mutation(&record)).await;
+    ensure_no_errors(&response, "publishing desktop PeerEndpoint")?;
+    Ok(record)
+}
+
+pub(super) async fn current_local_endpoint(
+    p2p: &Arc<dyn P2POps>,
+    identity: &dyn AgentIdentity,
+) -> Result<EndpointRecord> {
     let peer_id = match timeout(P2P_OPERATION_TIMEOUT, p2p.local_peer_id()).await {
         Ok(result) => result
             .map_err(anyhow::Error::msg)
@@ -595,20 +746,13 @@ pub(super) async fn publish_local_endpoint(
             .context("desktop P2P transport has no dialable shareable address yet")?,
         Err(_) => bail!("timed out reading desktop shareable P2P address"),
     };
-    let mut record = EndpointRecord {
+    Ok(EndpointRecord {
         did: identity.did().to_string(),
         node_id: peer_id,
         address,
         updated_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
         sig: Vec::new(),
-    };
-    record.sig = identity
-        .sign(&record.signing_payload())
-        .await
-        .context("signing desktop PeerEndpoint")?;
-    let response = node.execute(&peer_endpoint_upsert_mutation(&record)).await;
-    ensure_no_errors(&response, "publishing desktop PeerEndpoint")?;
-    Ok(record)
+    })
 }
 
 async fn write_bearer_claim_if_absent(
@@ -943,6 +1087,57 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn readiness_acknowledgement_is_bound_to_current_endpoint() {
+        let now = Utc::now();
+        let (_temp, identity, _encoded) = signed_token(now).await;
+        let endpoint = EndpointRecord {
+            did: "did:key:phone".into(),
+            node_id: "phone-node".into(),
+            address: "phone-ticket".into(),
+            updated_at: now.to_rfc3339_opts(SecondsFormat::Secs, true),
+            sig: Vec::new(),
+        };
+        let mut record = BearerPairingReadyRecord {
+            issuer_did: identity.did().to_string(),
+            claimant_did: endpoint.did.clone(),
+            peer_id: endpoint.node_id.clone(),
+            address: endpoint.address.clone(),
+            template: "conversation".into(),
+            acknowledged_at: now.to_rfc3339_opts(SecondsFormat::Secs, true),
+            sig: Vec::new(),
+        };
+        record.sig = identity
+            .sign(&record.signing_payload())
+            .expect("sign readiness");
+        let row = BearerPairingReadyObservationRow {
+            issuer_did: Some(record.issuer_did.clone()),
+            claimant_did: Some(record.claimant_did.clone()),
+            peer_id: Some(record.peer_id.clone()),
+            address: Some(record.address.clone()),
+            template: Some(record.template.clone()),
+            acknowledged_at: Some(record.acknowledged_at.clone()),
+            issuer_sig: Some(bs58::encode(&record.sig).into_string()),
+        };
+
+        verify_bearer_pairing_ready_row(&identity, identity.did(), &endpoint.did, &endpoint, &row)
+            .await
+            .expect("valid readiness acknowledgement");
+
+        let mut rotated_endpoint = endpoint;
+        rotated_endpoint.address = "rotated-ticket".into();
+        let error = verify_bearer_pairing_ready_row(
+            &identity,
+            identity.did(),
+            &rotated_endpoint.did,
+            &rotated_endpoint,
+            &row,
+        )
+        .await
+        .expect_err("stale endpoint acknowledgement");
+        assert!(error.to_string().contains("current signed endpoint"));
+    }
+
     #[test]
     fn combined_replicator_contains_scoped_conversation_and_claim_control_plane() {
         let collections = bearer_replicator_collections();
@@ -952,16 +1147,22 @@ mod tests {
         assert!(!collections.contains(&"AgentBehavior".to_string()));
         assert!(collections.contains(&"PairingBearerClaim".to_string()));
         assert!(collections.contains(&"PeerEndpoint".to_string()));
+        assert!(collections.contains(&"BearerPairingReady".to_string()));
         assert!(!collections.contains(&"ReciprocalConversationIntent".to_string()));
-        assert_eq!(filters.len(), 10);
+        assert_eq!(filters.len(), 11);
         for collection in resolve_template("conversation")
             .expect("conversation template")
             .collections
         {
+            let field = if *collection == "BearerPairingReady" {
+                "claimant_did"
+            } else {
+                "requester_did"
+            };
             assert_eq!(
                 filters.get(*collection),
                 Some(&ReplicationFilter::eq(
-                    "requester_did",
+                    field,
                     serde_json::json!("did:key:phone")
                 ))
             );

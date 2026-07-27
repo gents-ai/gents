@@ -311,6 +311,8 @@ pub struct AgentMessageRow {
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
     pub requester_did: Option<String>,
     #[serde(default)]
     pub sequence: Option<i64>,

@@ -101,6 +101,15 @@ fn behavior_id_for_write(
         })
 }
 
+fn ensure_peer_chat_ready(peer_record: Option<&PeerRecord>) -> Result<()> {
+    if peer_record.is_some_and(|record| !record.is_chat_ready()) {
+        bail!(
+            "bearer pairing is still waiting for signed membership and reciprocal-replication readiness"
+        );
+    }
+    Ok(())
+}
+
 impl ClientCore {
     pub async fn create_conversation(
         &self,
@@ -109,6 +118,7 @@ impl ClientCore {
     ) -> Result<CreatedConversation> {
         let snapshot = self.store.snapshot();
         let peer_record = self.peer_record_for_agent(agent_did).await;
+        ensure_peer_chat_ready(peer_record.as_ref())?;
         let behavior_id = behavior_id_for_write(behavior_id, peer_record.as_ref());
         match mutations::create_conversation(
             self.node.as_ref(),
@@ -162,6 +172,7 @@ impl ClientCore {
     ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
         let peer_record = self.peer_record_for_agent(agent_did).await;
+        ensure_peer_chat_ready(peer_record.as_ref())?;
         let behavior_id = behavior_id_for_write(behavior_id, peer_record.as_ref());
         match mutations::submit_request(
             self.node.as_ref(),
@@ -203,6 +214,7 @@ impl ClientCore {
     ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
         let peer_record = self.peer_record_for_agent(agent_did).await;
+        ensure_peer_chat_ready(peer_record.as_ref())?;
         let behavior_id = behavior_id_for_write(behavior_id, peer_record.as_ref());
         match mutations::submit_request_to_graphql(
             graphql,
@@ -2342,11 +2354,13 @@ mod delete_source_tests {
 
     #[test]
     fn bearer_peer_signed_default_is_used_when_caller_omits_behavior() {
-        let peer = peer_record(
+        let mut peer = peer_record(
             Some(super::super::bearer_pairing::BEARER_PAIRING_SOURCE),
             Some("default"),
         );
+        peer.pairing_ready = true;
 
+        ensure_peer_chat_ready(Some(&peer)).unwrap();
         assert_eq!(
             behavior_id_for_write(None, Some(&peer)).as_deref(),
             Some("default")
@@ -2355,6 +2369,19 @@ mod delete_source_tests {
             behavior_id_for_write(Some(" review "), Some(&peer)).as_deref(),
             Some("review")
         );
+    }
+
+    #[test]
+    fn pending_bearer_peer_rejects_chat_writes() {
+        let peer = peer_record(
+            Some(super::super::bearer_pairing::BEARER_PAIRING_SOURCE),
+            Some("default"),
+        );
+
+        assert!(ensure_peer_chat_ready(Some(&peer))
+            .unwrap_err()
+            .to_string()
+            .contains("still waiting"));
     }
 
     #[test]

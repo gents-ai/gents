@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
+use gents_protocol::row::{AgentMessageRow, AgentRequestRow, AgentToolCallRow};
 use gents_protocol::transcript::{normalize_markdown_text, present_persisted_message};
 
 use super::super::cause_derivation::{
@@ -14,6 +14,21 @@ use super::super::types::{
 };
 use super::timeline::{build_rendered_timeline, materialized_user_turn_count};
 use super::{request_matches_agent, source_matches_agent};
+
+fn message_is_runtime_control(
+    message: &AgentMessageRow,
+    requests_by_id: &HashMap<&str, &AgentRequestRow>,
+) -> bool {
+    gents::background_completion::is_background_completion_notification_request_id(
+        message.request_id.as_deref(),
+    ) || message
+        .request_id
+        .as_deref()
+        .and_then(|request_id| requests_by_id.get(request_id))
+        .is_some_and(|request| {
+            gents::lifecycle::is_background_completion_request(request.metadata.as_deref())
+        })
+}
 
 fn command_denial_from_row(row: &AgentToolCallRow) -> Option<CommandDenialView> {
     let rule_id = normalize_optional(row.denial_reason.as_deref())?;
@@ -260,6 +275,12 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
         .as_deref()
         .and_then(|request_id| build_pending_turn(store, agent_did, session_id, request_id));
 
+    // Durable request provenance distinguishes runtime controls from genuine
+    // user messages whose text happens to match a reserved-looking prompt.
+    let requests_by_id: HashMap<&str, &AgentRequestRow> = requests
+        .iter()
+        .map(|request| (request.request_id.as_str(), *request))
+        .collect();
     let messages = transcript
         .messages
         .into_iter()
@@ -294,16 +315,11 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
                 has_tool_results: presentation
                     .as_ref()
                     .is_some_and(|presentation| presentation.has_tool_results),
+                runtime_control: message_is_runtime_control(row, &requests_by_id),
                 timestamp: normalize_optional(row.timestamp.as_deref()),
             }
         })
         .collect::<Vec<_>>();
-
-    // Index requests by id for O(1) per-tool-call lookup.
-    let requests_by_id: HashMap<&str, &AgentRequestRow> = requests
-        .iter()
-        .map(|r| (r.request_id.as_str(), *r))
-        .collect();
 
     let tool_calls = transcript
         .tool_calls
@@ -510,6 +526,11 @@ fn build_pending_turn(
         || store.transcript(session_id),
         |agent_did| store.transcript_for_agent(session_id, agent_did),
     );
+    let requests_by_id = store
+        .requests
+        .iter()
+        .map(|request| (request.request_id.as_str(), request))
+        .collect::<HashMap<_, _>>();
     let messages = transcript
         .messages
         .into_iter()
@@ -535,6 +556,7 @@ fn build_pending_turn(
                 reasoning: None,
                 has_tool_calls: false,
                 has_tool_results: false,
+                runtime_control: message_is_runtime_control(row, &requests_by_id),
                 timestamp: normalize_optional(row.timestamp.as_deref()),
             }
         })

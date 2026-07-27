@@ -26,9 +26,9 @@ fn resolve_template_is_total_over_catalog_and_id_faithful() {
 
 /// Mirrors Lean `conversation_filter_eq` /
 /// `conversation_filters_requester_lineage`: the conversation/Push template
-/// resolves every transcript collection to the paired requester's DID — push
-/// is never silently unfiltered and same-agent third-party history cannot
-/// cross.
+/// resolves every transcript collection to the paired requester's DID and the
+/// readiness acknowledgement to the same claimant DID — push is never
+/// silently unfiltered and same-agent third-party history cannot cross.
 #[test]
 fn conversation_scope_resolves_to_requester_filter_for_every_collection() {
     let t = resolve_template("conversation").expect("conversation in catalog");
@@ -39,7 +39,12 @@ fn conversation_scope_resolves_to_requester_filter_for_every_collection() {
     assert_eq!(filter.len(), t.collections.len());
     for col in t.collections {
         let pred = filter.get(*col).expect("filter for every collection");
-        assert_eq!(pred.field, "requester_did");
+        let expected_field = if *col == "BearerPairingReady" {
+            "claimant_did"
+        } else {
+            "requester_did"
+        };
+        assert_eq!(pred.field, expected_field);
         assert_eq!(pred.value, "did:key:bob");
     }
 }

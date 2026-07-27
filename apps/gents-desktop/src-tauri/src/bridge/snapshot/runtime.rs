@@ -27,10 +27,11 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
         .into_iter()
         .map(|peer| {
             let status = peer_statuses.get(&peer.agent_did);
-            let require_source_scope = peer
-                .graphql
-                .as_deref()
-                .is_some_and(|graphql| !graphql.trim().is_empty());
+            let require_source_scope = peer.is_bearer_pairing()
+                || peer
+                    .graphql
+                    .as_deref()
+                    .is_some_and(|graphql| !graphql.trim().is_empty());
             let principal = store
                 .agent_principals
                 .iter()
@@ -56,7 +57,7 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                 .default_behavior_id_for_agent(&peer.agent_did)
                 .map(str::to_owned)
                 .or_else(|| normalize_optional(peer.default_behavior_id.as_deref()));
-            let runtime = store
+            let mut runtime = store
                 .latest_runtime(&peer.agent_did)
                 .map(|row| RuntimeView {
                     process_state: normalize_optional(row.process_state.as_deref()),
@@ -468,6 +469,26 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
             });
             retain_latest_conversation_summaries(&mut conversations);
 
+            let pairing_ready = peer.is_chat_ready();
+            if !pairing_ready {
+                // A saved bearer record is only a resumable pairing attempt.
+                // Do not project legacy or partially replicated documents into
+                // a usable agent until both issuer-signed readiness facts pass.
+                default_behavior_id = None;
+                agent_principal.default_behavior_id = None;
+                runtime = None;
+                behaviors.clear();
+                inference_backends.clear();
+                inference_profiles.clear();
+                tool_selections.clear();
+                tool_service_registries.clear();
+                skills.clear();
+                tasks.clear();
+                schedules.clear();
+                event_triggers.clear();
+                conversations.clear();
+            }
+
             DeploymentView {
                 peer_id: peer.peer_id,
                 label: peer.label,
@@ -476,6 +497,7 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                 source: peer.source,
                 graphql: peer.graphql,
                 dial_succeeded: status.is_some_and(|status| status.dial_succeeded),
+                pairing_ready,
                 last_error: status.and_then(|status| status.last_error.clone()),
                 default_behavior_id,
                 agent_principal,
@@ -513,7 +535,7 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
 }
 
 fn peer_can_infer_behaviors(peer: &PeerRecord) -> bool {
-    peer.is_bearer_pairing()
+    (peer.is_bearer_pairing() && peer.pairing_ready)
         || (peer.source.as_deref() == Some("server-status") && peer.default_behavior_id.is_some())
 }
 
@@ -607,6 +629,17 @@ mod inferred_peer_behavior_tests {
             inferred_default_behavior_id("did:key:amy", Some("default"), &ids).as_deref(),
             Some("default")
         );
+    }
+
+    #[test]
+    fn pending_bearer_peer_cannot_infer_chat_behavior() {
+        let mut peer = PeerRecord::new("Remote", "endpoint", "did:key:remote");
+        peer.source = Some("bearer-pairing".to_string());
+        peer.default_behavior_id = Some("default".to_string());
+
+        assert!(!peer_can_infer_behaviors(&peer));
+        peer.pairing_ready = true;
+        assert!(peer_can_infer_behaviors(&peer));
     }
 
     #[test]

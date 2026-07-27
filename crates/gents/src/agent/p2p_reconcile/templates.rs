@@ -114,6 +114,7 @@ const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentSession",
     "AgentConversation",
     "CompactionEntry",
+    "BearerPairingReady",
 ];
 
 const CONVERSATION_RULES: &[CollectionRule] = &[
@@ -155,6 +156,11 @@ const CONVERSATION_RULES: &[CollectionRule] = &[
     CollectionRule {
         collection: "CompactionEntry",
         field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "BearerPairingReady",
+        field: "claimant_did",
         source: DidSource::PeerDid,
     },
 ];
@@ -369,12 +375,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn conversation_is_scoped_push_with_eight_collections() {
+    fn conversation_is_scoped_push_with_transcript_and_readiness_collections() {
         let t = resolve_template("conversation").unwrap();
         assert_eq!(t.delivery, Delivery::Push);
         assert!(matches!(t.scope, Scope::PerCollection(_)));
-        assert_eq!(t.collections.len(), 8);
+        assert_eq!(t.collections.len(), 9);
         assert!(t.collections.contains(&"AgentRequest"));
+        assert!(t.collections.contains(&"BearerPairingReady"));
     }
 
     #[test]
@@ -394,13 +401,16 @@ mod tests {
     }
 
     #[test]
-    fn conversation_scope_filters_every_collection_by_requester_did() {
+    fn conversation_scope_filters_transcript_by_requester_and_readiness_by_claimant() {
         let t = resolve_template("conversation").unwrap();
         let f = scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice");
-        assert_eq!(f.len(), 8);
+        assert_eq!(f.len(), 9);
         let p = f.get("AgentRequest").unwrap();
         assert_eq!(p.field, "requester_did");
         assert_eq!(p.value, "did:key:bob");
+        let ready = f.get("BearerPairingReady").unwrap();
+        assert_eq!(ready.field, "claimant_did");
+        assert_eq!(ready.value, "did:key:bob");
     }
 
     #[test]

@@ -151,8 +151,9 @@ theorem scopeFilter_peerDid (f : String) (collections : List String)
 theorem scopeFilter_unscoped (collections : List String) (peerDid localDid : Did) :
     scopeFilter .unscoped collections peerDid localDid = [] := rfl
 
-/-- Conversation pairing carries the complete runtime transcript projection,
-but every artifact is routed only to the peer that originally requested it. -/
+/-- Conversation pairing carries the complete runtime transcript projection
+and the issuer-authored readiness acknowledgement. Transcript artifacts route
+by requester lineage; readiness routes by the claimant DID. -/
 theorem conversation_filter_eq (peerDid localDid : Did) :
     scopeFilter (.perCollection conversationRules) [] peerDid localDid
       = [ { collection := "AgentRequest",      field := "requester_did", value := peerDid }
@@ -162,19 +163,25 @@ theorem conversation_filter_eq (peerDid localDid : Did) :
         , { collection := "AgentToolResult",   field := "requester_did", value := peerDid }
         , { collection := "AgentSession",      field := "requester_did", value := peerDid }
         , { collection := "AgentConversation", field := "requester_did", value := peerDid }
-        , { collection := "CompactionEntry",   field := "requester_did", value := peerDid } ] := by
+        , { collection := "CompactionEntry",   field := "requester_did", value := peerDid }
+        , { collection := "BearerPairingReady", field := "claimant_did", value := peerDid } ] := by
   simp [scopeFilter, conversationRules]
 
-/-- Every conversation predicate is keyed to the requesting peer. Sharing an
-agent owner DID is therefore insufficient for unrelated history to cross. -/
+/-- Every conversation predicate is keyed to the requesting peer. Transcript
+rows use `requester_did`; the readiness acknowledgement uses `claimant_did`.
+Sharing an agent owner DID is therefore insufficient for either to cross. -/
 theorem conversation_filters_requester_lineage (peerDid localDid : Did) :
     (scopeFilter conversationTemplate.scope [] peerDid localDid).all
-      (fun k => k.field = "requester_did" ∧ k.value = peerDid) = true := by
+      (fun k =>
+        k.value = peerDid ∧
+        (if k.collection = "BearerPairingReady"
+          then k.field = "claimant_did"
+          else k.field = "requester_did")) = true := by
   simp [scopeFilter, conversationTemplate, conversationRules]
 
-/-- The requester-scoped rules cover every collection declared by the
-conversation template, preventing an accidentally unfiltered transcript
-collection from entering the pairing. -/
+/-- The requester/claimant-scoped rules cover every collection declared by the
+conversation template, preventing any accidentally unfiltered artifact from
+entering the pairing. -/
 theorem conversation_filters_declared_collections (peerDid localDid : Did) :
     ((scopeFilter conversationTemplate.scope [] peerDid localDid).map
         (fun k => k.collection)).toFinset
@@ -188,6 +195,14 @@ theorem conversation_request_crossing_is_peer_scoped (peerDid localDid : Did) :
     (scopeFilter conversationTemplate.scope [] peerDid localDid).find?
         (fun k => k.collection = "AgentRequest") =
           some { collection := "AgentRequest", field := "requester_did", value := peerDid } := by
+  simp [scopeFilter, conversationTemplate, conversationRules]
+
+/-- The readiness acknowledgement can cross only to the claimant for whom the
+issuer applied the reciprocal data-plane edge. -/
+theorem conversation_readiness_crossing_is_claimant_scoped (peerDid localDid : Did) :
+    (scopeFilter conversationTemplate.scope [] peerDid localDid).find?
+        (fun k => k.collection = "BearerPairingReady") =
+          some { collection := "BearerPairingReady", field := "claimant_did", value := peerDid } := by
   simp [scopeFilter, conversationTemplate, conversationRules]
 
 /-- The coordinator subagent leg carries only bridges addressed to the peer

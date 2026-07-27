@@ -6,8 +6,10 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+use chrono::{SecondsFormat, Utc};
 use defra_node::{EmbeddedNode, EventName, QueryResponse};
 use futures::{stream, StreamExt};
+use gents_protocol::bearer_token::{derive_bearer_readiness_key, BearerPairingReadyRecord};
 use p2p::iroh::parse_public_peer_addr;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
@@ -51,6 +53,19 @@ pub trait PairingStateStore: Send + Sync {
     async fn delete_applied(&self, peer_id: &str) -> Result<()>;
 
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>>;
+
+    /// Materialize or retract the issuer-signed bearer readiness projection.
+    /// The default keeps non-GraphQL test stores and alternate implementations
+    /// source-compatible; the embedded runtime implementation persists the
+    /// acknowledgement only after desired and applied reciprocal wiring agree.
+    async fn reconcile_bearer_readiness(
+        &self,
+        _peer_id: &str,
+        _desired: Option<&PairingDesired>,
+        _applied: &PairingApplied,
+    ) -> Result<()> {
+        Ok(())
+    }
 
     /// Called once at the start of each sweep, before the per-peer loop. Lets a
     /// store amortize per-sweep work (e.g. computing the membership-materializable
@@ -268,6 +283,9 @@ async fn reconcile_prepared_peer(
     if desired.is_none() && !applied.is_empty() {
         store.delete_applied(&peer_id).await?;
     }
+    store
+        .reconcile_bearer_readiness(&peer_id, desired.as_ref(), &applied)
+        .await?;
 
     Ok(PairingTickOutcome {
         peer_id,
@@ -838,6 +856,110 @@ impl GraphqlPairingStateStore {
             self.identity.did(),
         ))
     }
+
+    async fn bearer_readiness_is_current(
+        &self,
+        readiness_key: &str,
+        expected: &BearerPairingReadyRecord,
+    ) -> Result<bool> {
+        let readiness_key = escape_graphql_string(readiness_key);
+        let query = format!(
+            r#"{{
+                BearerPairingReady(
+                    filter: {{ readiness_key: {{ _eq: "{readiness_key}" }} }},
+                    limit: 1
+                ) {{
+                    issuer_did
+                    claimant_did
+                    peer_id
+                    address
+                    template
+                    acknowledged_at
+                    issuer_sig
+                }}
+            }}"#
+        );
+        let response = self.node.execute(&query).await;
+        ensure_no_errors(&response, "query BearerPairingReady")?;
+        let Some(row) = first_row::<BearerPairingReadyRow>(&response, "BearerPairingReady")? else {
+            return Ok(false);
+        };
+        let Some(existing) = bearer_pairing_ready_record(&row)? else {
+            return Ok(false);
+        };
+        if existing.issuer_did != expected.issuer_did
+            || existing.claimant_did != expected.claimant_did
+            || existing.peer_id != expected.peer_id
+            || existing.address != expected.address
+            || existing.template != expected.template
+        {
+            return Ok(false);
+        }
+        match self
+            .identity
+            .verify(
+                &existing.issuer_did,
+                &existing.signing_payload(),
+                &existing.sig,
+            )
+            .await
+        {
+            Ok(valid) => Ok(valid),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    claimant_did = %existing.claimant_did,
+                    "failed to verify existing bearer readiness acknowledgement; rewriting it"
+                );
+                Ok(false)
+            }
+        }
+    }
+
+    async fn upsert_bearer_readiness(
+        &self,
+        peer_id: &str,
+        claimant_did: &str,
+        address: &str,
+    ) -> Result<()> {
+        let readiness_key = derive_bearer_readiness_key(self.identity.did(), claimant_did);
+        let mut record = BearerPairingReadyRecord {
+            issuer_did: self.identity.did().to_string(),
+            claimant_did: claimant_did.to_string(),
+            peer_id: peer_id.to_string(),
+            address: address.to_string(),
+            template: "conversation".to_string(),
+            acknowledged_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+            sig: Vec::new(),
+        };
+        if self
+            .bearer_readiness_is_current(&readiness_key, &record)
+            .await?
+        {
+            return Ok(());
+        }
+        record.sig = self
+            .identity
+            .sign(&record.signing_payload())
+            .await
+            .context("signing bearer pairing readiness acknowledgement")?;
+        let mutation = bearer_pairing_ready_upsert_mutation(&readiness_key, &record);
+        let response = self.node.execute(&mutation).await;
+        ensure_no_errors(&response, "upsert BearerPairingReady")
+    }
+
+    async fn delete_bearer_readiness_for_peer(&self, peer_id: &str) -> Result<()> {
+        let peer_id = escape_graphql_string(peer_id);
+        let mutation = format!(
+            r#"mutation {{
+                delete_BearerPairingReady(
+                    filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}
+                ) {{ _docID }}
+            }}"#
+        );
+        let response = self.node.execute(&mutation).await;
+        ensure_no_errors(&response, "delete BearerPairingReady")
+    }
 }
 
 fn data_plane_materialized_entry_from_sources(
@@ -997,6 +1119,21 @@ impl PairingStateStore for GraphqlPairingStateStore {
         Ok(ids)
     }
 
+    async fn reconcile_bearer_readiness(
+        &self,
+        peer_id: &str,
+        desired: Option<&PairingDesired>,
+        applied: &PairingApplied,
+    ) -> Result<()> {
+        let Some((claimant_did, address)) =
+            earned_bearer_readiness(desired, applied, self.identity.did())
+        else {
+            return self.delete_bearer_readiness_for_peer(peer_id).await;
+        };
+        self.upsert_bearer_readiness(peer_id, &claimant_did, &address)
+            .await
+    }
+
     async fn begin_sweep(&self) -> Result<()> {
         // Compute the membership-materializable set ONCE for this sweep so the
         // per-peer Layer-2 gate (`data_plane_peer_is_materializable`) reuses it
@@ -1051,6 +1188,17 @@ pub const DEFAULT_PAIRING_TEMPLATE: &str = "conversation";
 #[derive(Deserialize)]
 struct PeerIdRow {
     peer_id: String,
+}
+
+#[derive(Deserialize)]
+struct BearerPairingReadyRow {
+    issuer_did: Option<String>,
+    claimant_did: Option<String>,
+    peer_id: Option<String>,
+    address: Option<String>,
+    template: Option<String>,
+    acknowledged_at: Option<String>,
+    issuer_sig: Option<String>,
 }
 
 fn desired_from_pairing_row(
@@ -1359,6 +1507,142 @@ pub fn merge_layered_desired(
     }
 }
 
+/// Return the claimant and endpoint only after the exact conversation
+/// replicator identity has been persisted as applied. This is the Rust
+/// boundary for Lean `BearerReadiness.ready`: a connected peer or a desired
+/// row alone never earns an acknowledgement.
+fn earned_bearer_readiness(
+    desired: Option<&PairingDesired>,
+    applied: &PairingApplied,
+    local_did: &str,
+) -> Option<(String, String)> {
+    let desired = desired?;
+    if !desired.template_ids.contains("conversation")
+        || desired.replicator_addresses.len() != 1
+        || applied.replicator_addresses != desired.replicator_addresses
+        || applied.replicator_filter != desired.replicator_filter
+    {
+        return None;
+    }
+    let template = resolve_template("conversation")?;
+    if !template
+        .collections
+        .iter()
+        .all(|collection| desired.replicator_collections.contains(*collection))
+    {
+        return None;
+    }
+    let readiness_filter = desired.replicator_filter.get("BearerPairingReady")?;
+    if readiness_filter.field != "claimant_did" {
+        return None;
+    }
+    let claimant_did = readiness_filter.value.trim();
+    if claimant_did.is_empty() {
+        return None;
+    }
+    let expected = scope_filter(
+        &template.scope,
+        template.collections,
+        claimant_did,
+        local_did,
+    );
+    if expected
+        .iter()
+        .any(|(collection, predicate)| desired.replicator_filter.get(collection) != Some(predicate))
+    {
+        return None;
+    }
+    let address = desired
+        .replicator_addresses
+        .iter()
+        .next()?
+        .trim()
+        .to_string();
+    (!address.is_empty()).then(|| (claimant_did.to_string(), address))
+}
+
+fn bearer_pairing_ready_record(
+    row: &BearerPairingReadyRow,
+) -> Result<Option<BearerPairingReadyRecord>> {
+    let required = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let Some(issuer_did) = required(row.issuer_did.as_deref()) else {
+        return Ok(None);
+    };
+    let Some(claimant_did) = required(row.claimant_did.as_deref()) else {
+        return Ok(None);
+    };
+    let Some(peer_id) = required(row.peer_id.as_deref()) else {
+        return Ok(None);
+    };
+    let Some(address) = required(row.address.as_deref()) else {
+        return Ok(None);
+    };
+    let Some(template) = required(row.template.as_deref()) else {
+        return Ok(None);
+    };
+    let Some(acknowledged_at) = required(row.acknowledged_at.as_deref()) else {
+        return Ok(None);
+    };
+    let Some(issuer_sig) = required(row.issuer_sig.as_deref()) else {
+        return Ok(None);
+    };
+    let sig = bs58::decode(issuer_sig)
+        .into_vec()
+        .context("decoding BearerPairingReady.issuer_sig")?;
+    Ok(Some(BearerPairingReadyRecord {
+        issuer_did,
+        claimant_did,
+        peer_id,
+        address,
+        template,
+        acknowledged_at,
+        sig,
+    }))
+}
+
+pub fn bearer_pairing_ready_upsert_mutation(
+    readiness_key: &str,
+    record: &BearerPairingReadyRecord,
+) -> String {
+    let readiness_key = escape_graphql_string(readiness_key);
+    let issuer_did = escape_graphql_string(&record.issuer_did);
+    let claimant_did = escape_graphql_string(&record.claimant_did);
+    let peer_id = escape_graphql_string(&record.peer_id);
+    let address = escape_graphql_string(&record.address);
+    let template = escape_graphql_string(&record.template);
+    let acknowledged_at = escape_graphql_string(&record.acknowledged_at);
+    let issuer_sig = escape_graphql_string(&bs58::encode(&record.sig).into_string());
+    format!(
+        r#"mutation {{
+            upsert_BearerPairingReady(
+                filter: {{ readiness_key: {{ _eq: "{readiness_key}" }} }},
+                add: {{
+                    readiness_key: "{readiness_key}",
+                    issuer_did: "{issuer_did}",
+                    claimant_did: "{claimant_did}",
+                    peer_id: "{peer_id}",
+                    address: "{address}",
+                    template: "{template}",
+                    acknowledged_at: "{acknowledged_at}",
+                    issuer_sig: "{issuer_sig}"
+                }},
+                update: {{
+                    peer_id: "{peer_id}",
+                    address: "{address}",
+                    template: "{template}",
+                    acknowledged_at: "{acknowledged_at}",
+                    issuer_sig: "{issuer_sig}"
+                }}
+            ) {{ _docID }}
+        }}"#
+    )
+}
+
 fn ensure_no_errors(response: &QueryResponse, label: &str) -> Result<()> {
     if response.has_errors() {
         bail!("{label} failed: {:?}", response.errors);
@@ -1448,6 +1732,76 @@ mod tests {
             },
         );
         filters
+    }
+
+    fn conversation_desired(claimant_did: &str, address: &str) -> PairingDesired {
+        let template = resolve_template("conversation").expect("conversation template");
+        PairingDesired {
+            replicator_addresses: set(&[address]),
+            replicator_collections: template
+                .collections
+                .iter()
+                .map(|collection| (*collection).to_string())
+                .collect(),
+            replicator_filter: scope_filter(
+                &template.scope,
+                template.collections,
+                claimant_did,
+                "did:key:issuer",
+            ),
+            template_ids: set(&["conversation"]),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn bearer_readiness_requires_exact_applied_conversation_replicator() {
+        let desired = conversation_desired("did:key:claimant", "iroh-ticket");
+        let pending = PairingApplied::default();
+        assert_eq!(
+            earned_bearer_readiness(Some(&desired), &pending, "did:key:issuer"),
+            None
+        );
+
+        let applied = PairingApplied {
+            replicator_addresses: desired.replicator_addresses.clone(),
+            replicator_filter: desired.replicator_filter.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            earned_bearer_readiness(Some(&desired), &applied, "did:key:issuer"),
+            Some(("did:key:claimant".to_string(), "iroh-ticket".to_string()))
+        );
+
+        let mut wrong_filter = applied;
+        wrong_filter
+            .replicator_filter
+            .get_mut("AgentRequest")
+            .expect("request filter")
+            .value = "did:key:someone-else".to_string();
+        assert_eq!(
+            earned_bearer_readiness(Some(&desired), &wrong_filter, "did:key:issuer"),
+            None
+        );
+    }
+
+    #[test]
+    fn bearer_readiness_mutation_escapes_signed_fields() {
+        let record = BearerPairingReadyRecord {
+            issuer_did: "did:key:issuer".to_string(),
+            claimant_did: "did:key:claimant\"quoted".to_string(),
+            peer_id: "peer-a".to_string(),
+            address: "ticket\\route".to_string(),
+            template: "conversation".to_string(),
+            acknowledged_at: "2026-07-27T00:00:00Z".to_string(),
+            sig: vec![1, 2, 3],
+        };
+
+        let mutation = bearer_pairing_ready_upsert_mutation("ready\"key", &record);
+        assert!(mutation.contains(r#"readiness_key: "ready\"key""#));
+        assert!(mutation.contains(r#"claimant_did: "did:key:claimant\"quoted""#));
+        assert!(mutation.contains(r#"address: "ticket\\route""#));
+        assert!(!mutation.contains("[]"));
     }
 
     #[test]

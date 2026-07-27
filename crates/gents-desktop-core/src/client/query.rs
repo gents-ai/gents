@@ -33,7 +33,7 @@ const AGENT_CONVERSATION_FIELDS: &str = "session_id agent_name agent_did request
 const AGENT_REQUEST_FIELDS: &str = "request_id agent_did requester_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content temperature top_p top_k max_tokens metadata status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_parent_request_id failure_reason terminalized_at terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until";
 const AGENT_RESPONSE_FIELDS: &str = "response_key request_id agent_did requester_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at";
 const AGENT_MESSAGE_FIELDS: &str =
-    "message_key session_id requester_did sequence role content reasoning timestamp";
+    "message_key session_id request_id requester_did sequence role content reasoning timestamp";
 const AGENT_SESSION_FIELDS: &str =
     "session_id agent_name requester_did behavior_id started ended status";
 const GOAL_FIELDS: &str = "goal_id session_id agent_did objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence created_at updated_at";
@@ -81,6 +81,7 @@ pub async fn load_full_snapshot_with_peer_records(
     requester_did: &str,
 ) -> Result<ClientStore> {
     let mut rows = load_full_snapshot(node).await?.to_rows();
+    isolate_legacy_bearer_rows(&mut rows, peers, requester_did);
     let mut remote_loads = Vec::new();
 
     for peer in peers {
@@ -139,6 +140,148 @@ pub async fn load_full_snapshot_with_peer_records(
     }
 
     Ok(ClientStore::from_rows(rows))
+}
+
+/// Bearer replication is requester-scoped, but an upgraded database can still
+/// contain rows received by the old unfiltered replicator. Keep those rows
+/// durable for diagnostics while excluding them from every client projection.
+fn isolate_legacy_bearer_rows(
+    rows: &mut ClientStoreRows,
+    peers: &[PeerRecord],
+    requester_did: &str,
+) {
+    let bearer_dids = peers
+        .iter()
+        .filter(|peer| peer.is_bearer_pairing())
+        .map(|peer| peer.agent_did.as_str())
+        .collect::<HashSet<_>>();
+    if bearer_dids.is_empty() {
+        return;
+    }
+
+    let is_bearer_did = |did: Option<&str>| did.is_some_and(|did| bearer_dids.contains(did));
+    let requester_matches = |did: Option<&str>| did.is_some_and(|did| did == requester_did);
+    let mut bearer_sessions = rows
+        .conversations
+        .iter()
+        .filter(|row| is_bearer_did(row.agent_did.as_deref()))
+        .map(|row| row.session_id.clone())
+        .collect::<HashSet<_>>();
+    bearer_sessions.extend(
+        rows.requests
+            .iter()
+            .filter(|row| is_bearer_did(row.agent_did.as_deref()))
+            .filter_map(|row| row.session_id.clone()),
+    );
+    bearer_sessions.extend(
+        rows.responses
+            .iter()
+            .filter(|row| is_bearer_did(row.agent_did.as_deref()))
+            .filter_map(|row| row.session_id.clone()),
+    );
+    bearer_sessions.extend(
+        rows.tool_results
+            .iter()
+            .filter(|row| is_bearer_did(row.agent_did.as_deref()))
+            .filter_map(|row| row.session_id.clone()),
+    );
+
+    rows.conversations.retain(|row| {
+        !is_bearer_did(row.agent_did.as_deref()) || requester_matches(row.requester_did.as_deref())
+    });
+    rows.requests.retain(|row| {
+        !is_bearer_did(row.agent_did.as_deref()) || requester_matches(row.requester_did.as_deref())
+    });
+    rows.responses.retain(|row| {
+        !is_bearer_did(row.agent_did.as_deref()) || requester_matches(row.requester_did.as_deref())
+    });
+    retain_rows_with_sources(
+        &mut rows.tool_results,
+        &mut rows.tool_result_source_agent_dids,
+        |row| {
+            !is_bearer_did(row.agent_did.as_deref())
+                || requester_matches(row.requester_did.as_deref())
+        },
+    );
+    retain_rows_with_sources(
+        &mut rows.messages,
+        &mut rows.message_source_agent_dids,
+        |row| {
+            !row.session_id
+                .as_deref()
+                .is_some_and(|session_id| bearer_sessions.contains(session_id))
+                || requester_matches(row.requester_did.as_deref())
+        },
+    );
+    retain_rows_with_sources(
+        &mut rows.sessions,
+        &mut rows.session_source_agent_dids,
+        |row| {
+            !bearer_sessions.contains(&row.session_id)
+                || requester_matches(row.requester_did.as_deref())
+        },
+    );
+    retain_rows_with_sources(
+        &mut rows.tool_calls,
+        &mut rows.tool_call_source_agent_dids,
+        |row| {
+            !row.session_id
+                .as_deref()
+                .is_some_and(|session_id| bearer_sessions.contains(session_id))
+                || requester_matches(row.requester_did.as_deref())
+        },
+    );
+    retain_rows_with_sources(
+        &mut rows.compaction_entries,
+        &mut rows.compaction_entry_source_agent_dids,
+        |row| {
+            !row.session_id
+                .as_deref()
+                .is_some_and(|session_id| bearer_sessions.contains(session_id))
+                || requester_matches(row.requester_did.as_deref())
+        },
+    );
+    // Goal was never part of the requester-scoped conversation template, so
+    // any bearer-owned goal in the local store necessarily came from the old
+    // broad replicator.
+    rows.goals
+        .retain(|row| !bearer_dids.contains(row.agent_did.as_str()));
+
+    // Configuration was also outside the signed bearer grant. The desktop
+    // uses the invite's signed default behavior until scoped conversation data
+    // arrives, rather than trusting legacy replicated configuration.
+    rows.agent_principals
+        .retain(|row| !bearer_dids.contains(row.agent_did.as_str()));
+    rows.behaviors
+        .retain(|row| !is_bearer_did(row.agent_did.as_deref()));
+    rows.runtimes
+        .retain(|row| !bearer_dids.contains(row.agent_did.as_str()));
+    rows.tool_selections
+        .retain(|row| !is_bearer_did(row.agent_did.as_deref()));
+    retain_rows_with_sources(&mut rows.skills, &mut rows.skill_source_agent_dids, |row| {
+        !is_bearer_did(row.agent_did.as_deref())
+    });
+}
+
+fn retain_rows_with_sources<T>(
+    rows: &mut Vec<T>,
+    sources: &mut Vec<Option<String>>,
+    mut keep: impl FnMut(&T) -> bool,
+) {
+    sources.resize(rows.len(), None);
+    let mut kept_rows = Vec::with_capacity(rows.len());
+    let mut kept_sources = Vec::with_capacity(sources.len());
+    for (row, source) in std::mem::take(rows)
+        .into_iter()
+        .zip(std::mem::take(sources))
+    {
+        if keep(&row) {
+            kept_rows.push(row);
+            kept_sources.push(source);
+        }
+    }
+    *rows = kept_rows;
+    *sources = kept_sources;
 }
 
 pub async fn load_agent_principals(node: &EmbeddedNode) -> Result<Vec<AgentPrincipalRow>> {
@@ -1107,6 +1250,74 @@ mod tests {
     use std::sync::Arc;
     use wiremock::matchers::{body_string_contains, method};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn upgraded_bearer_snapshot_isolates_unscoped_legacy_rows() {
+        let mut peer = PeerRecord::new("Remote", "ticket", "did:key:remote");
+        peer.source = Some(super::super::core::bearer_pairing::BEARER_PAIRING_SOURCE.to_string());
+        let mut rows = ClientStoreRows {
+            agent_principals: vec![serde_json::from_value(json!({
+                "agent_did": "did:key:remote",
+                "display_name": "legacy remote config"
+            }))
+            .unwrap()],
+            conversations: vec![
+                serde_json::from_value(json!({
+                    "session_id": "allowed",
+                    "agent_did": "did:key:remote",
+                    "requester_did": "did:key:local"
+                }))
+                .unwrap(),
+                serde_json::from_value(json!({
+                    "session_id": "foreign",
+                    "agent_did": "did:key:remote",
+                    "requester_did": "did:key:other"
+                }))
+                .unwrap(),
+            ],
+            messages: vec![
+                serde_json::from_value(json!({
+                    "message_key": "allowed:1",
+                    "session_id": "allowed",
+                    "requester_did": "did:key:local"
+                }))
+                .unwrap(),
+                serde_json::from_value(json!({
+                    "message_key": "foreign:1",
+                    "session_id": "foreign",
+                    "requester_did": "did:key:other"
+                }))
+                .unwrap(),
+            ],
+            goals: vec![serde_json::from_value(json!({
+                "goal_id": "legacy-goal",
+                "session_id": "foreign",
+                "agent_did": "did:key:remote"
+            }))
+            .unwrap()],
+            ..ClientStoreRows::default()
+        };
+
+        isolate_legacy_bearer_rows(&mut rows, &[peer], "did:key:local");
+
+        assert_eq!(
+            rows.conversations
+                .iter()
+                .map(|row| row.session_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["allowed"]
+        );
+        assert_eq!(
+            rows.messages
+                .iter()
+                .filter_map(|row| row.session_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec!["allowed"]
+        );
+        assert_eq!(rows.message_source_agent_dids, vec![None]);
+        assert!(rows.goals.is_empty());
+        assert!(rows.agent_principals.is_empty());
+    }
 
     #[tokio::test]
     async fn fetch_doc_patch_returns_only_matching_rows() {

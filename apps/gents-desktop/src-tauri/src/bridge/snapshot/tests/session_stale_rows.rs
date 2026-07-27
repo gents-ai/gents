@@ -54,6 +54,7 @@ fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is
             AgentMessageRow {
                 message_key: "msg-1".to_string(),
                 session_id: Some("session-1".to_string()),
+                request_id: None,
                 requester_did: None,
                 sequence: Some(1),
                 role: Some("user".to_string()),
@@ -64,6 +65,7 @@ fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is
             AgentMessageRow {
                 message_key: "msg-2".to_string(),
                 session_id: Some("session-1".to_string()),
+                request_id: None,
                 requester_did: None,
                 sequence: Some(2),
                 role: Some("assistant".to_string()),
@@ -380,6 +382,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
             AgentMessageRow {
                 message_key: "msg-1".to_string(),
                 session_id: Some("session-1".to_string()),
+                request_id: None,
                 requester_did: None,
                 sequence: Some(1),
                 role: Some("user".to_string()),
@@ -390,6 +393,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
             AgentMessageRow {
                 message_key: "msg-2".to_string(),
                 session_id: Some("session-1".to_string()),
+                request_id: None,
                 requester_did: None,
                 sequence: Some(2),
                 role: Some("assistant".to_string()),
@@ -400,6 +404,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
             AgentMessageRow {
                 message_key: "msg-3".to_string(),
                 session_id: Some("session-1".to_string()),
+                request_id: None,
                 requester_did: None,
                 sequence: Some(3),
                 role: Some("user".to_string()),
@@ -410,6 +415,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
             AgentMessageRow {
                 message_key: "msg-4".to_string(),
                 session_id: Some("session-1".to_string()),
+                request_id: None,
                 requester_did: None,
                 sequence: Some(4),
                 role: Some("assistant".to_string()),

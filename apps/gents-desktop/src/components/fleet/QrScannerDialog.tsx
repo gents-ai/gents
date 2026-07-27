@@ -191,7 +191,7 @@ export function QrScannerDialog({ onClose, onScan }: QrScannerDialogProps) {
         <header>
           <div>
             <p className="eyebrow">Secure pairing</p>
-            <h3>Scan Amy's invite</h3>
+            <h3>Scan agent invite</h3>
           </div>
           <button
             aria-label="Close camera"

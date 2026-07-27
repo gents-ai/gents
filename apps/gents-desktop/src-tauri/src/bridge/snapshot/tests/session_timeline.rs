@@ -56,6 +56,7 @@ fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
         messages: vec![AgentMessageRow {
             message_key: "msg-1".to_string(),
             session_id: Some("sess-1".to_string()),
+            request_id: None,
             requester_did: None,
             sequence: Some(1),
             role: Some("user".to_string()),
@@ -112,6 +113,7 @@ fn session_snapshot_deduplicates_persisted_rows_from_multiple_sources() {
     let assistant = AgentMessageRow {
         message_key: "msg-2".to_string(),
         session_id: Some("sess-1".to_string()),
+        request_id: None,
         requester_did: None,
         sequence: Some(2),
         role: Some("assistant".to_string()),
@@ -174,6 +176,7 @@ fn session_snapshot_hides_live_overlay_matching_last_materialized_assistant() {
     rows.messages.push(AgentMessageRow {
         message_key: "msg-2".to_string(),
         session_id: Some("sess-1".to_string()),
+        request_id: None,
         requester_did: None,
         sequence: Some(2),
         role: Some("assistant".to_string()),
@@ -289,6 +292,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
         messages: vec![AgentMessageRow {
             message_key: "msg-1".to_string(),
             session_id: Some("session-1".to_string()),
+            request_id: None,
             requester_did: None,
             sequence: Some(1),
             role: Some("user".to_string()),
@@ -422,6 +426,7 @@ fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
         messages: vec![AgentMessageRow {
             message_key: "msg-1".to_string(),
             session_id: Some("session-1".to_string()),
+            request_id: None,
             requester_did: None,
             sequence: Some(1),
             role: Some("user".to_string()),
@@ -566,6 +571,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
             AgentMessageRow {
                 message_key: "msg-1".to_string(),
                 session_id: Some("session-1".to_string()),
+                request_id: None,
                 requester_did: None,
                 sequence: Some(1),
                 role: Some("user".to_string()),
@@ -576,6 +582,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
             AgentMessageRow {
                 message_key: "msg-2".to_string(),
                 session_id: Some("session-1".to_string()),
+                request_id: None,
                 requester_did: None,
                 sequence: Some(2),
                 role: Some("assistant".to_string()),
@@ -589,6 +596,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
             AgentMessageRow {
                 message_key: "msg-3".to_string(),
                 session_id: Some("session-1".to_string()),
+                request_id: None,
                 requester_did: None,
                 sequence: Some(3),
                 role: Some("user".to_string()),
@@ -682,6 +690,7 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
         messages: vec![AgentMessageRow {
             message_key: "msg-1".to_string(),
             session_id: Some("session-1".to_string()),
+            request_id: None,
             requester_did: None,
             sequence: Some(1),
             role: Some("user".to_string()),
