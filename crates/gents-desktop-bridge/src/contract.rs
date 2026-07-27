@@ -253,22 +253,86 @@ mod tests {
                 assert_eq!(existing, set.kind, "set {} has mixed kinds", set.name);
             }
         }
-        for set in permission_set_inventory() {
-            if set.kind == "read" || set.kind == "mutate" {
-                let mut saw_read = false;
-                let mut saw_mutate = false;
-                for command in command_inventory() {
-                    if command.permission_set != set.name {
-                        continue;
-                    }
-                    // Map command set names that are themselves read/mutate.
-                    match set.kind.as_str() {
-                        "read" => saw_read = true,
-                        "mutate" => saw_mutate = true,
-                        _ => {}
-                    }
-                    let _ = (saw_read, saw_mutate);
-                }
+        // Independent per-command IO/privilege classification. Privileged
+        // active actions (address probe, service test, repair) classify as
+        // mutate deliberately: set purity tracks privilege, not just IO.
+        const COMMAND_KINDS: &[(&str, &str)] = &[
+            ("desktop_bridge_contract", "read"),
+            ("desktop_bootstrap_summary", "read"),
+            ("desktop_client_snapshot", "read"),
+            ("desktop_observer_metrics", "read"),
+            ("desktop_client_start", "mutate"),
+            ("desktop_client_shutdown", "mutate"),
+            ("desktop_set_selected_agent", "mutate"),
+            ("desktop_init_local_standard", "mutate"),
+            ("desktop_session_snapshot", "read"),
+            ("desktop_request_timeline", "read"),
+            ("desktop_tool_surface_explain", "read"),
+            ("desktop_chat_send", "mutate"),
+            ("desktop_conversation_rename", "mutate"),
+            ("desktop_session_fork", "mutate"),
+            ("desktop_request_resend", "mutate"),
+            ("desktop_peer_status_fetch", "read"),
+            ("desktop_network_status", "read"),
+            ("desktop_workspace_list", "read"),
+            ("desktop_peer_add", "mutate"),
+            ("desktop_peer_pair_bearer", "mutate"),
+            ("desktop_peer_remove", "mutate"),
+            ("desktop_peer_rename", "mutate"),
+            ("desktop_peer_probe_address", "mutate"),
+            ("desktop_p2p_repair", "mutate"),
+            ("desktop_operations_snapshot", "read"),
+            ("desktop_list_subagent_tree", "read"),
+            ("desktop_list_backends_with_health", "read"),
+            ("desktop_list_mcp_services_with_health", "read"),
+            ("desktop_probe_mcp_service", "read"),
+            ("desktop_preview_interrupt_cascade", "read"),
+            ("desktop_interrupt_request", "mutate"),
+            ("desktop_list_tool_call_holds", "read"),
+            ("desktop_resolve_tool_call_hold", "mutate"),
+            ("desktop_agent_config_save", "mutate"),
+            ("desktop_behavior_save", "mutate"),
+            ("desktop_skill_save", "mutate"),
+            ("desktop_skill_delete", "mutate"),
+            ("desktop_task_delete", "mutate"),
+            ("desktop_schedule_delete", "mutate"),
+            ("desktop_event_trigger_delete", "mutate"),
+            ("desktop_backend_delete", "mutate"),
+            ("desktop_inference_profile_delete", "mutate"),
+            ("desktop_tool_selection_delete", "mutate"),
+            ("desktop_tool_service_delete", "mutate"),
+            ("desktop_behavior_delete", "mutate"),
+            ("desktop_backend_save", "mutate"),
+            ("desktop_inference_profile_save", "mutate"),
+            ("desktop_tool_selection_save", "mutate"),
+            ("desktop_tool_service_save", "mutate"),
+            ("desktop_tool_service_test", "mutate"),
+            ("desktop_task_save", "mutate"),
+            ("desktop_schedule_save", "mutate"),
+            ("desktop_schedule_run", "mutate"),
+            ("desktop_event_trigger_save", "mutate"),
+            ("desktop_task_run", "mutate"),
+            ("desktop_native_e2e_config", "read"),
+            ("desktop_native_e2e_status", "mutate"),
+        ];
+        let kind_by_command: std::collections::BTreeMap<&str, &str> =
+            COMMAND_KINDS.iter().copied().collect();
+        assert_eq!(
+            kind_by_command.len(),
+            command_inventory().len(),
+            "COMMAND_KINDS must classify every command exactly once"
+        );
+        for command in command_inventory() {
+            let command_kind = *kind_by_command
+                .get(command.name.as_str())
+                .unwrap_or_else(|| panic!("command {} is unclassified", command.name));
+            let set_kind = kinds[&command.permission_set].as_str();
+            if set_kind == "read" || set_kind == "mutate" {
+                assert_eq!(
+                    command_kind, set_kind,
+                    "command {} is {} but sits in {} set {}",
+                    command.name, command_kind, set_kind, command.permission_set
+                );
             }
         }
         // Every command maps to a fine-grained set or the native-e2e test set.

@@ -91,24 +91,10 @@ async fn local_runtime_allowed_binds_fixed_agent_home() {
     assert_eq!(policy.desktop_paths.root(), bridge_root.as_path());
 }
 
-/// Fixture profile: capability grants must not exceed SnapshotGrants.
-/// v1 is process-wide single profile (no per-caller ACL introspection).
-#[test]
-fn fixture_chat_fleet_profile_is_subset_of_declared_snapshot_grants() {
-    // Documented fixture capability sets → expected SnapshotGrants bits.
-    let grants = SnapshotGrants {
-        session_read: true, // session-read
-        fleet_read: true,   // fleet-read (+ fleet-admin does not widen projection)
-        config_read: false, // no config-read / config-write
-        operations_read: false,
-        runtime_admin: false, // PairedRemoteOnly / no runtime-admin
-    };
-    // Must match apps/fixture-host BridgeConfig.snapshot_grants.
-    assert_eq!(grants.session_read, true);
-    assert_eq!(grants.fleet_read, true);
-    assert_eq!(grants.config_read, false);
-    assert_eq!(grants.runtime_admin, false);
-}
+// The capability-vs-snapshot-grants consistency fence lives in the fixture
+// crate (gents-fixture-host `capability_grants_match_declared_snapshot_grants`),
+// where it parses the real capabilities/default.json against the real
+// BridgeConfig instead of restating expected values.
 
 #[test]
 fn bridge_config_default_is_fail_closed_core_only() {
