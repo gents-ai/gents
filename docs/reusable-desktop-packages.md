@@ -1,11 +1,12 @@
 # Reusable desktop packages
 
 *Design spec — 2026-07-27. Issue [#877](https://github.com/source-inc/gents/issues/877)
-(`design` label: design-only spec PR). Status: proposed; revised 2026-07-27 after
-issue-author review (domain-storage model, permission scoping, shared frontend state,
-fixture-first sequencing, feature-gating mechanics), second pass same day
-(read/write permission splits, E2E capability activation, trust-boundary and
-forward-compatibility language, external distribution-access validation). Base: the
+(`design` label: design-only spec PR). Status: **approved by the issue author,
+2026-07-27**, after three review passes (domain-storage model, permission scoping,
+shared frontend state, fixture-first sequencing, feature-gating mechanics; read/write
+permission splits, E2E capability activation, trust-boundary and
+forward-compatibility language, external distribution-access validation; explicit
+capability enumeration and tag-vs-revision fetch sequencing). Base: the
 iPhone/bearer-pairing
 series (`agent/iphone-amy-bearer-pairing`, six commits ending `e3d19f7a`), which this
 design treats as load-bearing evidence, not incidental history.*
@@ -444,11 +445,16 @@ The bridge's public contract, versioned as one unit (§ Compatibility):
   their build steps; release packaging builds without it, and a release gate asserts
   the commands are absent. Compilation alone is not activation: the webview must
   also be *granted* the plugin's `native-e2e` permission. That grant lives in an
-  E2E-only capability file (`capabilities/native-e2e.json`) which production
-  `tauri.conf.json` does not reference; the E2E launchers activate it via a Tauri
-  config overlay (`--config` merge, alongside `--features native-e2e`), so a
-  production build neither compiles the commands nor grants the permission, and the
-  release gate asserts both absences. The existing runtime double-gate
+  E2E-only capability file (`capabilities/native-e2e.json`) — and a pitfall makes
+  explicit enumeration mandatory: when `app.security.capabilities` is omitted or
+  empty, Tauri includes **every** file under `capabilities/`, and today's
+  `tauri.conf.json` omits it, so merely not referencing the file would still
+  activate it. The contract therefore requires production config to enumerate
+  `"capabilities": ["default"]`, the E2E overlay (`--config` merge, alongside
+  `--features native-e2e`) to enumerate `"capabilities": ["default", "native-e2e"]`,
+  and the release gate to inspect the **effective compiled capability set** in the
+  build artifacts — not merely the source config — so a production build neither
+  compiles the commands nor grants the permission. The existing runtime double-gate
   (`#[cfg(debug_assertions)]` + `GENTS_NATIVE_E2E=1`) is retained as
   defense-in-depth, so even a mistaken feature enable ships inert stubs in a release
   profile. The commands are documented as an unsupported test contract: present so
@@ -591,8 +597,9 @@ of the release version and is what compatibility decisions key on.
   mechanism is `gents-desktop-bridge = { git = "ssh://git@github.com/source-inc/gents.git", tag = "vX.Y.Z" }`
   (downstream needs repo access — true today for any consumer of this private repo).
   Note the transitive cost: the consumer's Cargo must also fetch the ssh-pinned
-  DefraDB revisions, so external access is validated from Amygdala CI in phase 5,
-  not assumed.
+  DefraDB revisions, so external access is validated from Amygdala CI in phase 5
+  (by exact revision, since no crate-bearing tag exists yet) and by release tag in
+  phase 10 — not assumed.
 - **npm: GitHub Packages** under the `@source-inc` scope, published by the release
   workflow on tag — **conditional on validating, before phase 5 commits to it, that
   Amygdala's CI can authenticate to the org registry**. The fallback is npm git
@@ -657,16 +664,19 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
    `bridge_runner` into the bridge crate behind `test-harness`; put the `e2e` module
    behind the explicit `native-e2e` feature with app-crate forwarding, the
    E2E-launcher `--features` wiring, and the E2E-only capability overlay
-   (`capabilities/native-e2e.json` activated via `--config` merge; production
-   config omits it). Update the app: builder shrinks to helpers + plugin +
+   (`capabilities/native-e2e.json`; production config enumerates
+   `"capabilities": ["default"]` explicitly — required because omitting the field
+   includes every capability file — and the overlay enumerates
+   `["default", "native-e2e"]`). Update the app: builder shrinks to helpers +
+   plugin +
    context; `desktop-api.ts` command strings and error handling update in the same
    PR, consuming the phase-2 generated types. Exit:
    `test:ui:agent --backend live --viewport iphone` and `test:ui:live:e2e` green
    against the relocated `bridge_runner`; `test:ui:ios:e2e` green (native surface
    changed, built with `--features native-e2e` + the E2E capability overlay);
    release build verified to exclude both the E2E commands and the `native-e2e`
-   permission grant; permission sets reviewed against the no-read/mutate-mixing
-   rule.
+   grant by inspecting the effective compiled capability set; permission sets
+   reviewed against the no-read/mutate-mixing rule.
 4. **Minimal downstream fixture host — co-residence proof.** `apps/fixture-host`
    (name open): a minimal Tauri app with a different bundle id, product name, icon,
    and `HomePolicy::AppDataDir` home, granting only `default + chat-read +
@@ -690,9 +700,11 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
    dropped CSS assets. Distribution access is validated **end to end from Amygdala
    CI** here: GitHub Packages auth for npm (or the registry decision flips to the
    fallback) *and* an external Cargo fetch of the private Rust chain — a clean
-   environment outside this workspace resolving `gents-desktop-bridge` by git tag,
-   including the transitive `gents` and ssh-pinned DefraDB revisions. The
-   in-workspace fixture and the npm-pack gate cannot prove that; this check can.
+   environment outside this workspace resolving `gents-desktop-bridge` by **exact
+   commit revision** (no release tag carrying the crate exists yet; tag consumption
+   is proven at phase 10), including the transitive `gents` and ssh-pinned DefraDB
+   revisions. The in-workspace fixture and the npm-pack gate cannot prove that;
+   this check can.
    Exit: zero imports of `src/lib/desktop-api` outside the app-shell composition
    layer; fixture consumes `-client` from a packed tarball; single-subscription
    property tested (N update events → one coalesced refresh); forward-compatibility
@@ -725,8 +737,9 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
 10. **Release wiring.** Publish on tag (GitHub Packages or fallback per phase-5
     evidence); `CHANGELOG.md` + compat matrix; tag-validation extended to npm
     versions; documented downstream update workflow. Exit: a dry-run tag publishes
-    all packages at one version and the fixture app consumes them by exact pin
-    through a rehearsed pin-bump PR.
+    all packages at one version; the fixture app consumes them by exact pin through
+    a rehearsed pin-bump PR; and external Cargo consumption **by the release tag**
+    is proven from Amygdala CI (completing the phase-5 by-revision validation).
 
 ### How the existing lanes keep working
 
