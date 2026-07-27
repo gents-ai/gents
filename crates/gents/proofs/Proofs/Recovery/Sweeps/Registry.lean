@@ -13,6 +13,7 @@ def registeredRecoverySweeps : List RecoverySweep :=
   [ requestRecoverySweep
   , responseRecoverySweep
   , toolCallRecoverySweep
+  , terminalParentOwnedToolSweep
   , detachedBridgeRecoverySweep
   , inferenceCallRecoverySweep
   , expiredSubagentChildSweep
