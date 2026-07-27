@@ -2,10 +2,13 @@
 
 *Design spec — 2026-07-27. Issue [#877](https://github.com/source-inc/gents/issues/877)
 (`design` label: design-only spec PR). Status: design approved by the issue author
-2026-07-27 after three review passes; revised again same day for PR #878 review
-findings (bootstrap-vs-`runtime-admin` authorization, `HomePolicy::Default`
-path fidelity to `DesktopPaths::discover()`, package grant profiles, phases 3–4 as
-a stacked pair, release-tarball npm fallback). Base: the
+2026-07-27 after three review passes; revised same day for two PR #878 review
+rounds (bootstrap-vs-`runtime-admin` authorization, `HomePolicy::Default` path
+fidelity to `DesktopPaths::discover()`, package grant profiles, phases 3–4 as a
+stacked pair, release-tarball npm fallback; then client-store bootstrap vs runtime
+provisioning, webview-supplied home paths removed, permission-projected snapshots,
+opt-in fleet onboarding, cascade preview reclassified read-only, stacked-pair entry
+rule). Base: the
 iPhone/bearer-pairing series, merged to `main` as
 [#875](https://github.com/source-inc/gents/pull/875) (squash `1a5e23d5`), which this
 design treats as load-bearing evidence, not incidental history.*
@@ -240,10 +243,12 @@ phase 6), so branded CSS is never extracted and revisited.
 pub struct BridgeConfig {
     /// Where the client's storage home comes from.
     pub home: HomePolicy,
-    /// Host-side ceiling on runtime initialization. This is NOT an alternate
-    /// init path: desktop_client_start never initializes anything (an
-    /// uninitialized home fails with BridgeError::NotInitialized). All
-    /// initialization goes through desktop_init_local_standard (permission set
+    /// Host-side ceiling on LOCAL RUNTIME provisioning — and only that.
+    /// desktop_client_start performs client-store bootstrap in the resolved
+    /// home (create dirs, mint/load the principal identity, open the embedded
+    /// node), which clean-install pairing requires; it never provisions or
+    /// attaches a local Gents runtime. Local-runtime provisioning goes
+    /// exclusively through desktop_init_local_standard (permission set
     /// `runtime-admin`); LocalRuntimeAllowed permits that command,
     /// PairedRemoteOnly makes it fail with BridgeError::Unsupported even when
     /// the permission is granted.
@@ -291,6 +296,18 @@ tauri::Builder::default()
     .run(tauri::generate_context!())       // host's context: bundle id, icons, windows
 ```
 
+**`HomePolicy` is authoritative over storage — the webview can never supply a
+path.** The home is resolved exactly once, from `BridgeConfig.home`, at plugin init,
+and every command — start, initialization, bootstrap summary, reset/overwrite —
+operates on that one resolved home. This is a deliberate contract change: today's
+IPC surface accepts a `desktop_home` field that `desktop_init_local_standard` uses
+directly (`bridge/types/requests.rs`, `tauri_commands/lifecycle.rs`), which would
+let a `runtime-admin` webview point initialization — including the
+reset/overwrite flags — at an arbitrary filesystem path, bypassing
+`AppDataDir`/`FixedRoot` entirely. Plugin-ization removes those fields from the
+request payloads; Gents Desktop's env-based flexibility survives on the native side
+via `HomePolicy::Default`.
+
 Why a plugin instead of an exported handler list: Tauri 2's supported cross-crate
 composition mechanism is the plugin API — it carries its own `generate_handler!`,
 manages its own state, declares its own permissions, and composes with any number of
@@ -310,7 +327,7 @@ split, and hosts opt into each in their capability files:
 
 | Permission set | Commands (grouped) |
 |---|---|
-| `core` | `desktop_bridge_contract`, `desktop_bootstrap_summary`, `desktop_client_snapshot`, `desktop_observer_metrics` |
+| `core` | `desktop_bridge_contract`, `desktop_bootstrap_summary`, `desktop_client_snapshot` (**permission-projected** — sections require the matching read grants, see below), `desktop_observer_metrics` |
 | `client-lifecycle` | `desktop_client_start`, `desktop_set_selected_agent` |
 | `runtime-admin` | `desktop_init_local_standard`, `desktop_client_shutdown` |
 | `chat-read` | session snapshot, request timeline, tool-surface explain |
@@ -318,22 +335,38 @@ split, and hosts opt into each in their capability files:
 | `fleet-read` | peer status fetch, network status |
 | `workspace-read` | workspace list |
 | `fleet-admin` | peer add/remove/rename, bearer pairing, P2P repair |
-| `operations-read` | operations snapshot, subagent tree, backend/MCP health lists, MCP probe, hold list |
-| `operations-control` | interrupt-cascade preview, interrupt request, hold resolve |
-| `config-read` | (currently config reads arrive via snapshots; reserved) |
+| `operations-read` | operations snapshot, subagent tree, interrupt-cascade preview, backend/MCP health lists, MCP probe, hold list |
+| `operations-control` | interrupt request, hold resolve |
+| `config-read` | config sections of the projected snapshot (backends, profiles, tools, skills, behaviors, tasks, schedules, triggers) |
 | `config-write` | all 17 config save/delete/test commands |
 | `tasks` | task/schedule/event-trigger save + run |
 | `native-e2e` | the two debug-only E2E commands; never part of any default |
 
 The shipped `default` set is minimal: `core` + `client-lifecycle`. Notably it
-excludes `runtime-admin` — a webview should not be able to initialize a local
-runtime or shut the client down unless the host grants that explicitly. That
-guarantee only holds because `desktop_client_start` **never initializes**: start on
-an uninitialized home fails with `BridgeError::NotInitialized`, and
-`BootstrapPolicy` is a host-side ceiling on the `runtime-admin` init command, not an
-alternate init path (§ contract in `BridgeConfig` above). Without that rule, a
-default-only webview could bootstrap a runtime through start and the split would be
-cosmetic.
+excludes `runtime-admin` — a webview should not be able to provision a local
+runtime or shut the client down unless the host grants that explicitly. The line
+`desktop_client_start` walks is precise: it performs **client-store bootstrap**
+(create the home dirs, mint/load the principal identity, open the embedded node) —
+without which a clean-install paired-remote host could never start, pair, or chat —
+but it never provisions or attaches a local Gents runtime. Runtime provisioning
+lives exclusively in `desktop_init_local_standard` (`runtime-admin`), with
+`BootstrapPolicy` as the host-side ceiling on that command (§ contract in
+`BridgeConfig` above).
+
+**The aggregate snapshot is permission-projected.** Today
+`desktop_client_snapshot` returns every domain's state in one payload —
+conversation previews, system prompts, backend endpoints, tool selections, skills,
+tasks, schedules, triggers, and fleet data — so putting it in a "minimal" default
+would hand `-client` all of that without any read grant and make `config-read`
+meaningless. Under the plugin, command *availability* comes from `core`, but the
+payload is **projected by grant**: each read set carries a Tauri permission scope
+entry for its snapshot sections (`chat-read` → conversations/sessions,
+`fleet-read` → peers/network, `config-read` → the config sections listed in the
+table, `operations-read` → operations state), the snapshot builder emits only the
+sections the calling webview's grants cover, and a default-only webview receives
+just lifecycle/runtime status. A projection test in the fixture (run with
+default-only grants) asserts ungranted sections are absent — that test is what
+makes the least-privilege claim checkable rather than aspirational.
 
 Fine-grained sets are the enforcement unit, but the *supported setup* unit is the
 **package grant profile** — the sets a frontend package's full surface needs. A host
@@ -342,14 +375,16 @@ following a package's documented install must never hit permission-denied:
 | Package | Required permission sets |
 |---|---|
 | `-client` | `default` (`core` + `client-lifecycle`) |
-| `-chat` | `default` + `chat-read` + `chat-write` + `operations-control` (interrupt/cancel is part of the promised chat UX) |
-| `-fleet` | `default` + `fleet-read`; add `fleet-admin` for the pairing surfaces (`AddPeerForm`, QR pairing) |
+| `-chat` | `default` + `chat-read` + `chat-write` + `operations-read` (cascade preview for the cancel dialog) + `operations-control` (interrupt is part of the promised chat UX) |
+| `-fleet` | `default` + `fleet-read`; add `fleet-admin` for the pairing surfaces (`AddPeerForm`, QR pairing). The local-runtime onboarding affordance ("Connect Local Agent", today inside `FleetDashboard`) is extracted as an **opt-in subcomponent** with its own declared requirement of `runtime-admin` + `BootstrapPolicy::LocalRuntimeAllowed`; the base fleet profile never includes `runtime-admin`, and paired-remote hosts simply don't render it |
 | `-operations` | `default` + `operations-read` + `operations-control` + `chat-read` (`RequestTracePanel` timelines) + `workspace-read` (`WorkspaceTreePanel`) |
 
 Each package ships a machine-readable manifest of the commands its code can invoke;
 a contract test checks manifest ⊆ declared profile (using the fingerprint's
-command→set mapping), and the fixture host runs with **exactly** its profile grants
-so an undeclared command surfaces as a CI failure, not a downstream bug report.
+command→set mapping), opt-in surfaces (like the local-runtime onboarding
+subcomponent) carry their own manifests and declared extras, and the fixture host
+runs with **exactly** its profile grants so an undeclared command surfaces as a CI
+failure, not a downstream bug report.
 Gents Desktop grants everything except `native-e2e` (production builds), plus
 `native-e2e` in its E2E capability overlay (below). The exact command-to-set
 assignment is finalized in the plugin-ization PR from the inventory above; the
@@ -669,7 +704,10 @@ phase 3 does not merge until phase 4 is green atop it — so an incomplete exter
 boundary is discovered before the breaking change lands, not in a later phase. From
 phase 4 onward the fixture grows with every package.
 
-Entry criterion for every phase: previous phase merged. Standing exit criteria for
+Entry criterion for every phase: previous phase merged — with the one stated
+exception that phase 4 enters when phase 3's PR is *open and green*, since it is
+developed stacked on that branch and the pair merges in order (3, then 4) once
+phase 4 is green atop it. Standing exit criteria for
 every phase: `cargo check --workspace --all-targets`, `cargo test -p gents`, affected
 desktop Rust suites, `npm run test:ui` (format, build, unit, Playwright e2e, short
 fuzz), and `test:ui:agent --backend deterministic --viewport iphone`; from phase 4
@@ -695,8 +733,11 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
 3. **Plugin-ization — the one breaking window.** Move `tauri_commands/*` and
    `state.rs` into the bridge crate behind `gents_desktop_bridge::init(BridgeConfig)`
    with `HomePolicy` (Default/AppDataDir/FixedRoot), `BootstrapPolicy`, and the
-   `install_runtime()`/`init_tracing()` host helpers; declare the capability-scoped
-   permission sets; introduce `BridgeError` and `desktop_bridge_contract`; move
+   `install_runtime()`/`init_tracing()` host helpers; resolve the home once from
+   `BridgeConfig` and strip the `desktop_home` fields from IPC request payloads;
+   declare the capability-scoped permission sets and implement snapshot
+   permission-projection via scoped read grants; introduce `BridgeError` and
+   `desktop_bridge_contract`; move
    `bridge_runner` into the bridge crate behind `test-harness`; put the `e2e` module
    behind the explicit `native-e2e` feature with app-crate forwarding, the
    E2E-launcher `--features` wiring, and the E2E-only capability overlay
@@ -712,14 +753,17 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
    changed, built with `--features native-e2e` + the E2E capability overlay);
    release build verified to exclude both the E2E commands and the `native-e2e`
    grant by inspecting the effective compiled capability set; permission sets
-   reviewed against the no-read/mutate-mixing rule; the phase-4 fixture green
-   atop this PR (stacked-pair rule) before merge.
+   reviewed against the no-read/mutate-mixing rule; the snapshot-projection test
+   green (default-only grants receive no chat/fleet/config/operations sections);
+   the phase-4 fixture green atop this PR (stacked-pair rule) before merge.
 4. **Minimal downstream fixture host — co-residence proof (stacked on phase 3;
    phase 3 merges only with this green atop it).** `apps/fixture-host`
    (name open): a minimal Tauri app with a different bundle id, product name, icon,
    and `HomePolicy::AppDataDir` home, granting only `default + chat-read +
    chat-write + fleet-read + fleet-admin` permissions (no `runtime-admin`, no
-   `config-write`), registering the Gents bridge plugin **and** a fixture
+   `config-write` — and the fixture starting from a clean install via client-store
+   bootstrap alone is itself a required proof: the paired-remote path must work
+   without `runtime-admin`), registering the Gents bridge plugin **and** a fixture
    domain plugin that owns its own embedded store, commands, and event prefix. Its
    frontend is deliberately thin (raw client calls; packages don't exist yet). CI
    builds it and runs the co-residence smoke: bearer pairing + a chat round-trip
@@ -825,9 +869,14 @@ capability-scoped sets mean a compromised or merely buggy host webview granted t
 chat profile cannot invoke pairing, config mutation, runtime initialization, or
 shutdown (it does hold `operations-control`, deliberately — interrupt is part of
 the chat contract); the blanket-default alternative was rejected during review for
-exactly this reason. Runtime initialization is additionally double-gated: the
+exactly this reason. Runtime provisioning is additionally double-gated: the
 `runtime-admin` permission at the webview boundary and `BootstrapPolicy` as the
-host-side ceiling, with `desktop_client_start` structurally unable to initialize.
+host-side ceiling, with `desktop_client_start` limited to client-store bootstrap
+and structurally unable to provision a runtime. And the webview never chooses
+where any of it happens: the storage home is resolved once from
+`BridgeConfig.home`, and plugin-ization strips the `desktop_home` request fields
+that today would let a `runtime-admin` webview aim initialization — with its
+reset/overwrite flags — at an arbitrary path.
 
 **Identity and ACP boundaries stay explicit.** Principals are minted per storage
 home by `PrincipalIdentity`; bearer pairing keeps its full verification chain
@@ -849,8 +898,9 @@ invariants, or provider inputs, so it requires no speculative proof changes. Two
 watchpoints where implementation could drift into Lean territory, called out so
 follow-up PRs treat them correctly: (1) `BootstrapPolicy` must only *gate* the
 existing `init_standard_local_runtime` path behind the `runtime-admin` command —
-never add a new lifecycle and never let `desktop_client_start` become an
-initialization path; (2) any temptation to enrich the event contract beyond the coarse
+never add a new lifecycle and never let `desktop_client_start` become a
+*runtime-provisioning* path (the client-store bootstrap inside `ClientCore::start`
+is existing behavior and stays); (2) any temptation to enrich the event contract beyond the coarse
 `client-updated` ping into semantic lifecycle events would put event ordering into
 the contract and must go through the Lean model → conformance test → Rust flow
 before shipping. The future `BridgeHandle`/document-store API is a third: shared
