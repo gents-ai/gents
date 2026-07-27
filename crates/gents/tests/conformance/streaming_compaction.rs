@@ -30,6 +30,7 @@ struct StreamingResponseRow {
     status: String,
     error_message: Option<String>,
     token_count: i64,
+    progress_seq: i64,
     materialized_message_sequence: Option<i64>,
     interrupted_at: Option<String>,
     completed_at: Option<String>,
@@ -170,7 +171,7 @@ async fn drive_streaming_response_idle_timeout_case(
     )
     .await;
 
-    wait_for_backend_chunks_with_time_advance(&backend, IDLE_TIMEOUT_MARKER, 1).await;
+    wait_for_backend_chunks_realtime(&backend, IDLE_TIMEOUT_MARKER, 1).await;
     let response_doc_id = wait_for_response_doc_id_realtime(db.node.as_ref(), &request_id).await;
     let pre_response = wait_for_response_content_contains_realtime(
         db.node.as_ref(),
@@ -191,17 +192,16 @@ async fn drive_streaming_response_idle_timeout_case(
             .await;
     assert!(!inference_call_state_is_terminal(&pre_call.call_state));
 
-    for _ in 0..2 {
-        tokio::time::advance(Duration::from_secs(IDLE_TIMEOUT_CONFIGURED_SECS + 1)).await;
+    // The progress write above is the final operation for the first stream
+    // item. Give the processor a turn to install its next-poll idle deadline,
+    // then cross that deadline exactly once. Repeated virtual-time advances
+    // while terminal persistence is running can incorrectly exhaust DefraDB's
+    // own query timeout under host load.
+    for _ in 0..10 {
         tokio::task::yield_now().await;
-        if load_streaming_response_row(&db.node, &response_doc_id)
-            .await
-            .status
-            == case.post_status
-        {
-            break;
-        }
     }
+    tokio::time::advance(Duration::from_secs(IDLE_TIMEOUT_CONFIGURED_SECS + 1)).await;
+    tokio::task::yield_now().await;
 
     let post_response =
         wait_for_response_status_realtime(db.node.as_ref(), &response_doc_id, &case.post_status)
@@ -289,7 +289,7 @@ async fn wait_for_response_doc_id_realtime(node: &EmbeddedNode, request_id: &str
     }
 }
 
-async fn wait_for_backend_chunks_with_time_advance(
+async fn wait_for_backend_chunks_realtime(
     backend: &MockStreamingBackend,
     marker: &str,
     expected: usize,
@@ -304,7 +304,10 @@ async fn wait_for_backend_chunks_with_time_advance(
             started.elapsed() < Duration::from_secs(10),
             "timed out waiting for {expected} chunk(s) for marker {marker}, observed {observed}"
         );
-        tokio::time::advance(Duration::from_millis(50)).await;
+        // This test pauses Tokio time so it can trigger the five-second idle
+        // deadline deterministically below. Do not advance that clock before
+        // the mock's first real network chunk arrives: doing so can fire the
+        // idle timer while the request is still traversing the I/O reactor.
         tokio::task::yield_now().await;
     }
 }
@@ -317,7 +320,11 @@ async fn wait_for_response_content_contains_realtime(
     let started = std::time::Instant::now();
     loop {
         let row = load_streaming_response_row(node, response_doc_id).await;
-        if row.content.contains(expected) {
+        // The content flush becomes query-visible before StreamProcessor
+        // performs the lifecycle progress write and returns to the poll that
+        // installs the idle deadline. Waiting for both keeps paused-time
+        // advancement from racing that first item boundary under load.
+        if row.content.contains(expected) && row.progress_seq >= 2 {
             return row;
         }
         assert_ne!(
@@ -916,6 +923,7 @@ async fn load_streaming_response_row(node: &EmbeddedNode, doc_id: &str) -> Strea
                 status
                 error_message
                 token_count
+                progress_seq
                 materialized_message_sequence
                 interrupted_at
                 completed_at
