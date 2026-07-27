@@ -3,6 +3,7 @@ import {
   expectNoPageHorizontalOverflow,
   gotoHarness,
   openChat,
+  openChatNavigation,
   openConfig,
   openConfigTab,
   PEER_ID,
@@ -63,6 +64,26 @@ test.describe("desktop responsive layout guardrails", () => {
     }
   });
 
+  test("phone chat uses one full-screen pane at a time", async ({ page }) => {
+    test.skip(
+      (page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) > 760,
+      "mobile viewport guardrail",
+    );
+
+    await gotoHarness(page);
+    await openChat(page);
+    await expect(page.locator(".chat-column")).toBeVisible();
+    await expect(page.locator(".sidebar")).toBeHidden();
+
+    await openChatNavigation(page);
+    await expect(page.locator(".sidebar")).toBeVisible();
+    await expect(page.locator(".chat-column")).toBeHidden();
+
+    await page.getByTestId("conversation-session-intro").click();
+    await expect(page.locator(".chat-column")).toBeVisible();
+    await expect(page.locator(".sidebar")).toBeHidden();
+  });
+
   test("fleet row action buttons stay reachable at any width", async ({ page }) => {
     await gotoHarness(page); // default scenario renders peer-bombadil-local
     await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
@@ -117,7 +138,11 @@ test.describe("desktop responsive layout guardrails", () => {
     );
 
     await gotoHarness(page, "empty-fleet");
-    await page.getByTestId("fleet-remote-disclosure").locator("summary").click();
+    await page
+      .getByTestId("fleet-remote-disclosure")
+      .locator(":scope > summary")
+      .click();
+    await page.getByText("Advanced manual discovery", { exact: true }).click();
     await page.getByTestId("fleet-add-server-address").fill("http://studio-1:9191");
 
     const submit = page.getByTestId("fleet-add-submit");
@@ -130,6 +155,42 @@ test.describe("desktop responsive layout guardrails", () => {
       .locator(".app-shell")
       .evaluate((element) => element.scrollTop);
     expect(shellScrollTop).toBeGreaterThan(0);
+    await expectNoPageHorizontalOverflow(page);
+  });
+
+  test("populated-fleet status discovery stays reachable on mobile", async ({
+    page,
+  }) => {
+    test.skip(
+      (page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) > 760,
+      "mobile viewport guardrail",
+    );
+
+    await gotoHarness(page);
+    await page.getByRole("button", { name: "Add Agent", exact: true }).click();
+    await page.getByText("Advanced manual discovery", { exact: true }).click();
+
+    const address = page.getByTestId("fleet-add-server-address");
+    const fetchStatus = page.getByTestId("fleet-fetch-status");
+    await address.scrollIntoViewIfNeeded();
+    await expect(address).toBeVisible();
+    await address.fill("http://studio-1:9191");
+
+    await fetchStatus.scrollIntoViewIfNeeded();
+    await expect(fetchStatus).toBeVisible();
+    await fetchStatus.click({ trial: true });
+
+    const dashboardScroll = await page
+      .getByTestId("fleet-dashboard")
+      .evaluate((element) => ({
+        clientHeight: element.clientHeight,
+        overflowY: getComputedStyle(element).overflowY,
+        scrollHeight: element.scrollHeight,
+        scrollTop: element.scrollTop,
+      }));
+    expect(dashboardScroll.overflowY).toBe("auto");
+    expect(dashboardScroll.scrollHeight).toBeGreaterThan(dashboardScroll.clientHeight);
+    expect(dashboardScroll.scrollTop).toBeGreaterThan(0);
     await expectNoPageHorizontalOverflow(page);
   });
 });

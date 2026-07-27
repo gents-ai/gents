@@ -89,6 +89,17 @@ def snapshotJson : String :=
     ++ "\"native_filesystem_boundary_cases\":"
       ++ jsonArray
         (nativeFilesystemBoundaryCases.map nativeFilesystemBoundaryCaseJson) ++ ","
+    ++ "\"managed_exec_tool_boundary_cases\":"
+      ++ jsonArray
+        (managedExecToolBoundaryCases.map managedExecToolBoundaryCaseJson) ++ ","
+    ++ "\"pairing_reconcile_shutdown_boundary_cases\":"
+      ++ jsonArray
+        (pairingReconcileShutdownBoundaryCases.map
+          pairingReconcileShutdownBoundaryCaseJson) ++ ","
+    ++ "\"pairing_reconcile_sweep_scheduling_cases\":"
+      ++ jsonArray
+        (pairingReconcileSweepSchedulingCases.map
+          pairingReconcileSweepSchedulingCaseJson) ++ ","
     ++ "\"managed_exec_liveness_cases\":"
       ++ jsonArray
         (managedExecLivenessCases.map managedExecLivenessCaseJson) ++ ","
@@ -168,6 +179,8 @@ def snapshotJson : String :=
         (cancelPropagationCases.map cancelPropagationCaseJson) ++ ","
     ++ "\"workflow_cases\":"
       ++ workflowCasesJson ++ ","
+    ++ "\"workflow_composite_interrupt_cases\":"
+      ++ compositeInterruptCasesJson ++ ","
     ++ "\"r6_background_theorem_witnesses\":"
       ++ jsonArray
         (r6BackgroundTheoremWitnesses.map backgroundTheoremWitnessJson) ++ ","

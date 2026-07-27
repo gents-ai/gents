@@ -17,6 +17,9 @@ use super::super::schema::{
     branchable_collection_names, ensure_runtime_schemas, subscribe_all_collections,
     subscribed_collection_names,
 };
+use super::bearer_pairing::{
+    install_bearer_replicator_for_record, is_bearer_peer, publish_local_endpoint,
+};
 use super::materialization::spawn_materialization_supervisor_task;
 use super::p2p_ops::{
     p2p_add_replicator, p2p_connect_peer, p2p_connected_peers, p2p_listen_addresses,
@@ -78,7 +81,7 @@ impl ClientCore {
 
         let initial_snapshot = {
             let records = peer_directory.read().await.records().to_vec();
-            load_full_snapshot_with_peer_records(node.as_ref(), &records).await?
+            load_full_snapshot_with_peer_records(node.as_ref(), &records, principal.did()).await?
         };
         let (store, _store_updates) = ObservedStore::new(initial_snapshot);
         let observer = spawn_observer_with_selection(
@@ -139,6 +142,7 @@ impl ClientCore {
             p2p_health,
             selected_agent_did,
             last_loaded_for: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            request_patch_signatures: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             p2p_control: tokio::sync::Mutex::new(Some(p2p_control)),
             last_mutation_error: std::sync::RwLock::new(None),
             local_peer_id,
@@ -181,7 +185,7 @@ pub(super) async fn bootstrap_saved_peers(
     p2p: &Arc<dyn P2POps>,
     records: &[PeerRecord],
     options: &ClientCoreOptions,
-    _actor: &PrincipalIdentity,
+    actor: &PrincipalIdentity,
 ) -> (Vec<ClientPeerStatus>, Vec<String>) {
     let mut statuses = Vec::with_capacity(records.len());
     let mut errors = Vec::new();
@@ -208,17 +212,31 @@ pub(super) async fn bootstrap_saved_peers(
                     .unwrap_or(true);
 
                 if options.install_replicators_on_bootstrap && p2p_pairing_enabled {
-                    if let Err(error) = add_replicator_with_retry(
-                        p2p,
-                        subscribed_collection_names()
-                            .into_iter()
-                            .map(str::to_owned)
-                            .collect(),
-                        &record.addr,
-                        &record.label,
-                    )
-                    .await
-                    {
+                    let replicator_result = if is_bearer_peer(record) {
+                        if let Err(error) = publish_local_endpoint(node, p2p, actor).await {
+                            let message = format!(
+                                "peer {} signed endpoint refresh failed: {}",
+                                record.label, error
+                            );
+                            status.last_error = Some(message.clone());
+                            errors.push(message);
+                            statuses.push(status);
+                            continue;
+                        }
+                        install_bearer_replicator_for_record(p2p, record, actor.did()).await
+                    } else {
+                        add_replicator_with_retry(
+                            p2p,
+                            subscribed_collection_names()
+                                .into_iter()
+                                .map(str::to_owned)
+                                .collect(),
+                            &record.addr,
+                            &record.label,
+                        )
+                        .await
+                    };
+                    if let Err(error) = replicator_result {
                         let message = format!(
                             "peer {} replicator bootstrap failed: {}",
                             record.label, error

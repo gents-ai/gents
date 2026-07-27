@@ -1,5 +1,6 @@
 pub(crate) mod chat;
 pub(crate) mod config;
+pub(crate) mod e2e;
 pub(crate) mod inference_setup;
 pub(crate) mod lifecycle;
 pub(crate) mod operations;

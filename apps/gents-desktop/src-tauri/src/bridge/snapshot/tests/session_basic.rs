@@ -37,6 +37,7 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
             AgentMessageRow {
                 message_key: "msg-mini-1".to_string(),
                 session_id: Some("shared-session".to_string()),
+                request_id: None,
                 requester_did: None,
                 sequence: Some(1),
                 role: Some("user".to_string()),
@@ -47,6 +48,7 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
             AgentMessageRow {
                 message_key: "msg-mini-2".to_string(),
                 session_id: Some("shared-session".to_string()),
+                request_id: None,
                 requester_did: None,
                 sequence: Some(2),
                 role: Some("user".to_string()),
@@ -164,6 +166,7 @@ fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized
         messages: vec![AgentMessageRow {
             message_key: "msg-1".to_string(),
             session_id: Some("session-1".to_string()),
+            request_id: None,
             requester_did: None,
             sequence: Some(1),
             role: Some("user".to_string()),
@@ -235,6 +238,7 @@ fn session_snapshot_hides_pending_turn_once_user_message_is_materialized() {
         messages: vec![AgentMessageRow {
             message_key: "msg-2".to_string(),
             session_id: Some("session-1".to_string()),
+            request_id: None,
             requester_did: None,
             sequence: Some(2),
             role: Some("user".to_string()),
@@ -339,6 +343,7 @@ fn session_snapshot_keeps_pending_turn_for_repeated_prompt_until_second_user_mes
         messages: vec![AgentMessageRow {
             message_key: "msg-1".to_string(),
             session_id: Some("session-1".to_string()),
+            request_id: None,
             requester_did: None,
             sequence: Some(1),
             role: Some("user".to_string()),

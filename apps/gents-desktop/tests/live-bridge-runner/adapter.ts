@@ -1,6 +1,7 @@
 import type { DesktopApiAdapter } from "../../src/lib/desktop-api";
 import type { BackendHealth } from "../../src/components/backendHealth/types";
 import type {
+  BearerPairingResponse,
   BehaviorSaveRequest,
   CascadeCancelPreview,
   ChatSendResult,
@@ -16,13 +17,10 @@ import type {
 } from "../../src/lib/types";
 import type { TauriDriverChatRequest } from "../tauri-driver";
 import type { LiveBridgeRunner } from "../live-bridge-runner";
-import { normalizePeerStatusUrl } from "./process";
 
 type BridgeHttpClient = {
   getJson: <T>(path: string) => Promise<T>;
   postJson: <T = unknown>(path: string, body: unknown) => Promise<T>;
-  fetchWithTimeout: (input: string, init: RequestInit) => Promise<Response>;
-  decodeJson: <T>(response: Response) => Promise<T>;
 };
 
 type BridgeAdapterObservers = {
@@ -57,13 +55,10 @@ export function createBridgeHttpAdapter(
     },
     addPeer: async (request) =>
       client.postJson<DesktopClientSnapshot>("/desktop/peer/add", request),
-    fetchPeerStatus: async (serverAddress) => {
-      const response = await client.fetchWithTimeout(
-        normalizePeerStatusUrl(serverAddress),
-        {},
-      );
-      return client.decodeJson<unknown>(response);
-    },
+    pairBearer: async (request) =>
+      client.postJson<BearerPairingResponse>("/desktop/peer/pair-bearer", request),
+    fetchPeerStatus: async (serverAddress) =>
+      client.postJson("/desktop/peer/status", { serverAddress }),
     repairP2P: async () =>
       client.postJson<DesktopClientSnapshot>("/desktop/p2p/repair", {}),
     fetchSessionSnapshot: async (sessionId, agentDid, requestId) =>

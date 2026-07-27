@@ -4,6 +4,7 @@ import {
   expect,
   gotoHarness,
   openChat,
+  openChatNavigation,
   openConfig,
   openConfigTab,
   PEER_ID,
@@ -31,6 +32,7 @@ test.describe("desktop UI harness", () => {
     );
     await captureStableScreenshot(page, testInfo, "chat-with-transcript");
 
+    await openChatNavigation(page);
     await page.getByRole("button", { name: "Configure" }).click();
     await expect(page.locator(".config-workspace")).toBeVisible();
     await expect(
@@ -49,6 +51,7 @@ test.describe("desktop UI harness", () => {
     );
     await expect(adjacentDuplicateTranscriptRows(page)).resolves.toEqual([]);
 
+    await openChatNavigation(page);
     await page.getByTestId("sidebar-new-chat-ops").click();
     await expect(
       page.getByRole("heading", { name: "Start a conversation" }),
@@ -68,6 +71,32 @@ test.describe("desktop UI harness", () => {
     await page.getByTestId("conversation-title-input").fill("manual ops check");
     await page.keyboard.press("Enter");
     await expect(page.getByRole("heading", { name: "manual ops check" })).toBeVisible();
+  });
+
+  test("chat drafts stay scoped to their conversation or new-chat context", async ({
+    page,
+  }) => {
+    await gotoHarness(page);
+    await openChat(page);
+
+    await page.getByTestId("composer-input").fill("existing conversation draft");
+    await openChatNavigation(page);
+    await page.getByTestId("sidebar-new-chat-ops").click();
+    await expect(page.getByTestId("composer-input")).toHaveValue("");
+
+    await page.getByTestId("composer-input").fill("new ops conversation draft");
+    await openChatNavigation(page);
+    await page.getByTestId("sidebar-behavior-default").click();
+    await page.getByTestId("conversation-session-intro").click();
+    await expect(page.getByTestId("composer-input")).toHaveValue(
+      "existing conversation draft",
+    );
+
+    await openChatNavigation(page);
+    await page.getByTestId("sidebar-new-chat-ops").click();
+    await expect(page.getByTestId("composer-input")).toHaveValue(
+      "new ops conversation draft",
+    );
   });
 
   test("config workspace supports core CRUD and run flows", async ({
@@ -160,7 +189,7 @@ test.describe("desktop UI harness", () => {
     await gotoHarness(page, "active-turn");
     await openChat(page);
     await page.getByTestId("cancel-button").click();
-    await expect(page.getByTestId("chat-toast")).toContainText("Interrupted");
+    await expect(page.getByTestId("chat-toast")).toContainText("Interrupt requested");
 
     await gotoHarness(page, "cascade-turn");
     await openChat(page);
@@ -170,7 +199,7 @@ test.describe("desktop UI harness", () => {
     ).toBeVisible();
     await expect(page.getByText("Will be interrupted")).toBeVisible();
     await page.getByTestId("cascade-interrupt-confirm").click();
-    await expect(page.getByTestId("chat-toast")).toContainText("Interrupted");
+    await expect(page.getByTestId("chat-toast")).toContainText("Interrupt requested");
   });
 
   test("sad path scenarios surface empty, bridge, save, and backend-health errors", async ({

@@ -108,6 +108,7 @@ export function CascadeCancelDialog(
     setPhase("submitting");
     interruptRequest({
       requestId: rootRequestId,
+      agentDid: agentDid ?? null,
       cause: "userCancelled",
       cascade: true,
       expectedPreviewSignature: preview.previewSignature,

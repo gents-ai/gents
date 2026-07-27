@@ -7,22 +7,65 @@ import { displayConversationTitle } from "../../lib/types";
 export type ChatHeaderProps = {
   behaviorLabel: string | null;
   runtimeHealth: P2PHealth | null;
+  configuredPeerCount?: number;
+  dialedPeerCount?: number;
   selectedConversationTitle: string | null;
   selectedSessionId: string | null;
   onRenameConversationTitle: (sessionId: string, title: string) => void | Promise<void>;
   onForkConversation?: (sessionId: string) => void | Promise<void>;
+  onOpenMobileNavigation?: () => void;
   forking?: boolean;
 };
+
+export function p2pConnectionDisplay(
+  runtimeHealth: P2PHealth | null,
+  configuredPeerCount: number,
+  dialedPeerCount: number,
+) {
+  const status = runtimeHealth?.status ?? "unknown";
+  const title = runtimeHealth
+    ? `Transport ${status}; ${dialedPeerCount}/${configuredPeerCount} saved peers dialed; ${runtimeHealth.connectedPeerCount} active connections; ${runtimeHealth.replicatorCount} replicators`
+    : `Checking P2P transport; ${dialedPeerCount}/${configuredPeerCount} saved peers dialed`;
+
+  if (!runtimeHealth) {
+    return { label: "Checking sync", healthy: false, title };
+  }
+  if (runtimeHealth.status === "wedged") {
+    return { label: "P2P stalled", healthy: false, title };
+  }
+  if (runtimeHealth.status !== "healthy") {
+    return { label: "P2P retrying", healthy: false, title };
+  }
+  if (configuredPeerCount === 0) {
+    return { label: "Local", healthy: true, title };
+  }
+  if (dialedPeerCount < configuredPeerCount) {
+    return {
+      label: `Reconnecting ${dialedPeerCount}/${configuredPeerCount}`,
+      healthy: false,
+      title,
+    };
+  }
+  return { label: "Paired", healthy: true, title };
+}
 
 export function ChatHeader({
   behaviorLabel,
   runtimeHealth,
+  configuredPeerCount = 0,
+  dialedPeerCount = 0,
   selectedConversationTitle,
   selectedSessionId,
   onRenameConversationTitle,
   onForkConversation,
+  onOpenMobileNavigation,
   forking = false,
 }: ChatHeaderProps) {
+  const p2pDisplay = p2pConnectionDisplay(
+    runtimeHealth,
+    configuredPeerCount,
+    dialedPeerCount,
+  );
   const visibleConversationTitle = selectedSessionId
     ? displayConversationTitle(selectedConversationTitle)
     : "Start a conversation";
@@ -67,10 +110,22 @@ export function ChatHeader({
   return (
     <header className="chat-header">
       <div className="chat-title-block">
+        {onOpenMobileNavigation ? (
+          <button
+            className="ghost-button mobile-chat-navigation-button"
+            data-testid="mobile-chat-navigation"
+            onClick={onOpenMobileNavigation}
+            type="button"
+          >
+            <span aria-hidden="true">←</span>
+            Chats
+          </button>
+        ) : null}
         {selectedSessionId ? (
           isRenamingTitle ? (
             <form className="title-rename-form" onSubmit={submitTitleRename}>
               <input
+                aria-label={`Rename ${visibleConversationTitle}`}
                 autoFocus
                 className="title-rename-input"
                 data-testid="conversation-title-input"
@@ -89,6 +144,7 @@ export function ChatHeader({
             <div className="chat-title-row">
               <h2>{visibleConversationTitle}</h2>
               <button
+                aria-label={`Rename ${visibleConversationTitle}`}
                 className="icon-button"
                 data-testid="conversation-title-edit"
                 disabled={renamingTitle}
@@ -118,9 +174,10 @@ export function ChatHeader({
       <div className="chat-status">
         {behaviorLabel ? <span className="chip">{behaviorLabel}</span> : null}
         <span
-          className={runtimeHealth?.status === "healthy" ? "chip chip-green" : "chip"}
+          className={p2pDisplay.healthy ? "chip chip-green" : "chip"}
+          title={p2pDisplay.title}
         >
-          {runtimeHealth?.status ?? "unknown"}
+          {p2pDisplay.label}
         </span>
       </div>
     </header>

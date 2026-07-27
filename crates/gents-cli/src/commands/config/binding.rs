@@ -369,12 +369,60 @@ fn insert_nonempty(values: &mut BTreeSet<String>, value: &str) {
 }
 
 fn rebind_manifest_agent_did(manifest: &mut DesiredStateManifest, target_did: &str) {
+    // Capture source/local DIDs before overwriting so same-deployment
+    // `subagent_targets` entries can be recognized after the top-level rewrite.
+    // Only DIDs this function already treats as local (principal, behaviors,
+    // selections) are candidates — genuine cross-deployment target DIDs are
+    // left unchanged.
+    let source_local_dids = manifest_agent_dids(manifest);
+
     manifest.agent_principal.agent_did = target_did.to_string();
     for behavior in &mut manifest.agent_behaviors {
         behavior.agent_did = target_did.to_string();
     }
     for selection in &mut manifest.tool_selections {
         selection.agent_did = target_did.to_string();
+        rebind_subagent_target_dids(
+            &mut selection.subagent_targets,
+            &source_local_dids,
+            target_did,
+        );
+    }
+}
+
+/// Rewrite DIDs embedded in `subagent_targets` JSON entries that match a
+/// source/local DID being rebound. Malformed entries are preserved so desired-
+/// state validation can still report the precise parse error.
+///
+/// Only the `agent_did` field is mutated on the raw JSON object so unknown
+/// fields, key order, and optional extensions survive rebind (and so already-
+/// bound entries that already equal `target_did` are left byte-identical).
+fn rebind_subagent_target_dids(
+    entries: &mut [String],
+    source_local_dids: &BTreeSet<String>,
+    target_did: &str,
+) {
+    for entry in entries {
+        let Ok(mut value) = serde_json::from_str::<Value>(entry) else {
+            continue;
+        };
+        let Some(object) = value.as_object_mut() else {
+            continue;
+        };
+        let Some(current_did) = object.get("agent_did").and_then(Value::as_str) else {
+            continue;
+        };
+        let current_did = current_did.trim();
+        if current_did == target_did || !source_local_dids.contains(current_did) {
+            continue;
+        }
+        object.insert(
+            "agent_did".to_string(),
+            Value::String(target_did.to_string()),
+        );
+        if let Ok(rewritten) = serde_json::to_string(&value) {
+            *entry = rewritten;
+        }
     }
 }
 
@@ -382,4 +430,344 @@ fn is_rebindable_agent_did_error(error: &str) -> bool {
     (error.starts_with("behavior ") || error.starts_with("tool selection "))
         && error.contains(" belongs to ")
         && error.contains(" not ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::desired_state::{
+        DesiredAgentBehavior, DesiredAgentPrincipal, DesiredStateManifest, DesiredToolSelection,
+    };
+    use gents::{subagent_target_entry, SubagentTarget};
+
+    const SOURCE_DID: &str = "did:test:amy";
+    const TARGET_DID: &str = "did:key:z6MkiResolvedRuntimeDid";
+    const REMOTE_DID: &str = "did:key:z6MkRemoteOtherDeployment";
+
+    fn empty_manifest(agent_did: &str) -> DesiredStateManifest {
+        DesiredStateManifest {
+            agent_principal: DesiredAgentPrincipal {
+                agent_did: agent_did.to_string(),
+                display_name: Some("Amy".to_string()),
+                default_behavior_id: Some("default".to_string()),
+                enabled: true,
+            },
+            agent_behaviors: Vec::new(),
+            skills: Vec::new(),
+            tool_selections: Vec::new(),
+            inference_backends: Vec::new(),
+            inference_profiles: Vec::new(),
+            tool_service_registries: Vec::new(),
+            projection_acp_bindings: Vec::new(),
+            peer_pairings: Vec::new(),
+            tasks: Vec::new(),
+            schedules: Vec::new(),
+            event_triggers: Vec::new(),
+        }
+    }
+
+    fn sample_behavior(agent_did: &str) -> DesiredAgentBehavior {
+        DesiredAgentBehavior {
+            behavior_id: "default".to_string(),
+            agent_did: agent_did.to_string(),
+            display_name: Some("Default".to_string()),
+            description: None,
+            summary: None,
+            system_prompt: Some("Be helpful.".to_string()),
+            request_context_template: None,
+            backend_id: Some("default-backend".to_string()),
+            model_name: Some("mock-model".to_string()),
+            tool_selection_id: Some("default-tools".to_string()),
+            inference_profile_id: None,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            enabled: true,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
+        }
+    }
+
+    fn sample_selection(agent_did: &str, targets: Vec<String>) -> DesiredToolSelection {
+        DesiredToolSelection {
+            selection_id: "default-tools".to_string(),
+            agent_did: agent_did.to_string(),
+            display_name: Some("Standard".to_string()),
+            tool_policy_version: None,
+            enable_file_tools: false,
+            file_tools_mode: "ReadOnly".to_string(),
+            file_tool_root: None,
+            enable_bash: false,
+            bash_mode: "ReadOnly".to_string(),
+            command_execution_policy: None,
+            command_allowed_argv_prefixes: Vec::new(),
+            command_forbidden_argv_prefixes: Vec::new(),
+            read_only_command_allowlist: Vec::new(),
+            command_network_mode: None,
+            cli_tool_names: Vec::new(),
+            enable_meta_tools: true,
+            allowed_mcp_service_ids: Vec::new(),
+            delegate_to: Vec::new(),
+            backgroundable_tool_names: Vec::new(),
+            enable_memory: false,
+            enable_session_history_tool: false,
+            enable_context_budget: true,
+            enable_defra_query: true,
+            defra_query_collections: Vec::new(),
+            subagent_targets: targets,
+            subagent_spawn_enabled: true,
+            orchestration_enabled: false,
+            subagent_steering_enabled: false,
+            subagent_background_enabled: false,
+            subagent_default_await_mode: None,
+            subagent_allow_cross_deployment: false,
+            cross_deployment_spawn_timeout_seconds: None,
+            write_tools: Vec::new(),
+            enable_self_config: false,
+            self_config_categories: Vec::new(),
+            self_config_no_lockout: false,
+            self_config_dry_run: false,
+        }
+    }
+
+    fn parse_targets(entries: &[String]) -> Vec<SubagentTarget> {
+        entries
+            .iter()
+            .map(|entry| SubagentTarget::parse(entry).expect("entry must parse"))
+            .collect()
+    }
+
+    #[test]
+    fn rebind_rewrites_same_deployment_subagent_target_dids() {
+        let mut manifest = empty_manifest(SOURCE_DID);
+        manifest.agent_behaviors.push(sample_behavior(SOURCE_DID));
+        manifest.tool_selections.push(sample_selection(
+            SOURCE_DID,
+            vec![
+                subagent_target_entry(
+                    "session-classifier",
+                    SOURCE_DID,
+                    "session-classifier",
+                    Some("Classifies the active session".to_string()),
+                ),
+                subagent_target_entry("glm52", SOURCE_DID, "glm52", None),
+            ],
+        ));
+
+        rebind_manifest_agent_did(&mut manifest, TARGET_DID);
+
+        assert_eq!(manifest.agent_principal.agent_did, TARGET_DID);
+        assert_eq!(manifest.agent_behaviors[0].agent_did, TARGET_DID);
+        let selection = &manifest.tool_selections[0];
+        assert_eq!(selection.agent_did, TARGET_DID);
+
+        let targets = parse_targets(&selection.subagent_targets);
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].name, "session-classifier");
+        assert_eq!(targets[0].agent_did, TARGET_DID);
+        assert_eq!(targets[0].behavior_id, "session-classifier");
+        assert_eq!(
+            targets[0].description.as_deref(),
+            Some("Classifies the active session")
+        );
+        assert_eq!(targets[1].name, "glm52");
+        assert_eq!(targets[1].agent_did, TARGET_DID);
+        assert_eq!(targets[1].behavior_id, "glm52");
+        assert_eq!(targets[1].description, None);
+
+        // Post-bind validation must not misclassify same-deployment targets as remote.
+        let mut errors = Vec::new();
+        desired_state::validate::validate_manifest(&manifest, &mut errors);
+        assert!(
+            !errors
+                .iter()
+                .any(|msg| msg.contains("cross-deployment subagent delegation is deferred")),
+            "same-deployment targets must validate after rebind, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn rebind_preserves_cross_deployment_target_did() {
+        let mut manifest = empty_manifest(SOURCE_DID);
+        manifest.agent_behaviors.push(sample_behavior(SOURCE_DID));
+        let mut selection = sample_selection(
+            SOURCE_DID,
+            vec![
+                subagent_target_entry("local-helper", SOURCE_DID, "helper", None),
+                subagent_target_entry("remote-researcher", REMOTE_DID, "amy-research", None),
+            ],
+        );
+        selection.subagent_allow_cross_deployment = true;
+        manifest.tool_selections.push(selection);
+
+        rebind_manifest_agent_did(&mut manifest, TARGET_DID);
+
+        let targets = parse_targets(&manifest.tool_selections[0].subagent_targets);
+        assert_eq!(targets[0].agent_did, TARGET_DID);
+        assert_eq!(targets[1].name, "remote-researcher");
+        assert_eq!(targets[1].agent_did, REMOTE_DID);
+        assert_eq!(targets[1].behavior_id, "amy-research");
+    }
+
+    #[test]
+    fn rebind_preserves_malformed_subagent_target_json() {
+        let malformed = r#"{"name":"broken","agent_did":"#;
+        let mut manifest = empty_manifest(SOURCE_DID);
+        manifest.agent_behaviors.push(sample_behavior(SOURCE_DID));
+        manifest.tool_selections.push(sample_selection(
+            SOURCE_DID,
+            vec![
+                subagent_target_entry("ok", SOURCE_DID, "helper", None),
+                malformed.to_string(),
+            ],
+        ));
+
+        rebind_manifest_agent_did(&mut manifest, TARGET_DID);
+
+        let selection = &manifest.tool_selections[0];
+        assert_eq!(selection.subagent_targets[1], malformed);
+
+        let mut errors = Vec::new();
+        desired_state::validate::validate_manifest(&manifest, &mut errors);
+        assert!(
+            errors.iter().any(|msg| {
+                msg.contains("is not valid SubagentTarget JSON") && msg.contains("broken")
+            }),
+            "malformed entry must still produce an actionable validation error, got {errors:?}"
+        );
+        // The well-formed same-deployment target was still rebound.
+        let ok = SubagentTarget::parse(&selection.subagent_targets[0]).unwrap();
+        assert_eq!(ok.agent_did, TARGET_DID);
+    }
+
+    #[test]
+    fn rebind_preserves_unknown_subagent_target_fields() {
+        // Future optional fields / author extensions must survive rebind; only
+        // agent_did is rewritten on the raw JSON object.
+        let entry_with_extension = format!(
+            r#"{{"name":"helper","agent_did":"{SOURCE_DID}","behavior_id":"helper","description":"keeps me","future_flag":true,"extra_meta":{{"k":1}}}}"#
+        );
+        let mut manifest = empty_manifest(SOURCE_DID);
+        manifest.agent_behaviors.push(sample_behavior(SOURCE_DID));
+        manifest
+            .tool_selections
+            .push(sample_selection(SOURCE_DID, vec![entry_with_extension]));
+
+        rebind_manifest_agent_did(&mut manifest, TARGET_DID);
+
+        let rewritten = &manifest.tool_selections[0].subagent_targets[0];
+        let value: Value = serde_json::from_str(rewritten).unwrap();
+        assert_eq!(
+            value.get("agent_did").and_then(Value::as_str),
+            Some(TARGET_DID)
+        );
+        assert_eq!(value.get("name").and_then(Value::as_str), Some("helper"));
+        assert_eq!(
+            value.get("behavior_id").and_then(Value::as_str),
+            Some("helper")
+        );
+        assert_eq!(
+            value.get("description").and_then(Value::as_str),
+            Some("keeps me")
+        );
+        assert_eq!(
+            value.get("future_flag").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value.pointer("/extra_meta/k").and_then(Value::as_i64),
+            Some(1)
+        );
+
+        // Already-bound entry must not be reserialized (byte-identical).
+        let already_bound = rewritten.clone();
+        rebind_manifest_agent_did(&mut manifest, TARGET_DID);
+        assert_eq!(
+            manifest.tool_selections[0].subagent_targets[0], already_bound,
+            "second rebind must leave already-bound target entry byte-identical"
+        );
+    }
+
+    #[test]
+    fn rebind_is_idempotent() {
+        let mut manifest = empty_manifest(SOURCE_DID);
+        manifest.agent_behaviors.push(sample_behavior(SOURCE_DID));
+        manifest.tool_selections.push(sample_selection(
+            SOURCE_DID,
+            vec![
+                subagent_target_entry(
+                    "session-classifier",
+                    SOURCE_DID,
+                    "session-classifier",
+                    Some("Classifies the active session".to_string()),
+                ),
+                subagent_target_entry("remote-researcher", REMOTE_DID, "amy-research", None),
+            ],
+        ));
+        manifest.tool_selections[0].subagent_allow_cross_deployment = true;
+
+        rebind_manifest_agent_did(&mut manifest, TARGET_DID);
+        let once = manifest.clone();
+        rebind_manifest_agent_did(&mut manifest, TARGET_DID);
+
+        assert_eq!(manifest.agent_principal, once.agent_principal);
+        assert_eq!(manifest.agent_behaviors, once.agent_behaviors);
+        assert_eq!(manifest.tool_selections, once.tool_selections);
+    }
+
+    #[test]
+    fn rebind_does_not_weaken_cross_deployment_guard() {
+        let mut manifest = empty_manifest(SOURCE_DID);
+        manifest.agent_behaviors.push(sample_behavior(SOURCE_DID));
+        let mut selection = sample_selection(
+            SOURCE_DID,
+            vec![subagent_target_entry(
+                "remote-researcher",
+                REMOTE_DID,
+                "amy-research",
+                None,
+            )],
+        );
+        // Guard remains off: a truly remote target must still be rejected.
+        selection.subagent_allow_cross_deployment = false;
+        manifest.tool_selections.push(selection);
+
+        rebind_manifest_agent_did(&mut manifest, TARGET_DID);
+
+        let targets = parse_targets(&manifest.tool_selections[0].subagent_targets);
+        assert_eq!(targets[0].agent_did, REMOTE_DID);
+
+        let mut errors = Vec::new();
+        desired_state::validate::validate_manifest(&manifest, &mut errors);
+        assert!(
+            errors.iter().any(|msg| {
+                msg.contains("cross-deployment subagent delegation is deferred")
+                    && msg.contains("remote-researcher")
+                    && msg.contains("subagent_allow_cross_deployment=true")
+            }),
+            "default cross-deployment guard must still reject a remote target, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn rebind_preserves_target_list_order() {
+        let mut manifest = empty_manifest(SOURCE_DID);
+        manifest.agent_behaviors.push(sample_behavior(SOURCE_DID));
+        manifest.tool_selections.push(sample_selection(
+            SOURCE_DID,
+            vec![
+                subagent_target_entry("first", SOURCE_DID, "b1", None),
+                subagent_target_entry("second", REMOTE_DID, "b2", None),
+                subagent_target_entry("third", SOURCE_DID, "b3", Some("last local".to_string())),
+            ],
+        ));
+        manifest.tool_selections[0].subagent_allow_cross_deployment = true;
+
+        rebind_manifest_agent_did(&mut manifest, TARGET_DID);
+
+        let names: Vec<_> = parse_targets(&manifest.tool_selections[0].subagent_targets)
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(names, vec!["first", "second", "third"]);
+    }
 }

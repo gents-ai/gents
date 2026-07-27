@@ -5,6 +5,18 @@ import { expect, gotoHarness, PEER_ID, test } from "./desktopTest";
 // directly, so a regression that breaks the buttons (but not the name) cannot
 // ship silently — the class of defect behind "the row buttons do nothing".
 test.describe("fleet row action buttons", () => {
+  test("signed bearer invite is the primary remote pairing flow", async ({ page }) => {
+    await gotoHarness(page, "default");
+    await page.getByRole("button", { name: "Add Agent", exact: true }).click();
+
+    await page.getByTestId("fleet-pair-label").fill("Amy");
+    await page.getByTestId("fleet-pair-token").fill("dabear1-harness-signed-token");
+    await page.getByTestId("fleet-pair-submit").click();
+
+    await expect(page.getByTestId(`fleet-row-${PEER_ID}`)).toContainText("Amy");
+    await expect(page.getByTestId("fleet-pair-token")).toHaveCount(0);
+  });
+
   test("chat action button opens the chat workspace", async ({ page }) => {
     await gotoHarness(page, "default");
     await expect(page.getByTestId("fleet-dashboard")).toBeVisible();

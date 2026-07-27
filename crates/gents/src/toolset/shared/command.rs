@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
-use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::process::Command;
+use tokio_util::sync::CancellationToken;
 
 use super::context::{ToolContext, ToolError};
-use crate::background_tools::{LiveOutputStream, LiveToolOutputWriter};
-use crate::tool_call_lifecycle::runtime::current_tool_runtime_context;
+use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
+use crate::tool_call_lifecycle::runtime::{
+    cancelled_result, current_tool_runtime_context, timeout_result,
+};
 use crate::toolset::{CommandPolicyDenial, DenialReason};
 use crate::truncation::{truncate, TruncationLimits, TruncationMode};
 
@@ -176,6 +176,7 @@ impl CommandExecutionPolicy {
 
 pub(crate) async fn run_command(
     context: &ToolContext,
+    tool_name: &'static str,
     command_name: &str,
     args: &[String],
     cwd: Option<&str>,
@@ -190,41 +191,55 @@ pub(crate) async fn run_command(
     let command_line = shell_join(&argv);
     let (program, command_args, sandbox) =
         sandboxed_command_for_policy(context.root(), command_name, args, policy)?;
-    let mut command = Command::new(program);
-    command
-        .args(command_args)
-        .current_dir(&cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env_clear()
-        .envs(build_shell_env())
-        .kill_on_drop(true);
-
+    let runtime = current_tool_runtime_context();
+    let request_deadline = runtime.as_ref().and_then(|runtime| runtime.deadline_at);
+    let command_deadline = chrono::Utc::now()
+        + chrono::Duration::from_std(timeout).unwrap_or_else(|_| chrono::Duration::days(36_500));
+    let deadline_at =
+        Some(request_deadline.map_or(command_deadline, |deadline| deadline.min(command_deadline)));
+    let cancellation_token = runtime
+        .as_ref()
+        .map(|runtime| runtime.cancellation_token.clone())
+        .unwrap_or_else(CancellationToken::new);
+    let live_output = runtime.and_then(|runtime| runtime.live_output);
     let started = Instant::now();
-    let mut child = command.spawn()?;
-    let live_output = current_tool_runtime_context().and_then(|runtime| runtime.live_output);
-    let stdout_task = tokio::spawn(read_command_stream(
-        child.stdout.take(),
-        LiveOutputStream::Stdout,
-        live_output.clone(),
-    ));
-    let stderr_task = tokio::spawn(read_command_stream(
-        child.stderr.take(),
-        LiveOutputStream::Stderr,
+    let outcome = run_managed_exec(ManagedExecRequest {
+        argv: std::iter::once(program)
+            .chain(command_args)
+            .collect::<Vec<_>>(),
+        cwd: cwd.clone(),
+        deadline_at,
+        cancellation_token,
+        // Preserve the existing command-output contract: the canonical
+        // truncator below owns the 16 KiB honest marker and byte accounting.
+        max_output_bytes: usize::MAX,
+        stdin: Vec::new(),
+        environment: Some(build_shell_env()),
+        tool_name: Some(tool_name.to_string()),
         live_output,
-    ));
-    let wait_result = tokio::time::timeout(timeout, child.wait()).await;
+    })
+    .await;
     let duration_ms = elapsed_ms(started);
-    let (exit_code, timed_out) = match wait_result {
-        Ok(status) => (status?.code(), false),
-        Err(_) => {
-            let _ = child.kill().await;
-            (None, true)
+    let (exit_code, timed_out, stdout_bytes, stderr_bytes) = match outcome {
+        ManagedExecOutcome::Exited {
+            code,
+            stdout,
+            stderr,
+            ..
+        } => (code, false, stdout, stderr),
+        ManagedExecOutcome::TimedOut { stdout, stderr, .. } => {
+            if request_deadline.is_some_and(|deadline| chrono::Utc::now() >= deadline) {
+                return Ok(timeout_result(request_deadline));
+            }
+            (None, true, stdout, stderr)
+        }
+        ManagedExecOutcome::Cancelled { .. } => return Ok(cancelled_result()),
+        ManagedExecOutcome::SpawnFailed { error } => {
+            return Err(anyhow!("spawning managed command failed: {error}").into())
         }
     };
-    let stdout_raw = String::from_utf8_lossy(&join_command_stream(stdout_task).await).into_owned();
-    let stderr_raw = String::from_utf8_lossy(&join_command_stream(stderr_task).await).into_owned();
+    let stdout_raw = String::from_utf8_lossy(&stdout_bytes).into_owned();
+    let stderr_raw = String::from_utf8_lossy(&stderr_bytes).into_owned();
 
     let stdout = truncate_stream(&stdout_raw, super::super::DEFAULT_MAX_COMMAND_CHARS);
     let stderr = truncate_stream(&stderr_raw, super::super::DEFAULT_MAX_COMMAND_CHARS);
@@ -258,37 +273,6 @@ pub(crate) async fn run_command(
     };
 
     render_command_output(&output, raw_json).map_err(Into::into)
-}
-
-async fn read_command_stream<R>(
-    reader: Option<R>,
-    stream: LiveOutputStream,
-    live_output: Option<LiveToolOutputWriter>,
-) -> Vec<u8>
-where
-    R: AsyncRead + Unpin + Send + 'static,
-{
-    let Some(mut reader) = reader else {
-        return Vec::new();
-    };
-    let mut bytes = Vec::new();
-    let mut buf = [0u8; 8192];
-    loop {
-        let read = match reader.read(&mut buf).await {
-            Ok(0) => break,
-            Ok(read) => read,
-            Err(_) => break,
-        };
-        if let Some(writer) = &live_output {
-            writer.append(stream, &buf[..read]).await;
-        }
-        bytes.extend_from_slice(&buf[..read]);
-    }
-    bytes
-}
-
-async fn join_command_stream(task: tokio::task::JoinHandle<Vec<u8>>) -> Vec<u8> {
-    task.await.unwrap_or_default()
 }
 
 #[cfg(test)]

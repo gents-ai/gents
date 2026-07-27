@@ -35,7 +35,7 @@ pub use endpoint::{peer_endpoint_upsert_mutation, run_endpoint_heartbeat};
 pub use engine::{
     merge_layered_desired, reconcile_peer_tick, run_pairing_reconciler,
     update_applied_after_success, GraphqlPairingStateStore, PairingStateStore, PairingTickOutcome,
-    PAIRING_SWEEP_INTERVAL,
+    MAX_CONCURRENT_PEER_PREPARATIONS, PAIRING_SWEEP_INTERVAL,
 };
 pub use error_class::{classify_remote_admin_error, PairingErrorClass};
 pub use network::{
@@ -52,8 +52,8 @@ pub use registry::{
     UpsertKind, DEFAULT_NETWORK_ID, NETWORK_ID_ENV, REGISTRY_HEARTBEAT_INTERVAL,
 };
 pub use templates::{
-    builtin_templates, resolve_template, scope_filter, Delivery, FilterPredicate, PairingFilters,
-    Scope, ScopeTemplate,
+    builtin_templates, resolve_template, scope_filter, Delivery, DidSource, FilterPredicate,
+    PairingFilters, Scope, ScopeTemplate,
 };
 pub use trait_def::{
     RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteP2pDocument, RemoteReplicator,

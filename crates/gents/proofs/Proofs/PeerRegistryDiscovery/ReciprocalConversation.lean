@@ -21,6 +21,44 @@ abbrev Did := String
 abbrev PeerId := String
 abbrev Address := String
 
+/-! ## Bearer chat readiness
+
+The client may expose Chat only after it has verified both independent issuer
+observations: an active signed membership and a signed acknowledgement emitted
+after the reciprocal conversation replicator was applied. Transport reachability
+or either observation alone is insufficient. -/
+
+structure BearerReadiness where
+  membershipSignatureValid : Bool
+  membershipActive : Bool
+  acknowledgementSignatureValid : Bool
+  reciprocalReplicatorApplied : Bool
+  deriving DecidableEq, Repr
+
+def BearerReadiness.ready (r : BearerReadiness) : Bool :=
+  r.membershipSignatureValid &&
+  r.membershipActive &&
+  r.acknowledgementSignatureValid &&
+  r.reciprocalReplicatorApplied
+
+theorem bearer_ready_iff_all_verified (r : BearerReadiness) :
+    r.ready = true ↔
+      r.membershipSignatureValid = true ∧
+      r.membershipActive = true ∧
+      r.acknowledgementSignatureValid = true ∧
+      r.reciprocalReplicatorApplied = true := by
+  simp [BearerReadiness.ready, and_assoc]
+
+theorem no_bearer_chat_before_reciprocal_apply (r : BearerReadiness)
+    (h : r.reciprocalReplicatorApplied = false) :
+    r.ready = false := by
+  simp [BearerReadiness.ready, h]
+
+theorem no_bearer_chat_before_active_membership (r : BearerReadiness)
+    (h : r.membershipActive = false) :
+    r.ready = false := by
+  simp [BearerReadiness.ready, h]
+
 structure ReciprocalIntent where
   memberDid : Did
   template : String

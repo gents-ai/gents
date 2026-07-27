@@ -4,17 +4,23 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatComposer } from "../src/components/chat";
 
 function renderComposer(
-  overrides: { turnState?: string | null; sendHint?: string | null } = {},
+  overrides: {
+    activeRequestId?: string | null;
+    interruptVisible?: boolean;
+    turnState?: string | null;
+    sendHint?: string | null;
+  } = {},
 ) {
   return render(
     <ChatComposer
-      activeRequestId={null}
+      activeRequestId={overrides.activeRequestId ?? null}
       approxSerializedBytes={21000}
       behaviorLabel="default"
       canSend
       configuredPeerCount={1}
       dialedPeerCount={1}
       draft=""
+      interruptVisible={overrides.interruptVisible ?? false}
       rowCount={42}
       sendHint={overrides.sendHint ?? null}
       sending={false}
@@ -44,6 +50,15 @@ describe("ChatComposer chrome", () => {
   it("shows Responding… while streaming", () => {
     renderComposer({ turnState: "streaming" });
     expect(screen.getByTestId("composer-status")).toHaveTextContent("Responding…");
+  });
+
+  it("shows Interrupt while a submitted request awaits remote observation", () => {
+    renderComposer({
+      activeRequestId: "req-remote",
+      interruptVisible: true,
+      turnState: null,
+    });
+    expect(screen.getByRole("button", { name: "Interrupt" })).toBeEnabled();
   });
 
   it("lets a disabled-send hint take precedence", () => {

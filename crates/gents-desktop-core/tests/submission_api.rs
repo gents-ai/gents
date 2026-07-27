@@ -335,6 +335,7 @@ async fn add_and_remove_peer_persists_peer_directory() -> Result<()> {
             &addr,
             "did:test:workshop",
             Some("http://127.0.0.1:1/api/v0/graphql"),
+            None,
         )
         .await?;
 

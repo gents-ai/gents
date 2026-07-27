@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatTranscriptPanel } from "../src/components/chat";
+import { MessageList } from "../src/components/Transcript";
 import type { DesktopSessionSnapshot, RenderedTimelineItem } from "../src/lib/types";
 
 function makeSession(
@@ -23,6 +24,50 @@ const pendingTurn: RenderedTimelineItem = {
   content: "do the thing",
   selectedSkillIds: [],
 };
+
+function expectReasoningBeforeAnswer() {
+  const assistant = screen.getByTestId("assistant-message");
+  const reasoning = assistant.querySelector(".reasoning-disclosure");
+  const answer = assistant.querySelector(".message-content");
+  expect(reasoning).not.toBeNull();
+  expect(reasoning?.nextElementSibling).toBe(answer);
+}
+
+describe("assistant reasoning order", () => {
+  it("renders completed reasoning before the assistant answer", () => {
+    render(
+      <MessageList
+        timelineItems={[
+          {
+            kind: "assistantMessage",
+            itemKey: "assistant-1",
+            content: "Final answer",
+            reasoning: "First I thought about it",
+          },
+        ]}
+      />,
+    );
+
+    expectReasoningBeforeAnswer();
+  });
+
+  it("renders streaming reasoning before the live assistant answer", () => {
+    render(
+      <MessageList
+        timelineItems={[
+          {
+            kind: "liveAssistant",
+            itemKey: "live-1",
+            content: "Answer in progress",
+            reasoning: "Thinking in progress",
+          },
+        ]}
+      />,
+    );
+
+    expectReasoningBeforeAnswer();
+  });
+});
 
 describe("ChatTranscriptPanel states", () => {
   afterEach(() => {

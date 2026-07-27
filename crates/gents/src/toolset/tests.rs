@@ -1676,6 +1676,106 @@ async fn bash_timeout_reports_metadata_instead_of_error() {
     assert!(meta["exit_code"].is_null());
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_request_deadline_returns_lifecycle_timeout_marker() {
+    let root = temp_root("gents-bash-request-deadline");
+    let tool = ReadOnlyBashTool::new(
+        ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(5),
+        vec!["sleep".to_string()],
+    );
+    let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(100);
+
+    let output = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+        Some(deadline),
+        tokio_util::sync::CancellationToken::new(),
+        crate::llm::tool::Tool::call(
+            &tool,
+            BashArgs {
+                command: "sleep".to_string(),
+                args: vec!["2".to_string()],
+                cwd: None,
+                timeout_secs: 5,
+                raw_json: false,
+            },
+        ),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        crate::tool_call_lifecycle::runtime::classify_managed_tool_result(&output),
+        Some(crate::tool_call_lifecycle::runtime::ManagedToolTerminal::TimedOut)
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
+    let root = temp_root("gents-bash-process-tree-timeout");
+    let pid_file = root.join("descendant.pid");
+    let tool = UnrestrictedBashTool::with_policy(
+        ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(1),
+        CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted),
+    );
+    let command =
+        "trap '' TERM; while :; do sleep 1; done & child=$!; printf '%s' \"$child\" > descendant.pid; wait";
+
+    let call = crate::llm::tool::Tool::call(
+        &tool,
+        BashArgs {
+            command: command.to_string(),
+            args: Vec::new(),
+            cwd: None,
+            timeout_secs: 1,
+            raw_json: false,
+        },
+    );
+    let output = match tokio::time::timeout(Duration::from_secs(4), call).await {
+        Ok(result) => result.unwrap(),
+        Err(_) => {
+            if let Ok(pid) =
+                std::fs::read_to_string(&pid_file).map(|value| value.trim().parse::<i32>().unwrap())
+            {
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+            }
+            panic!("bash timeout hung while a descendant held its output pipes open");
+        }
+    };
+
+    let meta = compact_exec_meta(&output);
+    assert_eq!(meta["status"], "timeout");
+    assert_eq!(meta["timed_out"], true);
+    let descendant_pid = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse::<i32>()
+        .unwrap();
+    assert_unix_process_exited(descendant_pid).await;
+}
+
+#[cfg(unix)]
+async fn assert_unix_process_exited(pid: i32) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let result = unsafe { libc::kill(pid, 0) };
+        if result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+            return;
+        }
+        if Instant::now() >= deadline {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+            panic!("managed bash descendant process {pid} survived timeout");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn workspace_write_bash_contains_writes_to_tool_root() {

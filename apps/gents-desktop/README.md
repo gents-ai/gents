@@ -61,6 +61,28 @@ cargo build -p gents-desktop --release
 
 ## Pairing
 
+For a remote runtime, signed bearer pairing is the primary path. On the agent
+host, mint a five-minute, single-use conversation invite:
+
+```bash
+gents p2p pairings invite --home ~/.gents/my-agent --bearer --qr
+```
+
+In Gents, choose **Add Agent**, then scan the QR code or paste the emitted
+`dabear1-` token. The client verifies the issuer and network signatures,
+publishes its own signed endpoint and claim, and installs filtered conversation
+replication. The running agent burns the invite nonce and creates the reciprocal
+replication leg.
+
+Conversation pairing is requester-scoped: all eight transcript collections
+replicate only rows whose immutable `requester_did` is the paired client DID.
+Legacy rows created before requester lineage was recorded remain local by
+design; pairing never widens the filter to import null-requester history.
+
+The manual `/status` and connection-JSON form remains under **Advanced manual
+discovery** for diagnostics and older runtimes. It does not perform the signed
+membership exchange.
+
 The desktop binary has an `init` subcommand that discovers or seeds a runtime
 deployment before the GUI starts:
 
@@ -121,6 +143,7 @@ npm run test:ui:invariants
 npm run test:ui:screenshots
 npm run test:ui:fuzz -- --time-limit 30s
 npm run test:ui:fuzz:long
+npm run test:ui:ios:e2e
 npm run test:ui:native:preflight
 ```
 
@@ -135,6 +158,31 @@ the UI:
 ```bash
 npm run test:ui:fuzz
 npm run test:ui:fuzz -- --time-limit 2m
+```
+
+Codex and other LLM agents can drive a persistent browser session through the
+JSONL agent protocol:
+
+```bash
+npm run test:ui:agent -- --backend deterministic --viewport iphone
+npm run test:ui:agent -- --backend live --viewport iphone
+```
+
+The live form boots the real Rust bridge, embedded DefraDB runtime, and a local
+mock inference endpoint. See
+[tests/AGENT_BROWSER.md](./tests/AGENT_BROWSER.md) for commands and boundaries.
+
+The iOS lane builds and installs the real app in an iPhone Simulator, pairs
+with the isolated local `~/.gents/iphone-e2e` node through a fresh signed bearer
+invite, and verifies an actual prompt/response round-trip. It never targets a
+deployed agent unless the issuer environment variables are set explicitly. It
+uses a debug-only in-app driver so the same React and Tauri command paths run
+inside the native `WKWebView`, detects an unexpected app exit, and retains
+screenshots from the sent and terminal stages:
+
+```bash
+npm run test:ui:ios:e2e
+npm run test:ui:ios:e2e -- --runs=3
 ```
 
 Artifacts are written under `test-results/` and Playwright's HTML report under

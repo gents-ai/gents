@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use gents_desktop_core::client::{ClientCore, ClientPeerStatus};
+use gents_desktop_core::client::{ClientCore, ClientPeerStatus, PeerRecord};
 
 use super::super::types::{
     normalize_optional, turn_state_label, AgentPrincipalView, BehaviorView, ConversationSummary,
@@ -27,15 +27,16 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
         .into_iter()
         .map(|peer| {
             let status = peer_statuses.get(&peer.agent_did);
-            let require_source_scope = peer
-                .graphql
-                .as_deref()
-                .is_some_and(|graphql| !graphql.trim().is_empty());
+            let require_source_scope = peer.is_bearer_pairing()
+                || peer
+                    .graphql
+                    .as_deref()
+                    .is_some_and(|graphql| !graphql.trim().is_empty());
             let principal = store
                 .agent_principals
                 .iter()
                 .find(|row| row.agent_did == peer.agent_did);
-            let agent_principal = principal
+            let mut agent_principal = principal
                 .map(|row| AgentPrincipalView {
                     agent_did: row.agent_did.clone(),
                     display_name: normalize_optional(row.display_name.as_deref()),
@@ -52,10 +53,11 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     created_at: None,
                     created_by: None,
                 });
-            let default_behavior_id = store
+            let mut default_behavior_id = store
                 .default_behavior_id_for_agent(&peer.agent_did)
-                .map(str::to_owned);
-            let runtime = store
+                .map(str::to_owned)
+                .or_else(|| normalize_optional(peer.default_behavior_id.as_deref()));
+            let mut runtime = store
                 .latest_runtime(&peer.agent_did)
                 .map(|row| RuntimeView {
                     process_state: normalize_optional(row.process_state.as_deref()),
@@ -89,6 +91,43 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     skill_excludes: row.skill_excludes.clone(),
                 })
                 .collect::<Vec<_>>();
+            if peer_can_infer_behaviors(&peer) && behaviors.is_empty() {
+                let behavior_ids = inferred_peer_behavior_ids(
+                    store
+                        .conversation_rows(&peer.agent_did)
+                        .into_iter()
+                        .filter_map(|row| row.behavior_id.as_deref())
+                        .chain(peer.default_behavior_id.as_deref()),
+                );
+                default_behavior_id = inferred_default_behavior_id(
+                    &peer.agent_did,
+                    default_behavior_id.as_deref(),
+                    &behavior_ids,
+                );
+                agent_principal.default_behavior_id = default_behavior_id.clone();
+                behaviors = behavior_ids
+                    .into_iter()
+                    .map(|behavior_id| BehaviorView {
+                        display_name: inferred_behavior_display_name(
+                            &behavior_id,
+                            &peer.label,
+                            default_behavior_id.as_deref() == Some(behavior_id.as_str()),
+                        ),
+                        is_default: default_behavior_id.as_deref() == Some(behavior_id.as_str()),
+                        behavior_id,
+                        system_prompt: None,
+                        backend_id: None,
+                        model_name: None,
+                        tool_selection_id: None,
+                        inference_profile_id: None,
+                        compaction_strategy: None,
+                        compaction_threshold: None,
+                        enabled: true,
+                        skill_refs: Vec::new(),
+                        skill_excludes: Vec::new(),
+                    })
+                    .collect();
+            }
             behaviors.sort_by(|left, right| {
                 right
                     .is_default
@@ -430,6 +469,26 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
             });
             retain_latest_conversation_summaries(&mut conversations);
 
+            let pairing_ready = peer.is_chat_ready();
+            if !pairing_ready {
+                // A saved bearer record is only a resumable pairing attempt.
+                // Do not project legacy or partially replicated documents into
+                // a usable agent until both issuer-signed readiness facts pass.
+                default_behavior_id = None;
+                agent_principal.default_behavior_id = None;
+                runtime = None;
+                behaviors.clear();
+                inference_backends.clear();
+                inference_profiles.clear();
+                tool_selections.clear();
+                tool_service_registries.clear();
+                skills.clear();
+                tasks.clear();
+                schedules.clear();
+                event_triggers.clear();
+                conversations.clear();
+            }
+
             DeploymentView {
                 peer_id: peer.peer_id,
                 label: peer.label,
@@ -438,6 +497,7 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                 source: peer.source,
                 graphql: peer.graphql,
                 dial_succeeded: status.is_some_and(|status| status.dial_succeeded),
+                pairing_ready,
                 last_error: status.and_then(|status| status.last_error.clone()),
                 default_behavior_id,
                 agent_principal,
@@ -471,5 +531,129 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
         row_count: store.row_count(),
         approx_serialized_bytes: store.approx_serialized_bytes(),
         deployments,
+    }
+}
+
+fn peer_can_infer_behaviors(peer: &PeerRecord) -> bool {
+    (peer.is_bearer_pairing() && peer.pairing_ready)
+        || (peer.source.as_deref() == Some("server-status") && peer.default_behavior_id.is_some())
+}
+
+fn inferred_peer_behavior_ids<'a>(behavior_ids: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut behavior_ids = behavior_ids
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    behavior_ids.sort();
+    behavior_ids.dedup();
+    behavior_ids
+}
+
+fn inferred_default_behavior_id(
+    agent_did: &str,
+    configured_default: Option<&str>,
+    behavior_ids: &[String],
+) -> Option<String> {
+    configured_default
+        .filter(|candidate| behavior_ids.iter().any(|value| value == candidate))
+        .or_else(|| {
+            behavior_ids
+                .iter()
+                .find(|value| value.as_str() == "default")
+                .map(String::as_str)
+        })
+        .or_else(|| {
+            let scoped_default = gents::default_behavior_id_for_agent(agent_did);
+            behavior_ids
+                .iter()
+                .find(|value| value.as_str() == scoped_default)
+                .map(String::as_str)
+        })
+        .or_else(|| behavior_ids.first().map(String::as_str))
+        .map(str::to_owned)
+}
+
+fn inferred_behavior_display_name(behavior_id: &str, peer_label: &str, is_default: bool) -> String {
+    if is_default {
+        return peer_label.to_string();
+    }
+    behavior_id
+        .split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod inferred_peer_behavior_tests {
+    use super::*;
+
+    #[test]
+    fn deduplicates_behavior_ids_and_prefers_named_default() {
+        let ids =
+            inferred_peer_behavior_ids(["session-classifier", "default", "default"].into_iter());
+
+        assert_eq!(ids, vec!["default", "session-classifier"]);
+        assert_eq!(
+            inferred_default_behavior_id("did:key:amy", None, &ids).as_deref(),
+            Some("default")
+        );
+    }
+
+    #[test]
+    fn labels_default_as_peer_and_humanizes_other_behaviors() {
+        assert_eq!(
+            inferred_behavior_display_name("default", "Amy", true),
+            "Amy"
+        );
+        assert_eq!(
+            inferred_behavior_display_name("session-classifier", "Amy", false),
+            "Session Classifier"
+        );
+    }
+
+    #[test]
+    fn signed_default_behavior_bootstraps_a_fresh_bearer_peer() {
+        let ids = inferred_peer_behavior_ids(std::iter::empty::<&str>().chain(Some("default")));
+
+        assert_eq!(ids, vec!["default"]);
+        assert_eq!(
+            inferred_default_behavior_id("did:key:amy", Some("default"), &ids).as_deref(),
+            Some("default")
+        );
+    }
+
+    #[test]
+    fn pending_bearer_peer_cannot_infer_chat_behavior() {
+        let mut peer = PeerRecord::new("Remote", "endpoint", "did:key:remote");
+        peer.source = Some("bearer-pairing".to_string());
+        peer.default_behavior_id = Some("default".to_string());
+
+        assert!(!peer_can_infer_behaviors(&peer));
+        peer.pairing_ready = true;
+        assert!(peer_can_infer_behaviors(&peer));
+    }
+
+    #[test]
+    fn status_peer_with_imported_default_can_render_a_behavior_before_snapshot_hydration() {
+        let mut peer = PeerRecord::new("Amy", "endpoint-amy", "did:key:amy");
+        peer.source = Some("server-status".to_string());
+        peer.default_behavior_id = Some("default".to_string());
+
+        assert!(peer_can_infer_behaviors(&peer));
+        assert_eq!(
+            inferred_peer_behavior_ids(
+                std::iter::empty::<&str>().chain(peer.default_behavior_id.as_deref())
+            ),
+            vec!["default"]
+        );
     }
 }

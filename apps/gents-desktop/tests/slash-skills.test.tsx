@@ -104,6 +104,7 @@ describe("composer slash menu", () => {
         configuredPeerCount={1}
         dialedPeerCount={1}
         draft={draft}
+        interruptVisible={false}
         rowCount={0}
         sendHint={null}
         sending={false}

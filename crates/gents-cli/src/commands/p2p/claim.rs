@@ -303,6 +303,7 @@ mod tests {
             network_id: network_rec.network_id.clone(),
             issued_at: "2026-07-08T00:00:00Z".into(),
             template: "conversation".into(),
+            default_behavior_id: Some("default".into()),
             network: network_rec,
             sig: vec![2],
         }

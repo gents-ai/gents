@@ -17,6 +17,7 @@ export type DesktopPreviewInterruptCascadeArgs = {
 
 export type DesktopInterruptRequestArgs = {
   requestId: string;
+  agentDid?: string | null;
   cause: "userCancelled"; // operator-authentic only
   cascade: boolean;
   expectedPreviewSignature?: string;

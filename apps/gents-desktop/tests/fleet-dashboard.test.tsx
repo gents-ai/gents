@@ -2,7 +2,11 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { FleetDashboard } from "../src/components/fleet/FleetDashboard";
-import type { BootstrapSummary, DeploymentView } from "../src/lib/types";
+import type {
+  BearerPairingResponse,
+  BootstrapSummary,
+  DeploymentView,
+} from "../src/lib/types";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 // The guided-inference props are exercised by their own suite below; the
@@ -45,6 +49,7 @@ describe("FleetDashboard add connection flow", () => {
         repairingP2P={false}
         starting={false}
         onAddPeer={vi.fn()}
+        onPairBearer={vi.fn()}
         onFetchPeerStatus={vi.fn()}
         onInitLocalRuntime={onInitLocalRuntime}
         onOpenChat={vi.fn()}
@@ -82,6 +87,7 @@ describe("FleetDashboard add connection flow", () => {
         repairingP2P={false}
         starting={false}
         onAddPeer={onAddPeer}
+        onPairBearer={vi.fn()}
         onFetchPeerStatus={onFetchPeerStatus}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
@@ -124,6 +130,7 @@ describe("FleetDashboard add connection flow", () => {
         repairingP2P={false}
         starting={false}
         onAddPeer={vi.fn()}
+        onPairBearer={vi.fn()}
         onFetchPeerStatus={onFetchPeerStatus}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
@@ -144,7 +151,59 @@ describe("FleetDashboard add connection flow", () => {
         "did:key:z6MkGateway",
       );
       expect(screen.getByTestId("fleet-add-addr")).toHaveValue("iroh://gateway");
+      expect(screen.getByTestId("fleet-import-status")).toHaveTextContent(
+        "Fetched /status",
+      );
+      expect(
+        (screen.getByTestId("fleet-add-connection-json") as HTMLTextAreaElement).value,
+      ).toContain('"agent_name": "api-gateway"');
     });
+  });
+
+  it("surfaces a P2P-disabled discovery result beside the fetch controls", async () => {
+    const onFetchPeerStatus = vi.fn(async () => ({
+      agent_name: "amy",
+      agent_did: "did:key:z6MkAmy",
+      p2p_transport: "none",
+      p2p: {
+        enabled: false,
+        p2p_listen_addresses: [],
+      },
+    }));
+
+    render(
+      <FleetDashboard
+        addingPeer={false}
+        bootstrap={null}
+        deployments={[]}
+        loading={false}
+        p2pHealth={null}
+        repairingP2P={false}
+        starting={false}
+        onAddPeer={vi.fn()}
+        onPairBearer={vi.fn()}
+        onFetchPeerStatus={onFetchPeerStatus}
+        onInitLocalRuntime={vi.fn()}
+        onOpenChat={vi.fn()}
+        onOpenConfig={vi.fn()}
+        onRepairP2P={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("fleet-add-server-address"), {
+      target: { value: "http://amy.local:9191" },
+    });
+    fireEvent.click(screen.getByTestId("fleet-fetch-status"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("fleet-import-status")).toHaveTextContent(
+        "This runtime has P2P disabled",
+      );
+    });
+    expect(screen.getByTestId("fleet-add-label")).toHaveValue("");
+    expect(screen.getByTestId("fleet-add-server-address")).toHaveValue(
+      "http://amy.local:9191",
+    );
   });
 
   it("saves a typed GraphQL endpoint when manually adding a peer", async () => {
@@ -161,6 +220,7 @@ describe("FleetDashboard add connection flow", () => {
         repairingP2P={false}
         starting={false}
         onAddPeer={onAddPeer}
+        onPairBearer={vi.fn()}
         onFetchPeerStatus={onFetchPeerStatus}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
@@ -196,6 +256,63 @@ describe("FleetDashboard add connection flow", () => {
       });
     });
   });
+
+  it("keeps verified pairing readiness visible after closing the add panel", async () => {
+    const onPairBearer = vi.fn(async () => ({
+      bootstrap: {} as BearerPairingResponse["bootstrap"],
+      client: null,
+      pairing: {
+        peerId: "peer-steward",
+        label: "amygdalabook-steward",
+        addr: "iroh://steward",
+        issuerDid: "did:key:zSteward",
+        claimantDid: "did:key:zPhone",
+        networkId: "steward-network",
+        template: "conversation",
+        connected: true,
+        claimSubmitted: true,
+        endpointPublished: true,
+        replicationConfigured: true,
+        membershipObserved: true,
+        bidirectionalReplicationObserved: true,
+      },
+    }));
+
+    render(
+      <FleetDashboard
+        addingPeer={false}
+        bootstrap={bootstrap}
+        deployments={[deployment]}
+        loading={false}
+        p2pHealth={null}
+        repairingP2P={false}
+        starting={false}
+        onAddPeer={vi.fn()}
+        onPairBearer={onPairBearer}
+        onFetchPeerStatus={vi.fn()}
+        onInitLocalRuntime={vi.fn()}
+        onOpenChat={vi.fn()}
+        onOpenConfig={vi.fn()}
+        onRepairP2P={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Agent" }));
+    fireEvent.change(screen.getByTestId("fleet-pair-label"), {
+      target: { value: "amygdalabook-steward" },
+    });
+    fireEvent.change(screen.getByTestId("fleet-pair-token"), {
+      target: { value: "dabear1-signed-invite" },
+    });
+    fireEvent.click(screen.getByTestId("fleet-pair-submit"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("fleet-pair-submit")).not.toBeInTheDocument();
+      expect(screen.getByTestId("fleet-pair-status")).toHaveTextContent(
+        "amygdalabook-steward is ready",
+      );
+    });
+  });
 });
 
 describe("FleetDashboard fleet-level P2P repair", () => {
@@ -210,6 +327,7 @@ describe("FleetDashboard fleet-level P2P repair", () => {
         repairingP2P={false}
         starting={false}
         onAddPeer={vi.fn()}
+        onPairBearer={vi.fn()}
         onFetchPeerStatus={vi.fn()}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}

@@ -5,8 +5,12 @@ use std::path::PathBuf;
 
 use gents::agent::p2p_reconcile::{
     merge_layered_desired, DiffOp, FilterPredicate, PairingDesired, PairingFilters,
+    MAX_CONCURRENT_PEER_PREPARATIONS,
 };
 
+use crate::lean_vocab_test::{
+    lean_pairing_reconcile_shutdown_boundary_cases, lean_pairing_reconcile_sweep_scheduling_cases,
+};
 use crate::support::pairing_conformance::invariants::{
     check_liveness, check_safety, ObservedSnapshot,
 };
@@ -136,9 +140,9 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
         collections: set(&["AgentRequest", "AgentResponse"]),
         replicator_addresses: set(&[address]),
         replicator_collections: set(&["AgentRequest", "AgentResponse"]),
-        replicator_filter: one_filter("AgentRequest", "agent_did", "did:key:a")
+        replicator_filter: one_filter("AgentRequest", "requester_did", "did:key:a")
             .into_iter()
-            .chain(one_filter("AgentResponse", "agent_did", "did:key:a"))
+            .chain(one_filter("AgentResponse", "requester_did", "did:key:a"))
             .collect(),
         template_ids: BTreeSet::new(),
     };
@@ -167,14 +171,14 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
             .replicator_filter
             .get("AgentRequest")
             .map(|filter| (filter.field.as_str(), filter.value.as_str())),
-        Some(("agent_did", "did:key:a"))
+        Some(("requester_did", "did:key:a"))
     );
     assert_eq!(
         merged
             .replicator_filter
             .get("AgentResponse")
             .map(|filter| (filter.field.as_str(), filter.value.as_str())),
-        Some(("agent_did", "did:key:a"))
+        Some(("requester_did", "did:key:a"))
     );
     assert!(
         !merged.replicator_filter.contains_key("AgentNetwork"),
@@ -270,4 +274,40 @@ fn app_collections_coexists_with_control_pairing() {
     );
     assert!(merged.template_ids.contains("network-control"));
     assert!(merged.template_ids.contains("app-collections"));
+}
+
+pub(super) fn pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep() {
+    let cases = lean_pairing_reconcile_shutdown_boundary_cases();
+    assert_eq!(cases.len(), 1);
+    let case = &cases[0];
+    assert_eq!(
+        case.name,
+        "shutdown_preempts_in_flight_pairing_reconcile_sweep"
+    );
+    assert_eq!(case.supervisor, "pairingReconciler");
+    assert_eq!(case.work_class, "p2pReconcileSweep");
+    assert_eq!(case.boundary, "pairingReconcileSupervisorBoundary");
+    assert_eq!(case.per_admin_call_timeout_ms, 10_000);
+    assert!(case.cancellation_observed_inside_sweep);
+    assert!(case.current_admin_future_dropped);
+    assert!(case.remaining_peers_skipped);
+    assert!(case.shutdown_join_bounded);
+}
+
+pub(super) fn pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer() {
+    let cases = lean_pairing_reconcile_sweep_scheduling_cases();
+    assert_eq!(cases.len(), 1);
+    let case = &cases[0];
+    assert_eq!(case.name, "stale_peer_dial_does_not_block_ready_peer");
+    assert_eq!(case.supervisor, "pairingReconciler");
+    assert_eq!(case.work_class, "p2pReconcileSweep");
+    assert_eq!(case.boundary, "pairingReconcilePeerPreparationBoundary");
+    assert_eq!(
+        case.max_concurrent_peer_preparations,
+        MAX_CONCURRENT_PEER_PREPARATIONS
+    );
+    assert!(case.peer_preparation_bounded);
+    assert!(case.topology_mutation_serialized);
+    assert!(!case.stale_peer_blocks_ready_peer);
+    assert!(case.every_peer_result_accounted);
 }

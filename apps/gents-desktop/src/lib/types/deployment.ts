@@ -212,6 +212,7 @@ export type DeploymentView = {
   source?: string | null;
   graphql?: string | null;
   dialSucceeded: boolean;
+  pairingReady: boolean;
   lastError?: string | null;
   defaultBehaviorId?: string | null;
   agentPrincipal: AgentPrincipalView;

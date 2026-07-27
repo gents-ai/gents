@@ -17,6 +17,10 @@ The desktop test stack has three layers:
   `playwright.screenshots.config.ts`.
 - `npm run test:ui:fuzz` runs Bombadil against the same deterministic browser
   harness and checks persistent shell invariants under random interaction.
+- `npm run test:ui:agent` starts a persistent JSONL browser driver for Codex
+  and other LLM agents. It exposes accessibility snapshots, semantic clicks,
+  field entry, waits, console errors, and screenshots at an iPhone-sized
+  viewport by default. See [AGENT_BROWSER.md](./AGENT_BROWSER.md).
 - `npm run test:ui:qa-sweep` runs the fuller manual QA sweep.
 - `npm run test:ui:visual` runs golden screenshot checks for stable shell
   states across desktop, laptop, and narrow viewports.
@@ -27,6 +31,12 @@ The desktop test stack has three layers:
 - `npm run test:ui:live:e2e:real` runs the same live browser-to-runtime smoke
   path, but refuses to fall back to the mock endpoint. Use this when validating
   a real inference provider or the `live-smoke.yml` manual workflow inputs.
+- `npm run test:ui:ios:e2e` builds the real Tauri app for an iPhone Simulator,
+  mints a fresh signed invite on the isolated local `iphone-e2e` node, pairs
+  through the rendered UI, sends a fixed prompt, and waits for its response
+  through a debug-only in-app driver. The runner detects an unexpected native
+  app exit and retains screenshots under the printed temporary artifact
+  directory.
 - `npm run test:ui:native:preflight` runs the non-GUI native Tauri preflight.
 
 Root Makefile shortcuts mirror the common commands, including
@@ -47,6 +57,33 @@ diagnostics JSON, and a final browser screenshot to the Playwright output.
 
 The existing `test:live:*` suites remain the lower-level live bridge/runtime
 coverage until the live browser project reaches parity.
+
+The native iPhone run requires Xcode, XcodeGen, an available iPhone Simulator,
+and a running P2P-enabled issuer at `~/.gents/iphone-e2e`. It resets the app by
+default so pairing and first-message behavior are tested from a clean install:
+
+```bash
+npm run test:ui:ios:e2e
+npm run test:ui:ios:e2e -- --runs=3
+```
+
+Set `GENTS_IOS_SIMULATOR_ID` to choose a device.
+`GENTS_E2E_ISSUER_GENTS` and `GENTS_E2E_ISSUER_HOME` override the local issuer;
+setting `GENTS_E2E_ISSUER_SSH` explicitly uses a remote issuer. `--keep-data`
+reuses an existing pairing. The runner never prints the single-use invite.
+
+The agent browser can use either harness backend. Deterministic mode is the
+fast click-through layer. Live mode starts `bridge_runner`, an embedded
+DefraDB-backed runtime, and a local mock inference server so agents can exercise
+real chat persistence without credentials:
+
+```bash
+npm run test:ui:agent -- --backend live --viewport iphone
+```
+
+The browser process stays alive while JSON commands are sent over stdin, which
+lets an agent inspect the current accessibility tree before choosing its next
+action. Screenshots are written under `test-results/agent-browser/`.
 
 The `Desktop UI QA Sweep` GitHub workflow is the artifact-producing review
 loop for the deterministic browser layer. It can be run manually or by its

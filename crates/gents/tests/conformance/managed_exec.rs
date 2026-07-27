@@ -6,6 +6,40 @@
 
 use super::*;
 
+pub(super) fn managed_exec_tool_boundary_cases_cover_every_native_subprocess_tool() {
+    let cases = lean_managed_exec_tool_boundary_cases();
+    let tools = cases
+        .iter()
+        .map(|case| (case.tool_name.as_str(), case.work_class.as_str()))
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        tools,
+        BTreeSet::from([
+            ("bash", "shellCommand"),
+            ("bash_unrestricted", "shellCommand"),
+            ("glob", "filesystemTraversal"),
+            ("grep", "filesystemTraversal"),
+            ("list_files", "filesystemTraversal"),
+        ])
+    );
+    for case in cases {
+        assert_eq!(
+            case.name,
+            format!(
+                "{}_routes_through_managed_exec_process_tree_boundary",
+                case.tool_name
+            )
+        );
+        assert_eq!(case.boundary, "managedExecProcessGroupBoundary");
+        assert_eq!(case.kill_scope, "processTree");
+        assert!(case.timeout_requires_kill);
+        assert!(case.cancel_requires_kill);
+        assert!(case.descendants_in_termination_scope);
+        assert!(case.capture_drain_bounded);
+    }
+}
+
 pub(super) fn managed_exec_liveness_cases_pin_native_process_boundary() {
     let machine = lean_state_machine_contract("ManagedExec");
     assert_eq!(

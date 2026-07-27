@@ -1,7 +1,9 @@
 //! Recovery for persisted running tool calls: the startup sweep over rows
-//! orphaned by a daemon restart, plus the periodic subagent-liveness sweep
+//! orphaned by a daemon restart, the periodic subagent-liveness sweep
 //! (#465) that terminalizes expired children and orphaned queued descendants
-//! on the live reconciler tick.
+//! on the live reconciler tick, and the live terminal-parent owned-tool
+//! cleanup (#837) that cancels running composites/tools whose parent is
+//! already terminal without waiting for deadline or daemon restart.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -40,12 +42,28 @@ impl SubagentLivenessReport {
     }
 }
 
+/// Live reconcile of running tool rows owned by a terminal parent (#837).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TerminalParentToolReport {
+    pub tool_calls_terminalized: usize,
+}
+
+impl TerminalParentToolReport {
+    pub fn is_noop(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct RunningToolCallRow {
     #[serde(rename = "_docID")]
     doc_id: String,
     #[serde(default)]
     request_id: Option<String>,
+    /// Immutable owner principal stamped at create. Recovery scopes by this
+    /// field — `request_id` alone is not unique across agents.
+    #[serde(default)]
+    agent_did: Option<String>,
     session_id: String,
     tool_call_id: String,
     #[serde(default)]
@@ -70,7 +88,7 @@ struct RunningToolCallRow {
     unclaimed_deadline_at: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct ParentRequestRow {
     agent_did: String,
     status: String,
@@ -218,6 +236,163 @@ impl super::ToolCallLifecycle {
         }
         Ok(report)
     }
+
+    /// Live reconcile: terminalize running tool calls whose parent request is
+    /// already terminal (#837). Unlike full startup `recover_all`, this does
+    /// **not** interrupt live-parent background tools (restart-only path).
+    ///
+    /// Scope and ordering:
+    /// 1. Load only tool rows stamped with this agent's immutable `agent_did`
+    ///    (not global `request_id` matches — that field is not unique).
+    /// 2. Resolve the parent under the same DID; skip missing/foreign parents.
+    /// 3. Require a terminal parent before any write.
+    /// 4. Detached bridges under an *interrupted* parent are left running.
+    /// 5. Child-linked bridges under a *cleanly completed* parent are left
+    ///    running — clean completion is not a cancel signal (live cascade and
+    ///    recovery only cancel on cancel-worthy terminals).
+    /// 6. Then project already-terminal children onto bridges (matches startup
+    ///    child-precedence so restart and live ticks converge).
+    ///
+    /// Covers the durable bad state observed for `fan_out_and_synthesize`:
+    /// parent interrupted, outer composite still `running`, no executor active.
+    pub async fn reconcile_terminal_parent_owned_tools(
+        node: &EmbeddedNode,
+        agent_did: &str,
+    ) -> Result<TerminalParentToolReport> {
+        let rows = load_running_tool_call_rows_for_agent(node, agent_did).await?;
+        let mut report = TerminalParentToolReport::default();
+        let mut parent_cache: std::collections::HashMap<String, Option<ParentRequestRow>> =
+            std::collections::HashMap::new();
+
+        for row in rows {
+            // Defense in depth: never mutate a row whose stamped owner differs.
+            if row.agent_did.as_deref() != Some(agent_did) {
+                continue;
+            }
+
+            let parent = match row
+                .request_id
+                .as_deref()
+                .filter(|request_id| !request_id.is_empty())
+            {
+                Some(request_id) => {
+                    if let Some(cached) = parent_cache.get(request_id) {
+                        cached.clone()
+                    } else {
+                        let loaded = lookup_parent_request(node, agent_did, request_id).await?;
+                        parent_cache.insert(request_id.to_string(), loaded.clone());
+                        loaded
+                    }
+                }
+                None => None,
+            };
+            // Ownership gate: parent must resolve under this agent's DID.
+            let Some(parent) = parent else {
+                continue;
+            };
+            // Live parents are out of scope for this sweep.
+            if !request_is_terminal(&parent) {
+                continue;
+            }
+
+            // Detached bridges may outlive an interrupted parent by design
+            // (startup recovery leaves them running too).
+            if is_detached_subagent_tool(&row) && request_is_interrupted(&parent) {
+                continue;
+            }
+
+            // Child-terminal precedence only after owner + terminal-parent gates.
+            if recover_bridge_terminal_child(node, agent_did, &row).await? {
+                report.tool_calls_terminalized += 1;
+                tracing::info!(
+                    doc_id = %row.doc_id,
+                    request_id = row.request_id.as_deref().unwrap_or(""),
+                    tool_call_id = %row.tool_call_id,
+                    "reconciled running bridge from already-terminal child"
+                );
+                continue;
+            }
+
+            // Clean parent completion is not a cancel signal for linked
+            // background/cascade children — leave the bridge running.
+            if request_is_cleanly_completed(&parent) && child_request_id(&row).is_some() {
+                continue;
+            }
+
+            let outcome = if request_is_interrupted(&parent) {
+                RecoveryOutcome::Cancelled
+            } else {
+                // Cancel-worthy non-interrupt terminals, or a native composite
+                // stranded under a cleanly-completed parent.
+                RecoveryOutcome::Failed
+            };
+
+            // Cascade only for cancel-worthy terminals — never on clean complete.
+            let mut remote_cancel_intent_at = None;
+            if request_is_cancel_worthy_terminal(&parent) {
+                if let Some(child_request_id) = cascade_child_request_id(&row) {
+                    if child_request_is_locally_owned(node, agent_did, child_request_id).await? {
+                        if let Err(error) = interrupt_request(node, child_request_id).await {
+                            tracing::warn!(
+                                doc_id = %row.doc_id,
+                                request_id = row.request_id.as_deref().unwrap_or(""),
+                                tool_call_id = %row.tool_call_id,
+                                child_request_id,
+                                error = %error,
+                                "failed to cascade live terminal-parent cancel to child request"
+                            );
+                        }
+                    } else {
+                        remote_cancel_intent_at = Some(Utc::now());
+                    }
+                }
+            }
+
+            let deadline_at = parse_datetime(row.deadline_at.as_deref());
+            let updated = match recover_tool_call_row(
+                node,
+                &row,
+                deadline_at,
+                outcome,
+                remote_cancel_intent_at,
+            )
+            .await
+            {
+                Ok(updated) => updated,
+                Err(error) => {
+                    tracing::warn!(
+                        doc_id = %row.doc_id,
+                        request_id = row.request_id.as_deref().unwrap_or(""),
+                        tool_call_id = %row.tool_call_id,
+                        error = %error,
+                        "failed to terminalize running tool owned by terminal parent"
+                    );
+                    continue;
+                }
+            };
+            if !updated {
+                // Lost CAS: concurrent complete/fail/cancel already terminalized.
+                continue;
+            }
+
+            report.tool_calls_terminalized += 1;
+            tracing::info!(
+                doc_id = %row.doc_id,
+                request_id = row.request_id.as_deref().unwrap_or(""),
+                tool_call_id = %row.tool_call_id,
+                lifecycle_state = %outcome.lifecycle_state().as_str(),
+                "reconciled running tool owned by terminal parent"
+            );
+        }
+
+        if !report.is_noop() {
+            tracing::info!(
+                tool_calls_terminalized = report.tool_calls_terminalized,
+                "reconciled terminal-parent owned tools"
+            );
+        }
+        Ok(report)
+    }
 }
 
 #[cfg(test)]
@@ -232,13 +407,46 @@ mod tests {
         );
         assert_eq!(RecoveryOutcome::Cancelled.failure_class(), None);
     }
+
+    #[test]
+    fn cancel_worthy_field_takes_precedence_over_divergent_completed_status() {
+        let divergent = ParentRequestRow {
+            agent_did: "did:test:x".to_string(),
+            status: "completed".to_string(),
+            lifecycle_state: Some("interrupted".to_string()),
+            subagent_depth: None,
+        };
+        assert!(request_has_cancel_worthy_field(&divergent));
+        assert!(request_is_cancel_worthy_terminal(&divergent));
+        assert!(request_is_interrupted(&divergent));
+        assert!(
+            !request_is_cleanly_completed(&divergent),
+            "status=completed must not suppress lifecycle_state=interrupted"
+        );
+    }
+
+    #[test]
+    fn clean_completion_requires_no_cancel_worthy_fields() {
+        let clean = ParentRequestRow {
+            agent_did: "did:test:x".to_string(),
+            status: "completed".to_string(),
+            lifecycle_state: Some("completed".to_string()),
+            subagent_depth: None,
+        };
+        assert!(!request_has_cancel_worthy_field(&clean));
+        assert!(request_is_cleanly_completed(&clean));
+        assert!(!request_is_cancel_worthy_terminal(&clean));
+    }
 }
 
 async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
-    let rows = load_running_tool_call_rows(node).await?;
+    let rows = load_running_tool_call_rows_for_agent(node, agent_did).await?;
     let mut materialized = 0;
 
     for row in rows {
+        if row.agent_did.as_deref() != Some(agent_did) {
+            continue;
+        }
         let Some(child_request_id) = child_request_id(&row).map(str::to_string) else {
             continue;
         };
@@ -458,10 +666,14 @@ async fn fail_unauthorized_orphan_subagent_tool_call(
 }
 
 async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
-    let rows = load_running_tool_call_rows(node).await?;
+    let rows = load_running_tool_call_rows_for_agent(node, agent_did).await?;
 
     let mut recovered = 0;
     for row in rows {
+        if row.agent_did.as_deref() != Some(agent_did) {
+            continue;
+        }
+
         let deadline_at = parse_datetime(row.deadline_at.as_deref());
         let unclaimed_deadline_at = parse_datetime(row.unclaimed_deadline_at.as_deref());
         let parent = match row
@@ -498,6 +710,11 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
                 .is_some_and(|parent| request_is_interrupted(parent))
         {
             None
+        } else if parent.as_ref().is_some_and(request_is_cleanly_completed)
+            && child_request_id(&row).is_some()
+        {
+            // Clean parent completion is not a cancel signal for linked children.
+            None
         } else if parent
             .as_ref()
             .is_some_and(|parent| request_is_interrupted(parent))
@@ -523,8 +740,13 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
             continue;
         };
 
+        // Cascade only on cancel-worthy parent terminals (not clean completion).
         let mut remote_cancel_intent_at = None;
-        if outcome != RecoveryOutcome::UnclaimedCrossDeploymentSpawn {
+        let should_cascade = outcome != RecoveryOutcome::UnclaimedCrossDeploymentSpawn
+            && parent
+                .as_ref()
+                .is_none_or(|p| !request_is_cleanly_completed(p));
+        if should_cascade {
             if let Some(child_request_id) = cascade_child_request_id(&row) {
                 if child_request_is_locally_owned(node, agent_did, child_request_id).await? {
                     if let Err(error) = interrupt_request(node, child_request_id).await {
@@ -544,17 +766,26 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
             }
         }
 
-        if let Err(error) =
-            recover_tool_call_row(node, &row, deadline_at, outcome, remote_cancel_intent_at).await
-        {
-            tracing::warn!(
-                doc_id = %row.doc_id,
-                request_id = row.request_id.as_deref().unwrap_or(""),
-                session_id = %row.session_id,
-                tool_call_id = %row.tool_call_id,
-                error = %error,
-                "failed to recover running tool call"
-            );
+        let updated =
+            match recover_tool_call_row(node, &row, deadline_at, outcome, remote_cancel_intent_at)
+                .await
+            {
+                Ok(updated) => updated,
+                Err(error) => {
+                    tracing::warn!(
+                        doc_id = %row.doc_id,
+                        request_id = row.request_id.as_deref().unwrap_or(""),
+                        session_id = %row.session_id,
+                        tool_call_id = %row.tool_call_id,
+                        error = %error,
+                        "failed to recover running tool call"
+                    );
+                    continue;
+                }
+            };
+        if !updated {
+            // Lost CAS against a concurrent terminal writer — leave the durable
+            // terminal untouched (first-writer-wins).
             continue;
         }
 
@@ -598,8 +829,17 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
     Ok(recovered)
 }
 
-async fn load_running_tool_call_rows(node: &EmbeddedNode) -> Result<Vec<RunningToolCallRow>> {
-    load_running_tool_call_rows_with_filter(node, "").await
+/// Running tool rows owned by `agent_did` (immutable scope key on create).
+async fn load_running_tool_call_rows_for_agent(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Result<Vec<RunningToolCallRow>> {
+    let escaped = escape_graphql_string(agent_did);
+    load_running_tool_call_rows_with_filter(
+        node,
+        &format!(r#", agent_did: {{ _eq: "{escaped}" }}"#),
+    )
+    .await
 }
 
 /// Running bridge rows only (`child_request_id` set) — the periodic liveness
@@ -620,6 +860,7 @@ async fn load_running_tool_call_rows_with_filter(
         ) {{
             _docID
             request_id
+            agent_did
             session_id
             tool_call_id
             tool_name
@@ -1391,13 +1632,16 @@ async fn recover_bridge_failed_row(
     Ok(())
 }
 
+/// Terminalize a running tool-call row. Returns `Ok(true)` when the
+/// compare-and-set updated the row, `Ok(false)` when a concurrent writer
+/// already left `running` (first terminal wins — do not overwrite).
 async fn recover_tool_call_row(
     node: &EmbeddedNode,
     row: &RunningToolCallRow,
     deadline_at: Option<DateTime<Utc>>,
     outcome: RecoveryOutcome,
     remote_cancel_intent_at: Option<DateTime<Utc>>,
-) -> Result<()> {
+) -> Result<bool> {
     let now = Utc::now();
     let started_at = parse_datetime(row.started_at.as_deref()).unwrap_or(now);
     let latency_ms = (now - started_at).num_milliseconds().max(0);
@@ -1428,7 +1672,10 @@ async fn recover_tool_call_row(
     let mutation = format!(
         r#"mutation {{
             update_AgentToolCall(
-                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                filter: {{
+                    _docID: {{ _eq: "{escaped_doc_id}" }},
+                    lifecycle_state: {{ _eq: "running" }}
+                }},
                 input: {{
                     result: "{escaped_result}",
                     status: "completed",
@@ -1443,10 +1690,14 @@ async fn recover_tool_call_row(
         lifecycle_state = outcome.lifecycle_state().as_str(),
     );
 
-    execute_mutation_with_retry(node, &mutation, "recover_running_tool_call")
+    let response = execute_mutation_with_retry(node, &mutation, "recover_running_tool_call")
         .await
         .context("recover running tool call mutation")?;
-    Ok(())
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("update_AgentToolCall"))
+        .is_some_and(response_has_documents))
 }
 
 fn parse_datetime(value: Option<&str>) -> Option<DateTime<Utc>> {
@@ -1476,6 +1727,43 @@ fn effective_deadline(
 
 fn request_is_interrupted(parent: &ParentRequestRow) -> bool {
     parent.status == "interrupted" || parent.lifecycle_state.as_deref() == Some("interrupted")
+}
+
+/// Cancel-worthy evidence on either field takes precedence over a divergent
+/// `completed` sibling field. Mirrors
+/// `subagent_source::parent_reached_cancel_worthy_terminal` (plus `failed` on
+/// status for rows that stamp that vocabulary).
+fn request_has_cancel_worthy_field(parent: &ParentRequestRow) -> bool {
+    matches!(
+        parent.status.as_str(),
+        "error" | "failed" | "superseded" | "dead" | "interrupted"
+    ) || matches!(
+        parent.lifecycle_state.as_deref(),
+        Some("failed" | "error" | "superseded" | "dead" | "interrupted")
+    )
+}
+
+/// Parent reached a successful terminal **without** any cancel-worthy field
+/// evidence — not a cancel signal for linked background/cascade children.
+///
+/// Divergent replications such as `status=completed` + `lifecycle_state=interrupted`
+/// are **not** clean: cancel-worthy evidence wins.
+fn request_is_cleanly_completed(parent: &ParentRequestRow) -> bool {
+    if request_has_cancel_worthy_field(parent) {
+        return false;
+    }
+    matches!(parent.status.as_str(), "completed" | "complete")
+        || matches!(
+            parent.lifecycle_state.as_deref(),
+            Some("completed" | "complete")
+        )
+}
+
+/// Terminal parent whose terminal is cancel-worthy (interrupt, failure, dead,
+/// supersede, …). Cancel-worthy field evidence is checked first so a stale
+/// `completed` on the other column cannot suppress cascade.
+fn request_is_cancel_worthy_terminal(parent: &ParentRequestRow) -> bool {
+    request_has_cancel_worthy_field(parent)
 }
 
 fn request_is_terminal(parent: &ParentRequestRow) -> bool {

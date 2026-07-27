@@ -362,6 +362,7 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
         messages: vec![AgentMessageRow {
             message_key: "session-1:1".to_string(),
             session_id: Some("session-1".to_string()),
+            request_id: None,
             requester_did: None,
             sequence: Some(1),
             role: Some("user".to_string()),
@@ -434,6 +435,7 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
         messages: vec![AgentMessageRow {
             message_key: "session-1:1".to_string(),
             session_id: Some("session-1".to_string()),
+            request_id: None,
             requester_did: None,
             sequence: Some(1),
             role: Some("user".to_string()),
