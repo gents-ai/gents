@@ -2,13 +2,15 @@
 
 *Design spec — 2026-07-27. Issue [#877](https://github.com/source-inc/gents/issues/877)
 (`design` label: design-only spec PR). Status: design approved by the issue author
-2026-07-27 after three review passes; hardened same day across three PR #878
+2026-07-27 after three review passes; hardened same day across four PR #878
 security-review rounds — permission-set scoping (read/write splits,
-interrupt-vs-hold separation, grant profiles), storage-path and network-address
-authority (no webview-supplied `desktop_home`/`agent_home`/peer addresses), and
-projection boundaries (permission-projected snapshot and bootstrap summary,
-redacted chat/fleet metadata) — see git history for the pass-by-pass detail. Base:
-the
+interrupt-vs-hold separation, per-package grant profiles matched to actual command
+usage), storage-path and network-address authority (no webview-supplied
+`desktop_home`/`agent_home`, no arbitrary addresses in read grants, all agent-home
+consumers on bridge state), and projection boundaries (grant projection at the
+snapshot-builder seam covering every snapshot-bearing response, lifecycle-projected
+bootstrap summary, purpose-built chat/fleet projection types) — see git history for
+the pass-by-pass detail. Base: the
 iPhone/bearer-pairing series, merged to `main` as
 [#875](https://github.com/source-inc/gents/pull/875) (squash `1a5e23d5`), which this
 design treats as load-bearing evidence, not incidental history.*
@@ -314,6 +316,17 @@ the existing `~/.gents` conventions, or `Fixed(PathBuf)`), resolved natively. Ge
 Desktop's env-based flexibility survives on the native side via the `Default`
 policies.
 
+The resolved policies bind **every** agent-home consumer, not just initialization.
+Today the workspace browser calls `default_agent_home()` independently
+(`tauri_commands/workspace.rs:99`), as does tool-surface explanation
+(`tools_explain.rs:118`) — under `Fixed` or `PairedRemoteOnly` those would expose
+the global `~/.gents` workspace instead of the host-authorized location. Under the
+plugin, all three existing consumers — bootstrap summary, workspace listing, and
+tool-surface explanation — resolve the agent home from bridge state, and where no
+local runtime exists (`PairedRemoteOnly`) workspace listing and tool-surface
+explanation **fail closed** with a typed `BridgeError` rather than falling back to
+a global default.
+
 Why a plugin instead of an exported handler list: Tauri 2's supported cross-crate
 composition mechanism is the plugin API — it carries its own `generate_handler!`,
 manages its own state, declares its own permissions, and composes with any number of
@@ -336,8 +349,11 @@ split, and hosts opt into each in their capability files:
 | `core` | `desktop_bridge_contract`, `desktop_bootstrap_summary` (**lifecycle-projected** — see below), `desktop_client_snapshot` (**permission-projected** — sections require the matching read grants, see below), `desktop_observer_metrics` |
 | `client-lifecycle` | `desktop_client_start`, `desktop_client_shutdown`, `desktop_set_selected_agent` |
 | `runtime-admin` | `desktop_init_local_standard` |
-| `chat-read` | session snapshot, request timeline, tool-surface explain |
-| `chat-write` | send, conversation rename, session fork, request resend |
+| `session-read` | session snapshot |
+| `trace-read` | request timeline |
+| `tool-surface-read` | tool-surface explain |
+| `chat-write` | send, conversation rename, session fork |
+| `resend-control` | request resend |
 | `fleet-read` | peer status fetch (**by saved peer id only** — see below), network status |
 | `workspace-read` | workspace list |
 | `fleet-admin` | peer add/remove/rename, bearer pairing, P2P repair (all address-accepting flows live only here) |
@@ -373,25 +389,42 @@ tasks, schedules, triggers, and fleet data — so putting it in a "minimal" defa
 would hand `-client` all of that without any read grant and make `config-read`
 meaningless. Under the plugin, command *availability* comes from `core`, but the
 payload is **projected by grant**: each read set carries a Tauri permission scope
-entry for its snapshot sections (`chat-read` → conversations/sessions,
+entry for its snapshot sections (`session-read` → conversations/sessions,
 `fleet-read` → peers/network, `config-read` → the config sections listed in the
 table, `operations-read` → operations state), the snapshot builder emits only the
 sections the calling webview's grants cover, and a default-only webview receives
-just lifecycle/runtime status. A projection test in the fixture (run with
-default-only grants) asserts ungranted sections are absent — that test is what
-makes the least-privilege claim checkable rather than aspirational.
+just lifecycle/runtime status.
+
+Crucially, the projection applies at the **snapshot builder seam, not the command**:
+the aggregate snapshot leaks through many responses, not one. `desktop_client_start`
+and `desktop_client_shutdown` return a `DesktopClientSnapshot`
+(`tauri_commands/lifecycle.rs:59`), every peer/config/task mutation returns a fresh
+snapshot through the shared refresh helper (`tauri_commands.rs:22`), and pairing and
+peer-removal responses nest one. Because projection lives in the one builder that
+all of these call, every snapshot-bearing payload — direct, lifecycle, mutation
+refresh, or nested — is projected by the caller's grants. The gate matches the
+contract: the fixture's projection tests run **per grant profile** and assert every
+snapshot-bearing response contains exactly the granted sections, not just the
+direct snapshot command under default grants.
 
 Three refinements keep the projection honest without forcing broad grants:
 
-- **Redacted metadata projections.** Chat needs behavior selection and slash-skill
-  suggestions (`ChatWorkspace.tsx:104` today), and fleet rows show behavior and
-  tool-selection labels — but neither package should hold `config-read` for that.
-  The `chat-read` and `fleet-read` scopes therefore include **redacted metadata**
-  for those objects: identity and display fields only (ids, labels, model label,
-  slash triggers, tool-selection names). Content stays behind `config-read`:
-  system prompts, skill instruction bodies, backend endpoints, credentials, and
-  every other authoring-surface field. The redaction split is part of the contract
-  fingerprint, so widening a metadata projection is a visible contract change.
+- **Purpose-built redacted projections.** Chat needs behavior selection and
+  slash-skill suggestions (`ChatWorkspace.tsx:104`), and fleet rows render tool
+  icons and per-deployment metrics — but neither package should hold `config-read`
+  for that. "Ids and labels" is not enough: slash-skill selection consumes behavior
+  `skillRefs`/`skillExcludes` and skill `scope`/`enabled` (`slashSkills.ts:26`);
+  fleet tool icons consume capability modes and service/CLI identifiers
+  (`fleetMetrics.ts:85`); `FleetRow` derives task, backend, conversation, and
+  runtime metrics. The `session-read` and `fleet-read` scopes therefore carry
+  **purpose-built projection types** (e.g. `ChatBehaviorProjection`,
+  `ChatSkillProjection`, `FleetDeploymentProjection`) whose field lists are
+  enumerated from the actual consumers at extraction time under one redaction
+  rule: identity, selection, capability-shape, and count/metric fields are
+  projectable; authored content — system prompts, skill instruction bodies,
+  backend endpoints, credentials — is `config-read` only. The projection types are
+  part of the generated view-model contract and the fingerprint, so widening one
+  is a visible, versioned contract change.
 - **`desktop_bootstrap_summary` is lifecycle-projected the same way.** Its current
   payload (`bridge/types/views/bootstrap.rs`) includes filesystem paths, the tool
   root, saved peer addresses, GraphQL endpoints, and agent identity — far more
@@ -399,14 +432,15 @@ Three refinements keep the projection honest without forcing broad grants:
   init/run state, the local principal DID (the app's own public identity), and
   `app_meta`; the `fleet-read` scope adds saved-peer summaries; the
   `runtime-admin` scope adds filesystem paths, tool root, and endpoint URLs.
-- **No webview-supplied network addresses.** `desktop_peer_status_fetch` today
+- **No arbitrary addresses in read grants.** `desktop_peer_status_fetch` today
   performs a native HTTP fetch against a webview-provided address
   (`tauri_commands/peers.rs:49`) — an SSRF/LAN-scanning primitive if it sat in a
   read grant. Under the plugin it is re-keyed to a **saved peer id**; the native
-  side resolves the address from the peer directory, and the address-accepting
-  variants exist only inside `fleet-admin` flows (adding a peer inherently takes
-  an address). This is the same family of change as the storage-path removal:
-  webviews name objects, never paths or addresses.
+  side resolves the address from the peer directory. The invariant, stated
+  precisely: **read-only commands never accept arbitrary addresses**. Admin flows
+  necessarily do — adding a peer or pairing takes an address by nature — which is
+  exactly why those commands live in `fleet-admin`, a grant a host extends only to
+  surfaces that administer the fleet.
 
 Fine-grained sets are the enforcement unit, but the *supported setup* unit is the
 **package grant profile** — the sets a frontend package's full surface needs. A host
@@ -415,9 +449,13 @@ following a package's documented install must never hit permission-denied:
 | Package | Required permission sets |
 |---|---|
 | `-client` | `default` (`core` + `client-lifecycle`, which covers the restart/backoff loop's shutdown-then-start) |
-| `-chat` | `default` + `chat-read` + `chat-write` + `interrupt-read` (cascade preview for the cancel dialog) + `interrupt-control` (interrupt is part of the promised chat UX). **Never the hold sets** — enumerating or approving held tool executions is not a chat capability |
+| `-chat` | `default` + `session-read` + `chat-write` + `resend-control` (retry) + `interrupt-read` (cascade preview for the cancel dialog) + `interrupt-control` (interrupt is part of the promised chat UX). **Never the hold sets** — enumerating or approving held tool executions is not a chat capability |
 | `-fleet` | `default` + `fleet-read`; add `fleet-admin` for the pairing surfaces (`AddPeerForm`, QR pairing). The local-runtime onboarding affordance ("Connect Local Agent", today inside `FleetDashboard`) is extracted as an **opt-in subcomponent** with its own declared requirement of `runtime-admin` + `BootstrapPolicy::LocalRuntimeAllowed`; the base fleet profile never includes `runtime-admin`, and paired-remote hosts simply don't render it |
-| `-operations` | `default` + `operations-read` + `interrupt-read` + `interrupt-control` + `holds-read` + `holds-control` + `chat-read` (`RequestTracePanel` timelines) + `workspace-read` (`WorkspaceTreePanel`) |
+| `-operations` | `default` + `operations-read` + `interrupt-read` + `interrupt-control` + `holds-read` + `holds-control` + `trace-read` (`RequestTracePanel` timelines) + `resend-control` (backgrounded-tools resume) + `workspace-read` (`WorkspaceTreePanel`) |
+
+The app-private config workspace (not packaged in v1) uses `config-read` +
+`config-write` + `tool-surface-read` + `tasks` — `tool-surface-read` belongs to the
+config family, not chat, because `BehaviorToolSurface` is a config panel.
 
 Each package ships a machine-readable manifest of the commands its code can invoke;
 a contract test checks manifest ⊆ declared profile (using the fingerprint's
@@ -776,10 +814,13 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
    `install_runtime()`/`init_tracing()` host helpers; resolve the home once from
    `BridgeConfig` and strip every filesystem-path field (`desktop_home` **and**
    `agent_home`) from IPC request payloads, re-keying `desktop_peer_status_fetch`
-   to saved peer ids;
+   to saved peer ids and routing every agent-home consumer (bootstrap summary,
+   workspace listing, tool-surface explanation) through bridge state with
+   fail-closed behavior under `PairedRemoteOnly`;
    declare the capability-scoped permission sets and implement snapshot
-   permission-projection via scoped read grants; introduce `BridgeError` and
-   `desktop_bridge_contract`; move
+   permission-projection at the shared builder seam (covering lifecycle,
+   mutation-refresh, and nested pairing/removal responses); introduce
+   `BridgeError` and `desktop_bridge_contract`; move
    `bridge_runner` into the bridge crate behind `test-harness`; put the `e2e` module
    behind the explicit `native-e2e` feature with app-crate forwarding, the
    E2E-launcher `--features` wiring, and the E2E-only capability overlay
@@ -795,13 +836,16 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
    changed, built with `--features native-e2e` + the E2E capability overlay);
    release build verified to exclude both the E2E commands and the `native-e2e`
    grant by inspecting the effective compiled capability set; permission sets
-   reviewed against the no-read/mutate-mixing rule; the snapshot-projection test
-   green (default-only grants receive no chat/fleet/config/operations sections);
-   the phase-4 fixture green atop this PR (stacked-pair rule) before merge.
+   reviewed against the no-read/mutate-mixing rule; the projection tests green
+   **per grant profile and per snapshot-bearing response shape** (direct snapshot,
+   lifecycle returns, mutation refreshes, nested pairing/removal responses — a
+   default-only caller receives no session/fleet/config/operations sections in any
+   of them); the phase-4 fixture green atop this PR (stacked-pair rule) before
+   merge.
 4. **Minimal downstream fixture host — co-residence proof (stacked on phase 3;
    phase 3 merges only with this green atop it).** `apps/fixture-host`
    (name open): a minimal Tauri app with a different bundle id, product name, icon,
-   and `HomePolicy::AppDataDir` home, granting only `default + chat-read +
+   and `HomePolicy::AppDataDir` home, granting only `default + session-read +
    chat-write + fleet-read + fleet-admin` permissions (no `runtime-admin`, no
    `config-write` — and the fixture starting from a clean install via client-store
    bootstrap alone is itself a required proof: the paired-remote path must work
