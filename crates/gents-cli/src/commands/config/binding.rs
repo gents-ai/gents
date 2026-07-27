@@ -669,11 +669,12 @@ mod tests {
             value.get("description").and_then(Value::as_str),
             Some("keeps me")
         );
-        assert_eq!(value.get("future_flag").and_then(Value::as_bool), Some(true));
         assert_eq!(
-            value
-                .pointer("/extra_meta/k")
-                .and_then(Value::as_i64),
+            value.get("future_flag").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value.pointer("/extra_meta/k").and_then(Value::as_i64),
             Some(1)
         );
 
