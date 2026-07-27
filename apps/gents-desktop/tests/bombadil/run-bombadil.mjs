@@ -184,7 +184,13 @@ function shellQuote(value) {
 
 function resolveBin(name) {
   const suffix = process.platform === "win32" ? ".cmd" : "";
-  return resolve(rootDir, "node_modules", ".bin", `${name}${suffix}`);
+  // npm workspaces may hoist the bin shim to the workspace root; probe the
+  // app-local .bin first, then walk up.
+  const candidates = [
+    resolve(rootDir, "node_modules", ".bin", `${name}${suffix}`),
+    resolve(rootDir, "../..", "node_modules", ".bin", `${name}${suffix}`),
+  ];
+  return candidates.find((path) => existsSync(path)) ?? candidates[0];
 }
 
 function consumeFlag(values, flag) {
