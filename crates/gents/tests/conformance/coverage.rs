@@ -172,8 +172,8 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 4);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
-    assert_eq!(lean_recovery_sweep_cases().len(), 28);
-    assert_eq!(lean_recovery_equivalence_cases().len(), 28);
+    assert_eq!(lean_recovery_sweep_cases().len(), 30);
+    assert_eq!(lean_recovery_equivalence_cases().len(), 30);
     assert_eq!(lean_recovery_outcome_cases().len(), 4);
     assert_eq!(lean_transcript_cases().len(), 7);
     assert_eq!(lean_response_interrupt_flow_cases().len(), 1);

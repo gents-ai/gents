@@ -8,7 +8,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        28,
+        30,
         "Lean should emit one row per registered recovery predicate witness"
     );
 
@@ -16,6 +16,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
         "request_lifecycle_recover_all_requests",
         "request_lifecycle_recover_all_streaming_responses",
         "tool_call_lifecycle_recover_all_running_calls",
+        "tool_call_lifecycle_reconcile_terminal_parent_owned_tools",
         "tool_call_lifecycle_recover_detached_bridge_rows",
         "inference_call_recover_all_stale_calls",
         "subagent_liveness_terminalize_expired_children",
@@ -50,7 +51,7 @@ pub(super) fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence
     );
     assert_eq!(
         equivalence_cases.len(),
-        28,
+        30,
         "Lean recovery equivalence witness count drifted"
     );
 
@@ -129,6 +130,9 @@ fn expected_recovery_equivalence_theorem(sweep_id: &str) -> &'static str {
         }
         "tool_call_lifecycle_recover_all_running_calls" => {
             "Recovery.toolCallRecover_matches_uninterrupted"
+        }
+        "tool_call_lifecycle_reconcile_terminal_parent_owned_tools" => {
+            "Recovery.terminalParentToolRecover_matches_uninterrupted"
         }
         "tool_call_lifecycle_recover_detached_bridge_rows" => {
             "Recovery.detachedBridgeRecover_matches_uninterrupted"
@@ -856,14 +860,34 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
     )
     .await;
 
-    let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
-        .await
-        .unwrap();
-    assert_eq!(
-        report.tool_calls_recovered, 1,
-        "tool recovery case {} should recover one tool call",
-        case.name
-    );
+    if case.sweep_id == "tool_call_lifecycle_reconcile_terminal_parent_owned_tools" {
+        let report = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&db.node, AGENT_DID)
+            .await
+            .unwrap();
+        assert_eq!(
+            report.tool_calls_terminalized, 1,
+            "live terminal-parent tool case {} should terminalize one tool call",
+            case.name
+        );
+        // Idempotent under a second live tick.
+        let second = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&db.node, AGENT_DID)
+            .await
+            .unwrap();
+        assert_eq!(
+            second.tool_calls_terminalized, 0,
+            "live terminal-parent tool case {} must be idempotent",
+            case.name
+        );
+    } else {
+        let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+            .await
+            .unwrap();
+        assert_eq!(
+            report.tool_calls_recovered, 1,
+            "tool recovery case {} should recover one tool call",
+            case.name
+        );
+    }
 
     let row = fetch_tool_recovery_row(&db.node, &tool_call_id).await;
     assert_eq!(
@@ -1063,7 +1087,8 @@ async fn seed_tool_parent_and_row(
             "{}".to_string(),
             past_deadline,
         ),
-        "tool_running_parent_interrupted_to_cancelled" => {
+        "tool_running_parent_interrupted_to_cancelled"
+        | "live_running_composite_parent_interrupted_to_cancelled" => {
             set_request_status_and_lifecycle(&node, &parent_doc_id, "interrupted", "interrupted")
                 .await;
             ToolCallLifecycle::new(
@@ -1073,12 +1098,18 @@ async fn seed_tool_parent_and_row(
                 "did:test:test".to_string(),
                 tool_call_id.to_string(),
                 1,
-                "slow_tool".to_string(),
+                if case.name == "live_running_composite_parent_interrupted_to_cancelled" {
+                    "fan_out_and_synthesize"
+                } else {
+                    "slow_tool"
+                }
+                .to_string(),
                 "{}".to_string(),
                 future_deadline,
             )
         }
-        "tool_running_terminal_parent_to_failed" => {
+        "tool_running_terminal_parent_to_failed"
+        | "live_running_tool_parent_terminal_to_failed" => {
             set_request_status_and_lifecycle(&node, &parent_doc_id, "completed", "completed").await;
             ToolCallLifecycle::new(
                 node.clone(),

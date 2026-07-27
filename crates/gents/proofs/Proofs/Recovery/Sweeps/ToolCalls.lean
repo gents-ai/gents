@@ -146,4 +146,100 @@ def toolCallRecoveryEquivalence : RecoveryEquivalence toolCallRecoverySweep :=
   , h_recover_eq_uninterrupted := toolCallRecover_matches_uninterrupted
   }
 
+/-! ## Live terminal-parent owned tool cleanup (#837)
+
+Periodic (not restart-only) counterpart of the parent-interrupted /
+parent-terminal arms of `toolCallRecoverySweep`. Does **not** apply the
+restart-only `terminalizeBackgroundedAsInterrupted` path.
+-/
+
+structure TerminalParentToolRow where
+  call : ToolCallContext
+  parentTerminal : Bool
+  parentInterrupted : Bool
+  deriving Repr
+
+def terminalParentToolStale (row : TerminalParentToolRow) : Prop :=
+  row.call.state = .running ∧
+  ¬ isDetachedBridgeCall row.call ∧
+  (row.parentInterrupted = true ∨ row.parentTerminal = true)
+
+instance (row : TerminalParentToolRow) : Decidable (terminalParentToolStale row) := by
+  unfold terminalParentToolStale
+  infer_instance
+
+def terminalParentToolRecover (row : TerminalParentToolRow) : TerminalParentToolRow :=
+  let cause : ToolRecoveryCause :=
+    if row.parentInterrupted then .parentInterrupted else .parentTerminal
+  { row with call := { row.call with state := cause.terminalState } }
+
+def terminalParentToolUninterruptedTerminalize
+    (row : TerminalParentToolRow) : TerminalParentToolRow :=
+  terminalParentToolRecover row
+
+def terminalParentToolMeasure (row : TerminalParentToolRow) : Nat :=
+  if terminalParentToolStale row then 1 else 0
+
+theorem terminalParentToolRecover_matches_uninterrupted :
+    ∀ row, terminalParentToolStale row →
+      terminalParentToolRecover row = terminalParentToolUninterruptedTerminalize row := by
+  intro row _h_stale
+  rfl
+
+theorem terminalParentTool_stale_positive :
+    ∀ row, terminalParentToolStale row → terminalParentToolMeasure row > 0 := by
+  intro row h_stale
+  simp [terminalParentToolMeasure, h_stale]
+
+theorem terminalParentToolRecover_terminal :
+    ∀ row, terminalParentToolStale row →
+      isTerminal (terminalParentToolRecover row).call.state := by
+  intro row h_stale
+  unfold terminalParentToolRecover
+  by_cases h_int : row.parentInterrupted
+  · simp [h_int, ToolRecoveryCause.terminalState,
+      HasTerminal.isTerminal, ToolCallState.instHasTerminal]
+  · have h_term : row.parentTerminal = true := by
+      rcases h_stale with ⟨_, _, h_parent⟩
+      cases h_parent with
+      | inl h => exact absurd h (by simpa using h_int)
+      | inr h => exact h
+    simp [h_int, h_term, ToolRecoveryCause.terminalState,
+      HasTerminal.isTerminal, ToolCallState.instHasTerminal]
+
+theorem terminalParentToolRecover_zero :
+    ∀ row, terminalParentToolStale row →
+      terminalParentToolMeasure (terminalParentToolRecover row) = 0 := by
+  intro row h_stale
+  have h_not : ¬ terminalParentToolStale (terminalParentToolRecover row) := by
+    intro h
+    rcases h with ⟨h_running, _, _⟩
+    unfold terminalParentToolRecover at h_running
+    by_cases h_int : row.parentInterrupted
+    · simp [h_int, ToolRecoveryCause.terminalState] at h_running
+    · simp [h_int, ToolRecoveryCause.terminalState] at h_running
+  simp [terminalParentToolMeasure, h_not]
+
+def terminalParentOwnedToolSweep : RecoverySweep :=
+  { Row := TerminalParentToolRow
+  , collection := .agentToolCall
+  , sweepId := "tool_call_lifecycle_reconcile_terminal_parent_owned_tools"
+  , rustFunction := "ToolCallLifecycle::reconcile_terminal_parent_owned_tools"
+  , cadence := .periodic
+  , implementationStatus := .implemented
+  , stale := terminalParentToolStale
+  , recover := terminalParentToolRecover
+  , terminal := fun row => isTerminal row.call.state
+  , measure := terminalParentToolMeasure
+  , h_stale_positive := terminalParentTool_stale_positive
+  , h_recover_terminal := terminalParentToolRecover_terminal
+  , h_recover_zero := terminalParentToolRecover_zero
+  }
+
+def terminalParentOwnedToolEquivalence :
+    RecoveryEquivalence terminalParentOwnedToolSweep :=
+  { uninterrupted := terminalParentToolUninterruptedTerminalize
+  , h_recover_eq_uninterrupted := terminalParentToolRecover_matches_uninterrupted
+  }
+
 end Recovery

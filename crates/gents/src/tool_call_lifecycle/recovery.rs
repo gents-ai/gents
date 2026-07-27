@@ -1,7 +1,9 @@
 //! Recovery for persisted running tool calls: the startup sweep over rows
-//! orphaned by a daemon restart, plus the periodic subagent-liveness sweep
+//! orphaned by a daemon restart, the periodic subagent-liveness sweep
 //! (#465) that terminalizes expired children and orphaned queued descendants
-//! on the live reconciler tick.
+//! on the live reconciler tick, and the live terminal-parent owned-tool
+//! cleanup (#837) that cancels running composites/tools whose parent is
+//! already terminal without waiting for deadline or daemon restart.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -35,6 +37,18 @@ pub struct SubagentLivenessReport {
 }
 
 impl SubagentLivenessReport {
+    pub fn is_noop(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Live reconcile of running tool rows owned by a terminal parent (#837).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TerminalParentToolReport {
+    pub tool_calls_terminalized: usize,
+}
+
+impl TerminalParentToolReport {
     pub fn is_noop(&self) -> bool {
         *self == Self::default()
     }
@@ -214,6 +228,101 @@ impl super::ToolCallLifecycle {
                 bridges_projected = report.bridges_projected,
                 queued_descendants_interrupted = report.queued_descendants_interrupted,
                 "reconciled subagent liveness"
+            );
+        }
+        Ok(report)
+    }
+
+    /// Live reconcile: terminalize running tool calls whose parent request is
+    /// already terminal (#837). Unlike full startup `recover_all`, this does
+    /// **not** interrupt live-parent background tools (restart-only path).
+    ///
+    /// Covers the durable bad state observed for `fan_out_and_synthesize`:
+    /// parent interrupted, outer composite still `running`, no executor active.
+    pub async fn reconcile_terminal_parent_owned_tools(
+        node: &EmbeddedNode,
+        agent_did: &str,
+    ) -> Result<TerminalParentToolReport> {
+        let rows = load_running_tool_call_rows(node).await?;
+        let mut report = TerminalParentToolReport::default();
+
+        for row in rows {
+            let parent = match row
+                .request_id
+                .as_deref()
+                .filter(|request_id| !request_id.is_empty())
+            {
+                Some(request_id) => lookup_parent_request(node, agent_did, request_id).await?,
+                None => None,
+            };
+            let Some(parent) = parent else {
+                continue;
+            };
+
+            // Detached bridges may outlive an interrupted parent by design.
+            if is_detached_subagent_tool(&row) && request_is_interrupted(&parent) {
+                continue;
+            }
+
+            let outcome = if request_is_interrupted(&parent) {
+                Some(RecoveryOutcome::Cancelled)
+            } else if request_is_terminal(&parent) {
+                Some(RecoveryOutcome::Failed)
+            } else {
+                None
+            };
+            let Some(outcome) = outcome else {
+                continue;
+            };
+
+            // Cascade to linked children before terminalizing the tool row.
+            let mut remote_cancel_intent_at = None;
+            if let Some(child_request_id) = cascade_child_request_id(&row) {
+                if child_request_is_locally_owned(node, agent_did, child_request_id).await? {
+                    if let Err(error) = interrupt_request(node, child_request_id).await {
+                        tracing::warn!(
+                            doc_id = %row.doc_id,
+                            request_id = row.request_id.as_deref().unwrap_or(""),
+                            tool_call_id = %row.tool_call_id,
+                            child_request_id,
+                            error = %error,
+                            "failed to cascade live terminal-parent cancel to child request"
+                        );
+                    }
+                } else {
+                    remote_cancel_intent_at = Some(Utc::now());
+                }
+            }
+
+            let deadline_at = parse_datetime(row.deadline_at.as_deref());
+            if let Err(error) =
+                recover_tool_call_row(node, &row, deadline_at, outcome, remote_cancel_intent_at)
+                    .await
+            {
+                tracing::warn!(
+                    doc_id = %row.doc_id,
+                    request_id = row.request_id.as_deref().unwrap_or(""),
+                    tool_call_id = %row.tool_call_id,
+                    error = %error,
+                    "failed to terminalize running tool owned by terminal parent"
+                );
+                continue;
+            }
+
+            report.tool_calls_terminalized += 1;
+            tracing::info!(
+                doc_id = %row.doc_id,
+                request_id = row.request_id.as_deref().unwrap_or(""),
+                tool_call_id = %row.tool_call_id,
+                lifecycle_state = %outcome.lifecycle_state().as_str(),
+                "reconciled running tool owned by terminal parent"
+            );
+        }
+
+        if !report.is_noop() {
+            tracing::info!(
+                tool_calls_terminalized = report.tool_calls_terminalized,
+                "reconciled terminal-parent owned tools"
             );
         }
         Ok(report)

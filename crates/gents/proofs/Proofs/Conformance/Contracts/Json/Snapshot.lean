@@ -168,6 +168,8 @@ def snapshotJson : String :=
         (cancelPropagationCases.map cancelPropagationCaseJson) ++ ","
     ++ "\"workflow_cases\":"
       ++ workflowCasesJson ++ ","
+    ++ "\"workflow_composite_interrupt_cases\":"
+      ++ compositeInterruptCasesJson ++ ","
     ++ "\"r6_background_theorem_witnesses\":"
       ++ jsonArray
         (r6BackgroundTheoremWitnesses.map backgroundTheoremWitnessJson) ++ ","

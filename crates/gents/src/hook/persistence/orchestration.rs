@@ -137,23 +137,90 @@ impl DefraSessionHook {
         }
 
         lifecycle.start_running().await?;
-
-        let result = match self
-            .run_fan_out_and_synthesize(internal_call_id, seq, &parent_context, &parsed)
+        // Register the outer composite in the cancel-visible map so parent
+        // interrupt can terminalize it promptly (#837). The workflow future
+        // must not hold exclusive ownership across await points; completion
+        // re-takes (or reloads) the lifecycle and uses CAS terminalization so
+        // a concurrent interrupt wins cleanly.
+        self.in_flight_lifecycles
+            .lock()
             .await
+            .insert(internal_call_id.to_string(), lifecycle);
+
+        let run_result = self
+            .run_fan_out_and_synthesize(internal_call_id, seq, &parent_context, &parsed)
+            .await;
+
+        let result = self
+            .terminalize_fan_out_composite(&parent_context.session_id, internal_call_id, run_result)
+            .await?;
+
+        Ok(self.skip_tool_result(FAN_OUT_AND_SYNTHESIZE_TOOL_NAME, result))
+    }
+
+    /// Terminalize the outer `fan_out_and_synthesize` composite after the
+    /// workflow future returns (or after interrupt cancelled it mid-flight).
+    ///
+    /// Uses take-or-load + lifecycle CAS so:
+    /// - interrupt that already cancelled the durable row wins;
+    /// - late complete/fail cannot overwrite a cancel terminal;
+    /// - in-memory map ownership is released either way.
+    async fn terminalize_fan_out_composite(
+        &self,
+        session_id: &str,
+        internal_call_id: &str,
+        run_result: anyhow::Result<String>,
+    ) -> anyhow::Result<String> {
+        let mut lifecycle = match self
+            .take_or_load_in_flight_lifecycle(session_id, internal_call_id)
+            .await?
         {
+            Some(lifecycle) => lifecycle,
+            None => {
+                // Lifecycle disappeared without a durable row — treat as cancelled
+                // so the model still gets a tool result.
+                return Ok(crate::tool_call_lifecycle::runtime::cancelled_result());
+            }
+        };
+
+        if lifecycle.is_cancelled() || lifecycle.is_terminal() {
+            // Interrupt (or recovery) already won the durable race.
+            self.discard_in_flight_lifecycle(internal_call_id).await;
+            return Ok(match lifecycle.state() {
+                crate::tool_call_lifecycle::ToolCallState::Cancelled => {
+                    crate::tool_call_lifecycle::runtime::cancelled_result()
+                }
+                crate::tool_call_lifecycle::ToolCallState::TimedOut => {
+                    "tool call deadline exceeded".to_string()
+                }
+                crate::tool_call_lifecycle::ToolCallState::Failed => "tool call failed".to_string(),
+                crate::tool_call_lifecycle::ToolCallState::Completed => {
+                    // Extremely narrow race: another path completed it.
+                    "tool call completed".to_string()
+                }
+                _ => crate::tool_call_lifecycle::runtime::cancelled_result(),
+            });
+        }
+
+        match run_result {
             Ok(result) => {
                 lifecycle.complete(&result).await?;
-                result
+                if lifecycle.is_cancelled() {
+                    Ok(crate::tool_call_lifecycle::runtime::cancelled_result())
+                } else {
+                    Ok(result)
+                }
             }
             Err(error) => {
                 let (failure_class, payload) = classify_workflow_run_error(&error);
                 lifecycle.fail(&payload, failure_class).await?;
-                payload
+                if lifecycle.is_cancelled() {
+                    Ok(crate::tool_call_lifecycle::runtime::cancelled_result())
+                } else {
+                    Ok(payload)
+                }
             }
-        };
-
-        Ok(self.skip_tool_result(FAN_OUT_AND_SYNTHESIZE_TOOL_NAME, result))
+        }
     }
 
     /// Fail-fast guard for LOCAL workflow targets (mirrors the spawn path's #377
