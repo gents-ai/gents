@@ -909,7 +909,7 @@ async fn cascade_after_source_spawn_reaches_child_request() {
         db.node.clone(),
         parent_request_id.to_string(),
         "r3-session-cascade".to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -2347,6 +2347,7 @@ async fn create_orphan_cross_deployment_tool_call(
             create_AgentToolCall(input: {{
                 tool_call_key: "{tool_call_key}",
                 request_id: "{escaped_parent_request_id}",
+                agent_did: "{agent_did}",
                 session_id: "{escaped_parent_session_id}",
                 message_sequence: 1,
                 tool_name: "spawn_subagent",
@@ -2366,7 +2367,8 @@ async fn create_orphan_cross_deployment_tool_call(
                 tool_failure_class: null,
                 latency_ms: null
             }}) {{ _docID }}
-        }}"#
+        }}"#,
+        agent_did = escape_graphql_string(crate::support::AGENT_DID),
     );
     let response = node.execute(&mutation).await;
     assert!(
@@ -2443,6 +2445,7 @@ async fn create_orphan_subagent_tool_call_with_await_mode(
             create_AgentToolCall(input: {{
                 tool_call_key: "{tool_call_key}",
                 request_id: "{escaped_parent_request_id}",
+                agent_did: "{agent_did}",
                 session_id: "{escaped_parent_session_id}",
                 message_sequence: 1,
                 tool_name: "spawn_subagent",
@@ -2462,7 +2465,8 @@ async fn create_orphan_subagent_tool_call_with_await_mode(
                 tool_failure_class: null,
                 latency_ms: null
             }}) {{ _docID }}
-        }}"#
+        }}"#,
+        agent_did = escape_graphql_string(crate::support::AGENT_DID),
     );
     let response = node.execute(&mutation).await;
     assert!(
