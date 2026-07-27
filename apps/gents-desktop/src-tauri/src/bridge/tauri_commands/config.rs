@@ -20,7 +20,7 @@ use super::super::types::{
 use super::emit_config_update_and_snapshot;
 
 #[tauri::command]
-pub(crate) fn desktop_agent_config_save(
+pub(crate) async fn desktop_agent_config_save(
     app: AppHandle,
     request: AgentConfigSaveRequest,
     state: State<'_, DesktopAppState>,
@@ -29,16 +29,14 @@ pub(crate) fn desktop_agent_config_save(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        save_agent_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    save_agent_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_behavior_save(
+pub(crate) async fn desktop_behavior_save(
     app: AppHandle,
     request: BehaviorSaveRequest,
     state: State<'_, DesktopAppState>,
@@ -47,16 +45,14 @@ pub(crate) fn desktop_behavior_save(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        save_behavior_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    save_behavior_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_skill_save(
+pub(crate) async fn desktop_skill_save(
     app: AppHandle,
     request: SkillSaveRequest,
     state: State<'_, DesktopAppState>,
@@ -65,16 +61,14 @@ pub(crate) fn desktop_skill_save(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        save_skill_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    save_skill_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_skill_delete(
+pub(crate) async fn desktop_skill_delete(
     app: AppHandle,
     request: SkillDeleteRequest,
     state: State<'_, DesktopAppState>,
@@ -83,16 +77,14 @@ pub(crate) fn desktop_skill_delete(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        delete_skill_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    delete_skill_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_backend_save(
+pub(crate) async fn desktop_backend_save(
     app: AppHandle,
     request: BackendSaveRequest,
     state: State<'_, DesktopAppState>,
@@ -101,16 +93,14 @@ pub(crate) fn desktop_backend_save(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        save_backend_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    save_backend_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_inference_profile_save(
+pub(crate) async fn desktop_inference_profile_save(
     app: AppHandle,
     request: InferenceProfileSaveRequest,
     state: State<'_, DesktopAppState>,
@@ -119,16 +109,14 @@ pub(crate) fn desktop_inference_profile_save(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        save_inference_profile_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    save_inference_profile_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_tool_selection_save(
+pub(crate) async fn desktop_tool_selection_save(
     app: AppHandle,
     request: ToolSelectionSaveRequest,
     state: State<'_, DesktopAppState>,
@@ -137,16 +125,14 @@ pub(crate) fn desktop_tool_selection_save(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        save_tool_selection_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    save_tool_selection_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_tool_service_save(
+pub(crate) async fn desktop_tool_service_save(
     app: AppHandle,
     request: ToolServiceSaveRequest,
     state: State<'_, DesktopAppState>,
@@ -155,30 +141,26 @@ pub(crate) fn desktop_tool_service_save(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        save_tool_service_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    save_tool_service_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_tool_service_test(
+pub(crate) async fn desktop_tool_service_test(
     request: ToolServiceTestRequest,
     state: State<'_, DesktopAppState>,
 ) -> Result<ToolServiceTestResult, String> {
     let _ = current_core(&state).ok_or_else(|| "desktop client is not running".to_string())?;
 
-    tauri::async_runtime::block_on(async move {
-        test_tool_service_config(request)
-            .await
-            .map_err(|error| error.to_string())
-    })
+    test_tool_service_config(request)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub(crate) fn desktop_task_delete(
+pub(crate) async fn desktop_task_delete(
     app: AppHandle,
     request: TaskDeleteRequest,
     state: State<'_, DesktopAppState>,
@@ -187,16 +169,14 @@ pub(crate) fn desktop_task_delete(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        delete_task_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    delete_task_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_schedule_delete(
+pub(crate) async fn desktop_schedule_delete(
     app: AppHandle,
     request: ScheduleDeleteRequest,
     state: State<'_, DesktopAppState>,
@@ -205,16 +185,14 @@ pub(crate) fn desktop_schedule_delete(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        delete_schedule_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    delete_schedule_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_event_trigger_delete(
+pub(crate) async fn desktop_event_trigger_delete(
     app: AppHandle,
     request: EventTriggerDeleteRequest,
     state: State<'_, DesktopAppState>,
@@ -223,16 +201,14 @@ pub(crate) fn desktop_event_trigger_delete(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        delete_event_trigger_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    delete_event_trigger_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_backend_delete(
+pub(crate) async fn desktop_backend_delete(
     app: AppHandle,
     request: BackendDeleteRequest,
     state: State<'_, DesktopAppState>,
@@ -241,16 +217,14 @@ pub(crate) fn desktop_backend_delete(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        delete_backend_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    delete_backend_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_inference_profile_delete(
+pub(crate) async fn desktop_inference_profile_delete(
     app: AppHandle,
     request: InferenceProfileDeleteRequest,
     state: State<'_, DesktopAppState>,
@@ -259,16 +233,14 @@ pub(crate) fn desktop_inference_profile_delete(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        delete_inference_profile_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    delete_inference_profile_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_tool_selection_delete(
+pub(crate) async fn desktop_tool_selection_delete(
     app: AppHandle,
     request: ToolSelectionDeleteRequest,
     state: State<'_, DesktopAppState>,
@@ -277,16 +249,14 @@ pub(crate) fn desktop_tool_selection_delete(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        delete_tool_selection_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    delete_tool_selection_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_tool_service_delete(
+pub(crate) async fn desktop_tool_service_delete(
     app: AppHandle,
     request: ToolServiceDeleteRequest,
     state: State<'_, DesktopAppState>,
@@ -295,16 +265,14 @@ pub(crate) fn desktop_tool_service_delete(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        delete_tool_service_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    delete_tool_service_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }
 
 #[tauri::command]
-pub(crate) fn desktop_behavior_delete(
+pub(crate) async fn desktop_behavior_delete(
     app: AppHandle,
     request: BehaviorDeleteRequest,
     state: State<'_, DesktopAppState>,
@@ -313,10 +281,8 @@ pub(crate) fn desktop_behavior_delete(
         return Err("desktop client is not running".to_string());
     };
 
-    tauri::async_runtime::block_on(async move {
-        delete_behavior_config(core.as_ref(), request)
-            .await
-            .map_err(|error| error.to_string())?;
-        emit_config_update_and_snapshot(&app, &core).await
-    })
+    delete_behavior_config(core.as_ref(), request)
+        .await
+        .map_err(|error| error.to_string())?;
+    emit_config_update_and_snapshot(&app, &core).await
 }

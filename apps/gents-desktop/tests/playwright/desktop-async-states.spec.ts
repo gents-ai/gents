@@ -53,7 +53,13 @@ test.describe("desktop async states", () => {
 
     // `save-error` is scoped to behavior saves only: a backend save still succeeds
     // and clears the banner (setError(null) at the start of the next action).
-    await openConfigTab(page, "backends");
+    await page.getByTestId("config-tab-backends").click();
+    await expect(page.getByTestId("confirm-dialog")).toBeVisible();
+    await expect(page.getByTestId("behavior-system-prompt")).toHaveValue(
+      "This behavior save is rejected by the harness.",
+    );
+    await page.getByTestId("confirm-dialog-confirm").click();
+    await expect(page.getByTestId("config-tab-backends")).toHaveClass(/selected/);
     await page.getByTestId("backend-name").fill("OpenAI Harness Recovered");
     await saveConfig(page, "backend-save");
     await expect(page.getByTestId("error-banner")).toHaveCount(0);

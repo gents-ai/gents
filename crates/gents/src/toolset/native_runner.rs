@@ -84,6 +84,7 @@ impl NativeFsRunner {
             cancellation_token,
             max_output_bytes: MAX_NATIVE_RUNNER_OUTPUT_BYTES,
             stdin,
+            environment: None,
             tool_name: Some(tool_name.to_string()),
             live_output,
         })

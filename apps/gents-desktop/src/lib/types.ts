@@ -1,5 +1,8 @@
 export type {
   BootstrapSummary,
+  BearerPairingRequest,
+  BearerPairingResponse,
+  BearerPairingResult,
   InitSummary,
   P2PHealth,
   PeerAddRequest,

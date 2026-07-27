@@ -10,7 +10,7 @@ async fn latch_writes_interrupt_requested_at_when_absent() {
     let before = fetch_request_row(&core, "req_solo").await;
     assert!(before.interrupt_requested_at.is_none());
 
-    let latched = latch_root_interrupt(&core, "req_solo")
+    let latched = latch_root_interrupt(&core, "req_solo", None)
         .await
         .expect("latch ok");
     assert!(latched.was_first);
@@ -26,10 +26,10 @@ async fn latch_writes_interrupt_requested_at_when_absent() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn latch_is_noop_when_already_interrupted() {
     let (core, _tmp) = seed_standalone_fixture().await;
-    let _ = latch_root_interrupt(&core, "req_solo")
+    let _ = latch_root_interrupt(&core, "req_solo", None)
         .await
         .expect("first latch");
-    let second = latch_root_interrupt(&core, "req_solo")
+    let second = latch_root_interrupt(&core, "req_solo", None)
         .await
         .expect("second latch");
     assert!(!second.was_first);
@@ -42,6 +42,7 @@ async fn interrupt_request_no_cascade_returns_accepted() {
         &core,
         &DesktopInterruptRequest {
             request_id: "req_solo".into(),
+            agent_did: None,
             cause: "userCancelled".into(),
             cascade: false,
             expected_preview_signature: None,
@@ -62,6 +63,7 @@ async fn interrupt_request_returns_already_interrupted_for_second_call() {
         &core,
         &DesktopInterruptRequest {
             request_id: "req_solo".into(),
+            agent_did: None,
             cause: "userCancelled".into(),
             cascade: false,
             expected_preview_signature: None,
@@ -73,6 +75,7 @@ async fn interrupt_request_returns_already_interrupted_for_second_call() {
         &core,
         &DesktopInterruptRequest {
             request_id: "req_solo".into(),
+            agent_did: None,
             cause: "userCancelled".into(),
             cascade: false,
             expected_preview_signature: None,
@@ -91,6 +94,7 @@ async fn interrupt_request_rejects_non_user_cancelled_cause() {
         &core,
         &DesktopInterruptRequest {
             request_id: "req_solo".into(),
+            agent_did: None,
             cause: "deadline".into(), // not operator-authentic
             cascade: false,
             expected_preview_signature: None,
@@ -119,6 +123,7 @@ async fn interrupt_request_cascade_returns_accepted_when_signature_matches() {
         &core,
         &DesktopInterruptRequest {
             request_id: "req_root".into(),
+            agent_did: Some("did:test:operator".into()),
             cause: "userCancelled".into(),
             cascade: true,
             expected_preview_signature: Some(preview.preview_signature.clone()),
@@ -151,6 +156,7 @@ async fn interrupt_request_cascade_latches_only_cascade_descendants() {
         &core,
         &DesktopInterruptRequest {
             request_id: "req_root".into(),
+            agent_did: Some("did:test:operator".into()),
             cause: "userCancelled".into(),
             cascade: true,
             expected_preview_signature: Some(preview.preview_signature.clone()),
@@ -183,6 +189,7 @@ async fn interrupt_request_cascade_returns_stale_preview_when_signature_drifts()
         &core,
         &DesktopInterruptRequest {
             request_id: "req_root".into(),
+            agent_did: Some("did:test:operator".into()),
             cause: "userCancelled".into(),
             cascade: true,
             expected_preview_signature: Some("00".repeat(32)), // wrong sig
@@ -207,6 +214,7 @@ async fn interrupt_request_cascade_rejects_when_expected_signature_missing() {
         &core,
         &DesktopInterruptRequest {
             request_id: "req_root".into(),
+            agent_did: Some("did:test:operator".into()),
             cause: "userCancelled".into(),
             cascade: true,
             expected_preview_signature: None,

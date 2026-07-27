@@ -21,9 +21,9 @@ pub fn run() {
     let runtime = TAURI_RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
-            // Merge replay can recurse deeply through collection heads. Give Tokio
-            // worker threads enough stack to reach the merge depth guard instead of
-            // aborting the whole desktop process with a native stack overflow.
+            // DefraDB parent-DAG replay is iterative at the pinned revision
+            // (#1176). Keep generous headroom for the remaining native database
+            // and P2P callbacks on iOS.
             .thread_stack_size(32 * 1024 * 1024)
             .build()
             .expect("failed to build Tauri Tokio runtime")
@@ -35,10 +35,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             tauri_commands::lifecycle::desktop_bootstrap_summary,
+            tauri_commands::e2e::desktop_native_e2e_config,
+            tauri_commands::e2e::desktop_native_e2e_status,
             tauri_commands::lifecycle::desktop_init_local_standard,
             tauri_commands::lifecycle::desktop_client_start,
             tauri_commands::lifecycle::desktop_client_shutdown,
             tauri_commands::peers::desktop_peer_add,
+            tauri_commands::peers::desktop_peer_pair_bearer,
             tauri_commands::peers::desktop_peer_remove,
             tauri_commands::peers::desktop_peer_rename,
             tauri_commands::peers::desktop_peer_status_fetch,

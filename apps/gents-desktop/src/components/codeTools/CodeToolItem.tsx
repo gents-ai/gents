@@ -37,7 +37,7 @@ function readCountLabel(view: {
 export function CodeToolItem({ view }: { view: CodeToolView }) {
   if (view.kind === "fileEdit") {
     return (
-      <details className="tool-item code-tool" data-testid="code-file-edit" open>
+      <details className="tool-item code-tool" data-testid="code-file-edit">
         <summary className="tool-item-summary">
           <span className="tool-item-summary-left">
             <span aria-hidden="true" className="tool-item-dot tool-item-dot-success" />
@@ -134,7 +134,7 @@ export function CodeToolItem({ view }: { view: CodeToolView }) {
   }
 
   return (
-    <details className="tool-item code-tool" data-testid="code-command" open>
+    <details className="tool-item code-tool" data-testid="code-command">
       <summary className="tool-item-summary">
         <span className="tool-item-summary-left">
           <span

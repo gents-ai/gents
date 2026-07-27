@@ -22,6 +22,8 @@ targetTemplates:
       environmentVariables:
         RUST_BACKTRACE: full
         RUST_LOG: info
+      testTargets:
+        - GentsUITests
     settings:
       groups: [app]
 targets:
@@ -31,7 +33,6 @@ targets:
     sources:
       - path: Sources
       - path: Assets.xcassets
-      - path: Externals
       - path: gents-desktop-tauri_iOS
       - path: assets
         buildPhase: resources
@@ -41,6 +42,7 @@ targets:
       path: gents-desktop-tauri_iOS/Info.plist
       properties:
         LSRequiresIPhoneOS: true
+        NSCameraUsageDescription: Gents uses the camera to scan signed agent pairing invites.
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
         UISupportedInterfaceOrientations:
@@ -60,6 +62,8 @@ targets:
       environmentVariables:
         RUST_BACKTRACE: full
         RUST_LOG: info
+      testTargets:
+        - GentsUITests
     settings:
       base:
         ENABLE_BITCODE: false
@@ -82,9 +86,22 @@ targets:
       - sdk: SystemConfiguration.framework
       - sdk: WebKit.framework
     preBuildScripts:
-      - script: npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
+      - script: if [ "${GENTS_SKIP_TAURI_XCODE_SCRIPT:-0}" = "1" ]; then exit 0; fi;
+          npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
         name: Build Rust Code
         basedOnDependencyAnalysis: false
         outputFiles:
           - $(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a
           - $(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a
+  GentsUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: ../../../tests/ios
+    dependencies:
+      - target: gents-desktop-tauri_iOS
+    settings:
+      base:
+        DEVELOPMENT_TEAM: NXJ753WW5X
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.source-inc.gents.uitests

@@ -424,6 +424,38 @@ export function createDesktopUiHarness(
       notify("peers");
       return snapshot();
     },
+    async pairBearer(request) {
+      const label = request.label?.trim() || "Amy";
+      upsertDeployment({
+        label,
+        agentDid: AGENT_DID,
+        addr: "127.0.0.1:56000/p2p/amy-bearer-peer",
+        graphql: null,
+      });
+      deployment = {
+        ...deployment,
+        source: "bearer-pairing",
+        graphql: null,
+      };
+      notify("peers");
+      const next = snapshot();
+      return {
+        ...next,
+        pairing: {
+          peerId: deployment.peerId,
+          label,
+          addr: deployment.addr,
+          issuerDid: AGENT_DID,
+          claimantDid: "did:key:zPhone",
+          networkId: "amy-network",
+          template: "conversation",
+          connected: true,
+          claimSubmitted: true,
+          endpointPublished: true,
+          replicationConfigured: true,
+        },
+      };
+    },
     async removePeer(peerId) {
       if (peerId !== deployment.peerId) {
         throw new Error(`peer ${peerId} not found`);
@@ -1462,6 +1494,7 @@ function createDeployment(): DeploymentView {
     source: "bombadil-harness",
     graphql: "http://127.0.0.1:9181/api/v0/graphql",
     dialSucceeded: true,
+    pairingReady: true,
     lastError: null,
     defaultBehaviorId: DEFAULT_BEHAVIOR_ID,
     agentPrincipal: {

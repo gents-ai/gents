@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("../src/lib/tauri/interruptRequest", () => ({
   previewInterruptCascade: vi.fn(),
@@ -44,6 +44,7 @@ const streamingSession: DesktopSessionSnapshot = {
 };
 
 const baseProps = {
+  activeRequestId: "req_root",
   selectedDeployment: baseDeployment,
   selectedConversationTitle: "t",
   selectedBehaviorId: "default",
@@ -57,10 +58,13 @@ const baseProps = {
   canSend: false,
   sendHint: null,
   draft: "",
+  interruptVisible: true,
   sending: false,
+  turnState: "streaming",
   onRenameConversationTitle: vi.fn(),
   onDraftChange: vi.fn(),
   onSend: vi.fn(),
+  onInterruptAccepted: vi.fn(),
 };
 
 beforeEach(() => {
@@ -94,5 +98,40 @@ describe("ActiveChatWorkspace interrupt flow", () => {
     fireEvent.click(btn);
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     expect(mockedInterrupt).not.toHaveBeenCalled(); // not until user confirms
+  });
+
+  it("routes a parent-only interrupt through the selected deployment", async () => {
+    mockedPreview.mockResolvedValue({
+      rootRequestId: "req_root",
+      previewSignature: "sig",
+      rootState: "processing",
+      willInterrupt: [],
+      willDetach: [],
+      alreadyTerminal: [],
+      unknownPolicy: [],
+    });
+    mockedInterrupt.mockResolvedValue({
+      requestId: "req_root",
+      accepted: true,
+      alreadyInterrupted: false,
+      stalePreview: false,
+      interruptRequestedAt: "2026-07-24T17:00:00Z",
+    });
+
+    render(<ActiveChatWorkspace {...baseProps} />);
+    fireEvent.click(await screen.findByRole("button", { name: /interrupt/i }));
+
+    await waitFor(() =>
+      expect(mockedInterrupt).toHaveBeenCalledWith({
+        requestId: "req_root",
+        agentDid: "did:test:operator",
+        cause: "userCancelled",
+        cascade: false,
+      }),
+    );
+    expect(baseProps.onInterruptAccepted).toHaveBeenCalledOnce();
+    expect(await screen.findByTestId("chat-toast")).toHaveTextContent(
+      "Interrupt requested",
+    );
   });
 });

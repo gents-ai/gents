@@ -2,6 +2,8 @@ import { useState } from "react";
 
 import type {
   BootstrapSummary,
+  BearerPairingRequest,
+  BearerPairingResponse,
   DeploymentView,
   P2PHealth,
   PeerAddRequest,
@@ -23,6 +25,7 @@ type FleetDashboardProps = {
   repairingP2P: boolean;
   starting: boolean;
   onAddPeer: (request: PeerAddRequest) => Promise<unknown>;
+  onPairBearer: (request: BearerPairingRequest) => Promise<BearerPairingResponse>;
   onFetchPeerStatus: (serverAddress: string) => Promise<unknown>;
   onInitLocalRuntime: (label?: string | null) => Promise<unknown>;
   onOpenChat: (agentDid: string) => void;
@@ -49,6 +52,7 @@ export function FleetDashboard({
   repairingP2P,
   starting,
   onAddPeer,
+  onPairBearer,
   onFetchPeerStatus,
   onInitLocalRuntime,
   onOpenChat,
@@ -62,6 +66,7 @@ export function FleetDashboard({
   const [peerForm, setPeerForm] = useState(DEFAULT_PEER_FORM);
   const [peerFormError, setPeerFormError] = useState<string | null>(null);
   const [localRuntimeError, setLocalRuntimeError] = useState<string | null>(null);
+  const [pairingNotice, setPairingNotice] = useState<string | null>(null);
   const hasDeployments = deployments.length > 0;
   // The repair command re-dials the desktop client's P2P connections as a
   // whole, so it lives here at fleet level — a per-row placement would lie
@@ -87,6 +92,17 @@ export function FleetDashboard({
     } catch (error) {
       setPeerFormError(formatPeerConnectionError(error, "add-peer"));
     }
+  }
+
+  async function pairWithBearer(request: BearerPairingRequest) {
+    const response = await onPairBearer(request);
+    setPeerFormError(null);
+    setLocalRuntimeError(null);
+    setPairingNotice(
+      `${response.pairing.label} is ready. Signed membership and bidirectional replication were observed.`,
+    );
+    setShowAddPeer(false);
+    return response;
   }
 
   async function connectLocalRuntime() {
@@ -122,7 +138,9 @@ export function FleetDashboard({
             className="fleet-remote-disclosure"
             data-testid="fleet-remote-disclosure"
           >
-            <summary>Connect a remote agent instead…</summary>
+            <summary aria-label="Connect a remote agent">
+              Connect a remote agent instead…
+            </summary>
             <AddPeerForm
               addingPeer={addingPeer}
               disabled={starting || loading}
@@ -130,6 +148,7 @@ export function FleetDashboard({
               peerForm={peerForm}
               onPeerFormChange={setPeerForm}
               onFetchPeerStatus={onFetchPeerStatus}
+              onPairBearer={pairWithBearer}
               onSubmit={submitPeer}
             />
           </details>
@@ -158,13 +177,26 @@ export function FleetDashboard({
           ) : null}
           <button
             className="primary-button"
-            onClick={() => setShowAddPeer((value) => !value)}
+            onClick={() => {
+              setPairingNotice(null);
+              setShowAddPeer((value) => !value);
+            }}
             type="button"
           >
             Add Agent
           </button>
         </div>
       </header>
+
+      {pairingNotice ? (
+        <p
+          aria-live="polite"
+          className="fleet-pairing-success"
+          data-testid="fleet-pair-status"
+        >
+          {pairingNotice}
+        </p>
+      ) : null}
 
       {showAddPeer ? (
         <section className="panel fleet-add-panel">
@@ -181,6 +213,7 @@ export function FleetDashboard({
             peerForm={peerForm}
             onPeerFormChange={setPeerForm}
             onFetchPeerStatus={onFetchPeerStatus}
+            onPairBearer={pairWithBearer}
             onSubmit={submitPeer}
           />
         </section>

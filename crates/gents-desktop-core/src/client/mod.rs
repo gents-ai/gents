@@ -10,7 +10,10 @@ mod schema;
 mod store;
 
 pub use collection_resolver::CollectionResolver;
-pub use core::{ClientCore, ClientCoreOptions, ClientPeerStatus, P2PHealth, P2PHealthStatus};
+pub use core::{
+    BearerInvitePreview, BearerPairingResult, ClientCore, ClientCoreOptions, ClientPeerStatus,
+    P2PHealth, P2PHealthStatus,
+};
 pub use mutations::{
     CreatedConversation, PeerMutationResult, SubmitRequestOptions, SubmittedRequest,
 };

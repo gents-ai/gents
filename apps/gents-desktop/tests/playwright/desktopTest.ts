@@ -87,10 +87,22 @@ export async function openChat(page: Page) {
   await expect(page.getByTestId("composer-input")).toBeVisible();
 }
 
+export async function openChatNavigation(page: Page) {
+  const sidebar = page.locator(".sidebar");
+  if (
+    !(await sidebar.isVisible()) &&
+    (page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) <= 760
+  ) {
+    await page.getByTestId("mobile-chat-navigation").click();
+  }
+  await expect(sidebar).toBeVisible();
+}
+
 export async function openConfig(page: Page) {
   await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
   await page.getByTestId(`fleet-chat-name-${PEER_ID}`).click();
   await expect(page.getByTestId("composer-input")).toBeVisible();
+  await openChatNavigation(page);
   await page.getByRole("button", { name: "Configure" }).click();
   await expect(page.locator(".config-workspace")).toBeVisible();
 }

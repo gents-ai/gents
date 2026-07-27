@@ -585,6 +585,27 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "NativeFilesystemBoundaryCases".to_string(),
         ));
     }
+    if !snapshot.managed_exec_tool_boundary_cases.is_empty() {
+        emitted.insert((
+            "managed_exec_cases".to_string(),
+            "ManagedExecToolBoundaryCases".to_string(),
+        ));
+    }
+    if !snapshot
+        .pairing_reconcile_shutdown_boundary_cases
+        .is_empty()
+    {
+        emitted.insert((
+            "pairing_reconcile_cases".to_string(),
+            "PairingReconcileShutdownBoundaryCases".to_string(),
+        ));
+    }
+    if !snapshot.pairing_reconcile_sweep_scheduling_cases.is_empty() {
+        emitted.insert((
+            "pairing_reconcile_cases".to_string(),
+            "PairingReconcileSweepSchedulingCases".to_string(),
+        ));
+    }
     if !snapshot.managed_exec_liveness_cases.is_empty() {
         emitted.insert((
             "managed_exec_cases".to_string(),
@@ -931,6 +952,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "backend_health_cases",
         "native_filesystem_boundary_cases",
         "managed_exec_cases",
+        "pairing_reconcile_cases",
         "frontend_client_shell_cases",
         "desktop_client_shell_cases",
         "request_lifecycle_operator_ui_cases",

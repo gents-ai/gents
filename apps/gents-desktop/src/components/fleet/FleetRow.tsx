@@ -50,6 +50,7 @@ export function FleetRow({
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const status = deploymentStatus(deployment);
   const localRuntime = isLocalRuntimeSource(deployment.source);
+  const chatReady = deployment.pairingReady;
 
   function commitRename() {
     const label = (editingLabel ?? "").trim();
@@ -123,8 +124,13 @@ export function FleetRow({
               <button
                 className="fleet-agent-name"
                 data-testid={`fleet-chat-name-${deployment.peerId}`}
+                disabled={!chatReady}
                 onClick={() => onOpenChat(deployment.agentDid)}
-                title={`Open ${deployment.label} chat`}
+                title={
+                  chatReady
+                    ? `Open ${deployment.label} chat`
+                    : "Chat unlocks after signed reciprocal pairing completes"
+                }
                 type="button"
               >
                 {deployment.agentPrincipal.displayName ?? deployment.label}
@@ -202,8 +208,13 @@ export function FleetRow({
             aria-label={`Open ${deployment.label} chat`}
             className="primary-button fleet-table-action"
             data-testid={`fleet-chat-${deployment.peerId}`}
+            disabled={!chatReady}
             onClick={() => onOpenChat(deployment.agentDid)}
-            title="Open chat"
+            title={
+              chatReady
+                ? "Open chat"
+                : "Chat unlocks after signed reciprocal pairing completes"
+            }
             type="button"
           >
             <ChatIcon />

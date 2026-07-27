@@ -350,7 +350,7 @@ export function MessageList({
               item.sequence === responseMaterializedSequence;
             return (
               <div className="turn-block" key={timelineKey}>
-                <article className="message-card">
+                <article className="message-card" data-testid="assistant-message">
                   <div className="message-role">
                     assistant
                     {showBadge ? (
@@ -367,12 +367,12 @@ export function MessageList({
                       />
                     ) : null}
                   </div>
+                  <ReasoningDisclosure value={normalizedReasoning} />
                   {normalizedContent ? (
                     <div className="message-content">
                       <MarkdownContent value={normalizedContent} />
                     </div>
                   ) : null}
-                  <ReasoningDisclosure value={normalizedReasoning} />
                 </article>
               </div>
             );
@@ -401,7 +401,11 @@ export function MessageList({
               return null;
             }
             return (
-              <article className="message-card" key={timelineKey}>
+              <article
+                className="message-card"
+                data-testid="assistant-message"
+                key={timelineKey}
+              >
                 <div className="message-role">
                   assistant
                   {responseCancelCause != null ? (
@@ -411,12 +415,12 @@ export function MessageList({
                     />
                   ) : null}
                 </div>
+                <ReasoningDisclosure value={overlayReasoning} />
                 {overlayContent ? (
                   <div className="message-content">
                     <MarkdownContent value={overlayContent} />
                   </div>
                 ) : null}
-                <ReasoningDisclosure value={overlayReasoning} />
               </article>
             );
           }

@@ -5,12 +5,14 @@ export type DesktopShellTimingConfig = {
   p2pAutoRestartCooldownMs: number;
   clientRestartMaxAttempts: number;
   clientRestartBackoffMs: number;
+  activeSessionPollMs: number;
 };
 
 const DEFAULT_TIMING_CONFIG: DesktopShellTimingConfig = {
   p2pAutoRestartCooldownMs: 20_000,
   clientRestartMaxAttempts: 10,
   clientRestartBackoffMs: 250,
+  activeSessionPollMs: 1_500,
 };
 
 let timingConfigOverrides: Partial<DesktopShellTimingConfig> | null = null;
@@ -56,6 +58,58 @@ export function shouldAutoRestartP2P(
 
 export async function delay(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export type TrailingRefreshQueue = {
+  request: () => Promise<void>;
+  dispose: () => void;
+};
+
+/**
+ * Runs at most one refresh at a time and retains at most one trailing pass.
+ *
+ * DefraDB can publish many store versions while a replicated subagent batch is
+ * landing. Rendering each version would start overlapping full snapshot
+ * queries; the trailing pass guarantees the UI eventually observes the newest
+ * version without replaying every intermediate one.
+ */
+export function createTrailingRefreshQueue(
+  refresh: () => Promise<void>,
+): TrailingRefreshQueue {
+  let active: Promise<void> | null = null;
+  let disposed = false;
+  let pending = false;
+
+  const drain = async () => {
+    do {
+      pending = false;
+      try {
+        await refresh();
+      } catch (error) {
+        logShellEvent(`coalesced refresh failed error=${String(error)}`);
+      }
+    } while (!disposed && pending);
+  };
+
+  return {
+    request() {
+      if (disposed) {
+        return Promise.resolve();
+      }
+
+      pending = true;
+      if (!active) {
+        active = drain().finally(() => {
+          active = null;
+        });
+      }
+      return active;
+    },
+    dispose() {
+      disposed = true;
+      pending = false;
+    },
+  };
 }
 
 export function logShellEvent(message: string) {

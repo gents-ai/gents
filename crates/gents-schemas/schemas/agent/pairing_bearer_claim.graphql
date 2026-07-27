@@ -19,7 +19,10 @@
 type PairingBearerClaim @branchable {
     # The full encoded dabear1- token being redeemed.
     token: String
-    claimant_did: String @index
+    # Filtered replication routes each client only its own claim rows. DefraDB
+    # requires every replication-filter field to be immutable so a document
+    # cannot cross scopes after creation.
+    claimant_did: String @index @immutable
     claimant_node_id: String
     claimant_address: String
     claimed_at: DateTime @index(direction: DESC)

@@ -4,13 +4,18 @@ import {
   addPeer,
   fetchPeerStatus,
   initLocalStandardRuntime,
+  pairBearer,
   removePeer,
   renamePeer,
   repairP2P,
   startDesktopClient,
 } from "../lib/desktop-api";
 import { formatPeerConnectionError } from "../lib/peerConnectionErrors";
-import type { DesktopClientSnapshot, PeerAddRequest } from "../lib/types";
+import type {
+  BearerPairingRequest,
+  DesktopClientSnapshot,
+  PeerAddRequest,
+} from "../lib/types";
 
 type PeerActionParams = {
   snapshot: DesktopClientSnapshot | null;
@@ -86,6 +91,32 @@ export function createDesktopShellPeerActions({
     }
   }
 
+  async function onPairBearer(request: BearerPairingRequest) {
+    setAddingPeer(true);
+    setError(null);
+    try {
+      if (!snapshot?.client) {
+        setStarting(true);
+        const started = await startDesktopClient();
+        setSnapshot(started);
+      }
+      const response = await pairBearer(request);
+      setSnapshot({
+        bootstrap: response.bootstrap,
+        client: response.client,
+      });
+      setSelectedAgentDid(response.pairing.issuerDid);
+      return response;
+    } catch (err) {
+      const message = formatPeerConnectionError(err, "add-peer");
+      setError(message);
+      throw new Error(message);
+    } finally {
+      setStarting(false);
+      setAddingPeer(false);
+    }
+  }
+
   async function onFetchPeerStatus(serverAddress: string) {
     setError(null);
     try {
@@ -143,6 +174,7 @@ export function createDesktopShellPeerActions({
     onAddPeer,
     onFetchPeerStatus,
     onInitLocalRuntime,
+    onPairBearer,
     onRemovePeer,
     onRenamePeer,
     onRepairP2P,

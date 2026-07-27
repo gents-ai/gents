@@ -58,6 +58,11 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) storage_observation_runtime_cases: Vec<LeanStorageObservationRuntimeCase>,
     pub(crate) backend_health_admission_cases: Vec<LeanBackendHealthAdmissionCase>,
     pub(crate) native_filesystem_boundary_cases: Vec<LeanNativeFilesystemBoundaryCase>,
+    pub(crate) managed_exec_tool_boundary_cases: Vec<LeanManagedExecToolBoundaryCase>,
+    pub(crate) pairing_reconcile_shutdown_boundary_cases:
+        Vec<LeanPairingReconcileShutdownBoundaryCase>,
+    pub(crate) pairing_reconcile_sweep_scheduling_cases:
+        Vec<LeanPairingReconcileSweepSchedulingCase>,
     pub(crate) managed_exec_liveness_cases: Vec<LeanManagedExecLivenessCase>,
     pub(crate) tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
@@ -505,6 +510,21 @@ pub(crate) fn lean_backend_health_admission_cases() -> &'static [LeanBackendHeal
 pub(crate) fn lean_native_filesystem_boundary_cases() -> &'static [LeanNativeFilesystemBoundaryCase]
 {
     &lean_contract_snapshot().native_filesystem_boundary_cases
+}
+
+pub(crate) fn lean_managed_exec_tool_boundary_cases() -> &'static [LeanManagedExecToolBoundaryCase]
+{
+    &lean_contract_snapshot().managed_exec_tool_boundary_cases
+}
+
+pub(crate) fn lean_pairing_reconcile_shutdown_boundary_cases(
+) -> &'static [LeanPairingReconcileShutdownBoundaryCase] {
+    &lean_contract_snapshot().pairing_reconcile_shutdown_boundary_cases
+}
+
+pub(crate) fn lean_pairing_reconcile_sweep_scheduling_cases(
+) -> &'static [LeanPairingReconcileSweepSchedulingCase] {
+    &lean_contract_snapshot().pairing_reconcile_sweep_scheduling_cases
 }
 
 pub(crate) fn lean_managed_exec_liveness_cases() -> &'static [LeanManagedExecLivenessCase] {

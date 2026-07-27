@@ -1,4 +1,8 @@
 import type React from "react";
+import {
+  useConfigNavigationGuard,
+  useReportConfigDirty,
+} from "./ConfigNavigationGuard";
 
 export type ConfigEditorHeaderProps = {
   eyebrow: string;
@@ -27,6 +31,8 @@ export function ConfigEditorHeader({
 /** One save-state vocabulary for every editor, including the custom-header
  * Agent/Behavior panels: dirty outranks saved. */
 export function EditorStatusChip({ dirty, saved }: { dirty: boolean; saved: boolean }) {
+  useReportConfigDirty(dirty);
+
   if (dirty) {
     return (
       <span className="chip chip-amber" data-testid="unsaved-chip">
@@ -86,6 +92,8 @@ export function ConfigDocumentList({
   onCreate,
   onSelect,
 }: ConfigDocumentListProps) {
+  const { requestNavigation } = useConfigNavigationGuard();
+
   return (
     <aside className="panel config-list config-document-list">
       <div className="panel-header">
@@ -97,7 +105,7 @@ export function ConfigDocumentList({
           <button
             className="ghost-button"
             data-testid={`${testPrefix}-new`}
-            onClick={onCreate}
+            onClick={() => requestNavigation(onCreate)}
             type="button"
           >
             {createLabel}
@@ -110,7 +118,13 @@ export function ConfigDocumentList({
             className={item.id === selectedId ? "list-item selected" : "list-item"}
             data-testid={`config-${testPrefix}-${item.id}`}
             key={item.id}
-            onClick={() => onSelect(item.id)}
+            onClick={() => {
+              if (item.id === selectedId) {
+                onSelect(item.id);
+                return;
+              }
+              requestNavigation(() => onSelect(item.id));
+            }}
             type="button"
           >
             <span className="list-item-title">{item.title}</span>

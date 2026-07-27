@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ConversationListSection } from "../src/components/sidebar-widgets/ConversationListSection";
@@ -26,9 +26,19 @@ function renderList(
     <ConversationListSection
       conversations={conversations}
       deployments={[
-        { agentDid: AGENT, label: "Agent", tasks: [] } as unknown as DeploymentView,
+        {
+          agentDid: AGENT,
+          label: "Agent",
+          defaultBehaviorId: "default",
+          behaviors: [
+            { behaviorId: "default", displayName: "Amy", isDefault: true },
+            { behaviorId: "session-classifier", displayName: "Session Classifier" },
+          ],
+          tasks: [],
+        } as unknown as DeploymentView,
       ]}
       selectedAgentDid={AGENT}
+      selectedBehaviorId="default"
       selectedSessionId={null}
       onSelectSession={vi.fn()}
       onRenameConversationTitle={onRenameConversationTitle}
@@ -61,7 +71,23 @@ describe("conversation list", () => {
     expect(screen.getByText("2h ago")).toBeInTheDocument();
   });
 
-  it("renames inline and cancels on Escape", () => {
+  it("shows only the selected behavior and keeps legacy sessions with the default", () => {
+    renderList([
+      conv({ sessionId: "s-default", behaviorId: "default" }),
+      conv({ sessionId: "s-legacy", behaviorId: null, title: "legacy chat" }),
+      conv({
+        sessionId: "s-classifier",
+        behaviorId: "session-classifier",
+        title: "classification",
+      }),
+    ]);
+
+    expect(screen.getByTestId("conversation-s-default")).toBeInTheDocument();
+    expect(screen.getByTestId("conversation-s-legacy")).toBeInTheDocument();
+    expect(screen.queryByTestId("conversation-s-classifier")).not.toBeInTheDocument();
+  });
+
+  it("renames inline and cancels on Escape", async () => {
     const onRename = renderList([conv({ sessionId: "s-1" })]);
 
     fireEvent.click(screen.getByTestId("conversation-rename-s-1"));
@@ -70,10 +96,42 @@ describe("conversation list", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onRename).toHaveBeenCalledWith("s-1", "v2 cutover");
 
-    fireEvent.click(screen.getByTestId("conversation-rename-s-1"));
+    fireEvent.click(await screen.findByTestId("conversation-rename-s-1"));
     fireEvent.keyDown(screen.getByTestId("conversation-rename-input-s-1"), {
       key: "Escape",
     });
     expect(onRename).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a failed rename draft open and accessibly named", async () => {
+    const onRename = vi.fn().mockRejectedValue(new Error("replica unavailable"));
+    renderList([conv({ sessionId: "s-1" })], onRename);
+
+    fireEvent.click(screen.getByTestId("conversation-rename-s-1"));
+    const input = screen.getByTestId("conversation-rename-input-s-1");
+    expect(input).toHaveAccessibleName("Rename release planning");
+    fireEvent.change(input, { target: { value: "retry this title" } });
+    fireEvent.blur(input);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("conversation-rename-input-s-1")).toHaveValue(
+        "retry this title",
+      ),
+    );
+    expect(onRename).toHaveBeenCalledWith("s-1", "retry this title");
+  });
+
+  it("does not persist an unchanged display title", () => {
+    const onRename = renderList([conv({ sessionId: "s-1" })]);
+
+    fireEvent.click(screen.getByTestId("conversation-rename-s-1"));
+    fireEvent.keyDown(screen.getByTestId("conversation-rename-input-s-1"), {
+      key: "Enter",
+    });
+
+    expect(onRename).not.toHaveBeenCalled();
+    expect(
+      screen.queryByTestId("conversation-rename-input-s-1"),
+    ).not.toBeInTheDocument();
   });
 });

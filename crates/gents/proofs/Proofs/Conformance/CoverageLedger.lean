@@ -601,6 +601,21 @@ def caseCoverage : List CoverageEntry :=
       "conformance::managed_exec_liveness_cases_pin_native_process_boundary")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
+      "managed_exec_cases"
+      "ManagedExecToolBoundaryCases"
+      "conformance::managed_exec_tool_boundary_cases_cover_every_native_subprocess_tool")
+      "managed-exec" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "pairing_reconcile_cases"
+      "PairingReconcileShutdownBoundaryCases"
+      "conformance::pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep")
+      "pairing-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pairing_reconcile_cases"
+      "PairingReconcileSweepSchedulingCases"
+      "conformance::pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer")
+      "pairing-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "frontend_client_shell_cases"
       "FrontendClientShellCases"
       "apps/gents-desktop/src/lib/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts")

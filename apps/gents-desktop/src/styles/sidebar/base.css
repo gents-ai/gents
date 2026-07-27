@@ -67,4 +67,33 @@
   .compact-stack {
     gap: var(--space-3);
   }
+
+  @media (max-width: 760px) {
+    .workspace.mobile-chat-pane-conversation .sidebar {
+      display: none;
+    }
+
+    .sidebar {
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: var(--space-3);
+      padding: 0;
+    }
+
+    .sidebar-section,
+    .stack-panel {
+      gap: var(--space-2);
+    }
+
+    .sidebar .panel-header {
+      align-items: center;
+    }
+
+    .sidebar .panel-header .eyebrow {
+      display: none;
+    }
+
+    .sidebar .panel-header h2 {
+      font-size: var(--text-lg);
+    }
+  }
 }

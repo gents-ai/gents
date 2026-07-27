@@ -133,6 +133,16 @@ fn status_endpoint_connection_extracts_gents_status_shape() {
             "agent_name": "studio-1-steward",
             "agent_did": "did:key:z6MkStudio",
             "graphql": "http://127.0.0.1:9181/api/v0/graphql",
+            "behaviors": [
+                {
+                    "behavior_id": "session-classifier",
+                    "enabled": true
+                },
+                {
+                    "behavior_id": "default",
+                    "enabled": true
+                }
+            ],
             "p2p": {
                 "p2p_transport": "iroh",
                 "p2p_peer_id": "peer-alpha",
@@ -148,6 +158,7 @@ fn status_endpoint_connection_extracts_gents_status_shape() {
 
     assert_eq!(connection.label, "studio-1-steward");
     assert_eq!(connection.agent_did, "did:key:z6MkStudio");
+    assert_eq!(connection.default_behavior_id.as_deref(), Some("default"));
     assert_eq!(
         connection.graphql,
         "http://100.73.235.38:9181/api/v0/graphql"

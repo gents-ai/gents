@@ -4,6 +4,8 @@ import type { BackendHealth } from "../components/backendHealth/types";
 import type {
   AgentConfigSaveRequest,
   BackendSaveRequest,
+  BearerPairingRequest,
+  BearerPairingResponse,
   BehaviorSaveRequest,
   CascadeCancelPreview,
   ChatSendResult,
@@ -124,6 +126,7 @@ export type DesktopApiAdapter = {
   shutdownDesktopClient: () => Promise<DesktopClientSnapshot>;
   setSelectedAgent: (agentDid: string | null) => Promise<void>;
   addPeer: (request: PeerAddRequest) => Promise<DesktopClientSnapshot>;
+  pairBearer: (request: BearerPairingRequest) => Promise<BearerPairingResponse>;
   removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
   fetchPeerStatus: (serverAddress: string) => Promise<unknown>;
@@ -240,6 +243,11 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   addPeer(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_peer_add", { request });
+  },
+  pairBearer(request) {
+    return invokeDesktop<BearerPairingResponse>("desktop_peer_pair_bearer", {
+      request,
+    });
   },
   removePeer(peerId) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_peer_remove", { peerId });
@@ -473,6 +481,10 @@ export async function setSelectedAgent(agentDid: string | null) {
 
 export async function addPeer(request: PeerAddRequest) {
   return desktopApiAdapter().addPeer(request);
+}
+
+export async function pairBearer(request: BearerPairingRequest) {
+  return desktopApiAdapter().pairBearer(request);
 }
 
 export async function removePeer(peerId: string) {

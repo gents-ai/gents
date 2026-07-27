@@ -6,7 +6,10 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+use chrono::{SecondsFormat, Utc};
 use defra_node::{EmbeddedNode, EventName, QueryResponse};
+use futures::{stream, StreamExt};
+use gents_protocol::bearer_token::{derive_bearer_readiness_key, BearerPairingReadyRecord};
 use p2p::iroh::parse_public_peer_addr;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
@@ -26,6 +29,7 @@ use super::{
 };
 
 pub const PAIRING_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
+pub const MAX_CONCURRENT_PEER_PREPARATIONS: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingTickOutcome {
@@ -50,6 +54,19 @@ pub trait PairingStateStore: Send + Sync {
 
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>>;
 
+    /// Materialize or retract the issuer-signed bearer readiness projection.
+    /// The default keeps non-GraphQL test stores and alternate implementations
+    /// source-compatible; the embedded runtime implementation persists the
+    /// acknowledgement only after desired and applied reciprocal wiring agree.
+    async fn reconcile_bearer_readiness(
+        &self,
+        _peer_id: &str,
+        _desired: Option<&PairingDesired>,
+        _applied: &PairingApplied,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Called once at the start of each sweep, before the per-peer loop. Lets a
     /// store amortize per-sweep work (e.g. computing the membership-materializable
     /// set once instead of re-verifying every signature for every peer — the
@@ -73,26 +90,71 @@ async fn reconcile_peer_tick_with_replay(
     peer_id: &str,
     force_replay: bool,
 ) -> Result<PairingTickOutcome> {
-    let desired = match store.load_desired(peer_id).await {
+    let prepared =
+        prepare_pairing_peer(admin, store, peer_id.to_string(), None, force_replay).await;
+    reconcile_prepared_peer(admin, store, prepared).await
+}
+
+enum PreparedPairingState {
+    DesiredReadFailed,
+    Ready {
+        desired: Option<PairingDesired>,
+        applied: PairingApplied,
+        reconnected: bool,
+        force_replay: bool,
+    },
+}
+
+struct PairingPeerPreparation {
+    peer_id: String,
+    active_before: bool,
+    state: Result<PreparedPairingState>,
+}
+
+async fn prepare_pairing_peer(
+    admin: &dyn RemoteP2pAdmin,
+    store: &dyn PairingStateStore,
+    peer_id: String,
+    observed_active_before: Option<bool>,
+    force_replay: bool,
+) -> PairingPeerPreparation {
+    let desired = match store.load_desired(&peer_id).await {
         Ok(desired) => desired,
         Err(error) => {
             tracing::warn!(
-                peer_id,
+                peer_id = %peer_id,
                 error = %error,
-                "pairing desired state read failed; skipping reconcile tick"
+                "pairing desired state read failed; skipping reconcile preparation"
             );
-            return Ok(PairingTickOutcome {
-                peer_id: peer_id.to_string(),
-                ops_applied: Vec::new(),
-                replayed_replicators: Vec::new(),
-                desired_read_failed: true,
-            });
+            return PairingPeerPreparation {
+                peer_id,
+                active_before: observed_active_before.unwrap_or(false),
+                state: Ok(PreparedPairingState::DesiredReadFailed),
+            };
         }
     };
     let desired_state = desired.clone().unwrap_or_default();
+    let applied = match store.load_applied(&peer_id).await {
+        Ok(applied) => applied,
+        Err(error) => {
+            return PairingPeerPreparation {
+                peer_id,
+                active_before: observed_active_before.unwrap_or(false),
+                state: Err(error),
+            };
+        }
+    };
+    let mut active_before = observed_active_before.unwrap_or(false);
     let mut reconnected = false;
     if desired_state.has_wiring() && !desired_state.replicator_addresses.is_empty() {
-        // Dial only when the peer is not already connected — the Lean
+        // Dial when the peer is not already connected OR its signed endpoint
+        // changed since the last successfully applied replicator. Iroh keeps
+        // the peer identity stable across relaunches while its shareable
+        // address can change. During that window `active_peers` may still
+        // contain the old connection, so peer-id liveness alone is a false
+        // positive and add_replicator reuses a stale route until it times out.
+        //
+        // The unchanged-address case still follows the Lean
         // `PairingReconcile.Transition.dial`/`dialFailed` premises both require
         // `connected = false`; a connected peer proceeds straight to the
         // reconcile ops. A redundant redial is not merely wasted work: on Linux
@@ -101,22 +163,75 @@ async fn reconcile_peer_tick_with_replay(
         // already-paired peer permanently unable to pick up new desired state
         // (e.g. the filtered conversation data-plane replicator on top of an
         // applied control-plane pairing).
-        if peer_already_active(admin, peer_id).await {
-            tracing::debug!(peer_id, "pairing peer already connected; skipping redial");
+        let endpoint_changed = !applied.replicator_addresses.is_empty()
+            && applied.replicator_addresses != desired_state.replicator_addresses;
+        if observed_active_before.is_none() {
+            active_before = peer_already_active(admin, &peer_id).await;
+        }
+        if !endpoint_changed && active_before {
+            tracing::debug!(peer_id = %peer_id, "pairing peer already connected; skipping redial");
         } else {
             let addresses = desired_state
                 .replicator_addresses
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>();
-            admin
+            if let Err(error) = admin
                 .connect(&addresses)
                 .await
-                .context("connect pairing peer")?;
+                .context("connect pairing peer")
+            {
+                return PairingPeerPreparation {
+                    peer_id,
+                    active_before,
+                    state: Err(error),
+                };
+            }
             reconnected = true;
+            if endpoint_changed {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    previous_addresses = ?applied.replicator_addresses,
+                    desired_addresses = ?desired_state.replicator_addresses,
+                    "pairing endpoint changed; refreshed peer connection before reconcile"
+                );
+            }
         }
     }
-    let mut applied = store.load_applied(peer_id).await?;
+
+    PairingPeerPreparation {
+        peer_id,
+        active_before,
+        state: Ok(PreparedPairingState::Ready {
+            desired,
+            applied,
+            reconnected,
+            force_replay,
+        }),
+    }
+}
+
+async fn reconcile_prepared_peer(
+    admin: &dyn RemoteP2pAdmin,
+    store: &dyn PairingStateStore,
+    prepared: PairingPeerPreparation,
+) -> Result<PairingTickOutcome> {
+    let peer_id = prepared.peer_id;
+    let PreparedPairingState::Ready {
+        desired,
+        mut applied,
+        reconnected,
+        force_replay,
+    } = prepared.state?
+    else {
+        return Ok(PairingTickOutcome {
+            peer_id,
+            ops_applied: Vec::new(),
+            replayed_replicators: Vec::new(),
+            desired_read_failed: true,
+        });
+    };
+    let desired_state = desired.clone().unwrap_or_default();
     let actual = read_actual(admin).await?;
 
     // All three collection sets are in name-space: `desired_state` carries names,
@@ -161,16 +276,19 @@ async fn reconcile_peer_tick_with_replay(
     for op in ops {
         apply_op(admin, &op, &desired_state, &actual).await?;
         update_applied_after_success(&mut applied, &op, &desired_state);
-        persist_applied(store, peer_id, &applied).await?;
+        persist_applied(store, &peer_id, &applied).await?;
         ops_applied.push(op);
     }
 
     if desired.is_none() && !applied.is_empty() {
-        store.delete_applied(peer_id).await?;
+        store.delete_applied(&peer_id).await?;
     }
+    store
+        .reconcile_bearer_readiness(&peer_id, desired.as_ref(), &applied)
+        .await?;
 
     Ok(PairingTickOutcome {
-        peer_id: peer_id.to_string(),
+        peer_id,
         ops_applied,
         replayed_replicators,
         desired_read_failed: false,
@@ -222,13 +340,32 @@ pub async fn run_pairing_reconciler(
     let mut replay_connections = BTreeMap::new();
     let mut failing_peers = BTreeSet::<String>::new();
 
-    sweep_pairings(&admin, &store, &mut replay_connections, &mut failing_peers).await?;
+    if !sweep_pairings_until_cancelled(
+        &admin,
+        &store,
+        &mut replay_connections,
+        &mut failing_peers,
+        &cancel,
+    )
+    .await?
+    {
+        return Ok(());
+    }
 
     loop {
         tokio::select! {
+            biased;
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => {
-                sweep_pairings_logged(&admin, &store, &mut replay_connections, &mut failing_peers).await;
+                if !sweep_pairings_logged_until_cancelled(
+                    &admin,
+                    &store,
+                    &mut replay_connections,
+                    &mut failing_peers,
+                    &cancel,
+                ).await {
+                    return Ok(());
+                }
             }
             message = subscription.recv() => {
                 if message.is_none() {
@@ -239,9 +376,55 @@ pub async fn run_pairing_reconciler(
                 if dropped > 0 {
                     tracing::warn!(dropped, "pairing reconciler update subscription dropped messages");
                 }
-                sweep_pairings_logged(&admin, &store, &mut replay_connections, &mut failing_peers).await;
+                if !sweep_pairings_logged_until_cancelled(
+                    &admin,
+                    &store,
+                    &mut replay_connections,
+                    &mut failing_peers,
+                    &cancel,
+                ).await {
+                    return Ok(());
+                }
             }
         }
+    }
+}
+
+/// Run one full sweep while keeping the supervisor cancellation boundary live.
+///
+/// Each remote admin call has its own timeout, but a sweep can visit many stale
+/// peers. Awaiting the sweep directly therefore multiplies shutdown latency by
+/// the number of peers. Dropping the sweep future on cancellation preempts the
+/// current admin wait and skips the remaining peer loop; the outer runtime can
+/// then join this task promptly.
+async fn sweep_pairings_until_cancelled(
+    admin: &dyn RemoteP2pAdmin,
+    store: &dyn PairingStateStore,
+    replay_connections: &mut BTreeMap<String, bool>,
+    failing_peers: &mut BTreeSet<String>,
+    cancel: &CancellationToken,
+) -> Result<bool> {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Ok(false),
+        result = sweep_pairings(admin, store, replay_connections, failing_peers) => {
+            result?;
+            Ok(true)
+        }
+    }
+}
+
+async fn sweep_pairings_logged_until_cancelled(
+    admin: &dyn RemoteP2pAdmin,
+    store: &dyn PairingStateStore,
+    replay_connections: &mut BTreeMap<String, bool>,
+    failing_peers: &mut BTreeSet<String>,
+    cancel: &CancellationToken,
+) -> bool {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => false,
+        _ = sweep_pairings_logged(admin, store, replay_connections, failing_peers) => true,
     }
 }
 
@@ -270,24 +453,38 @@ async fn sweep_pairings(
     // (avoids re-verifying every signature per peer). Non-fatal on failure: the
     // per-peer gate falls back to a live read.
     store.begin_sweep().await?;
-    for peer_id in store.list_peer_ids().await? {
-        let active_before = peer_already_active(admin, &peer_id).await;
-        // Replay once on daemon startup, and on an inactive -> active edge even
-        // when the remote peer established the connection first. The latter is
-        // essential for bidirectional pairing: relying only on our own dial
-        // would repair whichever direction won the reconnect race and could
-        // leave the opposite direction stale beyond its request-write cap.
-        let force_replay = replay_connections
-            .get(&peer_id)
-            .is_none_or(|was_active| !was_active && active_before);
-        let tick_succeeded = match reconcile_peer_tick_with_replay(
-            admin,
-            store,
-            &peer_id,
-            force_replay,
-        )
-        .await
-        {
+    let preparation_inputs = store
+        .list_peer_ids()
+        .await?
+        .into_iter()
+        .map(|peer_id| {
+            let was_active = replay_connections.get(&peer_id).copied();
+            (peer_id, was_active)
+        })
+        .collect::<Vec<_>>();
+    // Discovery and dial preparation may wait on a stale mobile peer for the
+    // full remote-admin timeout. Prepare independent peers concurrently so a
+    // ready phone can enter the serialized topology-mutation section without
+    // waiting behind every stale peer in lexical order. `buffer_unordered`
+    // bounds remote pressure and yields whichever preparation finishes first.
+    let mut preparations = stream::iter(preparation_inputs.into_iter().map(
+        |(peer_id, was_active)| async move {
+            let active_before = peer_already_active(admin, &peer_id).await;
+            // Replay once on daemon startup, and on an inactive -> active edge
+            // even when the remote peer established the connection first.
+            let force_replay = was_active.is_none_or(|active| !active && active_before);
+            prepare_pairing_peer(admin, store, peer_id, Some(active_before), force_replay).await
+        },
+    ))
+    .buffer_unordered(MAX_CONCURRENT_PEER_PREPARATIONS);
+
+    while let Some(prepared) = preparations.next().await {
+        let peer_id = prepared.peer_id.clone();
+        let active_before = prepared.active_before;
+        // Reconciliation mutates shared DefraDB topology. Consume one prepared
+        // result at a time so those mutations remain ordered even though
+        // discovery/dial preparation is concurrent.
+        let tick_succeeded = match reconcile_prepared_peer(admin, store, prepared).await {
             Ok(outcome) => {
                 if outcome.desired_read_failed {
                     // Desired-state failure performs no topology work, so a
@@ -659,6 +856,110 @@ impl GraphqlPairingStateStore {
             self.identity.did(),
         ))
     }
+
+    async fn bearer_readiness_is_current(
+        &self,
+        readiness_key: &str,
+        expected: &BearerPairingReadyRecord,
+    ) -> Result<bool> {
+        let readiness_key = escape_graphql_string(readiness_key);
+        let query = format!(
+            r#"{{
+                BearerPairingReady(
+                    filter: {{ readiness_key: {{ _eq: "{readiness_key}" }} }},
+                    limit: 1
+                ) {{
+                    issuer_did
+                    claimant_did
+                    peer_id
+                    address
+                    template
+                    acknowledged_at
+                    issuer_sig
+                }}
+            }}"#
+        );
+        let response = self.node.execute(&query).await;
+        ensure_no_errors(&response, "query BearerPairingReady")?;
+        let Some(row) = first_row::<BearerPairingReadyRow>(&response, "BearerPairingReady")? else {
+            return Ok(false);
+        };
+        let Some(existing) = bearer_pairing_ready_record(&row)? else {
+            return Ok(false);
+        };
+        if existing.issuer_did != expected.issuer_did
+            || existing.claimant_did != expected.claimant_did
+            || existing.peer_id != expected.peer_id
+            || existing.address != expected.address
+            || existing.template != expected.template
+        {
+            return Ok(false);
+        }
+        match self
+            .identity
+            .verify(
+                &existing.issuer_did,
+                &existing.signing_payload(),
+                &existing.sig,
+            )
+            .await
+        {
+            Ok(valid) => Ok(valid),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    claimant_did = %existing.claimant_did,
+                    "failed to verify existing bearer readiness acknowledgement; rewriting it"
+                );
+                Ok(false)
+            }
+        }
+    }
+
+    async fn upsert_bearer_readiness(
+        &self,
+        peer_id: &str,
+        claimant_did: &str,
+        address: &str,
+    ) -> Result<()> {
+        let readiness_key = derive_bearer_readiness_key(self.identity.did(), claimant_did);
+        let mut record = BearerPairingReadyRecord {
+            issuer_did: self.identity.did().to_string(),
+            claimant_did: claimant_did.to_string(),
+            peer_id: peer_id.to_string(),
+            address: address.to_string(),
+            template: "conversation".to_string(),
+            acknowledged_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+            sig: Vec::new(),
+        };
+        if self
+            .bearer_readiness_is_current(&readiness_key, &record)
+            .await?
+        {
+            return Ok(());
+        }
+        record.sig = self
+            .identity
+            .sign(&record.signing_payload())
+            .await
+            .context("signing bearer pairing readiness acknowledgement")?;
+        let mutation = bearer_pairing_ready_upsert_mutation(&readiness_key, &record);
+        let response = self.node.execute(&mutation).await;
+        ensure_no_errors(&response, "upsert BearerPairingReady")
+    }
+
+    async fn delete_bearer_readiness_for_peer(&self, peer_id: &str) -> Result<()> {
+        let peer_id = escape_graphql_string(peer_id);
+        let mutation = format!(
+            r#"mutation {{
+                delete_BearerPairingReady(
+                    filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}
+                ) {{ _docID }}
+            }}"#
+        );
+        let response = self.node.execute(&mutation).await;
+        ensure_no_errors(&response, "delete BearerPairingReady")
+    }
 }
 
 fn data_plane_materialized_entry_from_sources(
@@ -818,6 +1119,21 @@ impl PairingStateStore for GraphqlPairingStateStore {
         Ok(ids)
     }
 
+    async fn reconcile_bearer_readiness(
+        &self,
+        peer_id: &str,
+        desired: Option<&PairingDesired>,
+        applied: &PairingApplied,
+    ) -> Result<()> {
+        let Some((claimant_did, address)) =
+            earned_bearer_readiness(desired, applied, self.identity.did())
+        else {
+            return self.delete_bearer_readiness_for_peer(peer_id).await;
+        };
+        self.upsert_bearer_readiness(peer_id, &claimant_did, &address)
+            .await
+    }
+
     async fn begin_sweep(&self) -> Result<()> {
         // Compute the membership-materializable set ONCE for this sweep so the
         // per-peer Layer-2 gate (`data_plane_peer_is_materializable`) reuses it
@@ -874,6 +1190,17 @@ struct PeerIdRow {
     peer_id: String,
 }
 
+#[derive(Deserialize)]
+struct BearerPairingReadyRow {
+    issuer_did: Option<String>,
+    claimant_did: Option<String>,
+    peer_id: Option<String>,
+    address: Option<String>,
+    template: Option<String>,
+    acknowledged_at: Option<String>,
+    issuer_sig: Option<String>,
+}
+
 fn desired_from_pairing_row(
     row: PairingStateRow,
     local_did: &str,
@@ -918,13 +1245,12 @@ fn desired_from_pairing_row(
         return Ok(None);
     }
 
-    // The scope filter value is the row's agent DID. For network-control rows
-    // this is the remote member DID; for data-plane rows the loader first
-    // sanitizes it to this node's DID so the node pushes only its own docs. A
-    // peer-DID-scoped template with a blank agent_did cannot be honored: it would
-    // build an `agent_did == ""` predicate (matches nothing) or, worse, an
-    // unscoped replicator. Refuse the row and skip this peer (caught per-peer by
-    // the sweep), mirroring the discovery-side skip of blank-DID registry entries.
+    // The scope filter's peer value is the row's remote agent DID. Templates
+    // choose which immutable route field receives it (for example,
+    // conversation uses requester_did). A peer-DID-dependent template with a
+    // blank agent_did cannot be honored: it would build an empty predicate
+    // (matches nothing) or, worse, an unscoped replicator. Refuse the row and
+    // skip this peer, mirroring discovery's blank-DID guard.
     let peer_did = row.agent_did.as_deref().map(str::trim).unwrap_or_default();
     if peer_did.is_empty() && scope_requires_peer_did(&template.scope) {
         anyhow::bail!(
@@ -1181,6 +1507,142 @@ pub fn merge_layered_desired(
     }
 }
 
+/// Return the claimant and endpoint only after the exact conversation
+/// replicator identity has been persisted as applied. This is the Rust
+/// boundary for Lean `BearerReadiness.ready`: a connected peer or a desired
+/// row alone never earns an acknowledgement.
+fn earned_bearer_readiness(
+    desired: Option<&PairingDesired>,
+    applied: &PairingApplied,
+    local_did: &str,
+) -> Option<(String, String)> {
+    let desired = desired?;
+    if !desired.template_ids.contains("conversation")
+        || desired.replicator_addresses.len() != 1
+        || applied.replicator_addresses != desired.replicator_addresses
+        || applied.replicator_filter != desired.replicator_filter
+    {
+        return None;
+    }
+    let template = resolve_template("conversation")?;
+    if !template
+        .collections
+        .iter()
+        .all(|collection| desired.replicator_collections.contains(*collection))
+    {
+        return None;
+    }
+    let readiness_filter = desired.replicator_filter.get("BearerPairingReady")?;
+    if readiness_filter.field != "claimant_did" {
+        return None;
+    }
+    let claimant_did = readiness_filter.value.trim();
+    if claimant_did.is_empty() {
+        return None;
+    }
+    let expected = scope_filter(
+        &template.scope,
+        template.collections,
+        claimant_did,
+        local_did,
+    );
+    if expected
+        .iter()
+        .any(|(collection, predicate)| desired.replicator_filter.get(collection) != Some(predicate))
+    {
+        return None;
+    }
+    let address = desired
+        .replicator_addresses
+        .iter()
+        .next()?
+        .trim()
+        .to_string();
+    (!address.is_empty()).then(|| (claimant_did.to_string(), address))
+}
+
+fn bearer_pairing_ready_record(
+    row: &BearerPairingReadyRow,
+) -> Result<Option<BearerPairingReadyRecord>> {
+    let required = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let Some(issuer_did) = required(row.issuer_did.as_deref()) else {
+        return Ok(None);
+    };
+    let Some(claimant_did) = required(row.claimant_did.as_deref()) else {
+        return Ok(None);
+    };
+    let Some(peer_id) = required(row.peer_id.as_deref()) else {
+        return Ok(None);
+    };
+    let Some(address) = required(row.address.as_deref()) else {
+        return Ok(None);
+    };
+    let Some(template) = required(row.template.as_deref()) else {
+        return Ok(None);
+    };
+    let Some(acknowledged_at) = required(row.acknowledged_at.as_deref()) else {
+        return Ok(None);
+    };
+    let Some(issuer_sig) = required(row.issuer_sig.as_deref()) else {
+        return Ok(None);
+    };
+    let sig = bs58::decode(issuer_sig)
+        .into_vec()
+        .context("decoding BearerPairingReady.issuer_sig")?;
+    Ok(Some(BearerPairingReadyRecord {
+        issuer_did,
+        claimant_did,
+        peer_id,
+        address,
+        template,
+        acknowledged_at,
+        sig,
+    }))
+}
+
+pub fn bearer_pairing_ready_upsert_mutation(
+    readiness_key: &str,
+    record: &BearerPairingReadyRecord,
+) -> String {
+    let readiness_key = escape_graphql_string(readiness_key);
+    let issuer_did = escape_graphql_string(&record.issuer_did);
+    let claimant_did = escape_graphql_string(&record.claimant_did);
+    let peer_id = escape_graphql_string(&record.peer_id);
+    let address = escape_graphql_string(&record.address);
+    let template = escape_graphql_string(&record.template);
+    let acknowledged_at = escape_graphql_string(&record.acknowledged_at);
+    let issuer_sig = escape_graphql_string(&bs58::encode(&record.sig).into_string());
+    format!(
+        r#"mutation {{
+            upsert_BearerPairingReady(
+                filter: {{ readiness_key: {{ _eq: "{readiness_key}" }} }},
+                add: {{
+                    readiness_key: "{readiness_key}",
+                    issuer_did: "{issuer_did}",
+                    claimant_did: "{claimant_did}",
+                    peer_id: "{peer_id}",
+                    address: "{address}",
+                    template: "{template}",
+                    acknowledged_at: "{acknowledged_at}",
+                    issuer_sig: "{issuer_sig}"
+                }},
+                update: {{
+                    peer_id: "{peer_id}",
+                    address: "{address}",
+                    template: "{template}",
+                    acknowledged_at: "{acknowledged_at}",
+                    issuer_sig: "{issuer_sig}"
+                }}
+            ) {{ _docID }}
+        }}"#
+    )
+}
+
 fn ensure_no_errors(response: &QueryResponse, label: &str) -> Result<()> {
     if response.has_errors() {
         bail!("{label} failed: {:?}", response.errors);
@@ -1270,6 +1732,76 @@ mod tests {
             },
         );
         filters
+    }
+
+    fn conversation_desired(claimant_did: &str, address: &str) -> PairingDesired {
+        let template = resolve_template("conversation").expect("conversation template");
+        PairingDesired {
+            replicator_addresses: set(&[address]),
+            replicator_collections: template
+                .collections
+                .iter()
+                .map(|collection| (*collection).to_string())
+                .collect(),
+            replicator_filter: scope_filter(
+                &template.scope,
+                template.collections,
+                claimant_did,
+                "did:key:issuer",
+            ),
+            template_ids: set(&["conversation"]),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn bearer_readiness_requires_exact_applied_conversation_replicator() {
+        let desired = conversation_desired("did:key:claimant", "iroh-ticket");
+        let pending = PairingApplied::default();
+        assert_eq!(
+            earned_bearer_readiness(Some(&desired), &pending, "did:key:issuer"),
+            None
+        );
+
+        let applied = PairingApplied {
+            replicator_addresses: desired.replicator_addresses.clone(),
+            replicator_filter: desired.replicator_filter.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            earned_bearer_readiness(Some(&desired), &applied, "did:key:issuer"),
+            Some(("did:key:claimant".to_string(), "iroh-ticket".to_string()))
+        );
+
+        let mut wrong_filter = applied;
+        wrong_filter
+            .replicator_filter
+            .get_mut("AgentRequest")
+            .expect("request filter")
+            .value = "did:key:someone-else".to_string();
+        assert_eq!(
+            earned_bearer_readiness(Some(&desired), &wrong_filter, "did:key:issuer"),
+            None
+        );
+    }
+
+    #[test]
+    fn bearer_readiness_mutation_escapes_signed_fields() {
+        let record = BearerPairingReadyRecord {
+            issuer_did: "did:key:issuer".to_string(),
+            claimant_did: "did:key:claimant\"quoted".to_string(),
+            peer_id: "peer-a".to_string(),
+            address: "ticket\\route".to_string(),
+            template: "conversation".to_string(),
+            acknowledged_at: "2026-07-27T00:00:00Z".to_string(),
+            sig: vec![1, 2, 3],
+        };
+
+        let mutation = bearer_pairing_ready_upsert_mutation("ready\"key", &record);
+        assert!(mutation.contains(r#"readiness_key: "ready\"key""#));
+        assert!(mutation.contains(r#"claimant_did: "did:key:claimant\"quoted""#));
+        assert!(mutation.contains(r#"address: "ticket\\route""#));
+        assert!(!mutation.contains("[]"));
     }
 
     #[test]
@@ -1390,7 +1922,7 @@ mod tests {
     }
 
     #[test]
-    fn data_plane_desired_uses_signed_endpoint_address_and_self_did() {
+    fn data_plane_desired_uses_signed_endpoint_address_and_requester_did() {
         let signed_endpoint = NetworkEndpointEntry {
             peer_id: "peer-b".to_string(),
             agent_did: "did:key:peer-b".to_string(),
@@ -1419,7 +1951,7 @@ mod tests {
                 .replicator_filter
                 .get("AgentRequest")
                 .map(|filter| (filter.field.as_str(), filter.value.as_str())),
-            Some(("agent_did", "did:key:self"))
+            Some(("requester_did", "did:key:peer-b"))
         );
     }
 
@@ -1584,6 +2116,45 @@ mod tests {
         }
     }
 
+    struct MultiPeerStore {
+        desired: BTreeMap<String, PairingDesired>,
+        applied: Mutex<BTreeMap<String, PairingApplied>>,
+    }
+
+    #[async_trait]
+    impl PairingStateStore for MultiPeerStore {
+        async fn load_desired(&self, peer_id: &str) -> Result<Option<PairingDesired>> {
+            Ok(self.desired.get(peer_id).cloned())
+        }
+
+        async fn load_applied(&self, peer_id: &str) -> Result<PairingApplied> {
+            Ok(self
+                .applied
+                .lock()
+                .unwrap()
+                .get(peer_id)
+                .cloned()
+                .unwrap_or_default())
+        }
+
+        async fn save_applied(&self, peer_id: &str, applied: &PairingApplied) -> Result<()> {
+            self.applied
+                .lock()
+                .unwrap()
+                .insert(peer_id.to_string(), applied.clone());
+            Ok(())
+        }
+
+        async fn delete_applied(&self, peer_id: &str) -> Result<()> {
+            self.applied.lock().unwrap().remove(peer_id);
+            Ok(())
+        }
+
+        async fn list_peer_ids(&self) -> Result<BTreeSet<String>> {
+            Ok(self.desired.keys().cloned().collect())
+        }
+    }
+
     #[derive(Default)]
     struct MockAdmin {
         collections: Mutex<BTreeSet<String>>,
@@ -1597,9 +2168,19 @@ mod tests {
         active: Mutex<Vec<String>>,
         /// When set, `active_peers` fails, exercising the degraded-read path.
         fail_active_peers: bool,
+        /// Test-only barrier proving supervisor cancellation can drop an
+        /// in-flight admin wait instead of waiting for its per-RPC timeout.
+        active_peers_started: Option<Arc<tokio::sync::Notify>>,
+        active_peers_release: Option<Arc<tokio::sync::Notify>>,
         /// When set, `connect` fails after recording the call — modeling the
         /// Linux redial-timeout that motivated the active-peer gate.
         fail_connect: bool,
+        /// Optional address-specific barrier used to prove that one stale
+        /// peer's dial does not head-of-line block a ready peer's sweep.
+        blocked_connect_address: Option<String>,
+        blocked_connect_started: Option<Arc<tokio::sync::Notify>>,
+        blocked_connect_release: Option<Arc<tokio::sync::Notify>>,
+        replicator_installed: Option<Arc<tokio::sync::Notify>>,
         /// Number of upcoming replicator installs to fail. This models the
         /// torn reconnect-replay window where delete succeeds but reinstall
         /// transiently fails; the next topology diff must heal it.
@@ -1613,6 +2194,12 @@ mod tests {
         }
 
         async fn active_peers(&self) -> RemoteP2pAdminResult<Vec<String>> {
+            if let Some(started) = &self.active_peers_started {
+                started.notify_one();
+            }
+            if let Some(release) = &self.active_peers_release {
+                release.notified().await;
+            }
             if self.fail_active_peers {
                 return Err(RemoteP2pAdminError::RpcError("active_peers down".into()));
             }
@@ -1621,6 +2208,18 @@ mod tests {
 
         async fn connect(&self, addresses: &[String]) -> RemoteP2pAdminResult<()> {
             self.connects.lock().unwrap().push(addresses.to_vec());
+            if self
+                .blocked_connect_address
+                .as_ref()
+                .is_some_and(|blocked| addresses.iter().any(|address| address == blocked))
+            {
+                if let Some(started) = &self.blocked_connect_started {
+                    started.notify_one();
+                }
+                if let Some(release) = &self.blocked_connect_release {
+                    release.notified().await;
+                }
+            }
             if self.fail_connect {
                 return Err(RemoteP2pAdminError::RpcTimeout);
             }
@@ -1665,6 +2264,9 @@ mod tests {
                     .lock()
                     .unwrap()
                     .push(DiffOp::InstallReplicator(address.clone()));
+                if let Some(installed) = &self.replicator_installed {
+                    installed.notify_one();
+                }
             }
             Ok(())
         }
@@ -1778,6 +2380,91 @@ mod tests {
         ) -> RemoteP2pAdminResult<()> {
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn cancellation_preempts_in_flight_pairing_sweep_admin_wait() {
+        let store = MockStore::with_desired(Some(PairingDesired::default()));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let admin = MockAdmin {
+            active_peers_started: Some(started.clone()),
+            active_peers_release: Some(release),
+            ..Default::default()
+        };
+        let cancel = CancellationToken::new();
+        let mut replay_connections = BTreeMap::new();
+        let mut failing_peers = BTreeSet::new();
+        let sweep = sweep_pairings_until_cancelled(
+            &admin,
+            &store,
+            &mut replay_connections,
+            &mut failing_peers,
+            &cancel,
+        );
+        tokio::pin!(sweep);
+
+        tokio::select! {
+            _ = started.notified() => {}
+            result = &mut sweep => panic!("sweep returned before admin barrier: {result:?}"),
+        }
+
+        cancel.cancel();
+        let completed = tokio::time::timeout(Duration::from_millis(100), &mut sweep)
+            .await
+            .expect("cancellation must preempt the in-flight admin wait")
+            .expect("cancelled sweep result");
+        assert!(!completed, "cancelled sweep must skip its remaining peers");
+    }
+
+    #[tokio::test]
+    async fn stale_peer_dial_does_not_head_of_line_block_ready_peer() {
+        let desired_for = |address: &str| PairingDesired {
+            replicator_addresses: set(&[address]),
+            replicator_collections: set(&["AgentRequest"]),
+            template_ids: set(&["conversation"]),
+            ..Default::default()
+        };
+        let store = MultiPeerStore {
+            desired: BTreeMap::from([
+                ("peer-a-stale".into(), desired_for("stale-addr")),
+                ("peer-z-ready".into(), desired_for("ready-addr")),
+            ]),
+            applied: Mutex::new(BTreeMap::new()),
+        };
+        let stale_started = Arc::new(tokio::sync::Notify::new());
+        let stale_release = Arc::new(tokio::sync::Notify::new());
+        let replicator_installed = Arc::new(tokio::sync::Notify::new());
+        let admin = MockAdmin {
+            blocked_connect_address: Some("stale-addr".into()),
+            blocked_connect_started: Some(stale_started.clone()),
+            blocked_connect_release: Some(stale_release.clone()),
+            replicator_installed: Some(replicator_installed.clone()),
+            ..Default::default()
+        };
+        let mut replay_connections = BTreeMap::new();
+        let mut failing_peers = BTreeSet::new();
+        let sweep = sweep_pairings(&admin, &store, &mut replay_connections, &mut failing_peers);
+        tokio::pin!(sweep);
+
+        tokio::select! {
+            _ = stale_started.notified() => {}
+            result = &mut sweep => panic!("sweep returned before stale dial barrier: {result:?}"),
+        }
+        tokio::time::timeout(Duration::from_millis(500), replicator_installed.notified())
+            .await
+            .expect("ready peer must install while stale peer dial remains blocked");
+        assert!(
+            admin.replicators.lock().unwrap().contains_key("ready-addr"),
+            "ready peer topology must converge before stale dial is released"
+        );
+
+        stale_release.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), &mut sweep)
+            .await
+            .expect("sweep must finish after stale dial is released")
+            .expect("sweep result");
+        assert!(admin.replicators.lock().unwrap().contains_key("stale-addr"));
     }
 
     #[tokio::test]
@@ -2135,7 +2822,7 @@ mod tests {
     /// null forever). An active peer must skip the redial and still reconcile.
     #[tokio::test]
     async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
-        let conversation_filter = one_filter("AgentRequest", "agent_did", "did:key:host");
+        let conversation_filter = one_filter("AgentRequest", "requester_did", "did:key:requester");
         // Desired now includes the conversation data plane: same address, new
         // collection, and a scoped filter (identity change ⇒ reinstall).
         let store = MockStore::with_desired(Some(PairingDesired {
@@ -2192,6 +2879,54 @@ mod tests {
         assert_eq!(recorded[0].1, conversation_filter);
     }
 
+    /// A stable peer id is not enough to prove that the live transport route
+    /// survived an app relaunch. The phone republishes a signed endpoint with
+    /// the same peer id and a fresh ticket; if applied still records the old
+    /// ticket, the tick must dial the fresh address even when `active_peers`
+    /// contains that peer. Otherwise the subsequent replicator install can
+    /// reuse the stale route and the response never reaches the relaunched app.
+    #[tokio::test]
+    async fn changed_endpoint_redials_active_peer_before_replacing_replicator() {
+        let store = MockStore::with_desired(Some(PairingDesired {
+            replicator_addresses: set(&["addr2"]),
+            replicator_collections: set(&["AgentRequest"]),
+            ..Default::default()
+        }));
+        *store.applied.lock().unwrap() = PairingApplied {
+            replicator_addresses: set(&["addr1"]),
+            ..Default::default()
+        };
+        let admin = MockAdmin {
+            active: Mutex::new(vec!["peer-a".into()]),
+            ..Default::default()
+        };
+        admin.replicators.lock().unwrap().insert(
+            "addr1".into(),
+            RemoteReplicator {
+                id: Some("id-addr1".into()),
+                collections: vec![mock_collection_id("AgentRequest")],
+                address: Some("addr1".into()),
+            },
+        );
+
+        let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+            .await
+            .expect("changed endpoint reconcile");
+
+        assert_eq!(*admin.connects.lock().unwrap(), vec![vec!["addr2"]]);
+        assert_eq!(
+            outcome.ops_applied,
+            vec![
+                DiffOp::InstallReplicator("addr2".into()),
+                DiffOp::TeardownReplicator("addr1".into()),
+            ]
+        );
+        assert_eq!(
+            store.applied.lock().unwrap().replicator_addresses,
+            set(&["addr2"])
+        );
+    }
+
     /// Regression for the demo layer-order race: the data-plane desired lands
     /// before the control-plane layer, so the first tick installs the
     /// replicator carrying only the conversation collections. When the merged
@@ -2204,7 +2939,7 @@ mod tests {
     /// step-8 hang even with a healthy connection).
     #[tokio::test]
     async fn grown_replicator_collection_set_reinstalls_replicator() {
-        let conversation_filter = one_filter("AgentRequest", "agent_did", "did:key:host");
+        let conversation_filter = one_filter("AgentRequest", "requester_did", "did:key:requester");
         // Tick 1: only the data-plane layer is visible (Push template shape:
         // nothing subscribed, the filtered replicator carries the set).
         let store = MockStore::with_desired(Some(PairingDesired {
@@ -2489,7 +3224,7 @@ mod tests {
             .replicator_filter
             .get("AgentRequest")
             .expect("AgentRequest filter");
-        assert_eq!(pred.field, "agent_did");
+        assert_eq!(pred.field, "requester_did");
         assert_eq!(pred.value, "did:key:bob");
     }
 
@@ -2727,7 +3462,7 @@ mod tests {
             .1
             .get("AgentRequest")
             .expect("AgentRequest filter on installed replicator");
-        assert_eq!(pred.field, "agent_did");
+        assert_eq!(pred.field, "requester_did");
         assert_eq!(pred.value, "did:key:bob");
     }
 
@@ -2792,7 +3527,7 @@ mod tests {
             alice_filter.insert(
                 (*col).to_string(),
                 crate::agent::p2p_reconcile::templates::FilterPredicate {
-                    field: "agent_did".to_string(),
+                    field: "requester_did".to_string(),
                     value: "did:key:alice".to_string(),
                 },
             );

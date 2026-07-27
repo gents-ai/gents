@@ -96,6 +96,45 @@ pub(crate) struct LeanNativeFilesystemBoundaryCase {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct LeanManagedExecToolBoundaryCase {
+    pub(crate) name: String,
+    pub(crate) tool_name: String,
+    pub(crate) work_class: String,
+    pub(crate) boundary: String,
+    pub(crate) kill_scope: String,
+    pub(crate) timeout_requires_kill: bool,
+    pub(crate) cancel_requires_kill: bool,
+    pub(crate) descendants_in_termination_scope: bool,
+    pub(crate) capture_drain_bounded: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanPairingReconcileShutdownBoundaryCase {
+    pub(crate) name: String,
+    pub(crate) supervisor: String,
+    pub(crate) work_class: String,
+    pub(crate) boundary: String,
+    pub(crate) per_admin_call_timeout_ms: usize,
+    pub(crate) cancellation_observed_inside_sweep: bool,
+    pub(crate) current_admin_future_dropped: bool,
+    pub(crate) remaining_peers_skipped: bool,
+    pub(crate) shutdown_join_bounded: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanPairingReconcileSweepSchedulingCase {
+    pub(crate) name: String,
+    pub(crate) supervisor: String,
+    pub(crate) work_class: String,
+    pub(crate) boundary: String,
+    pub(crate) max_concurrent_peer_preparations: usize,
+    pub(crate) peer_preparation_bounded: bool,
+    pub(crate) topology_mutation_serialized: bool,
+    pub(crate) stale_peer_blocks_ready_peer: bool,
+    pub(crate) every_peer_result_accounted: bool,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct LeanManagedExecLivenessCase {
     pub(crate) name: String,
     pub(crate) trigger: String,

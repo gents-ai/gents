@@ -98,6 +98,7 @@ struct StatusEndpointConnection {
     label: String,
     agent_name: String,
     agent_did: String,
+    default_behavior_id: Option<String>,
     graphql: String,
     p2p_transport: String,
     p2p_peer_id: String,
@@ -361,6 +362,7 @@ pub async fn init_status_endpoint_runtime(
             &connection.p2p_listen_address,
             &connection.agent_did,
             Some(&connection.graphql),
+            connection.default_behavior_id.as_deref(),
         )
         .await?;
 
@@ -569,6 +571,7 @@ fn extract_status_endpoint_connection(
         .or_else(|| string_at(payload, "/runtime/agent_name"))
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| fallback_agent_name(&agent_did));
+    let default_behavior_id = status_default_behavior_id(payload);
     let graphql = string_at(payload, "/desktop_graphql")
         .map(ToOwned::to_owned)
         .or_else(|| graphql_endpoint_for_desktop_access(payload, status_url))
@@ -607,11 +610,33 @@ fn extract_status_endpoint_connection(
         label,
         agent_name,
         agent_did,
+        default_behavior_id,
         graphql,
         p2p_transport,
         p2p_peer_id,
         p2p_listen_address,
     })
+}
+
+fn status_default_behavior_id(payload: &Value) -> Option<String> {
+    string_at(payload, "/default_behavior_id")
+        .or_else(|| string_at(payload, "/runtime/default_behavior_id"))
+        .or_else(|| string_at(payload, "/runtime_state/default_behavior_id"))
+        .map(str::to_owned)
+        .or_else(|| {
+            [
+                "/behaviors",
+                "/runtime/behaviors",
+                "/runtime_state/behaviors",
+            ]
+            .into_iter()
+            .filter_map(|pointer| payload.pointer(pointer).and_then(Value::as_array))
+            .flatten()
+            .filter(|behavior| behavior.get("enabled").and_then(Value::as_bool) != Some(false))
+            .filter_map(|behavior| string_at(behavior, "/behavior_id"))
+            .find(|behavior_id| *behavior_id == "default")
+            .map(str::to_owned)
+        })
 }
 
 fn string_at<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {

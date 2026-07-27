@@ -48,6 +48,7 @@ async fn managed_exec_deadline_kills_process_group() {
             cancellation_token: CancellationToken::new(),
             max_output_bytes: 1024,
             stdin: Vec::new(),
+            environment: None,
             tool_name: Some(tool_name.to_string()),
             live_output: None,
         })
@@ -101,6 +102,7 @@ async fn managed_exec_deadline_kills_process_group() {
         cancellation_token: CancellationToken::new(),
         max_output_bytes: 1024,
         stdin: Vec::new(),
+        environment: None,
         tool_name: Some("r3-soak-next".to_string()),
         live_output: None,
     })
@@ -130,6 +132,7 @@ async fn managed_exec_cancellation_kills_process_group() {
             cancellation_token: child_token,
             max_output_bytes: 1024,
             stdin: Vec::new(),
+            environment: None,
             tool_name: Some(tool_name.to_string()),
             live_output: None,
         })
@@ -165,6 +168,7 @@ async fn managed_exec_deadline_kills_job_object() {
                 cancellation_token: CancellationToken::new(),
                 max_output_bytes: 1024,
                 stdin: Vec::new(),
+                environment: None,
                 tool_name: Some(tool_name.to_string()),
                 live_output: None,
             })
@@ -206,6 +210,7 @@ async fn managed_exec_cancellation_kills_job_object() {
                 cancellation_token: child_token,
                 max_output_bytes: 1024,
                 stdin: Vec::new(),
+                environment: None,
                 tool_name: Some(tool_name.to_string()),
                 live_output: None,
             })
@@ -340,6 +345,7 @@ async fn managed_exec_caps_stdout() {
         cancellation_token: CancellationToken::new(),
         max_output_bytes: 3,
         stdin: Vec::new(),
+        environment: None,
         tool_name: Some("test".to_string()),
         live_output: None,
     })

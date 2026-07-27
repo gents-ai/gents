@@ -3,6 +3,7 @@ import {
   expectNoPageHorizontalOverflow,
   gotoHarness,
   openChat,
+  openChatNavigation,
   openConfigTab,
   test,
 } from "./desktopTest";
@@ -13,6 +14,7 @@ test.describe("desktop sidebar workflows", () => {
   }) => {
     await gotoHarness(page);
     await openChat(page);
+    await openChatNavigation(page);
 
     const connectedPeer = page.locator(".connected-peer-card");
     await expect(connectedPeer).toContainText("Bombadil UI Agent");
@@ -22,10 +24,11 @@ test.describe("desktop sidebar workflows", () => {
     await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
 
     await openChat(page);
+    await openChatNavigation(page);
     await connectedPeer.getByRole("button", { name: "Configure" }).click();
     await expect(page.locator(".config-workspace")).toBeVisible();
     await page.getByTestId("config-back-tab").click();
-    await expect(page.getByTestId("composer-input")).toBeVisible();
+    await openChatNavigation(page);
 
     await page.getByTestId("sidebar-behavior-ops").click();
     await expect(page.getByTestId("sidebar-behavior-ops")).toHaveClass(/selected/);
@@ -49,6 +52,7 @@ test.describe("desktop sidebar workflows", () => {
   }) => {
     await gotoHarness(page);
     await openChat(page);
+    await openChatNavigation(page);
 
     const taskFilter = page.getByTestId("conversation-task-filter");
     await expect(taskFilter).toBeVisible();
@@ -70,7 +74,7 @@ test.describe("desktop sidebar workflows", () => {
     await expect(page.getByTestId("task-run-status")).toContainText("request-");
 
     await page.getByTestId("config-back-tab").click();
-    await expect(page.getByTestId("composer-input")).toBeVisible();
+    await openChatNavigation(page);
     await taskFilter.selectOption("host-check");
     const conversationList = page.locator(".conversation-list");
     await expect(conversationList.getByText("Run task host-check")).toBeVisible();

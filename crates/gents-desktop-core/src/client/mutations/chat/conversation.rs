@@ -23,9 +23,11 @@ pub async fn create_conversation(
     node: &EmbeddedNode,
     store: &ClientStore,
     agent_did: &str,
+    requester_did: &str,
     behavior_id: Option<&str>,
 ) -> Result<CreatedConversation> {
     let agent_did = normalize_required("agent_did", agent_did)?;
+    let requester_did = normalize_required("requester_did", requester_did)?;
     let session_id = Uuid::new_v4().to_string();
     let binding = resolve_agent_binding(store, agent_did, behavior_id, None)?;
 
@@ -33,6 +35,8 @@ pub async fn create_conversation(
         node,
         store,
         &session_id,
+        agent_did,
+        requester_did,
         &binding.agent_name,
         &binding.behavior_id,
     )
@@ -42,6 +46,7 @@ pub async fn create_conversation(
         store,
         &session_id,
         agent_did,
+        requester_did,
         &binding.agent_name,
         &binding.behavior_id,
         "",
@@ -108,6 +113,8 @@ pub(super) async fn upsert_session(
     node: &EmbeddedNode,
     store: &ClientStore,
     session_id: &str,
+    agent_did: &str,
+    requester_did: &str,
     agent_name: &str,
     behavior_id: &Option<String>,
 ) -> Result<()> {
@@ -116,6 +123,8 @@ pub(super) async fn upsert_session(
         "upsert_AgentSession",
         store,
         session_id,
+        agent_did,
+        requester_did,
         agent_name,
         behavior_id,
         &now,
@@ -128,6 +137,8 @@ pub(super) fn build_upsert_session_field(
     alias: &str,
     store: &ClientStore,
     session_id: &str,
+    agent_did: &str,
+    requester_did: &str,
     agent_name: &str,
     behavior_id: &Option<String>,
     now: &str,
@@ -141,6 +152,8 @@ pub(super) fn build_upsert_session_field(
         .unwrap_or(now);
 
     let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_requester_did = escape_graphql_string(requester_did);
     let escaped_agent_name = escape_graphql_string(agent_name);
     let escaped_behavior_id = escape_graphql_string(behavior_id.as_deref().unwrap_or(""));
     let escaped_started = escape_graphql_string(started);
@@ -149,6 +162,8 @@ pub(super) fn build_upsert_session_field(
                 filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
                 add: {{
                     session_id: "{escaped_session_id}",
+                    agent_did: "{escaped_agent_did}",
+                    requester_did: "{escaped_requester_did}",
                     agent_name: "{escaped_agent_name}",
                     behavior_id: "{escaped_behavior_id}",
                     started: "{escaped_started}",
@@ -171,6 +186,7 @@ pub(super) async fn upsert_conversation(
     store: &ClientStore,
     session_id: &str,
     agent_did: &str,
+    requester_did: &str,
     agent_name: &str,
     behavior_id: &Option<String>,
     latest_request_id: &str,
@@ -183,6 +199,7 @@ pub(super) async fn upsert_conversation(
         store,
         session_id,
         agent_did,
+        requester_did,
         agent_name,
         behavior_id,
         latest_request_id,
@@ -200,6 +217,7 @@ pub(super) fn build_upsert_conversation_field(
     store: &ClientStore,
     session_id: &str,
     agent_did: &str,
+    requester_did: &str,
     agent_name: &str,
     behavior_id: &Option<String>,
     latest_request_id: &str,
@@ -245,6 +263,7 @@ pub(super) fn build_upsert_conversation_field(
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_name = escape_graphql_string(agent_name);
     let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_requester_did = escape_graphql_string(requester_did);
     let escaped_behavior_id = escape_graphql_string(behavior_id.as_deref().unwrap_or(""));
     let escaped_title = escape_graphql_string(&title);
     let escaped_title_source = escape_graphql_string(title_source);
@@ -259,6 +278,7 @@ pub(super) fn build_upsert_conversation_field(
                     session_id: "{escaped_session_id}",
                     agent_name: "{escaped_agent_name}",
                     agent_did: "{escaped_agent_did}",
+                    requester_did: "{escaped_requester_did}",
                     behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
                     title_source: "{escaped_title_source}",
@@ -270,7 +290,6 @@ pub(super) fn build_upsert_conversation_field(
                 }},
                 update: {{
                     agent_name: "{escaped_agent_name}",
-                    agent_did: "{escaped_agent_did}",
                     behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
                     title_source: "{escaped_title_source}",
