@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 use crate::error::BridgeErrorCode;
 
 /// `MAJOR.MINOR` contract version. MINOR = additive; MAJOR = breaking.
-// 0.2: additive — desktop_bridge_contract, desktop_peer_probe_address; peer_status
-// re-keyed to peer_id (breaking shape of that one request — MAJOR would be 1.0;
-// we ship as 0.2 during pre-1.0 with documented migration in phase 3).
-pub const CONTRACT_VERSION: &str = "0.2";
+// 0.3: additive — BridgeError on command Err paths; snapshot grants projection
+// (host-declared SnapshotGrants); native-e2e feature gate.
+// 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
+pub const CONTRACT_VERSION: &str = "0.3";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");

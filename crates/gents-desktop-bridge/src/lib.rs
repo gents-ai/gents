@@ -30,6 +30,7 @@ pub use contract::{current_contract, BridgeContract, CONTRACT_VERSION, PACKAGE_V
 pub use error::{BridgeError, BridgeErrorCode};
 pub use plugin::init;
 pub use runtime_setup::{init_tracing, install_runtime};
+pub use snapshot::projection::SnapshotGrants;
 
 #[cfg(test)]
 mod tests;

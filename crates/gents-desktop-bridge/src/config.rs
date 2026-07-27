@@ -3,6 +3,8 @@
 
 use std::path::PathBuf;
 
+use crate::snapshot::projection::SnapshotGrants;
+
 /// Configuration passed to [`crate::init`].
 #[derive(Debug, Clone)]
 pub struct BridgeConfig {
@@ -12,6 +14,9 @@ pub struct BridgeConfig {
     pub bootstrap: BootstrapPolicy,
     /// Host identity metadata for logs/diagnostics (not payloads).
     pub app_meta: AppMeta,
+    /// Snapshot section grants. Must match the capability permission sets the
+    /// host grants the webview (Gents Desktop uses [`SnapshotGrants::all`]).
+    pub snapshot_grants: SnapshotGrants,
 }
 
 impl Default for BridgeConfig {
@@ -25,6 +30,7 @@ impl Default for BridgeConfig {
                 app_name: "gents-desktop".into(),
                 app_version: env!("CARGO_PKG_VERSION").into(),
             },
+            snapshot_grants: SnapshotGrants::all(),
         }
     }
 }

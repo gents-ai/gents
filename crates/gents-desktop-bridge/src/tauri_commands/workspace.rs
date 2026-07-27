@@ -1,3 +1,4 @@
+use crate::error::BridgeError;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -31,9 +32,9 @@ pub struct WorkspaceListingView {
 pub fn desktop_workspace_list(
     subpath: Option<String>,
     state: State<'_, DesktopAppState>,
-) -> Result<WorkspaceListingView, String> {
+) -> Result<WorkspaceListingView, BridgeError> {
     if current_core(&state).is_none() {
-        return Err("desktop client is not running".to_string());
+        return Err(BridgeError::from_legacy_message("desktop client is not running"));
     }
 
     let root = workspace_root(&state)?;
@@ -45,15 +46,15 @@ pub fn desktop_workspace_list(
     };
     let target = requested
         .canonicalize()
-        .map_err(|error| format!("cannot open {}: {error}", requested.display()))?;
+        .map_err(|error| BridgeError::from_legacy_message(format!("cannot open {}: {error}", requested.display())))?;
     if !target.starts_with(&root) {
-        return Err("path escapes the workspace root".to_string());
+        return Err(BridgeError::from_legacy_message("path escapes the workspace root"));
     }
 
     let mut entries = Vec::new();
     let mut truncated = false;
     let read_dir = std::fs::read_dir(&target)
-        .map_err(|error| format!("cannot list {}: {error}", target.display()))?;
+        .map_err(|error| BridgeError::from_legacy_message(format!("cannot list {}: {error}", target.display())))?;
     for entry in read_dir.flatten() {
         if entries.len() >= MAX_ENTRIES {
             truncated = true;
@@ -88,7 +89,7 @@ pub fn desktop_workspace_list(
 
 /// The agent home's configured tool root, canonicalized. No tool root
 /// (meta-only agents) is an honest error, not an empty listing.
-fn workspace_root(state: &State<'_, DesktopAppState>) -> Result<PathBuf, String> {
+fn workspace_root(state: &State<'_, DesktopAppState>) -> Result<PathBuf, BridgeError> {
     #[derive(serde::Deserialize)]
     struct InitRootView {
         #[serde(default)]
@@ -102,8 +103,12 @@ fn workspace_root(state: &State<'_, DesktopAppState>) -> Result<PathBuf, String>
         .and_then(|config| config.tool_root)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "this agent has no tool root configured (meta-only ceiling)".to_string())?;
+        .ok_or_else(|| BridgeError::from_legacy_message("this agent has no tool root configured (meta-only ceiling)"))?;
     Path::new(&root)
         .canonicalize()
-        .map_err(|error| format!("tool root {root} is not accessible: {error}"))
+        .map_err(|error| {
+            BridgeError::from_legacy_message(format!(
+                "tool root {root} is not accessible: {error}"
+            ))
+        })
 }

@@ -5,13 +5,15 @@ use gents_desktop_core::local_runtime::{
     dangerously_overwrite_desktop_home, init_standard_local_runtime, reset_desktop_runtime_state,
     DesktopInitOptions, DesktopInitSummary,
 };
-use tauri::{Runtime, AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::config::BootstrapPolicy;
 use crate::contract::{current_contract, BridgeContract};
 use crate::error::{BridgeError, BridgeErrorCode};
-use crate::snapshot::{build_bootstrap_summary, build_client_snapshot};
-use crate::state::{current_core, spawn_client_update_task, DesktopAppState};
+use crate::snapshot::{
+    build_bootstrap_summary_for_policy, build_client_snapshot_with_grants,
+};
+use crate::state::{current_core, snapshot_grants, spawn_client_update_task, DesktopAppState};
 use crate::types::{
     ClientUpdateEvent, DesktopBootstrapSummary, DesktopClientSnapshot, DesktopInitRequest,
 };
@@ -19,27 +21,30 @@ use crate::types::{
 const CLIENT_START_STACK_SIZE: usize = 16 * 1024 * 1024;
 
 #[tauri::command]
-pub async fn desktop_bridge_contract() -> Result<BridgeContract, String> {
+pub async fn desktop_bridge_contract() -> Result<BridgeContract, BridgeError> {
     Ok(current_contract())
 }
 
 #[tauri::command]
-pub async fn desktop_bootstrap_summary() -> Result<DesktopBootstrapSummary, String> {
-    build_bootstrap_summary().await
+pub async fn desktop_bootstrap_summary(
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopBootstrapSummary, BridgeError> {
+    build_bootstrap_summary_for_policy(&state.policy)
+        .await
+        .map_err(BridgeError::from_legacy_message)
 }
 
 #[tauri::command]
 pub async fn desktop_init_local_standard(
     request: DesktopInitRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopInitSummary, String> {
+) -> Result<DesktopInitSummary, BridgeError> {
     match &state.policy.bootstrap {
         BootstrapPolicy::PairedRemoteOnly => {
             return Err(BridgeError::new(
                 BridgeErrorCode::Unsupported,
                 "local runtime provisioning is disabled (PairedRemoteOnly)",
-            )
-            .message);
+            ));
         }
         BootstrapPolicy::LocalRuntimeAllowed { .. } => {}
     }
@@ -49,15 +54,15 @@ pub async fn desktop_init_local_standard(
             BridgeErrorCode::Unsupported,
             "agent home is not configured for this host",
         )
-        .message
     })?;
     let desktop_paths = state.policy.desktop_paths.clone();
 
     if request.dangerously_overwrite {
         dangerously_overwrite_desktop_home(desktop_paths.root())
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
     } else if request.reset {
-        let _ = reset_desktop_runtime_state(&desktop_paths).map_err(|error| error.to_string())?;
+        let _ = reset_desktop_runtime_state(&desktop_paths)
+            .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
     }
 
     init_standard_local_runtime(DesktopInitOptions {
@@ -69,16 +74,19 @@ pub async fn desktop_init_local_standard(
             .unwrap_or_else(|| "Local Agent".to_string()),
     })
     .await
-    .map_err(|error| error.to_string())
+    .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
 }
 
 #[tauri::command]
 pub async fn desktop_client_start<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, String> {
+) -> Result<DesktopClientSnapshot, BridgeError> {
+    let grants = snapshot_grants(&state);
     if let Some(core) = current_core(&state) {
-        return build_client_snapshot(Some(&core)).await;
+        return build_client_snapshot_with_grants(Some(&core), Some(&state.policy), grants)
+            .await
+            .map_err(BridgeError::from_legacy_message);
     }
 
     let paths = state.policy.desktop_paths.clone();
@@ -98,14 +106,16 @@ pub async fn desktop_client_start<R: Runtime>(
         },
     );
 
-    build_client_snapshot(Some(&core)).await
+    build_client_snapshot_with_grants(Some(&core), Some(&state.policy), grants)
+        .await
+        .map_err(BridgeError::from_legacy_message)
 }
 
 #[tauri::command]
 pub async fn desktop_client_shutdown<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, String> {
+) -> Result<DesktopClientSnapshot, BridgeError> {
     let (core, updates_task) = {
         let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
         (bridge.core.take(), bridge.updates_task.take())
@@ -116,7 +126,9 @@ pub async fn desktop_client_shutdown<R: Runtime>(
     }
 
     if let Some(core) = core {
-        core.shutdown().await.map_err(|error| error.to_string())?;
+        core.shutdown()
+            .await
+            .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
     }
 
     let _ = app.emit(
@@ -126,43 +138,56 @@ pub async fn desktop_client_shutdown<R: Runtime>(
         },
     );
 
-    build_client_snapshot(None).await
+    let grants = snapshot_grants(&state);
+    build_client_snapshot_with_grants(None, Some(&state.policy), grants)
+        .await
+        .map_err(BridgeError::from_legacy_message)
 }
 
 #[tauri::command]
 pub async fn desktop_client_snapshot(
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, String> {
+) -> Result<DesktopClientSnapshot, BridgeError> {
     let core = current_core(&state);
-    build_client_snapshot(core.as_ref()).await
+    let grants = snapshot_grants(&state);
+    build_client_snapshot_with_grants(core.as_ref(), Some(&state.policy), grants)
+        .await
+        .map_err(BridgeError::from_legacy_message)
 }
 
 fn start_client_core_with_large_stack(
     paths: gents_desktop_core::client::DesktopPaths,
-) -> Result<ClientCore, String> {
-    // iOS gives its WebKit/main thread a much smaller stack than macOS. DefraDB
-    // schema migration can legitimately exceed it during first client startup,
-    // so keep the command asynchronous and poll startup on a temporary thread
-    // with explicit headroom.
+) -> Result<ClientCore, BridgeError> {
     std::thread::Builder::new()
         .name("desktop-client-start".to_string())
         .stack_size(CLIENT_START_STACK_SIZE)
-        .spawn(move || {
-            tauri::async_runtime::block_on(ClientCore::start_with_paths(paths))
-        })
-        .map_err(|error| format!("spawning desktop client startup thread: {error}"))?
+        .spawn(move || tauri::async_runtime::block_on(ClientCore::start_with_paths(paths)))
+        .map_err(|error| {
+            BridgeError::new(
+                BridgeErrorCode::ClientStartFailed,
+                format!("spawning desktop client startup thread: {error}"),
+            )
+        })?
         .join()
-        .map_err(|_| "desktop client startup thread panicked".to_string())?
-        .map_err(|error| error.to_string())
+        .map_err(|_| {
+            BridgeError::new(
+                BridgeErrorCode::ClientStartFailed,
+                "desktop client startup thread panicked",
+            )
+        })?
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
 }
 
 #[tauri::command]
 pub fn desktop_set_selected_agent(
     state: State<'_, DesktopAppState>,
     agent_did: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err("desktop client not initialized".to_string());
+        return Err(BridgeError::new(
+            BridgeErrorCode::ClientNotRunning,
+            "desktop client not initialized",
+        ));
     };
     let did = agent_did
         .map(|s| s.trim().to_string())
@@ -217,7 +242,7 @@ pub struct DesktopObserverMetrics {
 #[tauri::command]
 pub async fn desktop_observer_metrics(
     state: State<'_, DesktopAppState>,
-) -> Result<Option<DesktopObserverMetrics>, String> {
+) -> Result<Option<DesktopObserverMetrics>, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };

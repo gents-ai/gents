@@ -316,6 +316,7 @@ if (!skipBuild) {
   if (existsSync(priorTauriBuild)) {
     renameSync(priorTauriBuild, join(artifactRoot, "prior-tauri-build"));
   }
+  // Enable native-e2e command bodies + E2E capability overlay (design § Stable contracts).
   run(
     "npm",
     [
@@ -328,6 +329,11 @@ if (!skipBuild) {
       "--target",
       "aarch64-sim",
       "--ci",
+      "--config",
+      "src-tauri/tauri.e2e.conf.json",
+      "--",
+      "--features",
+      "native-e2e",
     ],
     { cwd: APP_ROOT },
   );

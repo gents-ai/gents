@@ -3,6 +3,8 @@ use std::time::Duration;
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
 use tauri::{Runtime, AppHandle, State};
 
+use crate::error::BridgeError;
+
 use crate::commands::{add_peer, pair_bearer, remove_peer, rename_peer, repair_p2p};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
@@ -17,15 +19,15 @@ pub async fn desktop_peer_add<R: Runtime>(
     app: AppHandle<R>,
     request: PeerAddRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, String> {
+) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err("desktop client is not running".to_string());
+        return Err(BridgeError::from_legacy_message("desktop client is not running"));
     };
 
     add_peer(core.as_ref(), request)
         .await
-        .map_err(|error| error.to_string())?;
-    emit_config_update_and_snapshot(&app, &core).await
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+    emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
 #[tauri::command]
@@ -33,15 +35,15 @@ pub async fn desktop_peer_pair_bearer<R: Runtime>(
     app: AppHandle<R>,
     request: BearerPairingRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<BearerPairingResponse, String> {
+) -> Result<BearerPairingResponse, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err("desktop client is not running".to_string());
+        return Err(BridgeError::from_legacy_message("desktop client is not running"));
     };
 
     let pairing = pair_bearer(core.as_ref(), request)
         .await
-        .map_err(|error| format!("{error:#}"))?;
-    let snapshot = emit_config_update_and_snapshot(&app, &core).await?;
+        .map_err(|error| BridgeError::from_legacy_message(format!("{error:#}")))?;
+    let snapshot = emit_config_update_and_snapshot(&app, &core, &state).await?;
     Ok(BearerPairingResponse::new(snapshot, pairing))
 }
 
@@ -49,13 +51,13 @@ pub async fn desktop_peer_pair_bearer<R: Runtime>(
 pub async fn desktop_peer_status_fetch(
     request: PeerStatusFetchRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err("desktop client is not running".to_string());
+        return Err(BridgeError::from_legacy_message("desktop client is not running"));
     };
     let peer_id = request.peer_id.trim();
     if peer_id.is_empty() {
-        return Err("peer_id is required".to_string());
+        return Err(BridgeError::from_legacy_message("peer_id is required"));
     }
     let addr = core
         .peer_records()
@@ -66,36 +68,36 @@ pub async fn desktop_peer_status_fetch(
         .ok_or_else(|| format!("saved peer {peer_id} was not found"))?;
     fetch_runtime_connection_payload(&addr)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
 }
 
 /// Admin-only: probe an arbitrary address before the peer is saved.
 #[tauri::command]
 pub async fn desktop_peer_probe_address(
     request: PeerProbeRequest,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, BridgeError> {
     let address = request.server_address.trim();
     if address.is_empty() {
-        return Err("server_address is required".to_string());
+        return Err(BridgeError::from_legacy_message("server_address is required"));
     }
     fetch_runtime_connection_payload(address)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
 }
 
 #[tauri::command]
 pub async fn desktop_p2p_repair<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, String> {
+) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err("desktop client is not running".to_string());
+        return Err(BridgeError::from_legacy_message("desktop client is not running"));
     };
 
     repair_p2p(core.as_ref(), Duration::from_millis(250))
         .await
-        .map_err(|error| error.to_string())?;
-    emit_config_update_and_snapshot(&app, &core).await
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+    emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
 #[tauri::command]
@@ -103,15 +105,15 @@ pub async fn desktop_peer_remove<R: Runtime>(
     app: AppHandle<R>,
     peer_id: String,
     state: State<'_, DesktopAppState>,
-) -> Result<PeerRemoveResponse, String> {
+) -> Result<PeerRemoveResponse, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err("desktop client is not running".to_string());
+        return Err(BridgeError::from_legacy_message("desktop client is not running"));
     };
 
     let mutation = remove_peer(core.as_ref(), peer_id)
         .await
-        .map_err(|error| error.to_string())?;
-    let snapshot = emit_config_update_and_snapshot(&app, &core).await?;
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+    let snapshot = emit_config_update_and_snapshot(&app, &core, &state).await?;
     Ok(PeerRemoveResponse::new(snapshot, mutation))
 }
 
@@ -121,23 +123,23 @@ pub async fn desktop_peer_rename<R: Runtime>(
     peer_id: String,
     label: String,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, String> {
+) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err("desktop client is not running".to_string());
+        return Err(BridgeError::from_legacy_message("desktop client is not running"));
     };
 
     rename_peer(core.as_ref(), peer_id, label)
         .await
-        .map_err(|error| error.to_string())?;
-    emit_config_update_and_snapshot(&app, &core).await
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+    emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
 #[tauri::command]
 pub async fn desktop_network_status(
     state: State<'_, DesktopAppState>,
-) -> Result<NetworkStatusView, String> {
+) -> Result<NetworkStatusView, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err("desktop client is not running".to_string());
+        return Err(BridgeError::from_legacy_message("desktop client is not running"));
     };
 
     let status = core.network_status().await;

@@ -1,17 +1,21 @@
 #[path = "snapshot/timeline.rs"]
 mod timeline;
+#[path = "snapshot/projection.rs"]
+pub mod projection;
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use gents_desktop_core::client::{ClientCore, DesktopPaths, P2PHealth, PeerDirectory};
-use gents_desktop_core::local_runtime::default_agent_home;
 
+use super::state::ResolvedBridgePolicy;
 use super::types::{
     normalize_optional, DesktopBootstrapSummary, DesktopClientSnapshot, P2PHealthView,
     SavedPeerView,
 };
+use projection::{project_bootstrap_summary, project_client_snapshot, SnapshotGrants};
 
 #[derive(Debug, serde::Deserialize)]
 struct StoredInitConfigView {
@@ -42,15 +46,41 @@ fn system_time_rfc3339(value: Option<SystemTime>) -> Option<String> {
 }
 
 pub async fn build_bootstrap_summary() -> Result<DesktopBootstrapSummary, String> {
-    let agent_home = default_agent_home().map_err(|error| error.to_string())?;
+    // Legacy entry: discover defaults, full grants (tests / pre-policy callers).
+    let agent_home = gents_desktop_core::local_runtime::default_agent_home()
+        .map_err(|error| error.to_string())?;
     let desktop_paths = DesktopPaths::discover().map_err(|error| error.to_string())?;
+    let full =
+        build_bootstrap_summary_raw(&desktop_paths, Some(agent_home.as_path())).await?;
+    Ok(project_bootstrap_summary(full, SnapshotGrants::all()))
+}
+
+pub async fn build_bootstrap_summary_for_policy(
+    policy: &ResolvedBridgePolicy,
+) -> Result<DesktopBootstrapSummary, String> {
+    let full = build_bootstrap_summary_raw(
+        &policy.desktop_paths,
+        policy.agent_home.as_deref(),
+    )
+    .await?;
+    Ok(project_bootstrap_summary(full, policy.snapshot_grants))
+}
+
+async fn build_bootstrap_summary_raw(
+    desktop_paths: &DesktopPaths,
+    agent_home: Option<&Path>,
+) -> Result<DesktopBootstrapSummary, String> {
     let peer_directory = PeerDirectory::load(desktop_paths.peer_directory_path())
         .await
         .map_err(|error| error.to_string())?;
-    let init = read_stored_init_config(&agent_home);
+    let init = agent_home.and_then(read_stored_init_config);
+    let agent_home_display = agent_home
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let agent_home_exists = agent_home.map(|p| p.exists()).unwrap_or(false);
 
     Ok(DesktopBootstrapSummary {
-        default_agent_home: agent_home.display().to_string(),
+        default_agent_home: agent_home_display,
         init_agent_name: init
             .as_ref()
             .and_then(|config| normalize_optional(config.agent_name.as_deref())),
@@ -67,7 +97,7 @@ pub async fn build_bootstrap_summary() -> Result<DesktopBootstrapSummary, String
         peer_directory_path: desktop_paths.peer_directory_path().display().to_string(),
         node_data_dir: desktop_paths.node_data_dir().display().to_string(),
         log_file_path: desktop_paths.log_file_path().display().to_string(),
-        agent_home_exists: agent_home.exists(),
+        agent_home_exists,
         desktop_home_exists: desktop_paths.root().exists(),
         peer_directory_exists: desktop_paths.peer_directory_path().exists(),
         saved_peers: peer_directory
@@ -124,12 +154,37 @@ pub use session::build_session_snapshot_from_store_for_agent;
 pub async fn build_client_snapshot(
     core: Option<&Arc<ClientCore>>,
 ) -> Result<DesktopClientSnapshot, String> {
-    let bootstrap = build_bootstrap_summary().await?;
+    build_client_snapshot_with_grants(core, None, SnapshotGrants::all()).await
+}
+
+/// Snapshot builder seam: always projects by `grants` so lifecycle returns,
+/// mutation refreshes, and nested pairing/removal responses stay consistent.
+pub async fn build_client_snapshot_with_grants(
+    core: Option<&Arc<ClientCore>>,
+    policy: Option<&ResolvedBridgePolicy>,
+    grants: SnapshotGrants,
+) -> Result<DesktopClientSnapshot, String> {
+    let bootstrap = match policy {
+        Some(policy) => {
+            build_bootstrap_summary_raw(&policy.desktop_paths, policy.agent_home.as_deref())
+                .await?
+        }
+        None => {
+            let agent_home = gents_desktop_core::local_runtime::default_agent_home()
+                .map_err(|error| error.to_string())?;
+            let desktop_paths =
+                DesktopPaths::discover().map_err(|error| error.to_string())?;
+            build_bootstrap_summary_raw(&desktop_paths, Some(agent_home.as_path())).await?
+        }
+    };
     let client = match core {
         Some(core) => Some(build_runtime_snapshot(core.as_ref()).await),
         None => None,
     };
-    Ok(DesktopClientSnapshot { bootstrap, client })
+    Ok(project_client_snapshot(
+        DesktopClientSnapshot { bootstrap, client },
+        grants,
+    ))
 }
 
 #[cfg(test)]

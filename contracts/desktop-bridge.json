@@ -229,7 +229,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "0.2",
+  "contractVersion": "0.3",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",

@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use crate::error::BridgeError;
+
+#[cfg(feature = "native-e2e")]
 const E2E_STATUS_FILENAME: &str = "native-e2e-status.json";
 
 #[derive(Serialize)]
@@ -20,10 +23,11 @@ pub struct NativeE2eStatus {
 }
 
 #[tauri::command]
-pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, String> {
+#[cfg(feature = "native-e2e")]
+pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, BridgeError> {
     #[cfg(not(debug_assertions))]
     {
-        Ok(None)
+        return Ok(None);
     }
 
     #[cfg(debug_assertions)]
@@ -32,10 +36,13 @@ pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, String> {
             return Ok(None);
         }
 
-        let pair_token = std::env::var("GENTS_E2E_PAIR_TOKEN")
-            .map_err(|_| "GENTS_E2E_PAIR_TOKEN is required for native E2E".to_owned())?;
+        let pair_token = std::env::var("GENTS_E2E_PAIR_TOKEN").map_err(|_| {
+            BridgeError::from_legacy_message("GENTS_E2E_PAIR_TOKEN is required for native E2E")
+        })?;
         if !pair_token.starts_with("dabear1-") {
-            return Err("GENTS_E2E_PAIR_TOKEN is not a bearer pairing invite".to_owned());
+            return Err(BridgeError::from_legacy_message(
+                "GENTS_E2E_PAIR_TOKEN is not a bearer pairing invite",
+            ));
         }
 
         Ok(Some(NativeE2eConfig {
@@ -57,43 +64,75 @@ pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, String> {
 }
 
 #[tauri::command]
-pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), String> {
+#[cfg(feature = "native-e2e")]
+pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), BridgeError> {
     #[cfg(not(debug_assertions))]
     {
         let _ = status;
-        Err("native E2E status is disabled in release builds".to_owned())
+        return Err(BridgeError::from_legacy_message(
+            "native E2E status is disabled in release builds",
+        ));
     }
 
     #[cfg(debug_assertions)]
     {
         if std::env::var("GENTS_NATIVE_E2E").ok().as_deref() != Some("1") {
-            return Err("native E2E status is not enabled".to_owned());
+            return Err(BridgeError::from_legacy_message(
+                "native E2E status is not enabled",
+            ));
         }
         if status.stage.is_empty() || status.stage.len() > 64 {
-            return Err("native E2E stage must contain 1-64 bytes".to_owned());
+            return Err(BridgeError::from_legacy_message(
+                "native E2E stage must contain 1-64 bytes",
+            ));
         }
         if status
             .detail
             .as_ref()
             .is_some_and(|detail| detail.len() > 2048)
         {
-            return Err("native E2E detail must not exceed 2048 bytes".to_owned());
+            return Err(BridgeError::from_legacy_message(
+                "native E2E detail must not exceed 2048 bytes",
+            ));
         }
 
         let directory = std::env::temp_dir();
-        tokio::fs::create_dir_all(&directory)
-            .await
-            .map_err(|error| format!("creating native E2E status directory: {error}"))?;
+        tokio::fs::create_dir_all(&directory).await.map_err(|error| {
+            BridgeError::from_legacy_message(format!(
+                "creating native E2E status directory: {error}"
+            ))
+        })?;
 
-        let bytes = serde_json::to_vec(&status)
-            .map_err(|error| format!("serializing native E2E status: {error}"))?;
+        let bytes = serde_json::to_vec(&status).map_err(|error| {
+            BridgeError::from_legacy_message(format!("serializing native E2E status: {error}"))
+        })?;
         let status_path = directory.join(E2E_STATUS_FILENAME);
         let temporary_path = directory.join(format!("{E2E_STATUS_FILENAME}.tmp"));
         tokio::fs::write(&temporary_path, bytes)
             .await
-            .map_err(|error| format!("writing native E2E status: {error}"))?;
+            .map_err(|error| {
+                BridgeError::from_legacy_message(format!("writing native E2E status: {error}"))
+            })?;
         tokio::fs::rename(&temporary_path, &status_path)
             .await
-            .map_err(|error| format!("publishing native E2E status: {error}"))
+            .map_err(|error| {
+                BridgeError::from_legacy_message(format!("publishing native E2E status: {error}"))
+            })?;
+        Ok(())
     }
+}
+
+/// Stubs when the `native-e2e` feature is off (production / default builds).
+#[tauri::command]
+#[cfg(not(feature = "native-e2e"))]
+pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, BridgeError> {
+    Ok(None)
+}
+
+#[tauri::command]
+#[cfg(not(feature = "native-e2e"))]
+pub async fn desktop_native_e2e_status(_status: NativeE2eStatus) -> Result<(), BridgeError> {
+    Err(BridgeError::from_legacy_message(
+        "native E2E commands are not compiled into this build",
+    ))
 }

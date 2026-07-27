@@ -136,7 +136,7 @@ async fn resolve_hold_rejects_unknown_tool_call() {
     )
     .await
     .expect_err("unknown hold must fail");
-    assert!(error.contains("not awaiting approval"), "{error}");
+    assert!(error.message.contains("not awaiting approval"), "{error}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

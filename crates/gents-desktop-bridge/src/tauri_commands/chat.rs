@@ -1,3 +1,4 @@
+use crate::error::BridgeError;
 use tauri::State;
 
 use crate::commands::{rename_conversation, send_chat_message};
@@ -13,7 +14,7 @@ pub async fn desktop_session_snapshot(
     agent_did: Option<String>,
     request_id: Option<String>,
     state: State<'_, DesktopAppState>,
-) -> Result<Option<DesktopSessionSnapshot>, String> {
+) -> Result<Option<DesktopSessionSnapshot>, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
@@ -51,28 +52,28 @@ pub async fn desktop_session_snapshot(
 pub async fn desktop_chat_send(
     request: ChatSendRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<ChatSendResult, String> {
+) -> Result<ChatSendResult, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err("desktop client is not running".to_string());
+        return Err(BridgeError::from_legacy_message("desktop client is not running"));
     };
 
     send_chat_message(core.as_ref(), request)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
 }
 
 #[tauri::command]
 pub async fn desktop_conversation_rename(
     request: ConversationRenameRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<(), String> {
+) -> Result<(), BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err("desktop client is not running".to_string());
+        return Err(BridgeError::from_legacy_message("desktop client is not running"));
     };
 
     rename_conversation(core.as_ref(), request)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -90,9 +91,9 @@ pub async fn desktop_session_fork(
     at_user_turn: u32,
     behavior_id: Option<String>,
     state: State<'_, DesktopAppState>,
-) -> Result<SessionForkResultView, String> {
+) -> Result<SessionForkResultView, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err("desktop client is not running".to_string());
+        return Err(BridgeError::from_legacy_message("desktop client is not running"));
     };
 
     let outcome = core
@@ -103,7 +104,7 @@ pub async fn desktop_session_fork(
             behavior_id.as_deref(),
         )
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
     Ok(SessionForkResultView {
         session_id: outcome.session_id,
         copied_messages: outcome.copied_messages,
@@ -122,15 +123,15 @@ pub struct RequestResendResultView {
 pub async fn desktop_request_resend(
     request_id: String,
     state: State<'_, DesktopAppState>,
-) -> Result<RequestResendResultView, String> {
+) -> Result<RequestResendResultView, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err("desktop client is not running".to_string());
+        return Err(BridgeError::from_legacy_message("desktop client is not running"));
     };
 
     let submitted = core
         .resend_request(&request_id)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
     Ok(RequestResendResultView {
         request_id: submitted.request_id,
         session_id: submitted.session_id,
@@ -142,14 +143,14 @@ pub async fn desktop_request_timeline(
     agent_did: String,
     request_id: String,
     state: State<'_, DesktopAppState>,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err("desktop client is not running".to_string());
+        return Err(BridgeError::from_legacy_message("desktop client is not running"));
     };
 
     let timeline = core
         .request_timeline(&agent_did, &request_id)
         .await
-        .map_err(|error| error.to_string())?;
-    serde_json::to_value(&timeline).map_err(|error| error.to_string())
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+    serde_json::to_value(&timeline).map_err(|error| BridgeError::from_legacy_message(error.to_string()))
 }

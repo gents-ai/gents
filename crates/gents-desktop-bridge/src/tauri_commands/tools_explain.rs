@@ -1,3 +1,4 @@
+use crate::error::BridgeError;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -16,13 +17,13 @@ pub async fn desktop_tool_surface_explain(
     agent_did: String,
     behavior_id: String,
     state: State<'_, DesktopAppState>,
-) -> Result<Value, String> {
+) -> Result<Value, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err("desktop client is not running".to_string());
+        return Err(BridgeError::from_legacy_message("desktop client is not running"));
     };
 
     if core.graphql_for_agent(&agent_did).await.is_some() {
-        return Err("tool-surface explanation for remote agents is not yet supported".to_string());
+        return Err(BridgeError::from_legacy_message("tool-surface explanation for remote agents is not yet supported"));
     }
     let snapshot = core.store().snapshot();
 
@@ -60,14 +61,14 @@ pub async fn desktop_tool_surface_explain(
                 .ok_or_else(|| format!("referenced ToolSelection {selection_id} is missing"))?;
             let document: gents::ToolSelectionDocument = serde_json::to_value(row)
                 .and_then(serde_json::from_value)
-                .map_err(|error| format!("decoding ToolSelection {selection_id}: {error}"))?;
+                .map_err(|error| BridgeError::from_legacy_message(format!("decoding ToolSelection {selection_id}: {error}")))?;
             let config = BehaviorToolConfig::from_tool_selection_document(
                 &behavior.behavior_id,
                 &document,
                 &ceiling,
                 Vec::new(),
             )
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
             ("document", config, document.tool_policy_version.clone())
         }
         None => (
@@ -78,7 +79,7 @@ pub async fn desktop_tool_surface_explain(
                 &ceiling,
                 Vec::new(),
             )
-            .map_err(|error| error.to_string())?,
+            .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?,
             None,
         ),
     };
@@ -100,7 +101,7 @@ pub async fn desktop_tool_surface_explain(
         "toolPolicySemantics": tool_policy_semantics,
         "ceilingSource": ceiling_source,
         "mcpServicesOnline": mcp_services_online,
-        "surface": serde_json::to_value(&explanation).map_err(|error| error.to_string())?,
+        "surface": serde_json::to_value(&explanation).map_err(|error| BridgeError::from_legacy_message(error.to_string()))?,
     }))
 }
 
@@ -108,7 +109,7 @@ pub async fn desktop_tool_surface_explain(
 /// stores `tool_ceiling` as a free string in the agent home's init.json.
 fn resolve_desktop_tool_ceiling(
     agent_home: &std::path::Path,
-) -> Result<(ToolCeiling, &'static str), String> {
+) -> Result<(ToolCeiling, &'static str), BridgeError> {
     #[derive(serde::Deserialize)]
     struct InitCeilingView {
         #[serde(default)]
@@ -151,6 +152,6 @@ fn resolve_desktop_tool_ceiling(
             })?;
             Ok((ToolCeiling::readwrite(PathBuf::from(root)), "init_json"))
         }
-        Some(other) => Err(format!("init.json has unrecognized tool_ceiling {other:?}")),
+        Some(other) => Err(format!("init.json has unrecognized tool_ceiling {other:?}").into()),
     }
 }

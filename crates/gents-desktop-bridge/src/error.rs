@@ -173,6 +173,18 @@ impl From<BridgeError> for String {
     }
 }
 
+impl From<String> for BridgeError {
+    fn from(message: String) -> Self {
+        Self::from_legacy_message(message)
+    }
+}
+
+impl From<&str> for BridgeError {
+    fn from(message: &str) -> Self {
+        Self::from_legacy_message(message)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

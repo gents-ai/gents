@@ -7,6 +7,7 @@ use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::config::{AgentHomePolicy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy};
+use crate::snapshot::projection::SnapshotGrants;
 use crate::types::ClientUpdateEvent;
 
 /// Resolved native policies bound at plugin init. Webview cannot override these.
@@ -16,6 +17,7 @@ pub struct ResolvedBridgePolicy {
     pub agent_home: Option<PathBuf>,
     pub bootstrap: BootstrapPolicy,
     pub app_meta: AppMeta,
+    pub snapshot_grants: SnapshotGrants,
 }
 
 pub struct DesktopAppState {
@@ -103,16 +105,20 @@ pub fn resolve_policy(
         agent_home,
         bootstrap: config.bootstrap.clone(),
         app_meta: config.app_meta.clone(),
+        snapshot_grants: config.snapshot_grants,
     })
 }
 
 /// Agent home from bridge state, or fail closed when local runtime is disallowed.
-pub fn require_agent_home(state: &State<'_, DesktopAppState>) -> Result<PathBuf, String> {
+pub fn require_agent_home(state: &State<'_, DesktopAppState>) -> Result<PathBuf, crate::error::BridgeError> {
     state.policy.agent_home.clone().ok_or_else(|| {
         crate::error::BridgeError::new(
             crate::error::BridgeErrorCode::Unsupported,
             "local agent home is not available under PairedRemoteOnly bootstrap policy",
         )
-        .message
     })
+}
+
+pub fn snapshot_grants(state: &State<'_, DesktopAppState>) -> SnapshotGrants {
+    state.policy.snapshot_grants
 }

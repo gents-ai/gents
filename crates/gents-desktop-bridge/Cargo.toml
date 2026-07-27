@@ -8,6 +8,12 @@ description = "Tauri plugin and desktop bridge logic for Gents"
 links = "tauri-plugin-gents-desktop-bridge"
 build = "build.rs"
 
+[features]
+default = []
+# Compiles real native-E2E command bodies (still double-gated by debug_assertions
+# + GENTS_NATIVE_E2E=1). Never in default; app forwards for E2E launchers only.
+native-e2e = []
+
 [dependencies]
 anyhow.workspace = true
 blake3 = "1"
