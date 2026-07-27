@@ -464,7 +464,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "trigger_cases"
       "TriggerDispatch"
-      "gents_desktop_tauri::bridge::snapshot::tests::runtime::task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_cases")
+      "gents_desktop_bridge::snapshot::tests::runtime::task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_cases")
       "triggers" [Surface.operatorUi]
   , tagged (consumerCoverage
       "goal_decision_cases"
@@ -623,7 +623,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "desktop_client_shell_cases"
       "DesktopClientShellCases"
-      "gents_desktop_tauri::bridge::snapshot::tests::session_state::session_snapshot_projection_consumes_generated_client_shell_contract_cases")
+      "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_projection_consumes_generated_client_shell_contract_cases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "live_overlay_cases"
@@ -633,7 +633,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "request_lifecycle_operator_ui_cases"
       "RequestLifecycleOperatorUiCases"
-      "gents_desktop_tauri::bridge::snapshot::tests::session_state::session_snapshot_binds_request_lifecycle_operator_ui_cases")
+      "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_binds_request_lifecycle_operator_ui_cases")
       "request-lifecycle" [Surface.operatorUi]
   , tagged (consumerCoverage
       "tool_cases"
@@ -663,7 +663,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "command_policy_cases"
       "CommandPolicyOperatorUi"
-      "gents_desktop_tauri::bridge::snapshot::tests::session_timeline::structured_command_policy_denial_projects_to_rendered_tool")
+      "gents_desktop_bridge::snapshot::tests::session_timeline::structured_command_policy_denial_projects_to_rendered_tool")
       "command-policy" [Surface.operatorUi]
   , tagged (consumerCoverage
       "queue_deadline_cases"
@@ -703,7 +703,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "r5_cross_deployment_cases"
       "R5CrossDeploymentCases"
-      "gents_desktop_tauri::bridge::snapshot::tests::subagent_lineage::subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases")
+      "gents_desktop_bridge::snapshot::tests::subagent_lineage::subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases")
       "subagents-cross-deployment" [Surface.operatorUi]
   , tagged (consumerCoverage
       "composed_invariant_witnesses"
@@ -738,7 +738,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "r4c_background_work_cases"
       "R4cBackgroundWorkCases"
-      "gents_desktop_tauri::bridge::snapshot::operations_snapshot::tests::project_filters_to_background_await_mode_only")
+      "gents_desktop_bridge::snapshot::operations_snapshot::tests::project_filters_to_background_await_mode_only")
       "background-tools" [Surface.operatorUi]
   , tagged (consumerCoverage
       "codex_shim_projection_cases"
@@ -823,7 +823,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "transcript_cases"
       "TranscriptConformanceCases"
-      "gents_desktop_tauri::bridge::snapshot::tests::session_state::session_snapshot_transcript_rendering_consumes_generated_transcript_cases")
+      "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_transcript_rendering_consumes_generated_transcript_cases")
       "transcript" [Surface.operatorUi]
   , tagged (consumerCoverage
       "identity_structural_cases"
@@ -858,7 +858,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "streaming_response_cases"
       "ResponseTransitionCases"
-      "gents_desktop_tauri::bridge::snapshot::tests::session_state::session_snapshot_streaming_response_overlay_consumes_generated_transition_cases")
+      "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_streaming_response_overlay_consumes_generated_transition_cases")
       "streaming-response" [Surface.operatorUi]
   , tagged (consumerCoverage
       "compaction_reducer_cases"
@@ -896,22 +896,22 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "mcp_health_cases"
       "MCPHealthCases"
-      "gents_desktop_tauri::bridge::snapshot::tests::mcp_health::mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition")
+      "gents_desktop_bridge::snapshot::tests::mcp_health::mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition")
       "mcp-health" [Surface.operatorUi]
   , tagged (consumerCoverage
       "vocabulary"
       "CancelCause"
-      "gents_desktop_tauri::bridge::snapshot::tests::session_state::session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_tool_call")
+      "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_tool_call")
       "interrupt-and-cancel" [Surface.operatorUi]
   , tagged (consumerCoverage
       "state_machine"
       "ToolCall"
-      "gents_desktop_tauri::bridge::tests::operations_cascade::preview_returns_four_classified_groups_and_a_signature")
+      "gents_desktop_bridge::tests::operations_cascade::preview_returns_four_classified_groups_and_a_signature")
       "interrupt-and-cancel" [Surface.operatorUi]
   , tagged (consumerCoverage
       "state_machine"
       "Request"
-      "gents_desktop_tauri::bridge::tests::operations_interrupt::interrupt_request_cascade_returns_accepted_when_signature_matches")
+      "gents_desktop_bridge::tests::operations_interrupt::interrupt_request_cascade_returns_accepted_when_signature_matches")
       "interrupt-and-cancel" [Surface.operatorUi]
   ]
 
