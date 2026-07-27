@@ -369,10 +369,7 @@ pub async fn seed_cascade_fixture_with_foreign_linked_child() -> (Arc<ClientCore
 /// Fetches a single `AgentRequest` row by `request_id` and returns a
 /// `AgentRequestRowLite` for assertions in interrupt tests. Panics if the
 /// request is not found.
-pub async fn fetch_request_row(
-    core: &Arc<ClientCore>,
-    request_id: &str,
-) -> AgentRequestRowLite {
+pub async fn fetch_request_row(core: &Arc<ClientCore>, request_id: &str) -> AgentRequestRowLite {
     let escaped = escape_graphql_string(request_id);
     let query = format!(
         r#"{{

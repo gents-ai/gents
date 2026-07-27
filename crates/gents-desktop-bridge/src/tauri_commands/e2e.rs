@@ -97,11 +97,13 @@ pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), Br
         }
 
         let directory = std::env::temp_dir();
-        tokio::fs::create_dir_all(&directory).await.map_err(|error| {
-            BridgeError::from_legacy_message(format!(
-                "creating native E2E status directory: {error}"
-            ))
-        })?;
+        tokio::fs::create_dir_all(&directory)
+            .await
+            .map_err(|error| {
+                BridgeError::from_legacy_message(format!(
+                    "creating native E2E status directory: {error}"
+                ))
+            })?;
 
         let bytes = serde_json::to_vec(&status).map_err(|error| {
             BridgeError::from_legacy_message(format!("serializing native E2E status: {error}"))

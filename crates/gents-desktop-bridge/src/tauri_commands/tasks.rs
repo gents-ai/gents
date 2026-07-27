@@ -1,7 +1,8 @@
-use tauri::{Runtime, AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::error::BridgeError;
 
+use super::emit_config_update_and_snapshot;
 use crate::commands::{
     run_schedule_config, run_task_config, save_event_trigger_config, save_schedule_config,
     save_task_config,
@@ -11,7 +12,6 @@ use crate::types::{
     ClientUpdateEvent, DesktopClientSnapshot, EventTriggerSaveRequest, ScheduleRunRequest,
     ScheduleSaveRequest, TaskRunRequest, TaskRunResult, TaskSaveRequest,
 };
-use super::emit_config_update_and_snapshot;
 
 #[tauri::command]
 pub async fn desktop_task_save<R: Runtime>(
@@ -20,7 +20,9 @@ pub async fn desktop_task_save<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     save_task_config(core.as_ref(), request)
@@ -36,7 +38,9 @@ pub async fn desktop_schedule_save<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     save_schedule_config(core.as_ref(), request)
@@ -52,7 +56,9 @@ pub async fn desktop_schedule_run<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<TaskRunResult, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     let result = run_schedule_config(core.as_ref(), request)
@@ -72,7 +78,9 @@ pub async fn desktop_event_trigger_save<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     save_event_trigger_config(core.as_ref(), request)
@@ -88,7 +96,9 @@ pub async fn desktop_task_run<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<TaskRunResult, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     let result = run_task_config(core.as_ref(), request)

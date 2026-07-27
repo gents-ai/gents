@@ -19,11 +19,15 @@ pub async fn desktop_tool_surface_explain(
     state: State<'_, DesktopAppState>,
 ) -> Result<Value, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     if core.graphql_for_agent(&agent_did).await.is_some() {
-        return Err(BridgeError::from_legacy_message("tool-surface explanation for remote agents is not yet supported"));
+        return Err(BridgeError::from_legacy_message(
+            "tool-surface explanation for remote agents is not yet supported",
+        ));
     }
     let snapshot = core.store().snapshot();
 
@@ -61,7 +65,11 @@ pub async fn desktop_tool_surface_explain(
                 .ok_or_else(|| format!("referenced ToolSelection {selection_id} is missing"))?;
             let document: gents::ToolSelectionDocument = serde_json::to_value(row)
                 .and_then(serde_json::from_value)
-                .map_err(|error| BridgeError::from_legacy_message(format!("decoding ToolSelection {selection_id}: {error}")))?;
+                .map_err(|error| {
+                    BridgeError::from_legacy_message(format!(
+                        "decoding ToolSelection {selection_id}: {error}"
+                    ))
+                })?;
             let config = BehaviorToolConfig::from_tool_selection_document(
                 &behavior.behavior_id,
                 &document,

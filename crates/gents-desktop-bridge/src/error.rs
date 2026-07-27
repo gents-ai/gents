@@ -35,6 +35,8 @@ pub enum BridgeErrorCode {
     PathEscapesRoot,
     /// Underlying store / GraphQL / runtime I/O failed.
     Backend,
+    /// Bearer pairing / peer-directory pairing family failures.
+    Pairing,
     /// Catch-all for uncategorized legacy string errors during migration.
     Unknown,
 }
@@ -52,6 +54,7 @@ impl BridgeErrorCode {
             Self::CascadeDepthExceeded => "cascadeDepthExceeded",
             Self::PathEscapesRoot => "pathEscapesRoot",
             Self::Backend => "backend",
+            Self::Pairing => "pairing",
             Self::Unknown => "unknown",
         }
     }
@@ -60,7 +63,11 @@ impl BridgeErrorCode {
     pub fn retryable(self) -> bool {
         matches!(
             self,
-            Self::ClientStartFailed | Self::EndpointUnreachable | Self::Backend | Self::StalePreview
+            Self::ClientStartFailed
+                | Self::EndpointUnreachable
+                | Self::Backend
+                | Self::StalePreview
+                | Self::Pairing
         )
     }
 
@@ -91,7 +98,9 @@ impl BridgeErrorCode {
             || lower.contains("expectedpreviewsignature")
             || lower.contains("expected preview signature")
             || lower.contains("signature")
-                && (lower.contains("mismatch") || lower.contains("drift") || lower.contains("missing"))
+                && (lower.contains("mismatch")
+                    || lower.contains("drift")
+                    || lower.contains("missing"))
         {
             return Self::StalePreview;
         }
@@ -122,6 +131,15 @@ impl BridgeErrorCode {
             || lower.contains("unrecognized")
         {
             return Self::InvalidArgument;
+        }
+        if lower.contains("pair")
+            || lower.contains("bearer")
+            || lower.contains("invite")
+            || lower.contains("ticket")
+            || lower.contains("network-admin")
+            || lower.contains("network admin")
+        {
+            return Self::Pairing;
         }
         if lower.contains("graphql")
             || lower.contains("query returned")

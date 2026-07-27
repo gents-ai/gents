@@ -42,7 +42,10 @@ impl DesktopAppState {
     }
 }
 
-pub fn spawn_client_update_task<R: Runtime>(app: AppHandle<R>, core: Arc<ClientCore>) -> JoinHandle<()> {
+pub fn spawn_client_update_task<R: Runtime>(
+    app: AppHandle<R>,
+    core: Arc<ClientCore>,
+) -> JoinHandle<()> {
     spawn(async move {
         let mut store_updates = core.store_updates();
         let mut health_updates = core.p2p_health_updates();
@@ -110,7 +113,9 @@ pub fn resolve_policy(
 }
 
 /// Agent home from bridge state, or fail closed when local runtime is disallowed.
-pub fn require_agent_home(state: &State<'_, DesktopAppState>) -> Result<PathBuf, crate::error::BridgeError> {
+pub fn require_agent_home(
+    state: &State<'_, DesktopAppState>,
+) -> Result<PathBuf, crate::error::BridgeError> {
     state.policy.agent_home.clone().ok_or_else(|| {
         crate::error::BridgeError::new(
             crate::error::BridgeErrorCode::Unsupported,

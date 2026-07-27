@@ -10,9 +10,7 @@ use tauri::{AppHandle, Emitter, Runtime, State};
 use crate::config::BootstrapPolicy;
 use crate::contract::{current_contract, BridgeContract};
 use crate::error::{BridgeError, BridgeErrorCode};
-use crate::snapshot::{
-    build_bootstrap_summary_for_policy, build_client_snapshot_with_grants,
-};
+use crate::snapshot::{build_bootstrap_summary_for_policy, build_client_snapshot_with_grants};
 use crate::state::{current_core, snapshot_grants, spawn_client_update_task, DesktopAppState};
 use crate::types::{
     ClientUpdateEvent, DesktopBootstrapSummary, DesktopClientSnapshot, DesktopInitRequest,

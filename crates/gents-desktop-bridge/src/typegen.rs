@@ -81,7 +81,10 @@ fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
     );
 
     let error = std::fs::read_to_string(tmp.path().join("BridgeError.ts")).expect("BridgeError.ts");
-    assert!(error.contains("retryable"), "BridgeError fields; got:\n{error}");
+    assert!(
+        error.contains("retryable"),
+        "BridgeError fields; got:\n{error}"
+    );
 }
 
 #[test]

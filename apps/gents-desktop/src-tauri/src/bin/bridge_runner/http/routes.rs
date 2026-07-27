@@ -12,8 +12,14 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 use super::protocol::{HttpRequestData, HttpResponse};
+use crate::diagnostics::{
+    build_desktop_client_snapshot, build_desktop_session_snapshot, build_request_diagnostics_bundle,
+};
+use crate::live_fixture::LiveBridgeFixture;
 use gents_desktop_bridge::cascade::{build_cascade_preview, interrupt_request};
-use gents_desktop_bridge::commands::mcp_health::{load_mcp_services_with_health, probe_mcp_service};
+use gents_desktop_bridge::commands::mcp_health::{
+    load_mcp_services_with_health, probe_mcp_service,
+};
 use gents_desktop_bridge::commands::{
     add_peer, pair_bearer, rename_conversation, repair_p2p, run_schedule_config, run_task_config,
     save_agent_config, save_backend_config, save_behavior_config, save_event_trigger_config,
@@ -33,14 +39,10 @@ use gents_desktop_bridge::types::{
     DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
     DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest, EventTriggerSaveRequest,
     InferenceCallSummaryView, InferenceProfileSaveRequest, NativeExecutorStatusView,
-    PeerAddRequest, PeerProbeRequest, RuntimeLivenessView, ScheduleRunRequest,
-    ScheduleSaveRequest, SubagentTreeView, TaskRunRequest, TaskSaveRequest,
-    ToolSelectionSaveRequest, ToolServiceSaveRequest, ToolServiceTestRequest,
+    PeerAddRequest, PeerProbeRequest, RuntimeLivenessView, ScheduleRunRequest, ScheduleSaveRequest,
+    SubagentTreeView, TaskRunRequest, TaskSaveRequest, ToolSelectionSaveRequest,
+    ToolServiceSaveRequest, ToolServiceTestRequest,
 };
-use crate::diagnostics::{
-    build_desktop_client_snapshot, build_desktop_session_snapshot, build_request_diagnostics_bundle,
-};
-use crate::live_fixture::LiveBridgeFixture;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

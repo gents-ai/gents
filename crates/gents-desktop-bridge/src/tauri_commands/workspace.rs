@@ -34,7 +34,9 @@ pub fn desktop_workspace_list(
     state: State<'_, DesktopAppState>,
 ) -> Result<WorkspaceListingView, BridgeError> {
     if current_core(&state).is_none() {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     }
 
     let root = workspace_root(&state)?;
@@ -44,17 +46,20 @@ pub fn desktop_workspace_list(
     } else {
         root.join(subpath.trim_matches('/'))
     };
-    let target = requested
-        .canonicalize()
-        .map_err(|error| BridgeError::from_legacy_message(format!("cannot open {}: {error}", requested.display())))?;
+    let target = requested.canonicalize().map_err(|error| {
+        BridgeError::from_legacy_message(format!("cannot open {}: {error}", requested.display()))
+    })?;
     if !target.starts_with(&root) {
-        return Err(BridgeError::from_legacy_message("path escapes the workspace root"));
+        return Err(BridgeError::from_legacy_message(
+            "path escapes the workspace root",
+        ));
     }
 
     let mut entries = Vec::new();
     let mut truncated = false;
-    let read_dir = std::fs::read_dir(&target)
-        .map_err(|error| BridgeError::from_legacy_message(format!("cannot list {}: {error}", target.display())))?;
+    let read_dir = std::fs::read_dir(&target).map_err(|error| {
+        BridgeError::from_legacy_message(format!("cannot list {}: {error}", target.display()))
+    })?;
     for entry in read_dir.flatten() {
         if entries.len() >= MAX_ENTRIES {
             truncated = true;
@@ -103,12 +108,12 @@ fn workspace_root(state: &State<'_, DesktopAppState>) -> Result<PathBuf, BridgeE
         .and_then(|config| config.tool_root)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| BridgeError::from_legacy_message("this agent has no tool root configured (meta-only ceiling)"))?;
-    Path::new(&root)
-        .canonicalize()
-        .map_err(|error| {
-            BridgeError::from_legacy_message(format!(
-                "tool root {root} is not accessible: {error}"
-            ))
-        })
+        .ok_or_else(|| {
+            BridgeError::from_legacy_message(
+                "this agent has no tool root configured (meta-only ceiling)",
+            )
+        })?;
+    Path::new(&root).canonicalize().map_err(|error| {
+        BridgeError::from_legacy_message(format!("tool root {root} is not accessible: {error}"))
+    })
 }

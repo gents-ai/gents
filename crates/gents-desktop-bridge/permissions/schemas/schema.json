@@ -985,6 +985,18 @@
           "markdownDescription": "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)\n#### This default permission set includes:\n\n- `allow-desktop-bridge-contract`\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`"
         },
         {
+          "description": "Contract, bootstrap summary, aggregate snapshot, observer metrics\n#### This permission set includes:\n\n- `allow-desktop-bridge-contract`\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`",
+          "type": "string",
+          "const": "core",
+          "markdownDescription": "Contract, bootstrap summary, aggregate snapshot, observer metrics\n#### This permission set includes:\n\n- `allow-desktop-bridge-contract`\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`"
+        },
+        {
+          "description": "Client start/shutdown and selected-agent\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`",
+          "type": "string",
+          "const": "client-lifecycle",
+          "markdownDescription": "Client start/shutdown and selected-agent\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`"
+        },
+        {
           "description": "Session/conversation snapshot read\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`",
           "type": "string",
           "const": "session-read",

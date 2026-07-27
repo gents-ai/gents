@@ -6,6 +6,13 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+### Bridge contract 0.4
+
+- Additive: `Pairing` error code; fingerprint permission inventory aligned with
+  grantable `[[set]]` entries (`core`, `client-lifecycle`, bundles).
+- `BridgeConfig::default().snapshot_grants` is **fail-closed** `core_only()`.
+- Documented v1 process-wide snapshot grant model (not per-caller ACL).
+
 ### Bridge contract 0.3
 
 - Additive: structured `BridgeError` on command error paths; `SnapshotGrants`

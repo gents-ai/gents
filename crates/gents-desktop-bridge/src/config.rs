@@ -14,8 +14,12 @@ pub struct BridgeConfig {
     pub bootstrap: BootstrapPolicy,
     /// Host identity metadata for logs/diagnostics (not payloads).
     pub app_meta: AppMeta,
-    /// Snapshot section grants. Must match the capability permission sets the
-    /// host grants the webview (Gents Desktop uses [`SnapshotGrants::all`]).
+    /// Process-wide snapshot section grants (v1: single profile per process).
+    ///
+    /// Hosts must set this to match the *maximum* capability profile they grant
+    /// any webview. Fail-closed default is [`SnapshotGrants::core_only`] — Gents
+    /// Desktop and other full hosts set [`SnapshotGrants::all`] explicitly.
+    /// Per-caller capability introspection is deferred (see design doc).
     pub snapshot_grants: SnapshotGrants,
 }
 
@@ -30,7 +34,9 @@ impl Default for BridgeConfig {
                 app_name: "gents-desktop".into(),
                 app_version: env!("CARGO_PKG_VERSION").into(),
             },
-            snapshot_grants: SnapshotGrants::all(),
+            // Fail closed: third-party hosts that take Default must opt into
+            // domain sections explicitly (Gents Desktop sets SnapshotGrants::all).
+            snapshot_grants: SnapshotGrants::core_only(),
         }
     }
 }

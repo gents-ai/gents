@@ -24,9 +24,7 @@ use super::super::types::{MCPServiceHealthView, McpServiceProbeResult};
 /// (the same `selected_agent_did` scopes config, transcripts, and
 /// triggers). Returns an empty Vec when no agent is selected — the rail
 /// renders the existing empty state.
-pub async fn load_mcp_services_with_health(
-    core: &ClientCore,
-) -> Result<Vec<MCPServiceHealthView>> {
+pub async fn load_mcp_services_with_health(core: &ClientCore) -> Result<Vec<MCPServiceHealthView>> {
     let Some(agent_did) = core.selected_agent_did() else {
         return Ok(Vec::new());
     };

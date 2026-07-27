@@ -54,7 +54,9 @@ pub async fn desktop_chat_send(
     state: State<'_, DesktopAppState>,
 ) -> Result<ChatSendResult, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     send_chat_message(core.as_ref(), request)
@@ -68,7 +70,9 @@ pub async fn desktop_conversation_rename(
     state: State<'_, DesktopAppState>,
 ) -> Result<(), BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     rename_conversation(core.as_ref(), request)
@@ -93,7 +97,9 @@ pub async fn desktop_session_fork(
     state: State<'_, DesktopAppState>,
 ) -> Result<SessionForkResultView, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     let outcome = core
@@ -125,7 +131,9 @@ pub async fn desktop_request_resend(
     state: State<'_, DesktopAppState>,
 ) -> Result<RequestResendResultView, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     let submitted = core
@@ -145,12 +153,15 @@ pub async fn desktop_request_timeline(
     state: State<'_, DesktopAppState>,
 ) -> Result<serde_json::Value, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     let timeline = core
         .request_timeline(&agent_did, &request_id)
         .await
         .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
-    serde_json::to_value(&timeline).map_err(|error| BridgeError::from_legacy_message(error.to_string()))
+    serde_json::to_value(&timeline)
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
 }

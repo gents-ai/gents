@@ -1,7 +1,5 @@
 use crate::cascade::{build_cascade_preview, interrupt_request, latch_root_interrupt};
-use crate::tests::support::{
-    fetch_request_row, seed_cascade_fixture, seed_standalone_fixture,
-};
+use crate::tests::support::{fetch_request_row, seed_cascade_fixture, seed_standalone_fixture};
 use crate::types::{DesktopInterruptRequest, DesktopPreviewInterruptCascadeRequest};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

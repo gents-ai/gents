@@ -1,7 +1,7 @@
-#[path = "snapshot/timeline.rs"]
-mod timeline;
 #[path = "snapshot/projection.rs"]
 pub mod projection;
+#[path = "snapshot/timeline.rs"]
+mod timeline;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -50,19 +50,15 @@ pub async fn build_bootstrap_summary() -> Result<DesktopBootstrapSummary, String
     let agent_home = gents_desktop_core::local_runtime::default_agent_home()
         .map_err(|error| error.to_string())?;
     let desktop_paths = DesktopPaths::discover().map_err(|error| error.to_string())?;
-    let full =
-        build_bootstrap_summary_raw(&desktop_paths, Some(agent_home.as_path())).await?;
+    let full = build_bootstrap_summary_raw(&desktop_paths, Some(agent_home.as_path())).await?;
     Ok(project_bootstrap_summary(full, SnapshotGrants::all()))
 }
 
 pub async fn build_bootstrap_summary_for_policy(
     policy: &ResolvedBridgePolicy,
 ) -> Result<DesktopBootstrapSummary, String> {
-    let full = build_bootstrap_summary_raw(
-        &policy.desktop_paths,
-        policy.agent_home.as_deref(),
-    )
-    .await?;
+    let full =
+        build_bootstrap_summary_raw(&policy.desktop_paths, policy.agent_home.as_deref()).await?;
     Ok(project_bootstrap_summary(full, policy.snapshot_grants))
 }
 
@@ -166,14 +162,12 @@ pub async fn build_client_snapshot_with_grants(
 ) -> Result<DesktopClientSnapshot, String> {
     let bootstrap = match policy {
         Some(policy) => {
-            build_bootstrap_summary_raw(&policy.desktop_paths, policy.agent_home.as_deref())
-                .await?
+            build_bootstrap_summary_raw(&policy.desktop_paths, policy.agent_home.as_deref()).await?
         }
         None => {
             let agent_home = gents_desktop_core::local_runtime::default_agent_home()
                 .map_err(|error| error.to_string())?;
-            let desktop_paths =
-                DesktopPaths::discover().map_err(|error| error.to_string())?;
+            let desktop_paths = DesktopPaths::discover().map_err(|error| error.to_string())?;
             build_bootstrap_summary_raw(&desktop_paths, Some(agent_home.as_path())).await?
         }
     };

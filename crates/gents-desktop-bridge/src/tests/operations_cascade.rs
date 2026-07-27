@@ -47,9 +47,7 @@ async fn walk_returns_classified_descendants_for_five_child_fixture() {
         agent_did: Some("did:test:operator".into()),
         include_terminal: true,
     };
-    let result = crate::cascade::walk(&core, &req)
-        .await
-        .expect("walk ok");
+    let result = crate::cascade::walk(&core, &req).await.expect("walk ok");
     let kinds: Vec<_> = result.rows.iter().map(|r| r.classification).collect();
     assert_eq!(
         kinds
@@ -125,9 +123,7 @@ async fn walk_returns_no_rows_for_standalone_root() {
         agent_did: Some("did:test:operator".into()),
         include_terminal: false,
     };
-    let result = crate::cascade::walk(&core, &req)
-        .await
-        .expect("walk ok");
+    let result = crate::cascade::walk(&core, &req).await.expect("walk ok");
     assert!(
         result.rows.is_empty(),
         "expected empty rows for standalone root, got: {:?}",
@@ -146,9 +142,7 @@ async fn walk_excludes_unlinked_rows_owned_by_different_agent_did() {
         agent_did: Some("did:test:operator".into()),
         include_terminal: true,
     };
-    let result = crate::cascade::walk(&core, &req)
-        .await
-        .expect("walk ok");
+    let result = crate::cascade::walk(&core, &req).await.expect("walk ok");
 
     // The foreign request must not appear in any walked row.
     let has_foreign = result.rows.iter().any(|r| r.request_id == "req_foreign");

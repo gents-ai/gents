@@ -1,10 +1,11 @@
 use std::time::Duration;
 
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
-use tauri::{Runtime, AppHandle, State};
+use tauri::{AppHandle, Runtime, State};
 
 use crate::error::BridgeError;
 
+use super::emit_config_update_and_snapshot;
 use crate::commands::{add_peer, pair_bearer, remove_peer, rename_peer, repair_p2p};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
@@ -12,7 +13,6 @@ use crate::types::{
     NetworkSavedPeerView, NetworkStatusView, PeerAddRequest, PeerProbeRequest, PeerRemoveResponse,
     PeerStatusFetchRequest,
 };
-use super::emit_config_update_and_snapshot;
 
 #[tauri::command]
 pub async fn desktop_peer_add<R: Runtime>(
@@ -21,7 +21,9 @@ pub async fn desktop_peer_add<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     add_peer(core.as_ref(), request)
@@ -37,7 +39,9 @@ pub async fn desktop_peer_pair_bearer<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<BearerPairingResponse, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     let pairing = pair_bearer(core.as_ref(), request)
@@ -53,7 +57,9 @@ pub async fn desktop_peer_status_fetch(
     state: State<'_, DesktopAppState>,
 ) -> Result<serde_json::Value, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
     let peer_id = request.peer_id.trim();
     if peer_id.is_empty() {
@@ -78,7 +84,9 @@ pub async fn desktop_peer_probe_address(
 ) -> Result<serde_json::Value, BridgeError> {
     let address = request.server_address.trim();
     if address.is_empty() {
-        return Err(BridgeError::from_legacy_message("server_address is required"));
+        return Err(BridgeError::from_legacy_message(
+            "server_address is required",
+        ));
     }
     fetch_runtime_connection_payload(address)
         .await
@@ -91,7 +99,9 @@ pub async fn desktop_p2p_repair<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     repair_p2p(core.as_ref(), Duration::from_millis(250))
@@ -107,7 +117,9 @@ pub async fn desktop_peer_remove<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<PeerRemoveResponse, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     let mutation = remove_peer(core.as_ref(), peer_id)
@@ -125,7 +137,9 @@ pub async fn desktop_peer_rename<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     rename_peer(core.as_ref(), peer_id, label)
@@ -139,7 +153,9 @@ pub async fn desktop_network_status(
     state: State<'_, DesktopAppState>,
 ) -> Result<NetworkStatusView, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     let status = core.network_status().await;

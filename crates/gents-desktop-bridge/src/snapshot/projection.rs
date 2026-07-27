@@ -6,8 +6,8 @@
 //! — direct, lifecycle, mutation refresh, nested pairing/removal — is covered.
 
 use crate::types::{
-    BehaviorView, DesktopBootstrapSummary, DesktopClientSnapshot, DesktopRuntimeSnapshot,
-    DeploymentView, InferenceBackendView, SkillView, ToolSelectionView,
+    BehaviorView, DeploymentView, DesktopBootstrapSummary, DesktopClientSnapshot,
+    DesktopRuntimeSnapshot, InferenceBackendView, SkillView, ToolSelectionView,
 };
 
 /// Section grants for snapshot / bootstrap projection.
@@ -171,20 +171,31 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
         .collect();
 
     // Full authored config surfaces require config-read.
+    // Fleet-read without config-read keeps count/metric fields for FleetRow
+    // (task/conversation counts) while clearing authored bodies.
+    if !grants.fleet_read {
+        deployment.tasks.clear();
+        deployment.schedules.clear();
+        deployment.event_triggers.clear();
+    } else {
+        // Metric-only: drop prompt templates and run history detail.
+        for task in &mut deployment.tasks {
+            task.prompt_template = None;
+            task.description = None;
+            task.run_history.clear();
+        }
+    }
     deployment.inference_profiles.clear();
     deployment.tool_service_registries.clear();
-    deployment.tasks.clear();
-    deployment.schedules.clear();
-    deployment.event_triggers.clear();
 
     deployment
 }
 
-/// Chat needs skillRefs / display names — not system prompts.
+/// Chat needs skillRefs, display names, and model label — not system prompts.
 fn project_behavior_for_chat(mut behavior: BehaviorView) -> BehaviorView {
     behavior.system_prompt = None;
     behavior.backend_id = None;
-    behavior.model_name = None;
+    // model_name is a selection/label field (projectable per spec).
     behavior.inference_profile_id = None;
     behavior.compaction_strategy = None;
     behavior.compaction_threshold = None;
@@ -221,8 +232,8 @@ fn project_tool_selection_for_fleet(mut selection: ToolSelectionView) -> ToolSel
 mod tests {
     use super::*;
     use crate::types::{
-        AgentPrincipalView, BehaviorView, ConversationSummary, DesktopBootstrapSummary,
-        DesktopClientSnapshot, DesktopRuntimeSnapshot, DeploymentView, P2PHealthView,
+        AgentPrincipalView, BehaviorView, ConversationSummary, DeploymentView,
+        DesktopBootstrapSummary, DesktopClientSnapshot, DesktopRuntimeSnapshot, P2PHealthView,
         SavedPeerView, SkillView,
     };
 
@@ -358,11 +369,16 @@ mod tests {
         assert!(dep.conversations.is_empty());
         assert!(dep.addr.is_empty());
         assert!(dep.behaviors[0].system_prompt.is_none());
+        // model_name is a projectable selection/label field for chat.
+        assert_eq!(dep.behaviors[0].model_name.as_deref(), Some("gpt"));
         assert_eq!(dep.behaviors[0].skill_refs, vec!["skill_a".to_string()]);
         assert!(dep.skills[0].instructions.is_none());
         assert_eq!(dep.skills[0].skill_id, "skill_a");
         // Identity labels remain.
-        assert_eq!(projected.bootstrap.init_agent_did.as_deref(), Some("did:test:local"));
+        assert_eq!(
+            projected.bootstrap.init_agent_did.as_deref(),
+            Some("did:test:local")
+        );
     }
 
     #[test]
@@ -371,6 +387,7 @@ mod tests {
         let dep = &projected.client.as_ref().unwrap().deployments[0];
         assert_eq!(dep.conversations.len(), 1);
         assert!(dep.behaviors[0].system_prompt.is_none());
+        assert_eq!(dep.behaviors[0].model_name.as_deref(), Some("gpt"));
         assert!(dep.skills[0].instructions.is_none());
         assert_eq!(dep.behaviors[0].skill_refs, vec!["skill_a".to_string()]);
     }

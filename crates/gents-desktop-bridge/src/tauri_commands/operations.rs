@@ -46,7 +46,8 @@ pub async fn desktop_operations_snapshot(
     state: State<'_, DesktopAppState>,
     request: DesktopOperationsSnapshotRequest,
 ) -> Result<DesktopOperationsSnapshot, BridgeError> {
-    let core = current_core(&state).ok_or_else(|| BridgeError::from_legacy_message("desktop bridge not initialized"))?;
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::from_legacy_message("desktop bridge not initialized"))?;
     let agent_did = request
         .agent_did
         .as_deref()
@@ -54,7 +55,9 @@ pub async fn desktop_operations_snapshot(
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .or_else(|| core.selected_agent_did())
-        .ok_or_else(|| BridgeError::from_legacy_message("no agent selected; pass agentDid explicitly"))?;
+        .ok_or_else(|| {
+            BridgeError::from_legacy_message("no agent selected; pass agentDid explicitly")
+        })?;
 
     // 1) In-process native executor snapshot. The runtime exposes this via
     //    `gents::active_native_executors()` (re-exported from
@@ -254,10 +257,13 @@ pub async fn desktop_list_subagent_tree(
 ) -> Result<SubagentTreeView, BridgeError> {
     let root_request_id = request.root_request_id.trim();
     if root_request_id.is_empty() {
-        return Err(BridgeError::from_legacy_message("rootRequestId is required"));
+        return Err(BridgeError::from_legacy_message(
+            "rootRequestId is required",
+        ));
     }
-    let core = current_core(&state)
-        .ok_or_else(|| BridgeError::from_legacy_message("desktop bridge has not finished bootstrapping"))?;
+    let core = current_core(&state).ok_or_else(|| {
+        BridgeError::from_legacy_message("desktop bridge has not finished bootstrapping")
+    })?;
 
     // Cross-node lineage: the walk fans out to the local node plus every
     // saved peer with a GraphQL endpoint, so children spawned on other
@@ -305,15 +311,18 @@ fn subagent_tree_url(
 ) -> Result<Url, BridgeError> {
     let trimmed = graphql.trim();
     if trimmed.is_empty() {
-        return Err(BridgeError::from_legacy_message("agent graphql URL is empty"));
+        return Err(BridgeError::from_legacy_message(
+            "agent graphql URL is empty",
+        ));
     }
     let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
         trimmed.to_string()
     } else {
         format!("http://{trimmed}")
     };
-    let mut url = Url::parse(&with_scheme)
-        .map_err(|error| BridgeError::from_legacy_message(format!("agent graphql URL is not a valid URL: {error}")))?;
+    let mut url = Url::parse(&with_scheme).map_err(|error| {
+        BridgeError::from_legacy_message(format!("agent graphql URL is not a valid URL: {error}"))
+    })?;
     let path = url.path().trim_end_matches('/').to_string();
     if path.is_empty() || path == "/api/v0" || path == "/api/v0/graphql" {
         url.set_path("/subagents/tree");
@@ -402,7 +411,9 @@ pub async fn desktop_preview_interrupt_cascade(
 ) -> Result<CascadeCancelPreview, BridgeError> {
     let core = crate::state::current_core(&state)
         .ok_or_else(|| BridgeError::from_legacy_message("desktop bridge core not initialized"))?;
-    crate::cascade::build_cascade_preview(&core, &request).await.map_err(BridgeError::from_legacy_message)
+    crate::cascade::build_cascade_preview(&core, &request)
+        .await
+        .map_err(BridgeError::from_legacy_message)
 }
 
 #[tauri::command]
@@ -447,7 +458,9 @@ pub async fn desktop_list_backends_with_health(
     state: State<'_, DesktopAppState>,
 ) -> Result<Vec<BackendHealthView>, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
     list_backends_with_health_for_core(core).await
 }
@@ -582,7 +595,9 @@ pub async fn desktop_list_mcp_services_with_health(
     state: State<'_, DesktopAppState>,
 ) -> Result<Vec<MCPServiceHealthView>, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
     list_mcp_services_with_health_for_core(core).await
 }
@@ -605,7 +620,9 @@ pub async fn desktop_probe_mcp_service(
     request: DesktopProbeMcpServiceRequest,
 ) -> Result<McpServiceProbeResult, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
     probe_mcp_service_for_core(core, request).await
 }
@@ -628,7 +645,9 @@ pub async fn desktop_list_tool_call_holds(
     request: DesktopListHoldsRequest,
 ) -> Result<Vec<HeldToolCallView>, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
     list_tool_call_holds_for_core(core, request).await
 }
@@ -663,7 +682,9 @@ pub async fn desktop_resolve_tool_call_hold(
     request: DesktopResolveHoldRequest,
 ) -> Result<ResolveHoldResult, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
     resolve_tool_call_hold_for_core(core, request).await
 }

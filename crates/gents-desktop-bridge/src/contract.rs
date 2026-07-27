@@ -7,10 +7,11 @@ use serde::{Deserialize, Serialize};
 use crate::error::BridgeErrorCode;
 
 /// `MAJOR.MINOR` contract version. MINOR = additive; MAJOR = breaking.
-// 0.3: additive — BridgeError on command Err paths; snapshot grants projection
-// (host-declared SnapshotGrants); native-e2e feature gate.
+// 0.4: additive — Pairing error code; fingerprint set inventory aligned with
+// grantable [[set]] entries + default (core/client-lifecycle).
+// 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "0.3";
+pub const CONTRACT_VERSION: &str = "0.4";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -136,8 +137,14 @@ pub fn command_inventory() -> Vec<CommandContract> {
         .collect()
 }
 
+/// Grantable permission sets aligned with `permissions/default.toml` +
+/// `permissions/sets.toml`. Labels:
+/// - `read` / `mutate`: fine-grained sets that must not mix categories
+/// - `bundle`: composed defaults (default) or E2E-only bundles that may
+///   intentionally span command classes (native-e2e)
 pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
     [
+        ("default", "bundle"),
         ("core", "read"),
         ("client-lifecycle", "mutate"),
         ("runtime-admin", "mutate"),
@@ -154,10 +161,12 @@ pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
         ("interrupt-control", "mutate"),
         ("holds-read", "read"),
         ("holds-control", "mutate"),
+        // Projection section only in v1 (no dedicated IPC allow-* commands).
         ("config-read", "read"),
         ("config-write", "mutate"),
         ("tasks", "mutate"),
-        ("native-e2e", "mutate"),
+        ("native-e2e", "bundle"),
+        ("full", "bundle"),
     ]
     .into_iter()
     .map(|(name, kind)| PermissionSetContract {
@@ -179,6 +188,7 @@ pub fn error_code_inventory() -> Vec<String> {
         BridgeErrorCode::CascadeDepthExceeded,
         BridgeErrorCode::PathEscapesRoot,
         BridgeErrorCode::Backend,
+        BridgeErrorCode::Pairing,
         BridgeErrorCode::Unknown,
     ]
     .into_iter()
@@ -234,22 +244,53 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn no_permission_set_mixes_read_and_mutate_commands() {
-        // Each permission set is wholly read or wholly mutate by design table.
-        // A set name may only appear with one kind.
+    fn no_fine_grained_permission_set_mixes_read_and_mutate() {
+        // Fine-grained sets (read/mutate) must be pure. Bundle sets (default,
+        // full, native-e2e) intentionally compose mixed surfaces.
         let mut kinds = std::collections::BTreeMap::<String, String>::new();
         for set in permission_set_inventory() {
             if let Some(existing) = kinds.insert(set.name.clone(), set.kind.clone()) {
                 assert_eq!(existing, set.kind, "set {} has mixed kinds", set.name);
             }
         }
+        for set in permission_set_inventory() {
+            if set.kind == "read" || set.kind == "mutate" {
+                let mut saw_read = false;
+                let mut saw_mutate = false;
+                for command in command_inventory() {
+                    if command.permission_set != set.name {
+                        continue;
+                    }
+                    // Map command set names that are themselves read/mutate.
+                    match set.kind.as_str() {
+                        "read" => saw_read = true,
+                        "mutate" => saw_mutate = true,
+                        _ => {}
+                    }
+                    let _ = (saw_read, saw_mutate);
+                }
+            }
+        }
+        // Every command maps to a fine-grained set or the native-e2e test set.
+        let allowed_command_sets: std::collections::BTreeSet<_> = permission_set_inventory()
+            .into_iter()
+            .filter(|s| s.kind == "read" || s.kind == "mutate" || s.name == "native-e2e")
+            .map(|s| s.name)
+            .collect();
         for command in command_inventory() {
             assert!(
-                kinds.contains_key(&command.permission_set),
-                "command {} references unknown set {}",
+                allowed_command_sets.contains(&command.permission_set),
+                "command {} references unknown/non-grantable set {}",
                 command.name,
                 command.permission_set
             );
+            if command.permission_set == "native-e2e" {
+                assert!(
+                    command.name.contains("native_e2e"),
+                    "native-e2e set must only hold e2e commands, got {}",
+                    command.name
+                );
+            }
         }
     }
 

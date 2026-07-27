@@ -86,10 +86,7 @@ pub async fn save_task_config(core: &ClientCore, request: TaskSaveRequest) -> Re
     Ok(())
 }
 
-pub async fn save_schedule_config(
-    core: &ClientCore,
-    request: ScheduleSaveRequest,
-) -> Result<()> {
+pub async fn save_schedule_config(core: &ClientCore, request: ScheduleSaveRequest) -> Result<()> {
     let schedule_id = require_trimmed("schedule_id", request.schedule_id)?;
     let task_id = require_trimmed("task_id", request.task_id)?;
 
@@ -195,10 +192,7 @@ pub async fn save_event_trigger_config(
     Ok(())
 }
 
-pub async fn run_task_config(
-    core: &ClientCore,
-    request: TaskRunRequest,
-) -> Result<TaskRunResult> {
+pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Result<TaskRunResult> {
     let task_id = require_trimmed("task_id", request.task_id)?;
     let args = request.args.unwrap_or_else(|| serde_json::json!({}));
     let store = core.store().snapshot();

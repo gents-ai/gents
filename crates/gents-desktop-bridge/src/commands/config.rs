@@ -14,10 +14,7 @@ use super::super::types::{
 };
 use super::util::{require_trimmed, sanitize_id_list, trim_optional};
 
-pub async fn save_agent_config(
-    core: &ClientCore,
-    request: AgentConfigSaveRequest,
-) -> Result<()> {
+pub async fn save_agent_config(core: &ClientCore, request: AgentConfigSaveRequest) -> Result<()> {
     let agent_did = require_trimmed("agent_did", request.agent_did)?;
     let display_name = require_trimmed("display_name", request.display_name)?;
     let default_behavior_id = require_trimmed("default_behavior_id", request.default_behavior_id)?;
@@ -50,10 +47,7 @@ pub async fn save_agent_config(
     Ok(())
 }
 
-pub async fn save_behavior_config(
-    core: &ClientCore,
-    request: BehaviorSaveRequest,
-) -> Result<()> {
+pub async fn save_behavior_config(core: &ClientCore, request: BehaviorSaveRequest) -> Result<()> {
     let agent_did = require_trimmed("agent_did", request.agent_did)?;
     let behavior_id = require_trimmed("behavior_id", request.behavior_id)?;
     let display_name = require_trimmed("display_name", request.display_name)?;
@@ -156,20 +150,14 @@ pub async fn save_skill_config(core: &ClientCore, request: SkillSaveRequest) -> 
 }
 
 #[cfg_attr(test, allow(dead_code))]
-pub async fn delete_skill_config(
-    core: &ClientCore,
-    request: SkillDeleteRequest,
-) -> Result<()> {
+pub async fn delete_skill_config(core: &ClientCore, request: SkillDeleteRequest) -> Result<()> {
     let skill_id = require_trimmed("skill_id", request.skill_id)?;
     let agent_did = require_trimmed("agent_did", request.agent_did)?;
     core.delete_skill(&skill_id, &agent_did).await
 }
 
 #[cfg_attr(test, allow(dead_code))]
-pub async fn delete_task_config(
-    core: &ClientCore,
-    request: TaskDeleteRequest,
-) -> Result<()> {
+pub async fn delete_task_config(core: &ClientCore, request: TaskDeleteRequest) -> Result<()> {
     let task_id = require_trimmed("task_id", request.task_id)?;
     let agent_did = require_trimmed("agent_did", request.agent_did)?;
     core.delete_task(&task_id, &agent_did).await
@@ -196,10 +184,7 @@ pub async fn delete_event_trigger_config(
 }
 
 #[cfg_attr(test, allow(dead_code))]
-pub async fn delete_backend_config(
-    core: &ClientCore,
-    request: BackendDeleteRequest,
-) -> Result<()> {
+pub async fn delete_backend_config(core: &ClientCore, request: BackendDeleteRequest) -> Result<()> {
     let backend_id = require_trimmed("backend_id", request.backend_id)?;
     let agent_did = require_trimmed("agent_did", request.agent_did)?;
     core.delete_inference_backend(&backend_id, &agent_did).await
@@ -245,10 +230,7 @@ pub async fn delete_behavior_config(
     core.delete_behavior(&behavior_id, &agent_did).await
 }
 
-pub async fn save_backend_config(
-    core: &ClientCore,
-    request: BackendSaveRequest,
-) -> Result<()> {
+pub async fn save_backend_config(core: &ClientCore, request: BackendSaveRequest) -> Result<()> {
     let backend_id = require_trimmed("backend_id", request.backend_id)?;
     let name = require_trimmed("name", request.name)?;
     let provider_kind = require_trimmed("provider_kind", request.provider_kind)?;

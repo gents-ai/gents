@@ -1,7 +1,8 @@
-use tauri::{Runtime, AppHandle, State};
+use tauri::{AppHandle, Runtime, State};
 
 use crate::error::BridgeError;
 
+use super::emit_config_update_and_snapshot;
 use crate::commands::{
     delete_backend_config, delete_behavior_config, delete_event_trigger_config,
     delete_inference_profile_config, delete_schedule_config, delete_skill_config,
@@ -19,7 +20,6 @@ use crate::types::{
     ToolSelectionSaveRequest, ToolServiceDeleteRequest, ToolServiceSaveRequest,
     ToolServiceTestRequest, ToolServiceTestResult,
 };
-use super::emit_config_update_and_snapshot;
 
 #[tauri::command]
 pub async fn desktop_agent_config_save<R: Runtime>(
@@ -28,7 +28,9 @@ pub async fn desktop_agent_config_save<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     save_agent_config(core.as_ref(), request)
@@ -44,7 +46,9 @@ pub async fn desktop_behavior_save<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     save_behavior_config(core.as_ref(), request)
@@ -60,7 +64,9 @@ pub async fn desktop_skill_save<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     save_skill_config(core.as_ref(), request)
@@ -76,7 +82,9 @@ pub async fn desktop_skill_delete<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     delete_skill_config(core.as_ref(), request)
@@ -92,7 +100,9 @@ pub async fn desktop_backend_save<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     save_backend_config(core.as_ref(), request)
@@ -108,7 +118,9 @@ pub async fn desktop_inference_profile_save<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     save_inference_profile_config(core.as_ref(), request)
@@ -124,7 +136,9 @@ pub async fn desktop_tool_selection_save<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     save_tool_selection_config(core.as_ref(), request)
@@ -140,7 +154,9 @@ pub async fn desktop_tool_service_save<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     save_tool_service_config(core.as_ref(), request)
@@ -154,7 +170,8 @@ pub async fn desktop_tool_service_test(
     request: ToolServiceTestRequest,
     state: State<'_, DesktopAppState>,
 ) -> Result<ToolServiceTestResult, BridgeError> {
-    let _ = current_core(&state).ok_or_else(|| BridgeError::from_legacy_message("desktop client is not running"))?;
+    let _ = current_core(&state)
+        .ok_or_else(|| BridgeError::from_legacy_message("desktop client is not running"))?;
 
     test_tool_service_config(request)
         .await
@@ -168,7 +185,9 @@ pub async fn desktop_task_delete<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     delete_task_config(core.as_ref(), request)
@@ -184,7 +203,9 @@ pub async fn desktop_schedule_delete<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     delete_schedule_config(core.as_ref(), request)
@@ -200,7 +221,9 @@ pub async fn desktop_event_trigger_delete<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     delete_event_trigger_config(core.as_ref(), request)
@@ -216,7 +239,9 @@ pub async fn desktop_backend_delete<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     delete_backend_config(core.as_ref(), request)
@@ -232,7 +257,9 @@ pub async fn desktop_inference_profile_delete<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     delete_inference_profile_config(core.as_ref(), request)
@@ -248,7 +275,9 @@ pub async fn desktop_tool_selection_delete<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     delete_tool_selection_config(core.as_ref(), request)
@@ -264,7 +293,9 @@ pub async fn desktop_tool_service_delete<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     delete_tool_service_config(core.as_ref(), request)
@@ -280,7 +311,9 @@ pub async fn desktop_behavior_delete<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message("desktop client is not running"));
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
     };
 
     delete_behavior_config(core.as_ref(), request)

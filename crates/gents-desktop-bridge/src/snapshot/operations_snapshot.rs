@@ -74,9 +74,7 @@ pub fn project_backgrounded_tools(
         .collect()
 }
 
-pub fn stuck_diagnostics_from_tool_calls(
-    rows: &[ToolCallRow],
-) -> Vec<StuckWorkDiagnosticView> {
+pub fn stuck_diagnostics_from_tool_calls(rows: &[ToolCallRow]) -> Vec<StuckWorkDiagnosticView> {
     rows.iter()
         .filter(|r| r.await_mode.as_deref() == Some("background"))
         .filter(|r| {

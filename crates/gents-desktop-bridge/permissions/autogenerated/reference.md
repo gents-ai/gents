@@ -1506,6 +1506,32 @@ Denies the desktop_workspace_list command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:core`
+
+</td>
+<td>
+
+Contract, bootstrap summary, aggregate snapshot, observer metrics
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:client-lifecycle`
+
+</td>
+<td>
+
+Client start/shutdown and selected-agent
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:session-read`
 
 </td>

@@ -229,7 +229,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "0.3",
+  "contractVersion": "0.4",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -241,6 +241,7 @@
     "cascadeDepthExceeded",
     "pathEscapesRoot",
     "backend",
+    "pairing",
     "unknown"
   ],
   "eventReasons": [
@@ -254,6 +255,10 @@
   ],
   "packageVersion": "0.8.0",
   "permissionSets": [
+    {
+      "kind": "bundle",
+      "name": "default"
+    },
     {
       "kind": "read",
       "name": "core"
@@ -331,8 +336,12 @@
       "name": "tasks"
     },
     {
-      "kind": "mutate",
+      "kind": "bundle",
       "name": "native-e2e"
+    },
+    {
+      "kind": "bundle",
+      "name": "full"
     }
   ]
 }

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Paired-remote host profile: no runtime-admin, no config-write",
+  "description": "Minimal chat+fleet profile (no runtime-admin, config-write, resend, or interrupt)",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -9,9 +9,6 @@
     "gents-desktop-bridge:default",
     "gents-desktop-bridge:session-read",
     "gents-desktop-bridge:chat-write",
-    "gents-desktop-bridge:resend-control",
-    "gents-desktop-bridge:interrupt-read",
-    "gents-desktop-bridge:interrupt-control",
     "gents-desktop-bridge:fleet-read",
     "gents-desktop-bridge:fleet-admin",
     "fixture-domain:default"

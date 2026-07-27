@@ -1,19 +1,30 @@
 # Reusable desktop packages
 
-*Design spec — 2026-07-27. Issue [#877](https://github.com/source-inc/gents/issues/877)
-(`design` label: design-only spec PR). Status: design approved by the issue author
-2026-07-27 after three review passes; hardened same day across four PR #878
-security-review rounds — permission-set scoping (read/write splits,
-interrupt-vs-hold separation, per-package grant profiles matched to actual command
-usage), storage-path and network-address authority (no webview-supplied
-`desktop_home`/`agent_home`, no arbitrary addresses in read grants, all agent-home
-consumers on bridge state), and projection boundaries (grant projection at the
-snapshot-builder seam covering every snapshot-bearing response, lifecycle-projected
-bootstrap summary, purpose-built chat/fleet projection types) — see git history for
-the pass-by-pass detail. Base: the
-iPhone/bearer-pairing series, merged to `main` as
-[#875](https://github.com/source-inc/gents/pull/875) (squash `1a5e23d5`), which this
-design treats as load-bearing evidence, not incidental history.*
+*Design spec — 2026-07-27. Issue [#877](https://github.com/source-inc/gents/issues/877).
+**Implementation status (PR #878, honest):**
+
+| Phase | Status | Notes |
+|---|---|---|
+| 1 Crate extract | **done** | `gents-desktop-bridge` |
+| 2 Contract prep | **done** | fingerprint, ts-rs spike, error taxonomy |
+| 3 Plugin-ization | **done** (native) | plugin, permissions, path strip, peer id rekey, BridgeError, projection seam |
+| 4 Fixture host | **done** (minimal) | co-resident domain plugin + home isolation test; not full CI co-residence smoke |
+| 5–9 npm packages | **scaffolded** | packages build/pack; app does **not** yet consume them; store incomplete; no component/CSS moves |
+| 10 Release | **docs only** | CHANGELOG + update workflow; no publish dry-run |
+
+**v1 snapshot projection model (accepted deviation):** grants are
+**process-wide** via `BridgeConfig.snapshot_grants` (host-declared, fail-closed
+default `core_only`). Not per-caller Tauri capability introspection. Hosts must
+keep capability files ⊆ that profile; consistency is a host obligation + fixture
+tests, not runtime ACL reflection. Per-caller projection is a filed follow-up.
+
+**Other recorded deviations:** `bridge_runner` remains in `gents-desktop-tauri`
+(not yet `test-harness` on the bridge crate). Live-lane verification of the
+phase-2 serde camelCase fix still owed.
+
+Design approved 2026-07-27 after three review passes; security-hardened across
+PR #878 rounds. Base: [#875](https://github.com/source-inc/gents/pull/875)
+(`1a5e23d5`).*
 
 Gents Desktop already keeps its reusable runtime behavior in
 `crates/gents-desktop-core`, but everything above that — the Tauri command bridge, the
@@ -238,6 +249,21 @@ The semantic/brand split lands **before** any UI package is extracted (§ Migrat
 phase 6), so branded CSS is never extracted and revisited.
 
 ## Native composition contract
+
+### Snapshot grants (v1 process-wide profile)
+
+The aggregate snapshot is projected at the shared builder seam by
+`SnapshotGrants` on `BridgeConfig`. **v1 is single-profile-per-process:** every
+webview of a host process sees the same projected sections. The host sets
+`snapshot_grants` to match the maximum capability profile it grants any window
+(Gents Desktop: `SnapshotGrants::all()`; fixture: chat+fleet bits only).
+`BridgeConfig::default()` uses `core_only()` (fail closed).
+
+This deliberately does **not** introspect Tauri ACL per invoke. That was the
+original multi-webview package-profile ideal; shipping it requires a supported
+capability-query API and is tracked as a follow-up. Until then, hosts that
+grant different profiles to different webviews must not share one process, or
+must accept the more permissive projection.
 
 ### A Tauri plugin, not a builder
 
@@ -823,7 +849,9 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
    permission-projection at the shared builder seam (covering lifecycle,
    mutation-refresh, and nested pairing/removal responses); introduce
    `BridgeError` and `desktop_bridge_contract`; move
-   `bridge_runner` into the bridge crate behind `test-harness`; put the `e2e` module
+   `bridge_runner` into the bridge crate behind `test-harness` (**status: deferred** —
+   runner remains in `gents-desktop-tauri`; launchers still target that package);
+   put the `e2e` module
    behind the explicit `native-e2e` feature with app-crate forwarding, the
    E2E-launcher `--features` wiring, and the E2E-only capability overlay
    (`capabilities/native-e2e.json`; production config enumerates

@@ -14,9 +14,7 @@ use gents_desktop_core::client::ClientCore;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::snapshot::{
-    compute_preview_signature, PreviewSignatureInput, PreviewSignatureRow,
-};
+use crate::snapshot::{compute_preview_signature, PreviewSignatureInput, PreviewSignatureRow};
 use crate::types::{
     CascadeAffectedRequest, CascadeCancelPreview, DesktopInterruptRequest,
     DesktopPreviewInterruptCascadeRequest, InterruptRequestResult,

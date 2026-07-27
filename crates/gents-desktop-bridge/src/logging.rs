@@ -11,8 +11,12 @@ fn log_rate_ceiling() -> RateLimitFilter {
     RateLimitFilter::new(RateLimitConfig::default())
 }
 
-/// Legacy convenience: discover log path via DesktopPaths (Gents Desktop default).
-/// Prefer [`init_tracing_with_config`] for hosts that own their storage home.
+/// Legacy convenience: discover log path via DesktopPaths (Gents defaults).
+///
+/// **Do not use from multi-home hosts** (fixture, Amygdala) — it writes into
+/// Gents' default data dir. Prefer [`init_tracing_with_config`] with an
+/// explicit path under the host-resolved home.
+#[deprecated(note = "pass TracingConfig with an explicit log_path via init_tracing_with_config")]
 pub fn init_tracing() {
     let log_path = DesktopPaths::discover()
         .map(|paths| paths.log_file_path())
