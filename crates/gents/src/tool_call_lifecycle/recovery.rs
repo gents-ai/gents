@@ -407,6 +407,36 @@ mod tests {
         );
         assert_eq!(RecoveryOutcome::Cancelled.failure_class(), None);
     }
+
+    #[test]
+    fn cancel_worthy_field_takes_precedence_over_divergent_completed_status() {
+        let divergent = ParentRequestRow {
+            agent_did: "did:test:x".to_string(),
+            status: "completed".to_string(),
+            lifecycle_state: Some("interrupted".to_string()),
+            subagent_depth: None,
+        };
+        assert!(request_has_cancel_worthy_field(&divergent));
+        assert!(request_is_cancel_worthy_terminal(&divergent));
+        assert!(request_is_interrupted(&divergent));
+        assert!(
+            !request_is_cleanly_completed(&divergent),
+            "status=completed must not suppress lifecycle_state=interrupted"
+        );
+    }
+
+    #[test]
+    fn clean_completion_requires_no_cancel_worthy_fields() {
+        let clean = ParentRequestRow {
+            agent_did: "did:test:x".to_string(),
+            status: "completed".to_string(),
+            lifecycle_state: Some("completed".to_string()),
+            subagent_depth: None,
+        };
+        assert!(!request_has_cancel_worthy_field(&clean));
+        assert!(request_is_cleanly_completed(&clean));
+        assert!(!request_is_cancel_worthy_terminal(&clean));
+    }
 }
 
 async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
@@ -1699,9 +1729,29 @@ fn request_is_interrupted(parent: &ParentRequestRow) -> bool {
     parent.status == "interrupted" || parent.lifecycle_state.as_deref() == Some("interrupted")
 }
 
-/// Parent reached a successful terminal without interrupt — not a cancel signal
-/// for linked background/cascade children.
+/// Cancel-worthy evidence on either field takes precedence over a divergent
+/// `completed` sibling field. Mirrors
+/// `subagent_source::parent_reached_cancel_worthy_terminal` (plus `failed` on
+/// status for rows that stamp that vocabulary).
+fn request_has_cancel_worthy_field(parent: &ParentRequestRow) -> bool {
+    matches!(
+        parent.status.as_str(),
+        "error" | "failed" | "superseded" | "dead" | "interrupted"
+    ) || matches!(
+        parent.lifecycle_state.as_deref(),
+        Some("failed" | "error" | "superseded" | "dead" | "interrupted")
+    )
+}
+
+/// Parent reached a successful terminal **without** any cancel-worthy field
+/// evidence — not a cancel signal for linked background/cascade children.
+///
+/// Divergent replications such as `status=completed` + `lifecycle_state=interrupted`
+/// are **not** clean: cancel-worthy evidence wins.
 fn request_is_cleanly_completed(parent: &ParentRequestRow) -> bool {
+    if request_has_cancel_worthy_field(parent) {
+        return false;
+    }
     matches!(parent.status.as_str(), "completed" | "complete")
         || matches!(
             parent.lifecycle_state.as_deref(),
@@ -1710,9 +1760,10 @@ fn request_is_cleanly_completed(parent: &ParentRequestRow) -> bool {
 }
 
 /// Terminal parent whose terminal is cancel-worthy (interrupt, failure, dead,
-/// supersede, …) — clean completion is excluded.
+/// supersede, …). Cancel-worthy field evidence is checked first so a stale
+/// `completed` on the other column cannot suppress cascade.
 fn request_is_cancel_worthy_terminal(parent: &ParentRequestRow) -> bool {
-    request_is_terminal(parent) && !request_is_cleanly_completed(parent)
+    request_has_cancel_worthy_field(parent)
 }
 
 fn request_is_terminal(parent: &ParentRequestRow) -> bool {

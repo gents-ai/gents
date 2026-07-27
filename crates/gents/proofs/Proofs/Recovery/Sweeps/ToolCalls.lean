@@ -157,8 +157,10 @@ structure TerminalParentToolRow where
   call : ToolCallContext
   parentTerminal : Bool
   parentInterrupted : Bool
-  /-- Parent reached a successful completed terminal (not interrupt/fail/dead).
-      Clean completion is **not** a cancel signal for linked children. -/
+  /-- Exclusive clean completion: parent shows completed evidence and **no**
+      cancel-worthy field. Must be false whenever `parentInterrupted` (or any
+      other cancel-worthy terminal) is true — mirrors Rust where cancel-worthy
+      evidence takes precedence over a divergent `completed` sibling field. -/
   parentCleanCompleted : Bool
   deriving Repr
 
@@ -170,20 +172,29 @@ instance (call : ToolCallContext) : Decidable (isChildLinkedBridge call) := by
   unfold isChildLinkedBridge
   infer_instance
 
+/-- Exclusive clean completion: completed without interrupt evidence. -/
+def exclusiveCleanCompleted (row : TerminalParentToolRow) : Prop :=
+  row.parentCleanCompleted = true ∧ row.parentInterrupted = false
+
+instance (row : TerminalParentToolRow) : Decidable (exclusiveCleanCompleted row) := by
+  unfold exclusiveCleanCompleted
+  infer_instance
+
 /-- Matches Rust live + startup product rule for this sweep:
 
     * running, and
     * parent is interrupted **or** otherwise terminal, and
     * **not** (detached bridge ∧ parent interrupted) — detached may outlive an
       interrupted parent, and
-    * **not** (child-linked bridge ∧ parent cleanly completed) — clean completion
-      does not cancel background cascade children.
+    * **not** (child-linked bridge ∧ *exclusive* clean completion) — clean
+      completion does not cancel background cascade children, but any interrupt
+      evidence cancels the exemption (cancel-worthy takes precedence).
 -/
 def terminalParentToolStale (row : TerminalParentToolRow) : Prop :=
   row.call.state = .running ∧
   (row.parentInterrupted = true ∨ row.parentTerminal = true) ∧
   ¬ (isDetachedBridgeCall row.call ∧ row.parentInterrupted = true) ∧
-  ¬ (isChildLinkedBridge row.call ∧ row.parentCleanCompleted = true)
+  ¬ (isChildLinkedBridge row.call ∧ exclusiveCleanCompleted row)
 
 instance (row : TerminalParentToolRow) : Decidable (terminalParentToolStale row) := by
   unfold terminalParentToolStale
