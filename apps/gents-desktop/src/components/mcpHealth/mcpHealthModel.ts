@@ -3,12 +3,7 @@ import type { MCPServiceHealthView } from "../../lib/types";
 export type FilterId = "all" | "unhealthy" | "reconnecting";
 
 export type VisualState =
-  | "healthy"
-  | "degraded"
-  | "evicted"
-  | "reconnecting"
-  | "stuck"
-  | "unknown";
+  "healthy" | "degraded" | "evicted" | "reconnecting" | "stuck" | "unknown";
 
 export function visualState(service: MCPServiceHealthView): VisualState {
   // Accept both the persisted vocabulary ("degraded") and the public

@@ -15,12 +15,7 @@ import {
 import { useOperationsSnapshot } from "./useOperationsSnapshot";
 
 type SortKey =
-  | "toolName"
-  | "ageMs"
-  | "requestId"
-  | "awaitMode"
-  | "derivedState"
-  | "processLabel";
+  "toolName" | "ageMs" | "requestId" | "awaitMode" | "derivedState" | "processLabel";
 type SortDir = "ascending" | "descending";
 
 const STATE_LABELS: Record<string, string> = {

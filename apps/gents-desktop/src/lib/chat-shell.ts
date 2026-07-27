@@ -34,8 +34,7 @@ export type ChatWorkflowState =
   | { kind: "blocked"; reason: ChatBlockedReason; turnState?: TurnState | null };
 
 export type SendStatus =
-  | { kind: "ready" }
-  | { kind: "disabled"; reason: ChatBlockedReason; hint: string };
+  { kind: "ready" } | { kind: "disabled"; reason: ChatBlockedReason; hint: string };
 
 type ProjectionInput = {
   clientAvailable: boolean;

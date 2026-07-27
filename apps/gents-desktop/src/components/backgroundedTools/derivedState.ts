@@ -7,11 +7,7 @@ export const STUCK_DWELL_MS = 5_000;
 const CORRELATION_WINDOW_MS = 1_000;
 
 export type DerivedState =
-  | "running"
-  | "background"
-  | "stuck"
-  | "cancelPending"
-  | "deadline+";
+  "running" | "background" | "stuck" | "cancelPending" | "deadline+";
 
 export function derivedState(row: BackgroundedToolView, nowMs: number): DerivedState {
   const stuckDwellMs = row.stuckSince
