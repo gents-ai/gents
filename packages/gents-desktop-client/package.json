@@ -27,7 +27,7 @@
   ],
   "scripts": {
     "build": "node ../../scripts/clean-desktop-package-dist.mjs && tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2"

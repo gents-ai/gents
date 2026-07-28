@@ -24,7 +24,7 @@
   ],
   "scripts": {
     "build": "node ../../scripts/clean-desktop-package-dist.mjs && tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run"
   },
   "peerDependencies": {
     "react-markdown": "^10.0.0",
