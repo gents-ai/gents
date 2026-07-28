@@ -1,13 +1,13 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { resolve } from "node:path";
 
-import type { DesktopApiAdapter } from "../src/lib/desktop-api";
-import type { DesktopClientUpdatedListenerFactory } from "../src/lib/desktop-events";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import type { DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desktop-client";
 import type {
   ChatSendResult,
   DesktopClientSnapshot,
   TaskRunResult,
-} from "../src/lib/types";
+} from "@source-inc/gents-desktop-client";
 import type { TauriDriverBridge, TauriDriverChatRequest } from "./tauri-driver";
 import { createRunnerAdapter } from "./live-bridge-runner/adapter";
 import { JsonHttpClient } from "./live-bridge-runner/http";

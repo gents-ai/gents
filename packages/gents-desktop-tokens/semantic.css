@@ -17,6 +17,11 @@
     --color-surface-deep: #020504;
     --color-surface-muted: #1c2724;
     --color-surface-row: #09110e;
+    --color-bg-rgb: 0 0 0;
+    --color-surface-rgb: 28 39 36;
+    --color-surface-strong-rgb: 7 17 14;
+    --color-surface-deep-rgb: 2 5 4;
+    --color-surface-row-rgb: 9 17 14;
     --color-text: #ffffff;
     --color-text-muted: #95a49d;
     --color-text-soft: #d6ddda;
@@ -24,17 +29,27 @@
 
     /* Accent & status */
     --color-accent: #06b250;
+    --color-accent-rgb: 6 178 80;
     --color-accent-strong: #39e27a;
     --color-accent-muted: #58c779;
     --color-success: #8df2b4;
     --color-success-strong: #06b250;
     --color-warning: #ffa011;
+    --color-warning-rgb: 255 160 17;
     --color-warning-soft: #ffd089;
     --color-info: #10cbff;
+    --color-info-rgb: 16 203 255;
     --color-error: #ffad9d;
     --color-error-strong: #ff6f5f;
     --color-error-soft: #ffe2de;
     --color-error-tint: #ffbfb8;
+    --color-error-strong-rgb: 255 111 95;
+    --color-error-deep-rgb: 72 15 10;
+    --color-text-muted-rgb: 149 164 157;
+    --color-accent-strong-rgb: 57 226 122;
+    --color-success-rgb: 141 242 180;
+    --overlay-rgb: 255 255 255;
+    --scrim-rgb: 0 0 0;
 
     /* Borders & radii */
     --border-subtle: rgb(6 178 80 / 0.12);
@@ -52,9 +67,26 @@
     --space-3: 8px;
     --space-4: 10px;
     --space-5: 12px;
-    --space-6: 16px;
-    --space-7: 20px;
-    --space-8: 24px;
+    --space-6: 14px;
+    --space-7: 16px;
+    --space-8: 18px;
+    --space-9: 20px;
+    --space-10: 24px;
+
+    /* Type and motion */
+    --text-2xs: 10px;
+    --text-xs: 11px;
+    --text-sm: 12px;
+    --text-md: 13px;
+    --text-base: 14px;
+    --text-lg: 16px;
+    --text-xl: 18px;
+    --text-2xl: 22px;
+    --text-3xl: 28px;
+    --text-4xl: 32px;
+    --motion-fast: 120ms;
+    --motion-medium: 150ms;
+    --motion-pulse: 1.4s;
 
     /* Layout contract: packages use this breakpoint; CSS custom props cannot
        parameterize @media, so hosts document the same literal. */

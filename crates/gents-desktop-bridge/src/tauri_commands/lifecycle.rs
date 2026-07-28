@@ -226,7 +226,7 @@ pub fn desktop_set_selected_agent(
     Ok(())
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
 pub struct DesktopObserverMetrics {
     pub events_received: u64,
     pub docs_fetched: u64,

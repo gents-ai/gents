@@ -24,7 +24,7 @@ import type {
   ToolSelectionDeleteRequest,
   ToolServiceDeleteRequest,
   BehaviorDeleteRequest,
-} from "../lib/types";
+} from "@source-inc/gents-desktop-client";
 import { NEW_DOCUMENT_ID, TABS } from "./config-workspace/model";
 import { useConfigWorkspaceSelection } from "./config-workspace/useConfigWorkspaceSelection";
 import {
@@ -39,7 +39,7 @@ import {
   ToolSelectionConfigPanel,
   ToolServiceConfigPanel,
 } from "./config";
-import { ConfirmDialog } from "./ConfirmDialog";
+import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import { ConfigNavigationGuardProvider } from "./config/ConfigNavigationGuard";
 import sourceMarkUrl from "../assets/source-mark-light.png";
 

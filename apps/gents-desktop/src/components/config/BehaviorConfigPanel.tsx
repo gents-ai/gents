@@ -11,9 +11,9 @@ import type {
   InferenceProfileView,
   SkillView,
   ToolSelectionView,
-} from "../../lib/types";
+} from "@source-inc/gents-desktop-client";
 import { BehaviorToolSurface } from "./BehaviorToolSurface";
-import { ConfirmDialog } from "../ConfirmDialog";
+import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import { isDirty } from "./configDirty";
 import {
   ConfigDocumentList,

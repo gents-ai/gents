@@ -1,11 +1,12 @@
 use gents_desktop_core::client::BearerPairingResult;
 use serde::Serialize;
+use ts_rs::TS;
 
 use gents_desktop_core::client::PeerMutationResult;
 
 use super::bootstrap::DesktopBootstrapSummary;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct P2PHealthView {
     pub status: String,
@@ -17,7 +18,7 @@ pub struct P2PHealthView {
     pub last_failure_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeView {
     pub process_state: Option<String>,
@@ -31,7 +32,7 @@ pub struct RuntimeView {
     pub unavailable_behavior_count: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentPrincipalView {
     pub agent_did: String,
@@ -42,7 +43,7 @@ pub struct AgentPrincipalView {
     pub created_by: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BehaviorView {
     pub behavior_id: String,
@@ -60,7 +61,7 @@ pub struct BehaviorView {
     pub skill_excludes: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceBackendView {
     pub backend_id: String,
@@ -77,7 +78,7 @@ pub struct InferenceBackendView {
     pub probe_status: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceProfileView {
     pub profile_id: String,
@@ -91,7 +92,7 @@ pub struct InferenceProfileView {
     pub deadline_duration_secs: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolSelectionView {
     pub selection_id: String,
@@ -128,7 +129,7 @@ pub struct ToolSelectionView {
     pub orchestration_enabled: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolServiceRegistryView {
     pub service_id: String,
@@ -144,7 +145,7 @@ pub struct ToolServiceRegistryView {
     pub updated_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskView {
     pub task_id: String,
@@ -158,7 +159,7 @@ pub struct TaskView {
     pub run_history: Vec<TaskRunSummaryView>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskRecentRunsView {
     pub total_fires: u64,
@@ -169,7 +170,7 @@ pub struct TaskRecentRunsView {
     pub event_trigger_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskRunSummaryView {
     pub request_id: String,
@@ -183,7 +184,7 @@ pub struct TaskRunSummaryView {
     pub created_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillView {
     pub skill_id: String,
@@ -198,7 +199,7 @@ pub struct SkillView {
     pub created_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleView {
     pub schedule_id: String,
@@ -216,7 +217,7 @@ pub struct ScheduleView {
     pub fire_count: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct EventTriggerView {
     pub trigger_id: String,
@@ -233,7 +234,7 @@ pub struct EventTriggerView {
     pub fire_count: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationSummary {
     pub session_id: String,
@@ -253,7 +254,7 @@ pub struct ConversationSummary {
     pub tool_call_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentView {
     pub peer_id: String,
@@ -280,7 +281,7 @@ pub struct DeploymentView {
     pub conversations: Vec<ConversationSummary>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopRuntimeSnapshot {
     pub local_peer_id: String,
@@ -297,14 +298,14 @@ pub struct DesktopRuntimeSnapshot {
     pub deployments: Vec<DeploymentView>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopClientSnapshot {
     pub bootstrap: DesktopBootstrapSummary,
     pub client: Option<DesktopRuntimeSnapshot>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PeerMutationView {
     pub peer_id: String,
@@ -326,7 +327,7 @@ impl From<PeerMutationResult> for PeerMutationView {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PeerRemoveResponse {
     #[serde(flatten)]
@@ -334,7 +335,7 @@ pub struct PeerRemoveResponse {
     pub mutation: PeerMutationView,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BearerPairingView {
     pub peer_id: String,
@@ -372,7 +373,7 @@ impl From<BearerPairingResult> for BearerPairingView {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BearerPairingResponse {
     #[serde(flatten)]
@@ -441,7 +442,7 @@ mod peer_remove_response_tests {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkStatusView {
     pub local_peer_id: Option<String>,
@@ -455,7 +456,7 @@ pub struct NetworkStatusView {
     pub saved_peers: Vec<NetworkSavedPeerView>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkReplicatorView {
     pub peer_id: Option<String>,
@@ -465,7 +466,7 @@ pub struct NetworkReplicatorView {
     pub last_status_change: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkSavedPeerView {
     pub peer_id: String,

@@ -1,10 +1,13 @@
 export {
+  assertCompatibleBridgeContract,
   createDesktopClient,
+  MINIMUM_BRIDGE_CONTRACT_VERSION,
+  PACKAGE_VERSION,
+  type DesktopBridgeContract,
   type DesktopClient,
 } from "./client.js";
 export {
   createDesktopStore,
-  countCoalescedRefreshes,
   DEFAULT_TIMING,
   type DesktopStore,
   type DesktopStoreState,
@@ -23,6 +26,10 @@ export {
   normalizeInvokeError,
   type BridgeErrorPayload,
 } from "./errors.js";
+export * from "./api.js";
+export * from "./commandDenial.js";
+export * from "./events.js";
+export * from "./types.js";
 
 /** Documented narrow layout breakpoint (px). Packages use this constant. */
 export const NARROW_BREAKPOINT_PX = 760;

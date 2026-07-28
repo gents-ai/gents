@@ -1,5 +1,9 @@
-import type { DesktopClient } from "./client.js";
+import {
+  assertCompatibleBridgeContract,
+  type DesktopClient,
+} from "./client.js";
 import type { ClientUpdateEvent, Unlisten } from "./transport.js";
+import type { DesktopClientSnapshot } from "./types.js";
 
 export type TimingConfig = {
   /** Coalesce burst of client-updated events into one refresh. */
@@ -15,7 +19,7 @@ export const DEFAULT_TIMING: TimingConfig = {
 
 export type DesktopStoreState = {
   generation: number;
-  snapshot: unknown | null;
+  snapshot: DesktopClientSnapshot | null;
   lastError: string | null;
   started: boolean;
 };
@@ -49,7 +53,8 @@ export function createDesktopStore(
   let unlisten: Unlisten | null = null;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let refreshInFlight: Promise<void> | null = null;
-  let trailingRefresh = false;
+  let refreshRequested = false;
+  let lifecycle: Promise<void> = Promise.resolve();
 
   function emit() {
     for (const listener of listeners) {
@@ -62,11 +67,11 @@ export function createDesktopStore(
     emit();
   }
 
-  async function refreshNow() {
+  async function refreshOnce() {
     try {
       const snapshot = await client.clientSnapshot();
       setState({
-        snapshot,
+        snapshot: snapshot as DesktopClientSnapshot,
         generation: state.generation + 1,
         lastError: null,
       });
@@ -77,24 +82,40 @@ export function createDesktopStore(
     }
   }
 
+  function requestRefresh(): Promise<void> {
+    refreshRequested = true;
+    if (!refreshInFlight) {
+      refreshInFlight = (async () => {
+        do {
+          refreshRequested = false;
+          await refreshOnce();
+        } while (refreshRequested);
+      })().finally(() => {
+        refreshInFlight = null;
+        // A request can arrive after the drain's final condition check but
+        // before this finally callback runs. Preserve that trailing refresh.
+        if (refreshRequested) {
+          void requestRefresh();
+        }
+      });
+    }
+    return refreshInFlight;
+  }
+
   function scheduleRefresh(_reason?: ClientUpdateEvent) {
     if (debounceTimer) {
       clearTimeout(debounceTimer);
     }
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
-      if (refreshInFlight) {
-        trailingRefresh = true;
-        return;
-      }
-      refreshInFlight = refreshNow().finally(() => {
-        refreshInFlight = null;
-        if (trailingRefresh) {
-          trailingRefresh = false;
-          void scheduleRefresh();
-        }
-      });
+      void requestRefresh();
     }, timing.refreshDebounceMs);
+  }
+
+  function serializeLifecycle(operation: () => Promise<void>): Promise<void> {
+    const result = lifecycle.then(operation, operation);
+    lifecycle = result.catch(() => undefined);
+    return result;
   }
 
   return {
@@ -106,49 +127,38 @@ export function createDesktopStore(
       };
     },
     client,
-    async start() {
-      if (state.started) {
-        return;
-      }
-      await client.clientStart();
-      unlisten = await client.transport.listenClientUpdated((event) => {
-        scheduleRefresh(event);
+    start() {
+      return serializeLifecycle(async () => {
+        if (state.started) {
+          return;
+        }
+        assertCompatibleBridgeContract(await client.bridgeContract());
+        await client.clientStart();
+        unlisten = await client.transport.listenClientUpdated((event) => {
+          scheduleRefresh(event);
+        });
+        setState({ started: true });
+        await requestRefresh();
       });
-      setState({ started: true });
-      await refreshNow();
     },
-    async stop() {
-      if (unlisten) {
-        unlisten();
-        unlisten = null;
-      }
-      if (debounceTimer) {
-        clearTimeout(debounceTimer);
-        debounceTimer = null;
-      }
-      try {
-        await client.clientShutdown();
-      } catch {
-        // ignore shutdown errors on teardown
-      }
-      setState({ started: false });
+    stop() {
+      return serializeLifecycle(async () => {
+        if (unlisten) {
+          unlisten();
+          unlisten = null;
+        }
+        if (debounceTimer) {
+          clearTimeout(debounceTimer);
+          debounceTimer = null;
+        }
+        try {
+          await client.clientShutdown();
+        } catch {
+          // ignore shutdown errors on teardown
+        }
+        setState({ started: false });
+      });
     },
-    refresh: refreshNow,
+    refresh: requestRefresh,
   };
-}
-
-/** N update events → one coalesced refresh (property under test). */
-export function countCoalescedRefreshes(
-  eventCount: number,
-  debounceMs: number,
-  fireIntervalMs: number,
-): number {
-  if (eventCount <= 0) {
-    return 0;
-  }
-  // If events arrive faster than debounce, they coalesce to 1.
-  if (fireIntervalMs < debounceMs) {
-    return 1;
-  }
-  return eventCount;
 }

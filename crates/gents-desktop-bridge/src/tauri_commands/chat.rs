@@ -80,7 +80,7 @@ pub async fn desktop_conversation_rename(
         .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionForkResultView {
     pub session_id: String,
@@ -118,7 +118,7 @@ pub async fn desktop_session_fork(
     })
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestResendResultView {
     pub request_id: String,

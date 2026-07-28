@@ -1,24 +1,55 @@
 {
   "name": "@source-inc/gents-desktop-fleet",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "license": "Apache-2.0",
-  "description": "Fleet metrics and peer error helpers for Gents desktop",
+  "description": "Reusable peer discovery, pairing, health, and fleet surfaces for Gents desktop",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "./styles.css",
+    "./local-runtime.css"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./local-runtime": {
+      "types": "./dist/local-runtime.d.ts",
+      "import": "./dist/local-runtime.js"
+    },
+    "./styles.css": "./styles.css",
+    "./local-runtime.css": "./local-runtime.css",
+    "./package.json": "./package.json"
   },
-  "files": ["dist", "README.md"],
-  "scripts": { "build": "tsc -p tsconfig.json" },
+  "files": [
+    "dist",
+    "styles",
+    "styles.css",
+    "local-runtime.css",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/clean-desktop-package-dist.mjs && tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2",
+    "jsqr": "^1.4.0"
+  },
   "peerDependencies": {
     "react": "^19.0.0",
-    "@source-inc/gents-desktop-client": "0.8.0"
+    "react-dom": "^19.0.0",
+    "@source-inc/gents-desktop-client": "0.9.0",
+    "@source-inc/gents-desktop-ui": "0.9.0"
   },
   "devDependencies": {
-    "@source-inc/gents-desktop-client": "0.8.0",
+    "@source-inc/gents-desktop-client": "0.9.0",
+    "@source-inc/gents-desktop-ui": "0.9.0",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "vitest": "^3.2.4",
     "typescript": "~5.8.3"
   }
 }

@@ -1,9 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { NetworkPanel } from "../src/components/fleet/NetworkPanel";
-import { setDesktopApiAdapterForTests } from "../src/lib/desktop-api";
-import type { DesktopApiAdapter } from "../src/lib/desktop-api";
+import { NetworkPanel } from "@source-inc/gents-desktop-fleet";
+import { setDesktopApiAdapterForTests } from "@source-inc/gents-desktop-client";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
 function withStatus(status: unknown, fail = false) {
   setDesktopApiAdapterForTests({

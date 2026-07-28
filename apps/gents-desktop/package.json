@@ -54,11 +54,12 @@
     "react-markdown": "^10.1.0",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
-    "@source-inc/gents-desktop-client": "0.8.0",
-    "@source-inc/gents-desktop-chat": "0.8.0",
-    "@source-inc/gents-desktop-fleet": "0.8.0",
-    "@source-inc/gents-desktop-operations": "0.8.0",
-    "@source-inc/gents-desktop-tokens": "0.8.0"
+    "@source-inc/gents-desktop-client": "0.9.0",
+    "@source-inc/gents-desktop-chat": "0.9.0",
+    "@source-inc/gents-desktop-fleet": "0.9.0",
+    "@source-inc/gents-desktop-operations": "0.9.0",
+    "@source-inc/gents-desktop-tokens": "0.9.0",
+    "@source-inc/gents-desktop-ui": "0.9.0"
   },
   "devDependencies": {
     "@antithesishq/bombadil": "^0.6.0",

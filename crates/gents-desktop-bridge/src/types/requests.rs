@@ -1,8 +1,9 @@
 use serde::Deserialize;
+use ts_rs::TS;
 
 /// Local-runtime init request. Filesystem paths are **not** accepted from the
 /// webview — they come from `BridgeConfig` resolved at plugin init.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopInitRequest {
     pub label: Option<String>,
@@ -10,7 +11,7 @@ pub struct DesktopInitRequest {
     pub reset: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PeerAddRequest {
     pub label: String,
@@ -24,7 +25,7 @@ pub struct PeerAddRequest {
 
 /// Fetch peer runtime status by **saved peer id** only — read grants never
 /// accept arbitrary addresses (SSRF).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PeerStatusFetchRequest {
     pub peer_id: String,
@@ -32,13 +33,13 @@ pub struct PeerStatusFetchRequest {
 
 /// Fleet-admin probe of an arbitrary address before the peer is saved.
 /// Lives only in `fleet-admin` — not a read grant.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PeerProbeRequest {
     pub server_address: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BearerPairingRequest {
     pub token: String,
@@ -46,7 +47,7 @@ pub struct BearerPairingRequest {
     pub label: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatSendRequest {
     pub agent_did: String,
@@ -55,14 +56,14 @@ pub struct ChatSendRequest {
     pub content: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationRenameRequest {
     pub session_id: String,
     pub title: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentConfigSaveRequest {
     pub agent_did: String,
@@ -71,7 +72,7 @@ pub struct AgentConfigSaveRequest {
     pub enabled: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BehaviorSaveRequest {
     pub agent_did: String,
@@ -90,70 +91,70 @@ pub struct BehaviorSaveRequest {
     pub skill_excludes: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillDeleteRequest {
     pub skill_id: String,
     pub agent_did: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskDeleteRequest {
     pub task_id: String,
     pub agent_did: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleDeleteRequest {
     pub schedule_id: String,
     pub agent_did: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct EventTriggerDeleteRequest {
     pub trigger_id: String,
     pub agent_did: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendDeleteRequest {
     pub backend_id: String,
     pub agent_did: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceProfileDeleteRequest {
     pub profile_id: String,
     pub agent_did: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolSelectionDeleteRequest {
     pub selection_id: String,
     pub agent_did: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolServiceDeleteRequest {
     pub service_id: String,
     pub agent_did: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BehaviorDeleteRequest {
     pub behavior_id: String,
     pub agent_did: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendSaveRequest {
     pub backend_id: String,
@@ -171,7 +172,7 @@ pub struct BackendSaveRequest {
     pub enabled: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceProfileSaveRequest {
     pub profile_id: String,
@@ -185,7 +186,7 @@ pub struct InferenceProfileSaveRequest {
     pub deadline_duration_secs: Option<i64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolSelectionSaveRequest {
     pub agent_did: String,
@@ -242,7 +243,7 @@ pub struct ToolSelectionSaveRequest {
     // row (the read query now fetches them), never set from the UI.
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolServiceSaveRequest {
     pub service_id: String,
@@ -256,7 +257,7 @@ pub struct ToolServiceSaveRequest {
     pub status: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolServiceTestRequest {
     pub service_id: String,
@@ -267,7 +268,7 @@ pub struct ToolServiceTestRequest {
     pub mcp_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskSaveRequest {
     pub task_id: String,
@@ -279,7 +280,7 @@ pub struct TaskSaveRequest {
     pub output_schema_ref: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillSaveRequest {
     pub skill_id: String,
@@ -294,14 +295,15 @@ pub struct SkillSaveRequest {
     pub enabled: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskRunRequest {
     pub task_id: String,
+    #[ts(type = "unknown", optional)]
     pub args: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleSaveRequest {
     pub schedule_id: String,
@@ -314,13 +316,13 @@ pub struct ScheduleSaveRequest {
     pub concurrency: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleRunRequest {
     pub schedule_id: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct EventTriggerSaveRequest {
     pub trigger_id: String,
@@ -334,7 +336,7 @@ pub struct EventTriggerSaveRequest {
 
 // --- operator-surfaces request params (issue #302) ---
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopOperationsSnapshotRequest {
     #[serde(default)]
@@ -349,7 +351,7 @@ pub struct DesktopOperationsSnapshotRequest {
     pub include_terminal: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopListSubagentTreeRequest {
     pub root_request_id: String,
@@ -361,7 +363,7 @@ pub struct DesktopListSubagentTreeRequest {
     pub max_depth: Option<u32>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopPreviewInterruptCascadeRequest {
     pub request_id: String,
@@ -371,13 +373,13 @@ pub struct DesktopPreviewInterruptCascadeRequest {
     pub include_terminal: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopListHoldsRequest {
     pub agent_did: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopResolveHoldRequest {
     pub agent_did: String,
@@ -387,7 +389,7 @@ pub struct DesktopResolveHoldRequest {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopInterruptRequest {
     pub request_id: String,
@@ -401,7 +403,7 @@ pub struct DesktopInterruptRequest {
     pub expected_preview_signature: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopProbeMcpServiceRequest {
     pub service_id: String,

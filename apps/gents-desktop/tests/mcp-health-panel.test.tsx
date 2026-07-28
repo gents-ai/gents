@@ -1,14 +1,20 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/lib/desktop-api", () => ({
+vi.mock("@source-inc/gents-desktop-client", () => ({
   listMcpServicesWithHealth: vi.fn(),
   probeMcpService: vi.fn(),
 }));
 
-import { listMcpServicesWithHealth, probeMcpService } from "../src/lib/desktop-api";
-import { McpHealthPanel, McpHealthPanelView } from "../src/components/mcpHealth";
-import type { MCPServiceHealthView } from "../src/lib/types";
+import {
+  listMcpServicesWithHealth,
+  probeMcpService,
+} from "@source-inc/gents-desktop-client";
+import {
+  McpHealthPanel,
+  McpHealthPanelView,
+} from "@source-inc/gents-desktop-operations";
+import type { MCPServiceHealthView } from "@source-inc/gents-desktop-client";
 
 const mockedList = vi.mocked(listMcpServicesWithHealth);
 const mockedProbe = vi.mocked(probeMcpService);

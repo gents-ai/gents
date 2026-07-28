@@ -1,3 +1,9 @@
+@import "@source-inc/gents-desktop-tokens/semantic.css";
+@import "@source-inc/gents-desktop-ui/styles.css";
+@import "@source-inc/gents-desktop-chat/styles.css";
+@import "@source-inc/gents-desktop-fleet/styles.css";
+@import "@source-inc/gents-desktop-operations/styles.css";
+
 :root {
   color-scheme: light dark;
   font-family: system-ui, sans-serif;
@@ -11,7 +17,7 @@ body {
 }
 
 main {
-  max-width: 720px;
+  max-width: 1100px;
   margin: 0 auto;
   padding: 1.5rem;
 }
@@ -41,4 +47,27 @@ pre {
 
 .error {
   color: #ff8a80;
+}
+
+.package-surface {
+  position: relative;
+  min-height: 240px;
+  margin: 1rem 0;
+  border: 1px solid var(--border-default);
+  padding: 1rem;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.package-surface h2 {
+  font-size: var(--text-lg);
+}
+
+.fixture-operations {
+  min-height: 520px;
+  overflow: hidden;
+}
+
+.fixture-domain-tab {
+  padding: var(--space-7);
 }

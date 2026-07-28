@@ -9,7 +9,7 @@ import { EventTriggerConfigEditor } from "../src/components/config/EventTriggerC
 import { InferenceProfileConfigEditor } from "../src/components/config/InferenceProfileConfigPanel";
 import { ToolSelectionConfigEditor } from "../src/components/config/ToolSelectionConfigPanel";
 import { ToolServiceConfigEditor } from "../src/components/config/ToolServiceConfigPanel";
-import type { TaskView } from "../src/lib/types";
+import type { TaskView } from "@source-inc/gents-desktop-client";
 import { toolSelection, toolService } from "./config-panel-buttons/fixtures";
 
 const sourceAgentDid = "did:test:source";

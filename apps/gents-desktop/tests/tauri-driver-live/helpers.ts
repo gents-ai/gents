@@ -2,7 +2,10 @@ import { waitFor } from "@testing-library/react";
 import { describe, expect } from "vitest";
 
 import { LiveBridgeRunner } from "../live-bridge-runner";
-import type { DeploymentView, DesktopSessionSnapshot } from "../../src/lib/types";
+import type {
+  DeploymentView,
+  DesktopSessionSnapshot,
+} from "@source-inc/gents-desktop-client";
 
 export const describeLive =
   process.env.GENTS_TAURI_LIVE === "1" ? describe.sequential : describe.skip;

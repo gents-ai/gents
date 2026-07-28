@@ -16,7 +16,7 @@ import type {
   TaskSaveRequest,
   ToolSelectionSaveRequest,
   ToolServiceSaveRequest,
-} from "../src/lib/types";
+} from "@source-inc/gents-desktop-client";
 import {
   backend,
   profile,

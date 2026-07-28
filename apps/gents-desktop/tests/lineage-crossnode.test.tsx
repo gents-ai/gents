@@ -1,10 +1,10 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { listSubagentTree } from "../src/lib/desktop-api";
-import { SubagentLineageView } from "../src/components/subagentLineage";
+import { listSubagentTree } from "@source-inc/gents-desktop-client";
+import { SubagentLineageView } from "@source-inc/gents-desktop-operations";
 
-vi.mock("../src/lib/desktop-api", async (orig) => ({
+vi.mock("@source-inc/gents-desktop-client", async (orig) => ({
   ...(await orig()),
   listSubagentTree: vi.fn(),
 }));

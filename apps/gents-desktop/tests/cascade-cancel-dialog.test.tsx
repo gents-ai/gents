@@ -1,20 +1,15 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/lib/tauri/interruptRequest", () => ({
-  previewInterruptCascade: vi.fn(),
-  interruptRequest: vi.fn(),
-}));
-
 import {
+  CascadeCancelDialog,
   interruptRequest,
   previewInterruptCascade,
-} from "../src/lib/tauri/interruptRequest";
-import { CascadeCancelDialog } from "../src/components/cancelUx";
-import type { CascadeCancelPreview } from "../src/lib/types/operations";
+} from "@source-inc/gents-desktop-chat";
+import type { CascadeCancelPreview } from "@source-inc/gents-desktop-client";
 
-const mockedPreview = vi.mocked(previewInterruptCascade);
-const mockedInterrupt = vi.mocked(interruptRequest);
+const mockedPreview = vi.fn<typeof previewInterruptCascade>();
+const mockedInterrupt = vi.fn<typeof interruptRequest>();
 
 const examplePreview: CascadeCancelPreview = {
   rootRequestId: "req_root",
@@ -70,6 +65,8 @@ const baseProps = {
   onAccepted: vi.fn(),
   onAlreadyInterrupted: vi.fn(),
   onError: vi.fn(),
+  previewInterrupt: mockedPreview,
+  interrupt: mockedInterrupt,
 };
 
 describe("CascadeCancelDialog", () => {

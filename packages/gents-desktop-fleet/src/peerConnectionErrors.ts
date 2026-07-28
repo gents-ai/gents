@@ -36,7 +36,9 @@ function errorMessage(error: unknown): string {
 }
 
 function requestUrlFromMessage(message: string): string | null {
-  const match = message.match(/\b(?:sending|reading) GET request to (https?:\/\/\S+)/i);
+  const match = message.match(
+    /\b(?:sending|reading) GET request to (https?:\/\/\S+)/i,
+  );
   if (!match) {
     return null;
   }

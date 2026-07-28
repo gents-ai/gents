@@ -7,11 +7,11 @@ import { setDesktopShellTimingConfigForTests } from "../src/hooks/useDesktopShel
 import {
   setDesktopApiAdapterForTests,
   type DesktopApiAdapter,
-} from "../src/lib/desktop-api";
+} from "@source-inc/gents-desktop-client";
 import {
   setDesktopClientUpdatedListenerFactoryForTests,
   type DesktopClientUpdatedListenerFactory,
-} from "../src/lib/desktop-events";
+} from "@source-inc/gents-desktop-client";
 
 export type TauriDriverChatRequest = {
   agentDid: string;

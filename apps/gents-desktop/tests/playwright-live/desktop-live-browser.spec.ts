@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 
 import { LiveBridgeRunner, type LiveBridgeRunnerOptions } from "../live-bridge-runner";
 import type { RequestDiagnosticsBundle } from "../live-bridge-runner";
-import type { DeploymentView } from "../../src/lib/types";
+import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import {
   liveSmokeFailureSummary,
   liveSmokeSummary,

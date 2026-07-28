@@ -3,7 +3,7 @@ use ts_rs::TS;
 
 use super::operations::DerivedCancelCauseView;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageView {
     pub message_key: String,
@@ -19,7 +19,7 @@ pub struct MessageView {
     pub timestamp: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallView {
     pub tool_call_key: String,
@@ -36,8 +36,10 @@ pub struct ToolCallView {
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub denial: Option<CommandDenialView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub cancel_cause: Option<DerivedCancelCauseView>,
 }
 
@@ -49,10 +51,13 @@ pub struct CommandDenialView {
     pub rule_id: String,
     pub reason_line: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub denied_command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub denied_argument: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub denied_subcommand: Option<String>,
     pub diagnostic: String,
 }
@@ -81,16 +86,20 @@ pub struct RenderedToolCallView {
     pub args: Option<ToolDetailValueView>,
     pub result: Option<ToolDetailValueView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub partial_output_tail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub partial_output_seq: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub denial: Option<CommandDenialView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub cancel_cause: Option<DerivedCancelCauseView>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolResultView {
     pub tool_name: Option<String>,
@@ -100,7 +109,7 @@ pub struct ToolResultView {
     pub created_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ResponseView {
     pub status: Option<String>,
@@ -113,12 +122,14 @@ pub struct ResponseView {
     pub interrupted_at: Option<String>,
     pub completed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub cancel_cause: Option<DerivedCancelCauseView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub backend_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingTurnView {
     pub request_id: String,
@@ -169,7 +180,7 @@ pub enum RenderedTimelineItem {
     },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct GoalView {
     pub goal_id: String,
@@ -187,7 +198,7 @@ pub struct GoalView {
     pub completion_evidence: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopSessionSnapshot {
     pub session_id: String,
@@ -205,11 +216,14 @@ pub struct DesktopSessionSnapshot {
     pub timeline_items: Vec<RenderedTimelineItem>,
     #[allow(dead_code)]
     #[serde(skip_serializing)]
+    #[ts(skip)]
     pub messages: Vec<MessageView>,
     #[allow(dead_code)]
     #[serde(skip_serializing)]
+    #[ts(skip)]
     pub tool_calls: Vec<ToolCallView>,
     #[allow(dead_code)]
     #[serde(skip_serializing)]
+    #[ts(skip)]
     pub tool_results: Vec<ToolResultView>,
 }

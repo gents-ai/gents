@@ -4,7 +4,7 @@ import { ChatWorkspace } from "./components/ChatWorkspace";
 import { CodeContextHeader } from "./components/code/CodeContextHeader";
 import { ConfigWorkspace } from "./components/ConfigWorkspace";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { FleetDashboard } from "./components/fleet/FleetDashboard";
+import { FleetHostDashboard } from "./components/fleet/FleetHostDashboard";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { applyTheme, loadTheme } from "./lib/theme";
 import { applyShellPlatform } from "./lib/shellPlatform";
@@ -108,7 +108,7 @@ function AppShell() {
       <ShortcutsHelp open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
       {workspaceView === "fleet" ? (
-        <FleetDashboard
+        <FleetHostDashboard
           addingPeer={shell.addingPeer}
           bootstrap={shell.snapshot?.bootstrap ?? null}
           deployments={shell.deployments}

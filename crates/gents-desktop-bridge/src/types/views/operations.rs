@@ -5,8 +5,9 @@
 //! these structs.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopOperationsSnapshot {
     pub fetched_at: String,
@@ -18,7 +19,7 @@ pub struct DesktopOperationsSnapshot {
     pub lineage: Option<SubagentTreeView>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeLivenessView {
     pub expired_processing_count: i64,
@@ -28,7 +29,7 @@ pub struct RuntimeLivenessView {
     pub active_native_executors: Vec<NativeExecutorStatusView>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ActiveRequestView {
     pub request_id: String,
@@ -42,7 +43,7 @@ pub struct ActiveRequestView {
     pub caused_by_trigger_kind: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ActiveToolCallView {
     pub request_id: String,
@@ -55,7 +56,7 @@ pub struct ActiveToolCallView {
     pub deadline_expired: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeExecutorStatusView {
     pub id: i64,
@@ -66,7 +67,7 @@ pub struct NativeExecutorStatusView {
     pub age_ms: i64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundedToolView {
     pub request_id: String,
@@ -86,7 +87,7 @@ pub struct BackgroundedToolView {
     pub native_executor: Option<NativeExecutorStatusView>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct StuckWorkDiagnosticView {
     pub request_id: String,
@@ -100,7 +101,7 @@ pub struct StuckWorkDiagnosticView {
     pub stuck_since: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentTreeView {
     pub root_request_id: String,
@@ -113,7 +114,7 @@ pub struct SubagentTreeView {
     pub partial_errors: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentNodeView {
     pub request_id: String,
@@ -140,7 +141,7 @@ pub struct SubagentNodeView {
     pub backend_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentEdgeView {
     pub parent_request_id: String,
@@ -157,7 +158,7 @@ pub struct SubagentEdgeView {
     pub lifecycle_state: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CascadeCancelPreview {
     pub root_request_id: String,
@@ -169,7 +170,7 @@ pub struct CascadeCancelPreview {
     pub unknown_policy: Vec<CascadeAffectedRequest>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CascadeAffectedRequest {
     pub request_id: String,
@@ -195,7 +196,7 @@ pub struct CascadeAffectedRequest {
 /// - `interrupt_requested_at` is the canonical timestamp the bridge observed
 ///   on the document after the call. Null only on a non-already-interrupted
 ///   failure.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InterruptRequestResult {
     pub request_id: String,
@@ -207,7 +208,7 @@ pub struct InterruptRequestResult {
 }
 
 /// One tool call held in `awaitingApproval`, as shown in the Holds strip.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HeldToolCallView {
     pub tool_call_id: String,
@@ -220,7 +221,7 @@ pub struct HeldToolCallView {
 }
 
 /// Result of writing an AgentToolApproval decision for a held call.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolveHoldResult {
     pub approval_id: String,
@@ -234,7 +235,7 @@ pub struct ResolveHoldResult {
 /// `(enabled, probe_status)` per the prototype's mapping (matches
 /// `InferenceBackend::is_available` and the Lean `backendAvailable`
 /// witness in `BoundaryRuntime.lean`).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendHealthView {
     pub backend_id: String,
@@ -251,7 +252,7 @@ pub struct BackendHealthView {
     pub recent_calls: Vec<InferenceCallSummaryView>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceCallSummaryView {
     pub call_id: String,
@@ -278,7 +279,7 @@ pub struct InferenceCallSummaryView {
 /// (`healthy` / `stale` / `evicted` / `reconnecting`) so the operator UI
 /// can distinguish back-off from in-flight retry; the public three-state
 /// `HealthStatus` collapses `evicted` and `reconnecting` to `unreachable`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MCPServiceHealthView {
     pub service_id: String,
@@ -302,7 +303,7 @@ pub struct MCPServiceHealthView {
 /// always reports `0` here because the cycle starts from an initial
 /// `ServiceModel`. For accumulated K-state, the panel reads the persisted
 /// `ToolServiceHealthState` row via `desktop_list_mcp_services_with_health`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServiceProbeResult {
     pub service_id: String,
@@ -311,7 +312,7 @@ pub struct McpServiceProbeResult {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DerivedCancelCauseView {
     pub cause: String,      // "userCancelled" | "interrupted" | "deadline" | "unknown"

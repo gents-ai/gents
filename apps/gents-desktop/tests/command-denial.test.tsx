@@ -1,14 +1,17 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { CommandDenialToolItem } from "../src/components/commandDenial";
+import { CommandDenialToolItem } from "@source-inc/gents-desktop-chat";
 import {
   parseCommandDenial,
   type CommandDenialView,
   type DenialRuleId,
-} from "../src/lib/commandDenial";
-import { MessageList } from "../src/components/Transcript";
-import type { RenderedTimelineItem, RenderedToolCallView } from "../src/lib/types";
+} from "@source-inc/gents-desktop-client";
+import { MessageList } from "@source-inc/gents-desktop-chat";
+import type {
+  RenderedTimelineItem,
+  RenderedToolCallView,
+} from "@source-inc/gents-desktop-client";
 
 // ---------------------------------------------------------------------
 // Sentinel matrix

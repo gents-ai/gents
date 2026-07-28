@@ -1,25 +1,44 @@
 {
   "name": "@source-inc/gents-desktop-operations",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "license": "Apache-2.0",
-  "description": "Operations rail registry and operator helpers for Gents desktop",
+  "description": "Reusable operations rail, liveness, health, lineage, trace, and workspace surfaces for Gents desktop",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "./styles.css"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./styles.css": "./styles.css",
+    "./package.json": "./package.json"
   },
-  "files": ["dist", "README.md"],
-  "scripts": { "build": "tsc -p tsconfig.json" },
+  "files": [
+    "dist",
+    "styles",
+    "styles.css",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/clean-desktop-package-dist.mjs && tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
   "peerDependencies": {
     "react": "^19.0.0",
-    "@source-inc/gents-desktop-client": "0.8.0"
+    "react-dom": "^19.0.0",
+    "@source-inc/gents-desktop-client": "0.9.0",
+    "@source-inc/gents-desktop-ui": "0.9.0"
   },
   "devDependencies": {
-    "@source-inc/gents-desktop-client": "0.8.0",
+    "@source-inc/gents-desktop-client": "0.9.0",
+    "@source-inc/gents-desktop-ui": "0.9.0",
     "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "vitest": "^3.2.4",
     "typescript": "~5.8.3"
   }
 }

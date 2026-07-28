@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { SkillConfigPanel } from "../src/components/config";
-import type { DeploymentView } from "../src/lib/types";
+import type { DeploymentView } from "@source-inc/gents-desktop-client";
 
 const deployment: DeploymentView = {
   deploymentId: "dep-1",

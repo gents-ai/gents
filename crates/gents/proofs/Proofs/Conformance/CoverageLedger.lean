@@ -618,7 +618,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "frontend_client_shell_cases"
       "FrontendClientShellCases"
-      "apps/gents-desktop/src/lib/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts")
+      "packages/gents-desktop-chat/src/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "desktop_client_shell_cases"

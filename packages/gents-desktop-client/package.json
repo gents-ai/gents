@@ -1,6 +1,6 @@
 {
   "name": "@source-inc/gents-desktop-client",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "license": "Apache-2.0",
   "description": "Transport, shared store, and view-model contract for Gents desktop packages",
   "type": "module",
@@ -14,7 +14,10 @@
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.js"
     },
-    "./generated/*": "./src/generated/*",
+    "./generated/*": {
+      "types": "./dist/generated/*.d.ts",
+      "import": "./dist/generated/*.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -23,7 +26,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node ../../scripts/clean-desktop-package-dist.mjs && tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests"
   },
   "peerDependencies": {

@@ -8,7 +8,12 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ### Bridge contract
 
-- 0.5 (additive): merged #871 inference onboarding — `desktop_probe_inference_endpoint`, `desktop_codex_login`, `desktop_codex_login_cancel` under `config-write`; new one-shot `desktop://codex-login-url` event. 0.4
+- 0.5 (additive): merged #871 inference onboarding —
+  `desktop_probe_inference_endpoint`, `desktop_codex_login`, and
+  `desktop_codex_login_cancel` under `config-write`; new one-shot
+  `desktop://codex-login-url` event.
+
+### Bridge contract 0.4
 
 - Additive: `Pairing` error code; fingerprint permission inventory aligned with
   grantable `[[set]]` entries (`core`, `client-lifecycle`, bundles).
@@ -24,15 +29,18 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ### Packages
 
-- New npm workspace packages (GitHub Packages / release tarballs pending phase-10
-  dry-run):
-  - `@source-inc/gents-desktop-client` — transport, store, errors, testing
-  - `@source-inc/gents-desktop-chat` — headless chat projection, `useMasterDetail`
-  - `@source-inc/gents-desktop-fleet` — fleet metrics, peer errors
-  - `@source-inc/gents-desktop-operations` — operations rail registry
+- New npm workspace packages, distributed as GitHub Release tarballs:
+  - `@source-inc/gents-desktop-client` — typed transport, shared store, errors, testing
+  - `@source-inc/gents-desktop-ui` — accessible shared primitives
+  - `@source-inc/gents-desktop-chat` — chat projection, components, and styles
+  - `@source-inc/gents-desktop-fleet` — discovery, pairing, health, and peer UI
+  - `@source-inc/gents-desktop-operations` — rail, holds, health, lineage, traces
   - `@source-inc/gents-desktop-tokens` — semantic CSS tokens
-- Fixture host `apps/fixture-host` + `fixture-domain-plugin` prove co-residence
-  under separate homes (phase 4).
+- Fixture host `apps/fixture-host` consumes all packages, registers a domain
+  operations tab, and proves co-residence under separate homes without
+  `runtime-admin`.
+- Tag releases attach clean-install-verified npm tarballs to the GitHub Release;
+  downstreams pin those assets exactly.
 
 ### Downstream update workflow
 
@@ -45,7 +53,7 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 | Tag | Bridge crate | npm packages | contract_version | Notes |
 |-----|--------------|--------------|------------------|-------|
-| unreleased | 0.8.0 | 0.8.0 | 0.3 | Package extraction in progress on #878 |
+| unreleased | 0.9.0 | 0.9.0 | 0.5 | Reusable desktop packages implemented in #878 |
 
 ## 0.8.0
 

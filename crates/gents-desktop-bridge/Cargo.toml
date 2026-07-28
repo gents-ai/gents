@@ -30,10 +30,9 @@ tauri = { version = "2", features = [] }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-# Phase-2 spike chose ts-rs over typeshare: serde-compat handles rename_all /
-# tagged enums (RenderedTimelineItem) without hand-written attributes; chrono
-# and uuid have first-party features. Full view-model coverage lands as types
-# grow #[derive(TS)] in the phase-3 window.
+# ts-rs is the source-of-truth generator for the public desktop request/view
+# contract. serde-compat handles rename_all and tagged enums
+# (RenderedTimelineItem) without hand-written mirror types.
 ts-rs = { version = "10.1", default-features = false, features = [
     "serde-compat",
     "chrono-impl",

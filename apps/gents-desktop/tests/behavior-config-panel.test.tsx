@@ -12,7 +12,7 @@ import type {
   InferenceBackendView,
   InferenceProfileView,
   ToolSelectionView,
-} from "../src/lib/types";
+} from "@source-inc/gents-desktop-client";
 
 const behavior: BehaviorView = {
   behaviorId: "did:key:z6MkAgent:default",

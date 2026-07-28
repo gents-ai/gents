@@ -6,7 +6,7 @@ import {
   saveEventTriggerConfig,
   saveScheduleConfig,
   saveTaskConfig,
-} from "../lib/desktop-api";
+} from "@source-inc/gents-desktop-client";
 import type {
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
@@ -16,7 +16,7 @@ import type {
   TaskRunRequest,
   TaskRunResult,
   TaskSaveRequest,
-} from "../lib/types";
+} from "@source-inc/gents-desktop-client";
 
 type TaskActionParams = {
   refreshSession: (

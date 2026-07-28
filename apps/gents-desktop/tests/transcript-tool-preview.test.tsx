@@ -1,8 +1,11 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { MessageList } from "../src/components/Transcript";
-import type { RenderedTimelineItem, ToolDetailValueView } from "../src/lib/types";
+import { MessageList } from "@source-inc/gents-desktop-chat";
+import type {
+  RenderedTimelineItem,
+  ToolDetailValueView,
+} from "@source-inc/gents-desktop-client";
 
 function renderToolArgs(args: ToolDetailValueView) {
   const items: RenderedTimelineItem[] = [

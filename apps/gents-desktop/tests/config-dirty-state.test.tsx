@@ -6,7 +6,7 @@ import {
   ScheduleConfigPanel,
   SkillConfigPanel,
 } from "../src/components/config";
-import type { DeploymentView } from "../src/lib/types";
+import type { DeploymentView } from "@source-inc/gents-desktop-client";
 
 function makeDeployment(): DeploymentView {
   return {

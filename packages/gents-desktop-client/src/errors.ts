@@ -1,7 +1,11 @@
-export type BridgeErrorPayload = {
+import type { BridgeError as GeneratedBridgeError } from "./generated/BridgeError.js";
+
+/**
+ * Known fields come from Rust. `code` remains open so a newer additive bridge
+ * error can still be displayed by an older client.
+ */
+export type BridgeErrorPayload = Omit<GeneratedBridgeError, "code"> & {
   code: string;
-  message: string;
-  retryable: boolean;
 };
 
 export class BridgeInvokeError extends Error {
@@ -16,7 +20,9 @@ export class BridgeInvokeError extends Error {
   }
 }
 
-export function asBridgeErrorPayload(error: unknown): BridgeErrorPayload | null {
+export function asBridgeErrorPayload(
+  error: unknown,
+): BridgeErrorPayload | null {
   if (!error || typeof error !== "object") {
     return null;
   }

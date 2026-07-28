@@ -8,15 +8,16 @@ use crate::state::{current_core, require_agent_home, DesktopAppState};
 
 const MAX_ENTRIES: usize = 500;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceEntryView {
     pub name: String,
+    #[ts(type = "\"dir\" | \"file\"")]
     pub kind: &'static str,
     pub size: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceListingView {
     pub root: String,

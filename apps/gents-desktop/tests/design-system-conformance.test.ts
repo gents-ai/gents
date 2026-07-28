@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 
 const STYLES_ROOT = join(__dirname, "..", "src", "styles");
 const APP_CSS = join(__dirname, "..", "src", "App.css");
+const PACKAGES_ROOT = join(__dirname, "..", "..", "..", "packages");
 
 function cssFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
@@ -23,7 +24,11 @@ function cssFiles(dir: string): string[] {
   });
 }
 
-const files = [APP_CSS, ...cssFiles(STYLES_ROOT)];
+const packageStyleFiles = readdirSync(PACKAGES_ROOT)
+  .filter((entry) => entry.startsWith("gents-desktop-"))
+  .flatMap((entry) => cssFiles(join(PACKAGES_ROOT, entry)))
+  .filter((file) => !file.endsWith("semantic.css"));
+const files = [APP_CSS, ...cssFiles(STYLES_ROOT), ...packageStyleFiles];
 
 function stripComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, "");
@@ -34,6 +39,13 @@ const sources = new Map(
 );
 
 describe("design tokens", () => {
+  it("package CSS never reaches into host-private brand tokens", () => {
+    const violations = packageStyleFiles
+      .filter((file) => sources.get(file)?.includes("--source-"))
+      .map((file) => relative(PACKAGES_ROOT, file));
+    expect(violations).toEqual([]);
+  });
+
   it("every fallback-less var() reference resolves to a defined token", () => {
     const defined = new Set<string>();
     for (const css of sources.values()) {

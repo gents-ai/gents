@@ -333,8 +333,10 @@ jobs:
 
       - name: Build and test desktop packages
         run: |
+          npm run check:package-boundaries
           npm run build:packages
           npm run test:packages
+          npm run build --workspace @source-inc/fixture-host-ui
           ./scripts/pack-desktop-packages.sh
 
       - name: Install Playwright browser

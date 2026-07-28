@@ -41,6 +41,10 @@
     --source-dark-green-rgb: 28 39 36;
     --source-blue-rgb: 16 203 255;
     --source-orange-rgb: 255 160 17;
+    --color-bg-rgb: 0 0 0;
+    --color-surface-rgb: var(--source-dark-green-rgb);
+    --color-surface-strong-rgb: 7 17 14;
+    --color-surface-deep-rgb: 2 5 4;
     --color-bg: var(--source-black);
     --color-surface: rgb(var(--source-dark-green-rgb) / 0.86);
     --color-surface-strong: #07110e;
@@ -51,19 +55,23 @@
     --source-ink-rgb: 1 8 6;
     --source-ink-2-rgb: 2 8 6;
     --source-ink-3-rgb: 9 17 14;
+    --color-surface-row-rgb: var(--source-ink-3-rgb);
     --color-surface-row: rgb(var(--source-ink-3-rgb) / 0.86);
     --color-text: var(--source-white);
     --color-text-muted: #95a49d;
     --color-text-soft: #d6ddda;
     --color-text-warm: #dff8e8;
     --color-accent: var(--source-green);
+    --color-accent-rgb: var(--source-green-rgb);
     --color-accent-strong: #39e27a;
     --color-accent-muted: #58c779;
     --color-success: #8df2b4;
     --color-success-strong: var(--source-green);
     --color-warning: var(--source-orange);
+    --color-warning-rgb: var(--source-orange-rgb);
     --color-warning-soft: #ffd089;
     --color-info: var(--source-blue);
+    --color-info-rgb: var(--source-blue-rgb);
     --color-error: #ffad9d;
     --color-error-strong: #ff6f5f;
     --color-error-strong-rgb: 255 111 95;
@@ -116,6 +124,7 @@
   :root[data-theme="light"] {
     color-scheme: light;
     --color-bg: #f4f7f5;
+    --color-bg-rgb: 244 247 245;
     --color-surface: #ffffff;
     --color-surface-strong: #eef3f0;
     --color-surface-deep: #e7ede9;
@@ -123,6 +132,10 @@
     --source-ink-rgb: 248 250 249;
     --source-ink-2-rgb: 244 247 245;
     --source-ink-3-rgb: 238 243 240;
+    --color-surface-rgb: 255 255 255;
+    --color-surface-strong-rgb: 238 243 240;
+    --color-surface-deep-rgb: 231 237 233;
+    --color-surface-row-rgb: var(--source-ink-3-rgb);
     --overlay-rgb: 2 8 6;
     --scrim-rgb: 255 255 255;
     --color-text: #0d1612;

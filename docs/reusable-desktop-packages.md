@@ -1,16 +1,21 @@
 # Reusable desktop packages
 
-*Design spec — 2026-07-27. Issue [#877](https://github.com/source-inc/gents/issues/877).
+_Design spec — 2026-07-27. Issue [#877](https://github.com/source-inc/gents/issues/877)._
+
 **Implementation status (PR #878, honest):**
 
 | Phase | Status | Notes |
 |---|---|---|
 | 1 Crate extract | **done** | `gents-desktop-bridge` |
-| 2 Contract prep | **done** | fingerprint, ts-rs spike, error taxonomy |
+| 2 Contract prep | **done** | full ts-rs request/view generation, fingerprint, error taxonomy, freshness gates |
 | 3 Plugin-ization | **done** (native) | plugin, permissions, path strip, peer id rekey, BridgeError, projection seam |
-| 4 Fixture host | **done** (minimal) | co-resident domain plugin + home isolation test; not full CI co-residence smoke |
-| 5–9 npm packages | **scaffolded** | packages build/pack; app does **not** yet consume them; store incomplete; no component/CSS moves |
-| 10 Release | **docs only** | CHANGELOG + update workflow; no publish dry-run |
+| 4 Fixture host | **done** (in-tree) | co-resident domain plugin, separate homes, full package surfaces, Rust + frontend CI |
+| 5 Client package | **done** | typed transport, single-subscription snapshot store, generated public types, testing seam |
+| 6 Tokens + UI | **done** | semantic token contract, conformance fence, shared primitives |
+| 7 Chat package | **done** | projection, transcript/composer/cancel/code/denial components, styles, tests |
+| 8 Fleet package | **done** | remote fleet surface + opt-in local-runtime subpath, brand slots, styles, tests |
+| 9 Operations package | **done** | extensible rail, holds, health, lineage, trace, workspace surfaces, styles, tests |
+| 10 Release | **wired** | packed clean-consumer gate, exact pins, tag artifact workflow; first real tag remains release-time evidence |
 
 **v1 snapshot projection model (accepted deviation):** grants are
 **process-wide** via `BridgeConfig.snapshot_grants` (host-declared, fail-closed
@@ -18,18 +23,25 @@ default `core_only`). Not per-caller Tauri capability introspection. Hosts must
 keep capability files ⊆ that profile; consistency is a host obligation + fixture
 tests, not runtime ACL reflection. Per-caller projection is a filed follow-up.
 
-**Other recorded deviations:** `bridge_runner` remains in `gents-desktop-tauri`
-(not yet `test-harness` on the bridge crate). Live-lane verification of the
-phase-2 serde camelCase fix still owed: a wire-format fence is in place in
+**Recorded follow-ups:** `bridge_runner` remains in `gents-desktop-tauri`
+(not yet `test-harness` on the bridge crate). The reusable store owns the shared
+snapshot subscription/coalescing boundary; Gents Desktop retains its mature
+session polling/restart coordinator in `useDesktopShell` and passes package
+components data + callbacks. Package CSS is semantic-token-only but preserves the
+existing class names to keep the extraction behavior-identical; a future
+collision-hardening release may prefix them. Live-lane verification of the serde
+camelCase fix remains fenced but not discharged: a wire-format assertion is in
 `test:live:chat` (`itemKey` must arrive camelCase over real IPC), but the suite
 fails before reaching it on this branch **and at main HEAD** — a pre-existing
 backgrounded-tools liveness assertion failure tracked as
 [#884](https://github.com/source-inc/gents/issues/884); the fence discharges
-this obligation once #884 is fixed.
+this obligation once #884 is fixed. External Amygdala authentication/Cargo-fetch
+and the first real tag publish remain release-environment evidence, not changes
+that can be proven inside this repository.
 
 Design approved 2026-07-27 after three review passes; security-hardened across
 PR #878 rounds. Base: [#875](https://github.com/source-inc/gents/pull/875)
-(`1a5e23d5`).*
+(`1a5e23d5`).
 
 Gents Desktop already keeps its reusable runtime behavior in
 `crates/gents-desktop-core`, but everything above that — the Tauri command bridge, the
@@ -57,7 +69,10 @@ Related docs: [gents.md](gents.md) (platform architecture),
 (semantic browser harness), [../crates/gents/proofs/README.md](../crates/gents/proofs/README.md)
 (proven core).
 
-## Current state, as evidence
+## Baseline state that drove the design
+
+This section records the pre-extraction state observed when the design was
+approved. The implementation-status table above is authoritative for PR #878.
 
 The boundary proposed below follows the seams the code already has. The load-bearing
 facts:
@@ -181,21 +196,21 @@ adding a boundary.
 
 ### Frontend
 
-Four published packages plus the private app, managed as npm workspaces (net-new; the
-repo currently has a single `package.json`):
+Six published packages plus the private apps, managed as npm workspaces:
 
 ```
-@source-inc/gents-desktop-client      transport interface + default Tauri transport,
-        ▲   ▲   ▲                     shared client store & refresh coordinator,
-        │   │   │                     canonical view-model types, contract handshake,
-        │   │   │                     testing entry point
-        │   │   └── @source-inc/gents-desktop-chat        headless chat state + components
+@source-inc/gents-desktop-tokens     semantic CSS contract
+@source-inc/gents-desktop-ui         shared accessible primitives
+@source-inc/gents-desktop-client     transport, shared store, canonical types
+        ▲   ▲   ▲
+        │   │   └── @source-inc/gents-desktop-chat        chat state + components
         │   └────── @source-inc/gents-desktop-fleet       discovery/pairing/health/peers
-        └────────── @source-inc/gents-desktop-operations  holds, traces, cancel, health panels
+        └────────── @source-inc/gents-desktop-operations  holds, traces, health panels
                           ▲
-                          │ (all four consumed by)
+                          │ (all packages consumed by)
               apps/gents-desktop  (private shell: App, Sidebar, navigation,
                                    branding, theme choice, config workspace)
+              apps/fixture-host   (independent consumer + domain plugin)
 ```
 
 - **`@source-inc/gents-desktop-client`** — the only package that knows a transport
@@ -208,18 +223,19 @@ repo currently has a single `package.json`):
   `tests/ui-harness/desktopHarness.ts` implements today. The npm scope is
   `@source-inc` because GitHub Packages requires scope = org; the issue's
   `@gents/*` names were illustrative.
+- **`@source-inc/gents-desktop-ui`** — the truly shared `CopyButton`,
+  `ConfirmDialog`, clipboard helper, and timestamp formatter. It depends only on
+  React and semantic tokens; it contains no Gents brand values.
 - **`@source-inc/gents-desktop-chat`** — headless first: `chat-shell.ts` projection
   (`projectChatShell`, `ChatWorkflowState`, turn/send state), conversation selection,
-  chat actions rehomed as selectors/actions over the shared store
-  (`useChatWorkflow`) — task/schedule actions stay **app-private** (they belong to
-  the config/tasks surface and their grants, not to chat) — and the presentational
+  reusable interrupt/cascade helpers, `useMasterDetail`, and the presentational
   components (`ChatComposer`,
   `ChatHeader`, `ChatTranscriptPanel`, `Transcript`, `cancelUx/*`, `slashSkills`).
-  Streaming, retry, interrupt, reconnect, and recovery behavior comes with the
-  projection + actions, not reimplemented.
+  Hosts own orchestration and pass snapshots/actions into the prop-driven surface;
+  task/schedule actions stay **app-private**.
 - **`@source-inc/gents-desktop-fleet`** — `FleetDashboard`, `FleetRow`,
   `AddPeerForm`, `QrScannerDialog`, `peerConnectionImport`, `NetworkPanel`,
-  `fleetMetrics`, peer selectors/actions, and `peerConnectionErrors` formatting.
+  `fleetMetrics`, and `peerConnectionErrors` formatting.
   `BrandLockup` does **not** move — the dashboard takes a `brand` slot/prop.
 - **`@source-inc/gents-desktop-operations`** — `OperationsRail` + its context/tab
   registry, `HoldsPanel`/`useToolCallHolds`, `BackgroundedToolsPanel`/
@@ -229,23 +245,24 @@ repo currently has a single `package.json`):
 - **Stays app-private**: `App.tsx`, `Sidebar` and sidebar widgets, hand-rolled view
   switching and shortcuts, theme persistence choice, branding assets and strings, the
   config workspace (`ConfigWorkspace` and the `config/*` panels), and
-  `useDesktopShell` itself — reduced to composition of the package hooks. The config
+  `useDesktopShell` itself — now composing the package views while retaining the
+  app's production orchestration policies. The config
   authoring surface is deliberately not packaged in v1 (see Unresolved decisions).
 
-Chat/fleet/operations packages depend only on `-client` and React; they never import
-each other or the app. `react` and `react-dom` are declared as **peer dependencies**
+Chat/fleet/operations packages depend only on `-client`, `-ui`, and React (plus
+their direct rendering/decoder libraries); they never import each other or the
+app. `react` and `react-dom` are declared as **peer dependencies**
 in every package (never bundled), and the packed-artifact gate (§ Migration and
 validation) installs the packages into a clean dependency tree to prove the peer
 ranges and `exports` maps are right. Enforcement of the import boundary is
 mechanical, not conventional: package `exports` fields hide internals, and a
-dependency-lint rule (`eslint no-restricted-imports` or `dependency-cruiser`, wired
-into `format:check`'s CI step) forbids `apps/gents-desktop/src` imports from packages
-and deep imports of package internals from the app. This is the fence that keeps
-private imports from silently returning.
+`check-desktop-package-boundaries.mjs` CI gate forbids
+`apps/gents-desktop/src` imports from packages, cross-domain package imports,
+host-private CSS tokens, and non-exact lockstep pins. This is the fence that
+keeps private imports from silently returning.
 
-Design tokens are a contract, not a package of components: `-client` (or a tiny
-sibling `@source-inc/gents-desktop-tokens` if maintainers prefer — naming decision
-below) ships `tokens.css` split into **semantic** custom properties
+Design tokens are a contract, not a package of components:
+`@source-inc/gents-desktop-tokens` ships **semantic** custom properties
 (`--color-bg/surface/text/accent`, spacing, radii, fonts) that packaged components
 reference exclusively, and Gents **brand** values (`--source-green`, brand fonts,
 logo) that stay in the app. The existing `design-system-conformance.test.ts` moves
@@ -678,27 +695,26 @@ That coordination therefore moves into `-client` as a **shared client store**:
 ```ts
 createDesktopStore(client: DesktopClient, timing?: TimingConfig): DesktopStore
 // - owns the single client-updated subscription
-// - owns snapshot/session caches keyed by generation, the trailing refresh
-//   queue, sequencing, polling, restart/backoff, and P2P cooldown policy
-//   (lifted from useDesktopShell / desktopShellRuntime / desktopShellEffects)
-// - exposes subscribe/getState for selectors and a typed action surface
-<DesktopClientProvider store={store}>…</DesktopClientProvider>
+// - owns the latest aggregate snapshot, generation counter, debounce, and
+//   trailing-refresh queue
+// - exposes subscribe/getState for useSyncExternalStore consumers
 ```
 
-Domain packages consume **selectors and actions**, never the event or the transport:
-`useChatWorkflow`, `useFleet`, `useOperations` are selector hooks over the one store,
-so every domain renders from the same snapshot generation and a burst of update
-events produces one coalesced refresh. `TimingConfig` is a public constructor
-parameter (replacing `setDesktopShellTimingConfigForTests`). `useDesktopShell`
-becomes the app's thin composition of these selectors plus app-private state, and is
-the reference proof that the store's surface is sufficient.
+The independent fixture consumes this store through `useSyncExternalStore`, proving
+that a host needs one update subscription and that a burst of update events produces
+one coalesced refresh. Domain components remain transport-agnostic and prop-driven:
+hosts may project this store themselves or supply data/callbacks from another state
+layer. Gents Desktop deliberately retains the established session caches, active-turn
+polling, restart/backoff, and P2P cooldown policy in `useDesktopShell`; moving those
+policies was not required to make the package boundary reusable and would have made
+the behavior-preserving extraction materially riskier. `TimingConfig` remains a
+public constructor parameter for deterministic host tests.
 
 ### Canonical types and the drift gate
 
 Canonical types are **generated from Rust**. The bridge crate's view-model and
-request structs derive TS bindings (`ts-rs` is the working candidate; `typeshare` is
-the fallback — tool choice is decided by the phase-2 spike, before the breaking
-window), emitted into `@source-inc/gents-desktop-client/src/generated/`. Two CI
+request structs derive TS bindings with `ts-rs` (selected by the phase-2 spike),
+emitted into `@source-inc/gents-desktop-client/src/generated/`. Two CI
 gates replace today's "1:1 mirror — keep in sync" comments:
 
 1. **Codegen freshness**: CI regenerates and fails on diff (generated output is
@@ -717,13 +733,14 @@ different layers with different authorities.
 
 ### Headless state vs presentation
 
-Every domain package is layered: a headless core (selectors, actions, pure
-projections — no CSS, no JSX beyond providers) and a component layer on top. The
+Every domain package is layered: a headless core (pure projections and reusable
+hooks, with no host-shell imports) and a component layer on top. The
 composition contract for a host shell:
 
-- **State**: the shared store above; domain hooks are selectors + actions over it.
-- **Presentation**: components take data + callbacks; the 11 components that call
-  `desktop-api` directly today switch to store selectors/actions. Slots/props replace
+- **State**: hosts may consume the shared snapshot store above or use another state
+  layer; package components accept typed data and callbacks.
+- **Presentation**: components take data + callbacks; reusable hooks invoke only the
+  public client API. Slots/props replace
   hard-coded chrome: `FleetDashboard` takes a `brand` slot; panels take
   label/asset overrides where Gents strings exist today.
 - **Navigation**: packages never navigate. Hosts own routes/views (Gents Desktop's
@@ -747,9 +764,9 @@ composition contract for a host shell:
   `assistant-message`, …) are stable API — the native E2E driver, Playwright,
   Bombadil, and XCUITest all depend on them.
 - **CSS**: packages ship compiled ESM + `.d.ts` + plain CSS files (no CSS-in-JS, no
-  shadow DOM), keeping today's `@layer`-ordered global-CSS model. During extraction,
-  moved stylesheets adopt a `gents-` class prefix and are re-baselined against the
-  visual suite; class names remain non-contractual (testids are the contract),
+  shadow DOM), keeping today's `@layer`-ordered global-CSS model. The
+  behavior-preserving extraction keeps existing class names; class names remain
+  non-contractual (testids are the contract),
   semantic tokens are the theming API, and `[data-theme]` switching keeps working
   with host-supplied token values.
 
@@ -774,26 +791,25 @@ of the release version and is what compatibility decisions key on.
   DefraDB revisions, so external access is validated from Amygdala CI in phase 5
   (by exact revision, since no crate-bearing tag exists yet) and by release tag in
   phase 10 — not assumed.
-- **npm: GitHub Packages** under the `@source-inc` scope, published by the release
-  workflow on tag — **conditional on validating, before phase 5 commits to it, that
-  Amygdala's CI can authenticate to the org registry**. The fallback is **release
-  tarball URLs**: the release workflow uploads each package's `npm pack` tarball as
+- **npm: GitHub Release tarball URLs.** Org-registry authentication was not made a
+  prerequisite for downstream CI, so the implemented release workflow uses the
+  documented fallback: it uploads each clean-install-verified `npm pack` tarball as
   a GitHub Release asset, and downstream pins the asset URL per package
   (`"@source-inc/gents-desktop-client": "https://github.com/source-inc/gents/releases/download/vX.Y.Z/source-inc-gents-desktop-client-X.Y.Z.tgz"`).
   npm git dependencies are **not** a viable fallback — a Git URL installs only the
   repository-root package and explicitly does not install its workspaces, so it
-  cannot address four nested `@source-inc/gents-desktop-*` packages. Either way,
-  what downstream installs is the packed artifact, and the packed artifact is what
+  cannot address nested `@source-inc/gents-desktop-*` packages. What downstream
+  installs is the packed artifact, and the packed artifact is what
   CI tests (§ Migration).
 
-**Compatibility matrix.** A table in this document (moving to `CHANGELOG.md` once it
-exists) with one row per release: tag, bridge crate version, npm package versions,
+**Compatibility matrix.** `CHANGELOG.md` has one row per release: tag, bridge
+crate version, npm package versions,
 **bridge contract version**, minimum `gents` runtime the bridge speaks to. The
 runtime handshake command plus the client's startup check turn version skew into a
 clear error at boot.
 
-**Changelog and downstream update workflow.** A root `CHANGELOG.md` (net-new — the
-repo has none) with a "Bridge contract" section per release listing every
+**Changelog and downstream update workflow.** The root `CHANGELOG.md` has a
+"Bridge contract" section per release listing every
 contract-fingerprint change, marked additive or breaking. The supported downstream
 update is: bump the git tag and the npm pins to the same `vX.Y.Z`, read the
 Bridge-contract section, run the downstream's contract + e2e + visual gates (the
@@ -804,8 +820,9 @@ automation is possible against GitHub Packages but out of scope here.
 
 ### Extraction sequence
 
-Each phase is one reviewable PR (or a small stack), lands green on the full existing
-gate set, and keeps `apps/gents-desktop` behavior-identical unless stated. The
+The numbered phases are the review sequence; PR #878 intentionally carries the
+complete in-repository sequence so the boundary lands usable rather than scaffolded.
+Each phase keeps `apps/gents-desktop` behavior-identical unless stated. The
 ordering follows two review directives: contract inputs (generated types, error
 codes) land **before** the one breaking window so command names, errors, and types
 change together; and the downstream fixture guards the external boundary from its
@@ -919,8 +936,8 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
    identically (visual suite); a token-override smoke shows retheming without
    patching components; no `--source-*` reference remains in CSS slated for
    extraction.
-7. **`@source-inc/gents-desktop-chat`.** Headless projection + selectors/actions +
-   components; `useMasterDetail`; `gents-` class prefixing for moved CSS; visual
+7. **`@source-inc/gents-desktop-chat`.** Headless projection + prop-driven
+   components; `useMasterDetail`; semantic-only moved CSS; visual
    baselines re-approved. The fixture host gains the chat surface, and its iOS
    project comes online: `GENTS_IOS_BUNDLE_ID` (new env; today's hard-coded
    `com.source-inc.gents` becomes the default) lets `test:ui:ios:e2e` prove
@@ -967,7 +984,7 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
 | #877 acceptance criterion | Package / API | Phase | Verification gate |
 |---|---|---|---|
 | Minimal downstream app owns binary, identity, storage home, schema registration, extra commands | `gents-desktop-bridge::init(BridgeConfig)` + `HomePolicy`; domain plugins own their stores/schemas (co-residence contract) | 3–4 | Fixture-host CI: co-residence smoke (bridge + domain plugin, two stores), home-isolation test, clean-install iOS lane under host bundle id |
-| Working chat surface: streaming, retry, interrupt, reconnect, recovery — no copied source | `@source-inc/gents-desktop-chat` selectors/components over the `-client` shared store | 7 | Agent-browser deterministic + live chat journeys (`iphone`), `test:live:chat`, fixture-host chat journey + iOS lane |
+| Working chat surface: streaming, retry, interrupt, reconnect, recovery — no copied source | `@source-inc/gents-desktop-chat` projection/components over the typed `-client` contract | 7 | Agent-browser deterministic + live chat journeys (`iphone`), `test:live:chat`, fixture-host chat journey + iOS lane |
 | Fleet pairing, health, peer management via package API | `@source-inc/gents-desktop-fleet` (+ bridge `fleet-*` permission sets) | 8 | `test:live:fleet`, QR/bearer agent-browser journeys, fixture-host pairing, iOS clean-install pairing |
 | Operator holds/traces/cancellation via package API | `@source-inc/gents-desktop-operations` (+ `operations-read`, interrupt, and hold permission sets) | 9 | `test:live:operations`/`interrupt`/`cascade`, deterministic operations scenarios, fixture rail-tab registration |
 | Own branding, semantic theme, navigation, domain routes without patching components | Semantic tokens contract (split before extraction), `brand` slots, host-owned navigation, rail-tab registry | 6–9 | Token-override smoke, fixture-host distinct branding + domain module, visual suite |

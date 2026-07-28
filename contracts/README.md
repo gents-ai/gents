@@ -25,8 +25,8 @@ Any fingerprint diff must bump the version to match the classification in the sa
 
 ## Type generation
 
-Phase-2 spike chose **ts-rs** over typeshare (serde-compat for `rename_all` and
-tagged enums; nested export). Bindings currently cover the error taxonomy and a
-representative view-model set; full coverage lands with the phase-3 pluginization
-window. Generated files move into `@source-inc/gents-desktop-client/src/generated/`
-in phase 5.
+Phase-2 selected **ts-rs** (serde-compat for `rename_all` and tagged enums;
+nested export). Bindings cover the complete public bridge request/view surface and
+are emitted to both the crate bindings directory and
+`@source-inc/gents-desktop-client/src/generated/`. The client package's public
+aliases consume those generated files directly.

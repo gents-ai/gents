@@ -1,10 +1,10 @@
-import type { BackendHealth } from "../../src/components/backendHealth/types";
-import { deriveDisplayState } from "../../src/components/backendHealth/displayState";
-import type { DesktopApiAdapter } from "../../src/lib/desktop-api";
+import type { BackendHealth } from "@source-inc/gents-desktop-client";
+import { deriveDisplayState } from "@source-inc/gents-desktop-operations";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type {
   DesktopClientUpdatedHandler,
   DesktopClientUpdatedListenerFactory,
-} from "../../src/lib/desktop-events";
+} from "@source-inc/gents-desktop-client";
 import type {
   CascadeCancelPreview,
   DesktopClientSnapshot,
@@ -20,11 +20,11 @@ import type {
   SubagentTreeView,
   TaskRunResult,
   ToolServiceTestResult,
-} from "../../src/lib/types";
+} from "@source-inc/gents-desktop-client";
 import type {
   HeldToolCallView,
   ResolveHoldResult,
-} from "../../src/lib/types/operations";
+} from "@source-inc/gents-desktop-client";
 
 const AGENT_DID = "did:key:z6MkBombadilAgent";
 const DEFAULT_BEHAVIOR_ID = "default";

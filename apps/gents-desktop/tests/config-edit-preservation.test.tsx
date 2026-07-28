@@ -13,7 +13,7 @@ import type {
   InferenceProfileView,
   ToolSelectionView,
   ToolServiceRegistryView,
-} from "../src/lib/types";
+} from "@source-inc/gents-desktop-client";
 
 // Fence for the background-refresh edit wipe: the Tauri bridge emits
 // client-updated on every store/health change, which re-fetches the snapshot

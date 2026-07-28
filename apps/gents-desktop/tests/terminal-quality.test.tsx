@@ -1,13 +1,13 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CodeToolItem } from "../src/components/codeTools/CodeToolItem";
+import { CodeToolItem } from "@source-inc/gents-desktop-chat";
 import {
   formatDuration,
   stripAnsi,
   toCodeToolView,
-} from "../src/components/codeTools/codeTools";
-import type { RenderedToolCallView } from "../src/lib/types";
+} from "@source-inc/gents-desktop-chat";
+import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 
 describe("formatDuration", () => {
   it("scales units for operator reading", () => {

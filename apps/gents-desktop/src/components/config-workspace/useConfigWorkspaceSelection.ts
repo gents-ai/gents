@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { DeploymentView } from "../../lib/types";
+import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import { ensureSelection, type ConfigTab } from "./model";
 
 export function useConfigWorkspaceSelection(

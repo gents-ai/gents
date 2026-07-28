@@ -1,8 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { BackgroundedToolsPanel } from "../src/components/backgroundedTools";
-import type { RuntimeView } from "../src/lib/types";
+import { BackgroundedToolsPanel } from "@source-inc/gents-desktop-operations";
+import type { RuntimeView } from "@source-inc/gents-desktop-client";
 
 describe("ops slot capacity", () => {
   it("shows runtime-reported capacity and queue depth", () => {

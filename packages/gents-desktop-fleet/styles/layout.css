@@ -1,0 +1,456 @@
+@layer fleet {
+  .network-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    align-items: flex-start;
+  }
+
+  .network-body {
+    width: 100%;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    background: rgb(var(--color-surface-strong-rgb) / 0.6);
+  }
+
+  .network-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .network-error {
+    color: var(--color-error);
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+  }
+
+  .network-facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: var(--space-5);
+  }
+
+  .network-facts dt {
+    font-size: var(--text-2xs);
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .network-facts dd {
+    margin: var(--space-1) 0 0;
+    font-size: var(--text-sm);
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+  }
+
+  .network-replicators {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+  }
+
+  .network-replicators th,
+  .network-replicators td {
+    text-align: left;
+    padding: var(--space-2) var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .theme-toggle {
+    width: 32px;
+    height: 32px;
+    min-height: 32px;
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+  }
+
+  .theme-toggle svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+  }
+
+  .fleet-dashboard {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    gap: var(--space-6);
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .fleet-header,
+  .fleet-brand,
+  .fleet-header-actions,
+  .fleet-row-actions,
+  .fleet-tool-icons,
+  .fleet-add-actions {
+    display: flex;
+    align-items: center;
+  }
+
+  .fleet-header {
+    justify-content: space-between;
+    gap: var(--space-7);
+  }
+
+  .fleet-brand {
+    min-width: 0;
+    gap: var(--space-5);
+  }
+
+  .fleet-brand h1 {
+    margin: 0;
+    font-size: var(--text-3xl);
+    line-height: 1.15;
+  }
+
+  .fleet-brand p {
+    margin: var(--space-1) 0 0;
+  }
+
+  .fleet-brand .eyebrow {
+    margin: 0 0 var(--space-1);
+  }
+
+  .fleet-brand-logo {
+    width: 40px;
+    height: 48px;
+    flex: 0 0 auto;
+    border: 1px solid rgb(var(--color-accent-rgb) / 0.2);
+    border-radius: var(--radius-sm);
+    /* Theme-stable dark tile: the brand glyph is white and must stay
+       visible on the light theme. */
+    background: var(--color-surface);
+    object-fit: contain;
+    padding: var(--space-2);
+  }
+
+  .fleet-header-actions,
+  .fleet-add-actions {
+    justify-content: flex-end;
+    gap: var(--space-4);
+  }
+
+  .fleet-local-runtime {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-5);
+    align-items: center;
+    padding: var(--space-5);
+    border: 1px solid rgb(var(--color-accent-rgb) / 0.18);
+    background: rgb(var(--color-surface-deep-rgb) / 0.72);
+  }
+
+  .fleet-local-runtime-copy {
+    display: grid;
+    min-width: 0;
+    gap: var(--space-1);
+  }
+
+  .fleet-local-runtime-copy strong,
+  .fleet-local-runtime-copy .mono {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .fleet-local-runtime-copy strong {
+    color: var(--color-text);
+    font-size: var(--text-lg);
+  }
+
+  .fleet-local-runtime-error {
+    grid-column: 1 / -1;
+    margin: 0;
+    color: var(--color-error);
+    font-size: var(--text-sm);
+  }
+
+  .fleet-remote-disclosure > summary {
+    cursor: pointer;
+    color: var(--color-text-muted);
+    font-size: var(--text-md);
+    padding: var(--space-2) 0;
+    width: fit-content;
+  }
+
+  .fleet-remote-disclosure > summary:hover {
+    color: var(--color-accent);
+  }
+
+  .fleet-remote-disclosure[open] > summary {
+    margin-bottom: var(--space-4);
+  }
+
+  .fleet-add-panel {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  .fleet-pairing {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  .fleet-bearer-form {
+    display: grid;
+    grid-template-columns: minmax(180px, 0.6fr) minmax(280px, 1.4fr) auto;
+    gap: var(--space-5);
+    align-items: end;
+    padding: var(--space-5);
+    border: 1px solid rgb(var(--color-accent-rgb) / 0.3);
+    border-radius: var(--radius-lg);
+    background: rgb(var(--color-accent-rgb) / 0.06);
+  }
+
+  .fleet-pairing-copy {
+    grid-column: 1 / -1;
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .fleet-pairing-copy h3,
+  .fleet-qr-dialog h3 {
+    margin: 0;
+  }
+
+  .fleet-pairing-copy p {
+    margin: 0;
+    max-width: 68ch;
+  }
+
+  .fleet-bearer-token-field textarea {
+    min-height: 64px;
+    resize: vertical;
+  }
+
+  .fleet-pair-actions {
+    display: flex;
+    gap: var(--space-3);
+    align-items: center;
+  }
+
+  .fleet-pairing-success {
+    grid-column: 1 / -1;
+    margin: 0;
+    color: var(--color-accent);
+    font-size: var(--text-sm);
+  }
+
+  .fleet-manual-disclosure {
+    border-top: 1px solid var(--border-subtle);
+    padding-top: var(--space-4);
+  }
+
+  .fleet-manual-disclosure > summary {
+    width: fit-content;
+    cursor: pointer;
+    color: var(--color-text-muted);
+  }
+
+  .fleet-manual-disclosure > p {
+    margin: var(--space-3) 0 var(--space-5);
+  }
+
+  .fleet-qr-backdrop {
+    position: fixed;
+    z-index: 1000;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: var(--space-5);
+    background: rgb(var(--scrim-rgb) / 0.78);
+  }
+
+  .fleet-qr-dialog {
+    width: min(520px, 100%);
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .fleet-qr-dialog header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-4);
+  }
+
+  .fleet-qr-viewport {
+    position: relative;
+    overflow: hidden;
+    min-height: 280px;
+    border-radius: var(--radius-md);
+    background: var(--color-bg);
+  }
+
+  .fleet-qr-viewport video {
+    display: block;
+    width: 100%;
+    min-height: 280px;
+    object-fit: cover;
+  }
+
+  .fleet-qr-guide {
+    position: absolute;
+    inset: 12%;
+    border: 2px solid rgb(var(--color-accent-rgb) / 0.9);
+    border-radius: var(--radius-md);
+    outline: 999px solid rgb(var(--scrim-rgb) / 0.16);
+  }
+
+  .fleet-qr-dialog canvas {
+    display: none;
+  }
+
+  .fleet-add-form {
+    display: grid;
+    grid-template-columns:
+      minmax(160px, 0.75fr) minmax(240px, 1fr) minmax(340px, 1.4fr)
+      auto;
+    gap: var(--space-5);
+    align-items: end;
+  }
+
+  .fleet-discovery-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: minmax(260px, 1fr) auto;
+    gap: var(--space-5);
+    align-items: end;
+  }
+
+  .fleet-add-form > .field {
+    min-width: 0;
+  }
+
+  .fleet-import-field {
+    grid-column: 1 / -1;
+  }
+
+  .fleet-import-field textarea {
+    min-height: 84px;
+    resize: vertical;
+  }
+
+  .fleet-import-status {
+    font-size: var(--text-sm);
+  }
+
+  .fleet-inline-error {
+    grid-column: 1 / -1;
+    margin: 0;
+    color: var(--color-error);
+  }
+
+  .fleet-empty {
+    display: grid;
+    min-height: 0;
+    height: 100%;
+    place-content: center;
+  }
+
+  .fleet-empty-card {
+    width: min(760px, calc(100vw - 64px));
+    display: grid;
+    gap: var(--space-7);
+  }
+
+  .fleet-empty-card .fleet-add-form {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .fleet-empty-card .fleet-discovery-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .fleet-empty-card .fleet-add-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+
+  .fleet-empty-card .fleet-add-actions .primary-button {
+    min-width: 184px;
+  }
+
+  .fleet-empty-copy {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .fleet-empty-copy h2 {
+    margin: 0;
+    font-size: var(--text-2xl);
+  }
+
+  @media (max-width: 760px) {
+    .fleet-dashboard {
+      gap: var(--space-5);
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior-y: contain;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .fleet-brand {
+      align-items: flex-start;
+    }
+
+    .fleet-brand h1 {
+      font-size: var(--text-2xl);
+    }
+
+    .fleet-local-runtime,
+    .fleet-bearer-form,
+    .fleet-discovery-row,
+    .fleet-add-form,
+    .fleet-empty-card .fleet-add-form,
+    .fleet-empty-card .fleet-discovery-row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .fleet-header {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .fleet-header-actions {
+      justify-content: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .fleet-empty-card {
+      width: min(100%, calc(100vw - 24px));
+    }
+
+    .fleet-empty {
+      height: auto;
+      min-height: 100%;
+      place-content: start center;
+      overflow: visible;
+      padding-block: var(--space-2);
+    }
+
+    .fleet-local-runtime .primary-button,
+    .fleet-pair-actions,
+    .fleet-add-actions .primary-button {
+      width: 100%;
+    }
+
+    .fleet-pair-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+}

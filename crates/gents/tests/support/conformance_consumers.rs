@@ -147,9 +147,9 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "rust_inference_call_transition_table_matches_lean_contract",
         },
         ConformanceConsumer::TypeScriptTest {
-            id: "apps/gents-desktop/src/lib/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts",
-            app: "gents-desktop",
-            source_path: "apps/gents-desktop/src/lib/chat-shell.test.ts",
+            id: "packages/gents-desktop-chat/src/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts",
+            app: "gents-desktop-chat",
+            source_path: "packages/gents-desktop-chat/src/chat-shell.test.ts",
             suite: "projectChatShell",
             test: "matches generated Lean ClientShell projection contracts",
         },

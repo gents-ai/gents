@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-vi.mock("../src/lib/tauri/interruptRequest", () => ({
+vi.mock("@source-inc/gents-desktop-chat", async (importOriginal) => ({
+  ...(await importOriginal()),
   previewInterruptCascade: vi.fn(),
   interruptRequest: vi.fn(),
 }));
@@ -9,9 +10,12 @@ vi.mock("../src/lib/tauri/interruptRequest", () => ({
 import {
   previewInterruptCascade,
   interruptRequest,
-} from "../src/lib/tauri/interruptRequest";
+} from "@source-inc/gents-desktop-chat";
 import { ActiveChatWorkspace } from "../src/components/ChatWorkspace";
-import type { DeploymentView, DesktopSessionSnapshot } from "../src/lib/types";
+import type {
+  DeploymentView,
+  DesktopSessionSnapshot,
+} from "@source-inc/gents-desktop-client";
 
 const mockedPreview = vi.mocked(previewInterruptCascade);
 const mockedInterrupt = vi.mocked(interruptRequest);

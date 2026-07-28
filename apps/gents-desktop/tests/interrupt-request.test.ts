@@ -8,7 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   interruptRequest,
   previewInterruptCascade,
-} from "../src/lib/tauri/interruptRequest";
+} from "@source-inc/gents-desktop-chat";
 
 const mockedInvoke = vi.mocked(invoke);
 

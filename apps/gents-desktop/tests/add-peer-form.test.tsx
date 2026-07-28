@@ -1,11 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  AddPeerForm,
-  type AddPeerFormProps,
-} from "../src/components/fleet/AddPeerForm";
-import type { BearerPairingResponse, PeerAddRequest } from "../src/lib/types";
+import { AddPeerForm, type AddPeerFormProps } from "@source-inc/gents-desktop-fleet";
+import type {
+  BearerPairingResponse,
+  PeerAddRequest,
+} from "@source-inc/gents-desktop-client";
 
 function renderForm(overrides: Partial<AddPeerFormProps> = {}) {
   const peerForm: PeerAddRequest = {

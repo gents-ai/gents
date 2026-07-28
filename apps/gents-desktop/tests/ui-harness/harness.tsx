@@ -2,8 +2,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import App from "../../src/App";
-import { setDesktopApiAdapterForTests } from "../../src/lib/desktop-api";
-import { setDesktopClientUpdatedListenerFactoryForTests } from "../../src/lib/desktop-events";
+import { setDesktopApiAdapterForTests } from "@source-inc/gents-desktop-client";
+import { setDesktopClientUpdatedListenerFactoryForTests } from "@source-inc/gents-desktop-client";
 import { setDesktopShellTimingConfigForTests } from "../../src/hooks/useDesktopShell";
 import { createDesktopUiHarness } from "./desktopHarness";
 import { createLiveDesktopUiHarness } from "./liveBridgeHarness";

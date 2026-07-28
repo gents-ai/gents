@@ -1,13 +1,13 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/lib/desktop-api", () => ({
+vi.mock("@source-inc/gents-desktop-client", () => ({
   fetchOperationsSnapshot: vi.fn(),
 }));
 
-import { useOperationsSnapshot } from "../src/components/backgroundedTools/useOperationsSnapshot";
-import { fetchOperationsSnapshot } from "../src/lib/desktop-api";
-import type { DesktopOperationsSnapshot } from "../src/lib/types/operations";
+import { useOperationsSnapshot } from "@source-inc/gents-desktop-operations";
+import { fetchOperationsSnapshot } from "@source-inc/gents-desktop-client";
+import type { DesktopOperationsSnapshot } from "@source-inc/gents-desktop-client";
 
 const mockedFetch = vi.mocked(fetchOperationsSnapshot);
 

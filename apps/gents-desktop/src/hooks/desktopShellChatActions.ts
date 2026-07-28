@@ -1,8 +1,14 @@
 import type { Dispatch, FormEvent, MutableRefObject, SetStateAction } from "react";
 
-import { renameConversation, sendChatMessage } from "../lib/desktop-api";
-import type { ChatShellProjection, ChatWorkflowState } from "../lib/chat-shell";
-import type { DeploymentView, DesktopSessionSnapshot } from "../lib/types";
+import { renameConversation, sendChatMessage } from "@source-inc/gents-desktop-client";
+import type {
+  ChatShellProjection,
+  ChatWorkflowState,
+} from "@source-inc/gents-desktop-chat";
+import type {
+  DeploymentView,
+  DesktopSessionSnapshot,
+} from "@source-inc/gents-desktop-client";
 
 type ChatActionParams = {
   draft: string;

@@ -21,7 +21,7 @@ import {
   deleteToolSelectionConfig,
   deleteToolServiceConfig,
   deleteBehaviorConfig,
-} from "../lib/desktop-api";
+} from "@source-inc/gents-desktop-client";
 import type {
   AgentConfigSaveRequest,
   BackendSaveRequest,
@@ -44,7 +44,7 @@ import type {
   ToolSelectionDeleteRequest,
   ToolServiceDeleteRequest,
   BehaviorDeleteRequest,
-} from "../lib/types";
+} from "@source-inc/gents-desktop-client";
 
 type ConfigActionParams = {
   setError: Dispatch<SetStateAction<string | null>>;

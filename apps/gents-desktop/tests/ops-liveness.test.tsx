@@ -1,8 +1,9 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/lib/desktop-api", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/lib/desktop-api")>();
+vi.mock("@source-inc/gents-desktop-client", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@source-inc/gents-desktop-client")>();
   return {
     ...original,
     listBackendsWithHealth: vi.fn(),
@@ -10,10 +11,13 @@ vi.mock("../src/lib/desktop-api", async (importOriginal) => {
   };
 });
 
-import { listBackendsWithHealth, listSubagentTree } from "../src/lib/desktop-api";
-import { BackendHealthPanel } from "../src/components/backendHealth";
-import type { BackendHealth } from "../src/components/backendHealth/types";
-import { SubagentLineageView } from "../src/components/subagentLineage";
+import {
+  listBackendsWithHealth,
+  listSubagentTree,
+} from "@source-inc/gents-desktop-client";
+import { BackendHealthPanel } from "@source-inc/gents-desktop-operations";
+import type { BackendHealth } from "@source-inc/gents-desktop-client";
+import { SubagentLineageView } from "@source-inc/gents-desktop-operations";
 
 const mockedBackends = vi.mocked(listBackendsWithHealth);
 const mockedTree = vi.mocked(listSubagentTree);

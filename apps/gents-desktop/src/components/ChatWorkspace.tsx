@@ -1,26 +1,37 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 
-import type { DeploymentView, DesktopSessionSnapshot, P2PHealth } from "../lib/types";
-import { displayBehaviorLabel } from "../lib/types";
+import type {
+  DeploymentView,
+  DesktopSessionSnapshot,
+  P2PHealth,
+} from "@source-inc/gents-desktop-client";
+import { displayBehaviorLabel } from "@source-inc/gents-desktop-client";
 import {
   previewInterruptCascade,
   interruptRequest,
-} from "../lib/tauri/interruptRequest";
-import { BackendHealthPanel } from "./backendHealth";
-import { CascadeCancelDialog } from "./cancelUx";
-import { ChatComposer, ChatHeader, ChatTranscriptPanel } from "./chat";
-import { forkSession, resendRequest } from "../lib/desktop-api";
-import { effectiveBehaviorSkills } from "./chat/slashSkills";
-import { McpHealthPanel } from "./mcpHealth";
-import { OperationsRail, OperationsRailProvider } from "./operations";
-import type { OperationsRailTabDescriptor } from "./operations";
-import { BackgroundedToolsPanel } from "./backgroundedTools";
-import { HoldsPanel } from "./operations/HoldsPanel";
-import { useToolCallHolds } from "./operations/useToolCallHolds";
-import { WorkspaceTreePanel } from "./workspace/WorkspaceTreePanel";
-import { RequestTracePanel } from "./trace/RequestTracePanel";
-import { useOperationsSnapshot } from "./backgroundedTools/useOperationsSnapshot";
-import { SubagentLineageView } from "./subagentLineage";
+} from "@source-inc/gents-desktop-chat";
+import { BackendHealthPanel } from "@source-inc/gents-desktop-operations";
+import { CascadeCancelDialog } from "@source-inc/gents-desktop-chat";
+import {
+  ChatComposer,
+  ChatHeader,
+  ChatTranscriptPanel,
+} from "@source-inc/gents-desktop-chat";
+import { forkSession, resendRequest } from "@source-inc/gents-desktop-client";
+import { effectiveBehaviorSkills } from "@source-inc/gents-desktop-chat";
+import { McpHealthPanel } from "@source-inc/gents-desktop-operations";
+import {
+  OperationsRail,
+  OperationsRailProvider,
+} from "@source-inc/gents-desktop-operations";
+import type { OperationsRailTabDescriptor } from "@source-inc/gents-desktop-operations";
+import { BackgroundedToolsPanel } from "@source-inc/gents-desktop-operations";
+import { HoldsPanel } from "@source-inc/gents-desktop-operations";
+import { useToolCallHolds } from "@source-inc/gents-desktop-operations";
+import { WorkspaceTreePanel } from "@source-inc/gents-desktop-operations";
+import { RequestTracePanel } from "@source-inc/gents-desktop-operations";
+import { useOperationsSnapshot } from "@source-inc/gents-desktop-operations";
+import { SubagentLineageView } from "@source-inc/gents-desktop-operations";
 
 export type ChatWorkspaceProps = {
   activeRequestId: string | null;
@@ -377,6 +388,8 @@ export function ActiveChatWorkspace({
           open
           rootRequestId={cascade.rootRequestId}
           agentDid={selectedDeployment.agentDid}
+          previewInterrupt={previewInterruptCascade}
+          interrupt={interruptRequest}
           onClose={() => setCascade(null)}
           onAccepted={(at) => {
             setCascade(null);

@@ -1,12 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { FleetDashboard } from "../src/components/fleet/FleetDashboard";
+import { FleetHostDashboard } from "../src/components/fleet/FleetHostDashboard";
 import type {
   BearerPairingResponse,
   BootstrapSummary,
   DeploymentView,
-} from "../src/lib/types";
+} from "@source-inc/gents-desktop-client";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 // The guided-inference props are exercised by their own suite below; the
@@ -35,12 +35,12 @@ const bootstrap: BootstrapSummary = {
   savedPeers: [],
 };
 
-describe("FleetDashboard add connection flow", () => {
+describe("FleetHostDashboard add connection flow", () => {
   it("connects the local runtime from the fleet empty state", async () => {
     const onInitLocalRuntime = vi.fn(async () => undefined);
 
     render(
-      <FleetDashboard
+      <FleetHostDashboard
         addingPeer={false}
         bootstrap={bootstrap}
         deployments={[]}
@@ -78,7 +78,7 @@ describe("FleetDashboard add connection flow", () => {
     const onAddPeer = vi.fn(async () => undefined);
 
     render(
-      <FleetDashboard
+      <FleetHostDashboard
         addingPeer={false}
         bootstrap={null}
         deployments={[]}
@@ -121,7 +121,7 @@ describe("FleetDashboard add connection flow", () => {
     }));
 
     render(
-      <FleetDashboard
+      <FleetHostDashboard
         addingPeer={false}
         bootstrap={null}
         deployments={[]}
@@ -172,7 +172,7 @@ describe("FleetDashboard add connection flow", () => {
     }));
 
     render(
-      <FleetDashboard
+      <FleetHostDashboard
         addingPeer={false}
         bootstrap={null}
         deployments={[]}
@@ -212,7 +212,7 @@ describe("FleetDashboard add connection flow", () => {
     const onAddPeer = vi.fn(async () => undefined);
 
     render(
-      <FleetDashboard
+      <FleetHostDashboard
         addingPeer={false}
         bootstrap={null}
         deployments={[]}
@@ -280,7 +280,7 @@ describe("FleetDashboard add connection flow", () => {
     }));
 
     render(
-      <FleetDashboard
+      <FleetHostDashboard
         addingPeer={false}
         bootstrap={bootstrap}
         deployments={[deployment]}
@@ -316,10 +316,10 @@ describe("FleetDashboard add connection flow", () => {
   });
 });
 
-describe("FleetDashboard fleet-level P2P repair", () => {
+describe("FleetHostDashboard fleet-level P2P repair", () => {
   function renderFleet(deployments: DeploymentView[], onRepairP2P = vi.fn()) {
     render(
-      <FleetDashboard
+      <FleetHostDashboard
         addingPeer={false}
         bootstrap={bootstrap}
         deployments={deployments}
@@ -353,10 +353,10 @@ describe("FleetDashboard fleet-level P2P repair", () => {
   });
 });
 
-describe("FleetDashboard guided inference callout", () => {
+describe("FleetHostDashboard guided inference callout", () => {
   function renderFleet(deployments: DeploymentView[]) {
     render(
-      <FleetDashboard
+      <FleetHostDashboard
         addingPeer={false}
         bootstrap={bootstrap}
         deployments={deployments}

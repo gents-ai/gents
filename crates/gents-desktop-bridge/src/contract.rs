@@ -3,6 +3,7 @@
 //! permission projection and typed errors against it.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::error::BridgeErrorCode;
 
@@ -18,7 +19,7 @@ pub const CONTRACT_VERSION: &str = "0.5";
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BridgeContract {
     pub contract_version: String,
@@ -30,14 +31,14 @@ pub struct BridgeContract {
     pub permission_sets: Vec<PermissionSetContract>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandContract {
     pub name: String,
     pub permission_set: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionSetContract {
     pub name: String,

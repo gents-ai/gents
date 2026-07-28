@@ -1,21 +1,21 @@
 import { useEffect, type MutableRefObject } from "react";
 
-import type { ChatWorkflowState } from "../lib/chat-shell";
-import { conversationBelongsToBehavior } from "../lib/conversation-selection";
+import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
+import { conversationBelongsToBehavior } from "@source-inc/gents-desktop-chat";
 import type {
   DeploymentView,
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
   P2PHealth,
-} from "../lib/types";
+} from "@source-inc/gents-desktop-client";
 import {
   createTrailingRefreshQueue,
   logShellEvent,
   shouldAutoRestartP2P,
   timingConfig,
 } from "./desktopShellRuntime";
-import { setSelectedAgent } from "../lib/desktop-api";
-import { listenToDesktopClientUpdates } from "../lib/desktop-events";
+import { setSelectedAgent } from "@source-inc/gents-desktop-client";
+import { listenToDesktopClientUpdates } from "@source-inc/gents-desktop-client";
 
 type DesktopShellEffectsArgs = {
   autoRestartInFlight: MutableRefObject<boolean>;

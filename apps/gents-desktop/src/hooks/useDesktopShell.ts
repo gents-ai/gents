@@ -12,12 +12,12 @@ import {
   fetchSessionSnapshot,
   shutdownDesktopClient,
   startDesktopClient,
-} from "../lib/desktop-api";
+} from "@source-inc/gents-desktop-client";
 import {
   isTerminalTurnState,
   projectChatShell,
   type ChatWorkflowState,
-} from "../lib/chat-shell";
+} from "@source-inc/gents-desktop-chat";
 import {
   delay,
   logShellEvent,
@@ -34,7 +34,7 @@ import type {
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
   P2PHealth,
-} from "../lib/types";
+} from "@source-inc/gents-desktop-client";
 
 export { setDesktopShellTimingConfigForTests };
 

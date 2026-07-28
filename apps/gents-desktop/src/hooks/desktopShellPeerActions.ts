@@ -10,13 +10,13 @@ import {
   renamePeer,
   repairP2P,
   startDesktopClient,
-} from "../lib/desktop-api";
-import { formatPeerConnectionError } from "../lib/peerConnectionErrors";
+} from "@source-inc/gents-desktop-client";
+import { formatPeerConnectionError } from "@source-inc/gents-desktop-fleet";
 import type {
   BearerPairingRequest,
   DesktopClientSnapshot,
   PeerAddRequest,
-} from "../lib/types";
+} from "@source-inc/gents-desktop-client";
 
 type PeerActionParams = {
   snapshot: DesktopClientSnapshot | null;

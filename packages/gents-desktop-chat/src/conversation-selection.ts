@@ -1,4 +1,4 @@
-import type { ConversationSummary } from "./types.js";
+import type { ConversationSummary } from "@source-inc/gents-desktop-client";
 
 export function conversationBelongsToBehavior(
   conversation: ConversationSummary,

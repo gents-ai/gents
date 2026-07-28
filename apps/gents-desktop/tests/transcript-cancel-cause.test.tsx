@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { MessageList } from "../src/components/Transcript";
-import type { RenderedTimelineItem } from "../src/lib/types";
-import type { DerivedCancelCauseView } from "../src/lib/types/operations";
+import { MessageList } from "@source-inc/gents-desktop-chat";
+import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
+import type { DerivedCancelCauseView } from "@source-inc/gents-desktop-client";
 
 describe("Transcript cancel cause surfacing", () => {
   it("renders CancelCauseBadge on cancelled tool calls", () => {

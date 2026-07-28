@@ -1,4 +1,7 @@
-import type { DeploymentView, ToolSelectionView } from "./types.js";
+import type {
+  DeploymentView,
+  ToolSelectionView,
+} from "@source-inc/gents-desktop-client";
 
 export type StatusTone = "green" | "yellow" | "red";
 
@@ -99,9 +102,12 @@ export function toolCeilingIcons(
   );
   const unrestrictedMetaServices = source.some(
     (selection) =>
-      selection.enableMetaTools && (selection.allowedMcpServiceIds ?? []).length === 0,
+      selection.enableMetaTools &&
+      (selection.allowedMcpServiceIds ?? []).length === 0,
   );
-  const cliTools = uniqueValues(source.flatMap((selection) => selection.cliToolNames));
+  const cliTools = uniqueValues(
+    source.flatMap((selection) => selection.cliToolNames),
+  );
 
   if (bestFileMode) {
     icons.push({
@@ -144,7 +150,9 @@ export function toolCeilingIcons(
 function strongestMode(values: Array<string | null | undefined>) {
   if (
     values.some((value) =>
-      ["readwrite", "read-write", "unrestricted"].includes((value ?? "").toLowerCase()),
+      ["readwrite", "read-write", "unrestricted"].includes(
+        (value ?? "").toLowerCase(),
+      ),
     )
   ) {
     return "readwrite";
@@ -207,7 +215,10 @@ export function formatRelativeTime(value?: string | null) {
   if (!Number.isFinite(timestamp)) {
     return "unknown";
   }
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  const elapsedSeconds = Math.max(
+    0,
+    Math.floor((Date.now() - timestamp) / 1000),
+  );
   if (elapsedSeconds < 60) {
     return `${elapsedSeconds}s ago`;
   }

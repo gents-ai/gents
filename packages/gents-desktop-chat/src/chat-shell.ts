@@ -1,4 +1,7 @@
-import type { ConversationSummary, DesktopSessionSnapshot } from "./types.js";
+import type {
+  ConversationSummary,
+  DesktopSessionSnapshot,
+} from "@source-inc/gents-desktop-client";
 
 export type TurnState =
   | "waitingForClaim"
@@ -28,7 +31,11 @@ export type ChatWorkflowState =
       requestId?: string | null;
       turnState: TurnState;
     }
-  | { kind: "blocked"; reason: ChatBlockedReason; turnState?: TurnState | null };
+  | {
+      kind: "blocked";
+      reason: ChatBlockedReason;
+      turnState?: TurnState | null;
+    };
 
 export type SendStatus =
   | { kind: "ready" }

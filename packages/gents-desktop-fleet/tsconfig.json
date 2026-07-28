@@ -8,7 +8,9 @@
     "rootDir": "src",
     "strict": true,
     "skipLibCheck": true,
+    "jsx": "react-jsx",
     "lib": ["ES2022", "DOM"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }

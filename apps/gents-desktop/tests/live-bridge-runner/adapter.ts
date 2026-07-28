@@ -1,5 +1,5 @@
-import type { DesktopApiAdapter } from "../../src/lib/desktop-api";
-import type { BackendHealth } from "../../src/components/backendHealth/types";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import type { BackendHealth } from "@source-inc/gents-desktop-client";
 import type {
   BearerPairingResponse,
   BehaviorSaveRequest,
@@ -14,7 +14,7 @@ import type {
   McpServiceProbeResult,
   SubagentTreeView,
   TaskRunResult,
-} from "../../src/lib/types";
+} from "@source-inc/gents-desktop-client";
 import type { TauriDriverChatRequest } from "../tauri-driver";
 import type { LiveBridgeRunner } from "../live-bridge-runner";
 

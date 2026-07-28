@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ConnectedPeerSection } from "../src/components/sidebar-widgets/ConnectedPeerSection";
-import type { DeploymentView } from "../src/lib/types";
+import type { DeploymentView } from "@source-inc/gents-desktop-client";
 
 function dep(agentDid: string, label: string): DeploymentView {
   return {

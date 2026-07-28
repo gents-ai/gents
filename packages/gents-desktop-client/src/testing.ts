@@ -1,4 +1,8 @@
-import type { DesktopTransport, ClientUpdateEvent, Unlisten } from "./transport.js";
+import type {
+  DesktopTransport,
+  ClientUpdateEvent,
+  Unlisten,
+} from "./transport.js";
 
 export type MemoryTransportOptions = {
   handlers?: Record<string, (args?: unknown) => unknown | Promise<unknown>>;
@@ -13,6 +17,7 @@ export function createMemoryTransport(
 ): DesktopTransport & {
   emitClientUpdated(event?: ClientUpdateEvent): void;
   calls: Array<{ command: string; args?: unknown }>;
+  listenerCount(): number;
 } {
   const handlers = options.handlers ?? {};
   const calls: Array<{ command: string; args?: unknown }> = [];
@@ -40,6 +45,9 @@ export function createMemoryTransport(
       for (const listener of updateListeners) {
         listener(event);
       }
+    },
+    listenerCount() {
+      return updateListeners.size;
     },
   };
 }

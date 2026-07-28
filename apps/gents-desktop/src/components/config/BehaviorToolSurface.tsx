@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 
-import { explainToolSurface } from "../../lib/desktop-api";
-import type { ToolSurfaceExplanationView } from "../../lib/types";
+import { explainToolSurface } from "@source-inc/gents-desktop-client";
+import type { ToolSurfaceExplanationView } from "@source-inc/gents-desktop-client";
 
 /// The behavior's RESOLVED tool surface, computed by the runtime's explain
 /// machinery over the live documents — what the model actually gets, not

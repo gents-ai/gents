@@ -1,9 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { WorkspaceTreePanel } from "../src/components/workspace/WorkspaceTreePanel";
-import { setDesktopApiAdapterForTests } from "../src/lib/desktop-api";
-import type { DesktopApiAdapter } from "../src/lib/desktop-api";
+import { WorkspaceTreePanel } from "@source-inc/gents-desktop-operations";
+import { setDesktopApiAdapterForTests } from "@source-inc/gents-desktop-client";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
 const TREE: Record<string, unknown> = {
   "": {

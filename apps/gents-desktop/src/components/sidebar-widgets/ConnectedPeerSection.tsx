@@ -1,5 +1,8 @@
-import type { DeploymentView } from "../../lib/types";
-import { displayAgentIdentity, displayGraphqlEndpoint } from "../../lib/types";
+import type { DeploymentView } from "@source-inc/gents-desktop-client";
+import {
+  displayAgentIdentity,
+  displayGraphqlEndpoint,
+} from "@source-inc/gents-desktop-client";
 
 export type ConnectedPeerSectionProps = {
   deployments: DeploymentView[];
