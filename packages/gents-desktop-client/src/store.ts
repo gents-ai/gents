@@ -26,8 +26,8 @@ type Listener = () => void;
 /**
  * Shared client store + refresh coordinator.
  * Each store owns exactly one client-updated subscription. Gents Desktop still
- * retains its mature session polling coordinator, and some prop-less domain
- * components use the compatibility API wrappers until instance unification.
+ * retains its mature session polling coordinator; package providers can bind
+ * their domain actions to this store's `client.api`.
  */
 export type DesktopStore = {
   getState(): DesktopStoreState;

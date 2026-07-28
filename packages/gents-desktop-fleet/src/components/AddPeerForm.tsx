@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 
 import { formatPeerConnectionError } from "../peerConnectionErrors.js";
 import type {
@@ -21,6 +21,7 @@ export type AddPeerFormProps = {
     request: BearerPairingRequest,
   ) => Promise<BearerPairingResponse>;
   onSubmit: (request: PeerAddRequest) => Promise<void>;
+  pairingQrHint?: ReactNode;
 };
 
 export function AddPeerForm({
@@ -32,6 +33,7 @@ export function AddPeerForm({
   onProbePeerAddress,
   onPairBearer,
   onSubmit,
+  pairingQrHint,
 }: AddPeerFormProps) {
   const [bearerToken, setBearerToken] = useState("");
   const [pairLabel, setPairLabel] = useState("");
@@ -378,6 +380,7 @@ export function AddPeerForm({
         <QrScannerDialog
           onClose={() => setScannerOpen(false)}
           onScan={(token) => updateBearerToken(token)}
+          pairingHint={pairingQrHint}
         />
       ) : null}
     </div>

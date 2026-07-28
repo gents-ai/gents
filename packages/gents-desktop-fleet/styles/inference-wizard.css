@@ -1,30 +1,6 @@
-/* Guided inference setup: onboarding callout + wizard modal. */
+/* Guided inference setup wizard modal. The dashboard callout is base fleet UI. */
 
 @layer fleet {
-  .fleet-inference-callout {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-7);
-    padding: var(--space-7) var(--space-9);
-    border: 1px solid var(--border-strong);
-    background: rgb(var(--color-accent-strong-rgb) / 0.06);
-  }
-
-  .fleet-inference-callout-copy {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  .fleet-inference-callout-copy strong {
-    font-size: var(--text-base);
-  }
-
-  .fleet-inference-callout .primary-button {
-    flex: none;
-  }
-
   .inference-wizard {
     width: min(520px, 100%);
   }

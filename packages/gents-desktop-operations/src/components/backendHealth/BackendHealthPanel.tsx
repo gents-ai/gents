@@ -2,6 +2,7 @@ import { BackendHealthRow } from "./BackendHealthRow.js";
 import type {
   BackendDisplayState,
   BackendHealth,
+  DesktopApiAdapter,
 } from "@source-inc/gents-desktop-client";
 import { useBackendHealth } from "./useBackendHealth.js";
 
@@ -97,6 +98,7 @@ function EmptyFleet() {
 export function BackendHealthPanel({
   initialBackends,
   now: providedNow,
+  api,
 }: {
   /**
    * When provided, the panel renders these rows without calling the
@@ -105,8 +107,9 @@ export function BackendHealthPanel({
    */
   initialBackends?: BackendHealth[];
   now?: Date;
+  api?: DesktopApiAdapter;
 } = {}) {
-  const live = useBackendHealth();
+  const live = useBackendHealth(api);
   const backends = initialBackends ?? live.backends;
   const error = initialBackends ? null : live.error;
   const loading = initialBackends ? false : live.loading;

@@ -7,8 +7,11 @@ import {
   type KeyboardEvent,
 } from "react";
 
-import { listSubagentTree } from "@source-inc/gents-desktop-client";
-import type { SubagentTreeView } from "@source-inc/gents-desktop-client";
+import type {
+  DesktopApiAdapter,
+  SubagentTreeView,
+} from "@source-inc/gents-desktop-client";
+import { useOperationsApi } from "../../apiContext.js";
 import { SubagentDetailPanel } from "./SubagentDetailPanel.js";
 import { SubagentTreeRow } from "./SubagentLineageTree.js";
 import type { AnyNode, FilterState, Selected } from "./lineageModel.js";
@@ -23,12 +26,15 @@ import {
 export type SubagentLineageViewProps = {
   rootRequestId: string | null;
   agentDid: string | null;
+  api?: DesktopApiAdapter;
 };
 
 export function SubagentLineageView({
   rootRequestId,
   agentDid,
+  api: explicitApi,
 }: SubagentLineageViewProps) {
+  const api = useOperationsApi(explicitApi);
   const [tree, setTree] = useState<SubagentTreeView | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,7 +79,7 @@ export function SubagentLineageView({
         setError(null);
       }
       try {
-        const value = await listSubagentTree({
+        const value = await api.listSubagentTree({
           rootRequestId,
           agentDid: agentDid ?? null,
           includeTerminal: true,
@@ -116,7 +122,7 @@ export function SubagentLineageView({
       cancelled = true;
       window.clearInterval(handle);
     };
-  }, [rootRequestId, agentDid]);
+  }, [agentDid, api, rootRequestId]);
 
   const { rootBuilt, deployments } = useMemo(() => {
     if (!tree) return { rootBuilt: null, deployments: [] };

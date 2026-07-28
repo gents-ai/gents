@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { fetchOperationsSnapshot } from "@source-inc/gents-desktop-client";
 import type {
+  DesktopApiAdapter,
   DesktopOperationsSnapshot,
   DesktopOperationsSnapshotRequest,
 } from "@source-inc/gents-desktop-client";
+import { useOperationsApi } from "../../apiContext.js";
 
 export type OperationsSnapshotState = {
   snapshot: DesktopOperationsSnapshot | null;
@@ -15,6 +16,7 @@ export type OperationsSnapshotState = {
 
 export type OperationsSnapshotOptions = {
   enabled?: boolean;
+  api?: DesktopApiAdapter;
 };
 
 const REFRESH_INTERVAL_MS = 2_000;
@@ -24,6 +26,7 @@ export function useOperationsSnapshot(
   options: OperationsSnapshotOptions = {},
 ): OperationsSnapshotState {
   const enabled = options.enabled ?? true;
+  const api = useOperationsApi(options.api);
   const requestKey = useMemo(
     () =>
       JSON.stringify([
@@ -58,7 +61,7 @@ export function useOperationsSnapshot(
   const refresh = useCallback(async () => {
     setLoadingRequestKey(requestKey);
     try {
-      const next = await fetchOperationsSnapshot(stableRequest);
+      const next = await api.fetchOperationsSnapshot(stableRequest);
       if (currentRequestKey.current !== requestKey) return;
       setSnapshotState({ requestKey, value: next });
       setErrorState(null);
@@ -73,7 +76,7 @@ export function useOperationsSnapshot(
         current === requestKey ? null : current,
       );
     }
-  }, [requestKey, stableRequest]);
+  }, [api, requestKey, stableRequest]);
 
   useEffect(() => {
     if (!enabled) return;

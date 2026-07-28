@@ -1,5 +1,7 @@
 import { normalizeInvokeError } from "./errors.js";
 import { DesktopTransport, tauriTransport } from "./transport.js";
+import { createDesktopApiAdapter } from "./api/adapter.js";
+import type { DesktopApiAdapter } from "./api/types.js";
 import type { BridgeContract as GeneratedBridgeContract } from "./generated/BridgeContract.js";
 import type {
   BearerPairingRequest,
@@ -48,6 +50,8 @@ export function assertCompatibleBridgeContract(
  */
 export type DesktopClient = {
   transport: DesktopTransport;
+  /** Full command API bound to this client's transport. */
+  api: DesktopApiAdapter;
   invoke<T>(command: string, args?: unknown): Promise<T>;
   clientStart(): Promise<DesktopClientSnapshot>;
   clientShutdown(): Promise<DesktopClientSnapshot>;
@@ -66,6 +70,8 @@ export type DesktopClient = {
 export function createDesktopClient(
   transport: DesktopTransport = tauriTransport(),
 ): DesktopClient {
+  const api = createDesktopApiAdapter(transport);
+
   async function invoke<T>(command: string, args?: unknown): Promise<T> {
     try {
       return await transport.invoke<T>(command, args);
@@ -76,6 +82,7 @@ export function createDesktopClient(
 
   return {
     transport,
+    api,
     invoke,
     clientStart: () => invoke("desktop_client_start"),
     clientShutdown: () => invoke("desktop_client_shutdown"),

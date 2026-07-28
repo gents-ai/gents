@@ -4,10 +4,12 @@ import type {
   BearerPairingRequest,
   BearerPairingResponse,
   BootstrapSummary,
+  DesktopApiAdapter,
   DeploymentView,
   P2PHealth,
   PeerAddRequest,
 } from "@source-inc/gents-desktop-client";
+import type { FleetCopy } from "../copy.js";
 import { formatPeerConnectionError } from "../peerConnectionErrors.js";
 import { validateAgentDid } from "../peerConnectionImport.js";
 import { AddPeerForm } from "./AddPeerForm.js";
@@ -50,6 +52,10 @@ export type FleetDashboardProps = {
   onRepairP2P: () => Promise<unknown>;
   /** Host branding; omitted by reusable/white-label consumers. */
   brand?: ReactNode;
+  /** Instance-bound bridge API for package-owned reads such as network status. */
+  api?: DesktopApiAdapter;
+  /** Host-owned product and operational copy. */
+  copy?: FleetCopy;
   /** Host-owned controls such as a theme switcher. */
   headerLeadingActions?: ReactNode;
   /** Opt-in runtime-admin surface. The base fleet package never invokes it. */
@@ -86,6 +92,8 @@ export function FleetDashboard({
   onRenamePeer,
   onRepairP2P,
   brand,
+  api,
+  copy,
   headerLeadingActions,
   localRuntimeSetup,
   renderInferenceSetup,
@@ -174,6 +182,7 @@ export function FleetDashboard({
               onPeerFormChange={setPeerForm}
               onProbePeerAddress={onProbePeerAddress}
               onPairBearer={pairWithBearer}
+              pairingQrHint={copy?.pairingQrHint}
               onSubmit={submitPeer}
             />
           </details>
@@ -260,6 +269,7 @@ export function FleetDashboard({
             onPeerFormChange={setPeerForm}
             onProbePeerAddress={onProbePeerAddress}
             onPairBearer={pairWithBearer}
+            pairingQrHint={copy?.pairingQrHint}
             onSubmit={submitPeer}
           />
         </section>
@@ -296,7 +306,7 @@ export function FleetDashboard({
         </table>
       </div>
 
-      <NetworkPanel />
+      <NetworkPanel api={api} />
 
       {activeWizardDeployment && renderInferenceSetup
         ? renderInferenceSetup(activeWizardDeployment, () =>

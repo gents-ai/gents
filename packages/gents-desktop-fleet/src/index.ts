@@ -7,3 +7,8 @@ export * from "./components/FleetIcons.js";
 export * from "./components/FleetRow.js";
 export * from "./components/NetworkPanel.js";
 export * from "./components/QrScannerDialog.js";
+export {
+  DEFAULT_CLI_BINARY_NAME,
+  DEFAULT_RUNTIME_PRODUCT_NAME,
+  type FleetCopy,
+} from "./copy.js";

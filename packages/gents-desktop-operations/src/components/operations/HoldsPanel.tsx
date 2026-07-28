@@ -1,7 +1,10 @@
 import { useState } from "react";
 
-import { resolveToolCallHold } from "@source-inc/gents-desktop-client";
-import type { HeldToolCallView } from "@source-inc/gents-desktop-client";
+import type {
+  DesktopApiAdapter,
+  HeldToolCallView,
+} from "@source-inc/gents-desktop-client";
+import { useOperationsApi } from "../../apiContext.js";
 import { useToolCallHolds } from "./useToolCallHolds.js";
 
 function normalizedArgs(args: string | null) {
@@ -42,8 +45,14 @@ function deadlineLabel(deadlineAt: string | null) {
 /// dispatches the tool on the owning runtime; Deny fails it with the given
 /// reason. Both write an AgentToolApproval document — the runtime's verdict
 /// watcher does the rest.
-export function HoldsPanel({ agentDid }: { agentDid: string | null }) {
-  const { holds, loading, error, refresh } = useToolCallHolds(agentDid);
+export type HoldsPanelProps = {
+  agentDid: string | null;
+  api?: DesktopApiAdapter;
+};
+
+export function HoldsPanel({ agentDid, api: explicitApi }: HoldsPanelProps) {
+  const api = useOperationsApi(explicitApi);
+  const { holds, loading, error, refresh } = useToolCallHolds(agentDid, api);
   const [busyCallId, setBusyCallId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [denyingCallId, setDenyingCallId] = useState<string | null>(null);
@@ -60,7 +69,7 @@ export function HoldsPanel({ agentDid }: { agentDid: string | null }) {
     setBusyCallId(hold.toolCallId);
     setActionError(null);
     try {
-      await resolveToolCallHold({
+      await api.resolveToolCallHold({
         agentDid,
         toolCallId: hold.toolCallId,
         approve,

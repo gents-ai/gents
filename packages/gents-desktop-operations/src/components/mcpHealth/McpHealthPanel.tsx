@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import {
-  listMcpServicesWithHealth,
-  probeMcpService,
+import type {
+  DesktopApiAdapter,
+  MCPServiceHealthView,
 } from "@source-inc/gents-desktop-client";
-import type { MCPServiceHealthView } from "@source-inc/gents-desktop-client";
+import { useOperationsApi } from "../../apiContext.js";
 import { McpHealthPanelView } from "./McpHealthPanelView.js";
 import type { McpProbeOutcome } from "./mcpHealthModel.js";
 
@@ -14,7 +14,12 @@ import type { McpProbeOutcome } from "./mcpHealthModel.js";
 /// AbortController + a generation guard against stale fetches.
 const POLL_INTERVAL_MS = 10_000;
 
-export function McpHealthPanel() {
+export function McpHealthPanel({
+  api: explicitApi,
+}: {
+  api?: DesktopApiAdapter;
+} = {}) {
+  const api = useOperationsApi(explicitApi);
   const [services, setServices] = useState<MCPServiceHealthView[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -29,7 +34,7 @@ export function McpHealthPanel() {
     const generation = ++generationRef.current;
     setLoading(true);
     try {
-      const next = await listMcpServicesWithHealth();
+      const next = await api.listMcpServicesWithHealth();
       if (generation !== generationRef.current) return;
       setServices(next);
       setError(null);
@@ -42,7 +47,7 @@ export function McpHealthPanel() {
         setLoading(false);
       }
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => {
     void refresh();
@@ -60,7 +65,7 @@ export function McpHealthPanel() {
     async (serviceId: string) => {
       setProbingServiceId(serviceId);
       try {
-        const result = await probeMcpService(serviceId);
+        const result = await api.probeMcpService(serviceId);
         setProbeOutcomes((prev) => ({
           ...prev,
           [serviceId]: {
@@ -84,7 +89,7 @@ export function McpHealthPanel() {
         setProbingServiceId(null);
       }
     },
-    [refresh],
+    [api, refresh],
   );
 
   return (

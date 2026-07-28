@@ -1,8 +1,8 @@
-@layer tokens, base, primitives, shell, sidebar, chat, fleet, config, transcript, components, backend-health, backgrounded-tools, holds, utilities, trace, workspace;
+@layer tokens, base, primitives, shell, sidebar, chat, fleet, config, transcript, components, backend-health, backgrounded-tools, holds, mcp-health, utilities, trace, workspace;
 
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/funnel-display";
-@import "./styles/tokens.css";
+@import "@source-inc/gents-desktop-tokens/semantic.css";
 @import "@source-inc/gents-desktop-ui/styles.css";
 @import "./styles/base.css";
 @import "./styles/primitives/layout.css";
@@ -26,4 +26,4 @@
 @import "./styles/config/documents.css";
 @import "./styles/config/forms.css";
 @import "@source-inc/gents-desktop-operations/styles.css";
-@import "./styles/utilities.css";
+@import "./styles/tokens.css";

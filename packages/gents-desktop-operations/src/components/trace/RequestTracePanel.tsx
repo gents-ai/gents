@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { fetchRequestTimeline } from "@source-inc/gents-desktop-client";
 import { formatMessageTime } from "@source-inc/gents-desktop-ui";
 import type {
+  DesktopApiAdapter,
   RequestTimelineView,
   RunTimelineEventView,
 } from "@source-inc/gents-desktop-client";
 import { CopyButton } from "@source-inc/gents-desktop-ui";
+import { useOperationsApi } from "../../apiContext.js";
 
 export type RequestTracePanelProps = {
   agentDid: string;
   rootRequestId?: string | null;
+  api?: DesktopApiAdapter;
 };
 
 /// Per-request event timeline reconstructed from persisted documents by the
@@ -20,7 +22,9 @@ export type RequestTracePanelProps = {
 export function RequestTracePanel({
   agentDid,
   rootRequestId,
+  api: explicitApi,
 }: RequestTracePanelProps) {
+  const api = useOperationsApi(explicitApi);
   const [timeline, setTimeline] = useState<RequestTimelineView | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,7 +40,7 @@ export function RequestTracePanel({
     setLoading(true);
     setError(null);
     try {
-      const next = await fetchRequestTimeline(agentDid, rootRequestId);
+      const next = await api.fetchRequestTimeline(agentDid, rootRequestId);
       if (generationRef.current === generation) {
         setTimeline(next);
       }
@@ -49,7 +53,7 @@ export function RequestTracePanel({
         setLoading(false);
       }
     }
-  }, [agentDid, rootRequestId]);
+  }, [agentDid, api, rootRequestId]);
 
   useEffect(() => {
     setTimeline(null);

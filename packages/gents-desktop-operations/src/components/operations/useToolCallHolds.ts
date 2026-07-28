@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { listToolCallHolds } from "@source-inc/gents-desktop-client";
-import type { HeldToolCallView } from "@source-inc/gents-desktop-client";
+import type {
+  DesktopApiAdapter,
+  HeldToolCallView,
+} from "@source-inc/gents-desktop-client";
+import { useOperationsApi } from "../../apiContext.js";
 
 export type ToolCallHoldsState = {
   holds: HeldToolCallView[] | null;
@@ -15,7 +18,11 @@ export type ToolCallHoldsState = {
 /// Background refreshes skip the loading flip to avoid flicker. A generation
 /// counter drops out-of-order responses so a slow fetch for a previous agent
 /// (or an older poll tick) can never overwrite fresher rows.
-export function useToolCallHolds(agentDid: string | null): ToolCallHoldsState {
+export function useToolCallHolds(
+  agentDid: string | null,
+  explicitApi?: DesktopApiAdapter,
+): ToolCallHoldsState {
+  const api = useOperationsApi(explicitApi);
   const [holds, setHolds] = useState<HeldToolCallView[] | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +41,7 @@ export function useToolCallHolds(agentDid: string | null): ToolCallHoldsState {
       }
       setError(null);
       try {
-        const rows = await listToolCallHolds(agentDid);
+        const rows = await api.listToolCallHolds(agentDid);
         if (generationRef.current === generation) {
           setHolds(rows);
         }
@@ -48,7 +55,7 @@ export function useToolCallHolds(agentDid: string | null): ToolCallHoldsState {
         }
       }
     },
-    [agentDid],
+    [agentDid, api],
   );
 
   useEffect(() => {

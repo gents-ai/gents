@@ -1,8 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { WorkspaceTreePanel } from "@source-inc/gents-desktop-operations";
-import { setDesktopApiAdapterForTests } from "@source-inc/gents-desktop-client";
+import {
+  OperationsApiProvider,
+  WorkspaceTreePanel,
+} from "@source-inc/gents-desktop-operations";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
 const TREE: Record<string, unknown> = {
@@ -24,7 +26,7 @@ const TREE: Record<string, unknown> = {
 };
 
 function withTree(fail = false) {
-  setDesktopApiAdapterForTests({
+  return {
     listWorkspace: fail
       ? vi.fn().mockRejectedValue(new Error("this agent has no tool root configured"))
       : vi.fn().mockImplementation(async (subpath?: string | null) => {
@@ -32,15 +34,20 @@ function withTree(fail = false) {
           if (!listing) throw new Error("no such directory");
           return listing;
         }),
-  } as unknown as DesktopApiAdapter);
+  } as unknown as DesktopApiAdapter;
+}
+
+function renderTree(api: DesktopApiAdapter) {
+  render(
+    <OperationsApiProvider api={api}>
+      <WorkspaceTreePanel />
+    </OperationsApiProvider>,
+  );
 }
 
 describe("workspace tree", () => {
-  afterEach(() => setDesktopApiAdapterForTests(null));
-
   it("lists the root and descends into directories lazily", async () => {
-    withTree();
-    render(<WorkspaceTreePanel />);
+    renderTree(withTree());
 
     await waitFor(() => expect(screen.getByText("Cargo.toml")).toBeInTheDocument());
     expect(screen.getByText("812 B")).toBeInTheDocument();
@@ -54,8 +61,7 @@ describe("workspace tree", () => {
   });
 
   it("shows the no-tool-root error honestly", async () => {
-    withTree(true);
-    render(<WorkspaceTreePanel />);
+    renderTree(withTree(true));
     await waitFor(() =>
       expect(screen.getByTestId("workspace-error")).toHaveTextContent(
         "no tool root configured",

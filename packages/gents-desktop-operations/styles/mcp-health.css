@@ -1,4 +1,4 @@
-@layer fleet {
+@layer mcp-health {
   .mcp-health-panel {
     display: grid;
     gap: var(--space-7);

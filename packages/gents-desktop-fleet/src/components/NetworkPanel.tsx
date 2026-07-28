@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { fetchNetworkStatus } from "@source-inc/gents-desktop-client";
-import type { NetworkStatusView } from "@source-inc/gents-desktop-client";
+import {
+  getDesktopApiAdapter,
+  type DesktopApiAdapter,
+  type NetworkStatusView,
+} from "@source-inc/gents-desktop-client";
 import { CopyButton } from "@source-inc/gents-desktop-ui";
 import { formatRelativeTime } from "../fleetMetrics.js";
 
 /// Live P2P state for this desktop node: own addresses, connected peers
 /// matched against saved deployments, and replicator collection sets.
 /// Collapsed by default; fetched on expand and on explicit refresh only.
-export function NetworkPanel() {
+export function NetworkPanel({ api }: { api?: DesktopApiAdapter } = {}) {
+  const desktopApi = getDesktopApiAdapter(api);
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<NetworkStatusView | null>(null);
   const [loading, setLoading] = useState(false);
@@ -20,7 +24,7 @@ export function NetworkPanel() {
     setLoading(true);
     setError(null);
     try {
-      const next = await fetchNetworkStatus();
+      const next = await desktopApi.fetchNetworkStatus();
       if (generationRef.current === generation) {
         setStatus(next);
       }
@@ -33,7 +37,7 @@ export function NetworkPanel() {
         setLoading(false);
       }
     }
-  }, []);
+  }, [desktopApi]);
 
   useEffect(() => {
     if (open && !status && !loading) {

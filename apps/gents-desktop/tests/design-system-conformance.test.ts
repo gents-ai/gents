@@ -26,12 +26,15 @@ function cssFiles(dir: string): string[] {
 
 const packageStyleFiles = readdirSync(PACKAGES_ROOT)
   .filter((entry) => entry.startsWith("gents-desktop-"))
-  .flatMap((entry) => cssFiles(join(PACKAGES_ROOT, entry)))
-  .filter((file) => !file.endsWith("semantic.css"));
+  .flatMap((entry) => cssFiles(join(PACKAGES_ROOT, entry)));
 const files = [APP_CSS, ...cssFiles(STYLES_ROOT), ...packageStyleFiles];
 
 function stripComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+function isTokenSheet(file: string): boolean {
+  return file.endsWith("tokens.css") || file.endsWith("semantic.css");
 }
 
 const sources = new Map(
@@ -73,7 +76,7 @@ describe("motion and focus", () => {
   it("transition/animation durations use --motion-* tokens", () => {
     const raw: string[] = [];
     for (const [file, css] of sources) {
-      if (file.endsWith("tokens.css")) continue;
+      if (isTokenSheet(file)) continue;
       for (const match of css.matchAll(
         /(?:transition|animation)[^:;{}]*:\s*[^;{}]*?(\d+(?:\.\d+)?m?s)\b/g,
       )) {
@@ -108,7 +111,7 @@ describe("type scale", () => {
         const value = match[1].trim();
         if (!/^var\(--text-[\w-]+\)$/.test(value) && value !== "inherit") {
           // tokens.css defines the scale itself in raw px.
-          if (file.endsWith("tokens.css")) continue;
+          if (isTokenSheet(file)) continue;
           raw.push(`${relative(STYLES_ROOT, file)}: font-size: ${value}`);
         }
       }

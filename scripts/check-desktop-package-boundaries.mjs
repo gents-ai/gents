@@ -17,14 +17,29 @@ const allowedImports = new Map([
   ["gents-desktop-tokens", new Set()],
   ["gents-desktop-client", new Set()],
   ["gents-desktop-ui", new Set(["gents-desktop-tokens"])],
-  ["gents-desktop-chat", new Set(["gents-desktop-client", "gents-desktop-ui"])],
+  [
+    "gents-desktop-chat",
+    new Set([
+      "gents-desktop-client",
+      "gents-desktop-tokens",
+      "gents-desktop-ui",
+    ]),
+  ],
   [
     "gents-desktop-fleet",
-    new Set(["gents-desktop-client", "gents-desktop-ui"]),
+    new Set([
+      "gents-desktop-client",
+      "gents-desktop-tokens",
+      "gents-desktop-ui",
+    ]),
   ],
   [
     "gents-desktop-operations",
-    new Set(["gents-desktop-client", "gents-desktop-ui"]),
+    new Set([
+      "gents-desktop-client",
+      "gents-desktop-tokens",
+      "gents-desktop-ui",
+    ]),
   ],
 ]);
 
@@ -102,6 +117,24 @@ for (const name of packageNames) {
     );
   }
   checkInternalVersions(manifest, relative(root, manifestPath));
+}
+
+for (const name of [
+  "gents-desktop-chat",
+  "gents-desktop-fleet",
+  "gents-desktop-operations",
+]) {
+  const manifest = manifests.get(name);
+  for (const section of ["peerDependencies", "devDependencies"]) {
+    if (
+      manifest?.[section]?.["@source-inc/gents-desktop-tokens"] !==
+      workspaceVersion
+    ) {
+      failures.push(
+        `packages/${name}/package.json ${section} must declare @source-inc/gents-desktop-tokens ${workspaceVersion}`,
+      );
+    }
+  }
 }
 
 for (const app of [
@@ -192,6 +225,212 @@ for (const name of packageNames) {
         `${relative(root, file)} references a host-private --source-* token`,
       );
     }
+  }
+}
+
+const uiStylesPath = join(root, "packages/gents-desktop-ui/styles.css");
+const uiStyles = readFileSync(uiStylesPath, "utf8");
+for (const className of [
+  "primary-button",
+  "ghost-button",
+  "danger-button",
+  "icon-button",
+  "panel",
+  "muted",
+  "eyebrow",
+  "field",
+  "mono",
+  "small",
+  "chip",
+]) {
+  if (!new RegExp(`\\.${className}(?:[\\s:,.{]|$)`).test(uiStyles)) {
+    failures.push(
+      `${relative(root, uiStylesPath)} must own shared .${className} primitive`,
+    );
+  }
+}
+
+const chatStylesPath = join(
+  root,
+  "packages/gents-desktop-chat/styles/chat.css",
+);
+const chatStyles = readFileSync(chatStylesPath, "utf8");
+for (const className of [
+  "chat-header",
+  "chat-status",
+  "composer-footer",
+  "empty-transcript",
+]) {
+  if (!new RegExp(`\\.${className}(?:[\\s:,.{]|$)`).test(chatStyles)) {
+    failures.push(
+      `${relative(root, chatStylesPath)} must own package-emitted .${className}`,
+    );
+  }
+}
+
+const hostStyleSource = filesUnder(
+  join(root, "apps/gents-desktop/src/styles"),
+  (path) => path.endsWith(".css"),
+)
+  .map((path) => readFileSync(path, "utf8"))
+  .join("\n");
+const hostSelectors = [
+  ...hostStyleSource.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{/g),
+].flatMap((match) => match[1].split(",").map((selector) => selector.trim()));
+for (const className of [
+  "primary-button",
+  "ghost-button",
+  "icon-button",
+  "panel",
+  "muted",
+  "eyebrow",
+  "field",
+  "mono",
+  "small",
+  "chip",
+  "chat-header",
+  "chat-status",
+  "composer-footer",
+  "empty-transcript",
+]) {
+  const directSelector = new RegExp(
+    `^\\.${className}(?::(?:[\\w-]+|not\\([^)]*\\)))*$`,
+  );
+  if (hostSelectors.some((selector) => directSelector.test(selector))) {
+    failures.push(
+      `host CSS must not directly redefine reusable package class .${className}`,
+    );
+  }
+}
+
+const fleetBaseStyles = readFileSync(
+  join(root, "packages/gents-desktop-fleet/styles.css"),
+  "utf8",
+);
+const fleetLayoutStyles = readFileSync(
+  join(root, "packages/gents-desktop-fleet/styles/layout.css"),
+  "utf8",
+);
+if (
+  !fleetBaseStyles.includes("./styles/layout.css") ||
+  !fleetLayoutStyles.includes(".fleet-inference-callout")
+) {
+  failures.push(
+    "FleetDashboard inference callout styles must ship in the base fleet entrypoint",
+  );
+}
+
+const mcpHealthStyles = readFileSync(
+  join(root, "packages/gents-desktop-operations/styles/mcp-health.css"),
+  "utf8",
+);
+if (!/@layer\s+mcp-health\s*\{/.test(mcpHealthStyles)) {
+  failures.push("operations MCP health CSS must use the mcp-health layer");
+}
+
+const semanticPath = join(root, "packages/gents-desktop-tokens/semantic.css");
+const semanticSource = readFileSync(semanticPath, "utf8");
+const semanticTokens = new Set(
+  [...semanticSource.matchAll(/(?:^|[{;\s])(--[\w-]+)\s*:/g)].map(
+    (match) => match[1],
+  ),
+);
+const hostTokensPath = join(root, "apps/gents-desktop/src/styles/tokens.css");
+const hostTokens = readFileSync(hostTokensPath, "utf8");
+for (const match of hostTokens.matchAll(
+  /(?:^|[{;\s])(--(?:font|color|border|radius|space|text|motion)-[\w-]+|--(?:overlay|scrim)-rgb)\s*:/g,
+)) {
+  if (!semanticTokens.has(match[1])) {
+    failures.push(
+      `${relative(root, hostTokensPath)} overrides ${match[1]}, which is absent from the semantic contract`,
+    );
+  }
+}
+
+const semanticAccent = semanticSource.match(/--color-accent:\s*([^;]+);/)?.[1];
+const fixtureStylesPath = join(root, "apps/fixture-host/src/styles.css");
+const fixtureStyles = readFileSync(fixtureStylesPath, "utf8");
+const fixtureAccent = fixtureStyles.match(/--color-accent:\s*([^;]+);/)?.[1];
+if (
+  !fixtureAccent ||
+  fixtureAccent === semanticAccent ||
+  fixtureAccent.toLowerCase() === "#06b250"
+) {
+  failures.push(
+    `${relative(root, fixtureStylesPath)} must remap --color-accent to a distinct non-Source brand`,
+  );
+}
+const fixtureApp = readFileSync(
+  join(root, "apps/fixture-host/src/App.tsx"),
+  "utf8",
+);
+if (!fixtureApp.includes('data-testid="fixture-brand"')) {
+  failures.push(
+    "fixture-host must pass a distinct brand node to FleetDashboard",
+  );
+}
+
+const desktopAppCssPath = join(root, "apps/gents-desktop/src/App.css");
+const desktopAppCss = readFileSync(desktopAppCssPath, "utf8");
+const semanticImport = desktopAppCss.indexOf(
+  '@import "@source-inc/gents-desktop-tokens/semantic.css";',
+);
+const hostTokenImport = desktopAppCss.indexOf('@import "./styles/tokens.css";');
+if (
+  semanticImport === -1 ||
+  hostTokenImport === -1 ||
+  semanticImport > hostTokenImport
+) {
+  failures.push(
+    `${relative(root, desktopAppCssPath)} must import semantic.css before host token overrides`,
+  );
+}
+
+const breakpointSource = readFileSync(
+  join(root, "packages/gents-desktop-client/src/index.ts"),
+  "utf8",
+);
+const narrowBreakpoint = Number(
+  breakpointSource.match(/NARROW_BREAKPOINT_PX\s*=\s*(\d+)/)?.[1],
+);
+const tokenBreakpoint = Number(
+  semanticSource.match(/--gents-narrow-breakpoint:\s*(\d+)px/)?.[1],
+);
+if (
+  !Number.isInteger(narrowBreakpoint) ||
+  tokenBreakpoint !== narrowBreakpoint
+) {
+  failures.push(
+    `semantic breakpoint ${tokenBreakpoint || "<missing>"} must equal NARROW_BREAKPOINT_PX ${narrowBreakpoint || "<missing>"}`,
+  );
+}
+for (const path of [
+  "packages/gents-desktop-chat/styles/chat.css",
+  "packages/gents-desktop-fleet/styles/layout.css",
+  "packages/gents-desktop-operations/styles/rail.css",
+]) {
+  const css = readFileSync(join(root, path), "utf8");
+  const values = [...css.matchAll(/@media\s*\(max-width:\s*(\d+)px\)/g)].map(
+    (match) => Number(match[1]),
+  );
+  if (!values.includes(narrowBreakpoint)) {
+    failures.push(
+      `${path} must use the shared narrow breakpoint ${narrowBreakpoint}px`,
+    );
+  }
+}
+
+for (const [path, maximumLines] of [
+  ["packages/gents-desktop-client/src/api.ts", 100],
+  ["packages/gents-desktop-client/src/api/adapter.ts", 350],
+  ["packages/gents-desktop-fleet/src/InferenceSetupWizard.tsx", 450],
+  ["packages/gents-desktop-fleet/src/inference/steps.tsx", 400],
+  ["packages/gents-desktop-chat/src/components/Transcript.tsx", 100],
+  ["packages/gents-desktop-chat/src/components/codeTools/codeTools.ts", 100],
+]) {
+  const lines = readFileSync(join(root, path), "utf8").split(/\r?\n/).length;
+  if (lines > maximumLines) {
+    failures.push(`${path} has ${lines} lines; maximum is ${maximumLines}`);
   }
 }
 

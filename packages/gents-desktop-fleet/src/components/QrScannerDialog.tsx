@@ -1,7 +1,7 @@
 import { gunzipSync } from "fflate";
 import jsQR from "jsqr";
 import type { QRCode } from "jsqr";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 const BEARER_QR_MAGIC = new Uint8Array([
   0x64, 0x61, 0x62, 0x65, 0x61, 0x72, 0x31, 0x7a, 0x00,
@@ -11,9 +11,10 @@ const MAX_COMPACT_QR_CBOR_BYTES = 16 * 1024;
 const BASE58_ALPHABET =
   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-type QrScannerDialogProps = {
+export type QrScannerDialogProps = {
   onClose: () => void;
   onScan: (value: string) => void;
+  pairingHint?: ReactNode;
 };
 
 function startsWithBytes(value: Uint8Array, prefix: Uint8Array): boolean {
@@ -85,7 +86,11 @@ export function decodePairingQrPayload(
   }
 }
 
-export function QrScannerDialog({ onClose, onScan }: QrScannerDialogProps) {
+export function QrScannerDialog({
+  onClose,
+  onScan,
+  pairingHint,
+}: QrScannerDialogProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const onCloseRef = useRef(onClose);
@@ -209,8 +214,12 @@ export function QrScannerDialog({ onClose, onScan }: QrScannerDialogProps) {
         </div>
         {error ? <p className="fleet-inline-error">{error}</p> : null}
         <p className="muted">
-          Point the camera at the QR code printed by{" "}
-          <code>gents p2p pairings invite --bearer --qr</code>.
+          {pairingHint ?? (
+            <>
+              Point the camera at the QR code printed by{" "}
+              <code>gents p2p pairings invite --bearer --qr</code>.
+            </>
+          )}
         </p>
         <canvas aria-hidden="true" ref={canvasRef} />
       </section>

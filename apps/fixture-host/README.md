@@ -5,6 +5,8 @@ Minimal downstream Tauri host for [reusable desktop packages](../../docs/reusabl
 ## Proves
 
 - Distinct bundle id (`com.source-inc.gents-fixture-host`) and product name
+- A purple `Indigo Relay` brand slot and semantic-token remap, deliberately
+  distinct from the Source green defaults used by Gents Desktop
 - `HomePolicy::AppDataDir { subdirectory: "gents-fixture-host/client" }`
 - `BootstrapPolicy::PairedRemoteOnly` (no `runtime-admin` / local runtime init)
 - Capability grants limited to chat/fleet/operations (no config-write)

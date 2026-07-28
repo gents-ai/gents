@@ -11,29 +11,29 @@
     --font-mono: ui-monospace, monospace;
 
     /* Surfaces & text */
-    --color-bg: #000000;
-    --color-surface: #1c2724;
-    --color-surface-strong: #07110e;
-    --color-surface-deep: #020504;
-    --color-surface-muted: #1c2724;
-    --color-surface-row: #09110e;
-    --color-bg-rgb: 0 0 0;
-    --color-surface-rgb: 28 39 36;
-    --color-surface-strong-rgb: 7 17 14;
-    --color-surface-deep-rgb: 2 5 4;
-    --color-surface-row-rgb: 9 17 14;
+    --color-bg: #0e0f12;
+    --color-surface: #1a1c22;
+    --color-surface-strong: #15171c;
+    --color-surface-deep: #090a0d;
+    --color-surface-muted: #20232a;
+    --color-surface-row: #17191e;
+    --color-bg-rgb: 14 15 18;
+    --color-surface-rgb: 26 28 34;
+    --color-surface-strong-rgb: 21 23 28;
+    --color-surface-deep-rgb: 9 10 13;
+    --color-surface-row-rgb: 23 25 30;
     --color-text: #ffffff;
-    --color-text-muted: #95a49d;
-    --color-text-soft: #d6ddda;
-    --color-text-warm: #dff8e8;
+    --color-text-muted: #9ca3af;
+    --color-text-soft: #d1d5db;
+    --color-text-warm: #e5e7eb;
 
     /* Accent & status */
-    --color-accent: #06b250;
-    --color-accent-rgb: 6 178 80;
-    --color-accent-strong: #39e27a;
-    --color-accent-muted: #58c779;
-    --color-success: #8df2b4;
-    --color-success-strong: #06b250;
+    --color-accent: #a3a8b8;
+    --color-accent-rgb: 163 168 184;
+    --color-accent-strong: #c4c8d4;
+    --color-accent-muted: #9ca3af;
+    --color-success: #6ee7a8;
+    --color-success-strong: #38c77a;
     --color-warning: #ffa011;
     --color-warning-rgb: 255 160 17;
     --color-warning-soft: #ffd089;
@@ -45,17 +45,17 @@
     --color-error-tint: #ffbfb8;
     --color-error-strong-rgb: 255 111 95;
     --color-error-deep-rgb: 72 15 10;
-    --color-text-muted-rgb: 149 164 157;
-    --color-accent-strong-rgb: 57 226 122;
-    --color-success-rgb: 141 242 180;
+    --color-text-muted-rgb: 156 163 175;
+    --color-accent-strong-rgb: 196 200 212;
+    --color-success-rgb: 110 231 168;
     --overlay-rgb: 255 255 255;
     --scrim-rgb: 0 0 0;
 
     /* Borders & radii */
-    --border-subtle: rgb(6 178 80 / 0.12);
-    --border-default: rgb(6 178 80 / 0.18);
-    --border-strong: rgb(6 178 80 / 0.28);
-    --border-selected: rgb(6 178 80 / 0.48);
+    --border-subtle: rgb(var(--color-accent-rgb) / 0.14);
+    --border-default: rgb(var(--color-accent-rgb) / 0.22);
+    --border-strong: rgb(var(--color-accent-rgb) / 0.34);
+    --border-selected: rgb(var(--color-accent-rgb) / 0.56);
     --radius-sm: 8px;
     --radius-md: 8px;
     --radius-lg: 8px;
@@ -87,6 +87,12 @@
     --motion-fast: 120ms;
     --motion-medium: 150ms;
     --motion-pulse: 1.4s;
+    --shadow-icon-button:
+      inset 0 1px 0 rgb(var(--overlay-rgb) / 0.05),
+      inset 2px 0 0 rgb(var(--color-accent-rgb) / 0.16);
+    --shadow-icon-button-hover:
+      inset 0 1px 0 rgb(var(--overlay-rgb) / 0.06),
+      inset 3px 0 0 var(--color-accent);
 
     /* Layout contract: packages use this breakpoint; CSS custom props cannot
        parameterize @media, so hosts document the same literal. */

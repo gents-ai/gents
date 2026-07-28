@@ -1,18 +1,7 @@
 @layer primitives {
-  .panel {
-    border: 1px solid var(--border-default);
-    background: var(--color-surface);
-    box-shadow:
-      inset 0 1px 0 rgb(var(--overlay-rgb) / 0.04),
-      0 18px 60px rgb(var(--scrim-rgb) / 0.22);
-    padding: var(--space-7);
-  }
-
-  .composer-footer,
   .composer-toolbar,
   .panel-header,
-  .tool-card-title,
-  .chat-status {
+  .tool-card-title {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -70,8 +59,7 @@
     letter-spacing: 0.08em;
   }
 
-  .list-item-subtle,
-  .muted {
+  .list-item-subtle {
     color: var(--color-text-muted);
   }
 
@@ -102,8 +90,7 @@
     padding: var(--space-6);
   }
 
-  .centered-panel,
-  .empty-transcript {
+  .centered-panel {
     min-height: 260px;
     display: grid;
     gap: var(--space-4);

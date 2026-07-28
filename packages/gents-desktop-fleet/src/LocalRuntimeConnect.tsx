@@ -2,11 +2,13 @@ import { useState } from "react";
 
 import type { BootstrapSummary } from "@source-inc/gents-desktop-client";
 
+import type { FleetCopy } from "./copy.js";
 import { formatPeerConnectionError } from "./peerConnectionErrors.js";
 
 export type LocalRuntimeConnectProps = {
   bootstrap: BootstrapSummary | null;
   busy: boolean;
+  copy?: Pick<FleetCopy, "runtimeProductName" | "cliBinaryName">;
   onConnect: (label?: string | null) => Promise<unknown>;
 };
 
@@ -19,6 +21,7 @@ export type LocalRuntimeConnectProps = {
 export function LocalRuntimeConnect({
   bootstrap,
   busy,
+  copy,
   onConnect,
 }: LocalRuntimeConnectProps) {
   const [error, setError] = useState<string | null>(null);
@@ -31,7 +34,7 @@ export function LocalRuntimeConnect({
     try {
       await onConnect(agentName);
     } catch (connectError) {
-      setError(formatPeerConnectionError(connectError, "local-runtime"));
+      setError(formatPeerConnectionError(connectError, "local-runtime", copy));
     }
   }
 

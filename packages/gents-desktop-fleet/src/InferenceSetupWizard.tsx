@@ -3,41 +3,36 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   BackendSaveRequest,
   BehaviorSaveRequest,
-  BehaviorView,
   CodexLoginResult,
   DeploymentView,
   InferenceProbeResult,
 } from "@source-inc/gents-desktop-client";
-
-// The same defaults the CLI init picker resolves onto, so the two onboarding
-// paths land the user on identical backend documents.
-const OPENAI_ENDPOINT = "https://api.openai.com/v1";
-const OPENAI_DEFAULT_MODEL = "gpt-5.4-mini";
-const OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434/v1";
-const LOCAL_PROBE_URLS = [
-  "http://127.0.0.1:8080/v1",
-  "http://127.0.0.1:11434/v1",
-];
-const CODEX_ENDPOINT = "https://chatgpt.com/backend-api/codex";
-const CODEX_DEFAULT_MODEL = "gpt-5.5";
-
-// Runtime-canonical provider kinds (see gents::backend_provider).
-const PROVIDER_OPENAI = "openai";
-const PROVIDER_CODEX = "ChatGptCodex";
-
-// Wire API per OpenAI-compatible target (gents::openai_wire). OpenAI itself
-// speaks the Responses API — matching the CLI preset — while local/self-hosted
-// OpenAI-compatible servers speak chat completions.
-const WIRE_RESPONSES = "responses";
-const WIRE_CHAT_COMPLETIONS = "chat_completions";
-
-type WizardStep = "choose" | "openai" | "local" | "custom" | "codex";
-
-type Detection = {
-  status: "idle" | "probing" | "found" | "none";
-  url: string;
-  models: string[];
-};
+import {
+  CODEX_DEFAULT_MODEL,
+  CODEX_ENDPOINT,
+  LOCAL_PROBE_URLS,
+  OLLAMA_DEFAULT_URL,
+  OPENAI_DEFAULT_MODEL,
+  OPENAI_ENDPOINT,
+  PROVIDER_CODEX,
+  PROVIDER_OPENAI,
+  WIRE_CHAT_COMPLETIONS,
+  WIRE_RESPONSES,
+  type Detection,
+  type WizardStep,
+} from "./inference/constants.js";
+import { resolveTargets } from "./inference/resolveTargets.js";
+import {
+  persistInferenceBackend,
+  type PersistBackendOptions,
+} from "./inference/persistBackend.js";
+import {
+  ChooseStep,
+  CodexStep,
+  CustomStep,
+  LocalStep,
+  OpenAiStep,
+} from "./inference/steps.js";
 
 export type InferenceSetupWizardProps = {
   deployment: DeploymentView;
@@ -54,46 +49,6 @@ export type InferenceSetupWizardProps = {
     onUrl: (url: string | null) => void,
   ) => Promise<() => void>;
 };
-
-/** The backend + behavior the wizard reconfigures for an already-provisioned agent. */
-function resolveTargets(deployment: DeploymentView) {
-  const behavior =
-    deployment.behaviors.find((entry) => entry.isDefault) ??
-    deployment.behaviors[0] ??
-    null;
-  const backend =
-    deployment.inferenceBackends.find(
-      (entry) => entry.backendId === behavior?.backendId,
-    ) ??
-    deployment.inferenceBackends[0] ??
-    null;
-  const backendId = backend?.backendId ?? behavior?.backendId ?? "default";
-  return { behavior, backend, backendId };
-}
-
-/** Re-save a behavior unchanged except for its backend link; the desktop
- *  save path re-derives `model_name` from the backend's first model, which is
- *  how the chosen model actually reaches the behavior. */
-function behaviorSaveFrom(
-  behavior: BehaviorView,
-  agentDid: string,
-  backendId: string,
-): BehaviorSaveRequest {
-  return {
-    agentDid,
-    behaviorId: behavior.behaviorId,
-    displayName: behavior.displayName,
-    systemPrompt: behavior.systemPrompt ?? "",
-    backendId,
-    toolSelectionId: behavior.toolSelectionId ?? null,
-    inferenceProfileId: behavior.inferenceProfileId ?? null,
-    compactionStrategy: behavior.compactionStrategy ?? null,
-    compactionThreshold: behavior.compactionThreshold ?? null,
-    enabled: behavior.enabled,
-    skillRefs: behavior.skillRefs,
-    skillExcludes: behavior.skillExcludes,
-  };
-}
 
 export function InferenceSetupWizard({
   deployment,
@@ -185,41 +140,13 @@ export function InferenceSetupWizard({
     return () => document.removeEventListener("keydown", handler);
   }, [cancelAndClose]);
 
-  async function persistBackend(opts: {
-    name: string;
-    providerKind: string;
-    endpoint: string;
-    models: string[];
-    apiKey?: string;
-    clearApiKey?: boolean;
-    openaiWireApi?: string;
-  }) {
-    await onSaveBackendConfig({
-      backendId: targets.backendId,
-      name: opts.name,
-      providerKind: opts.providerKind,
-      openaiWireApi: opts.openaiWireApi,
-      endpoint: opts.endpoint,
-      apiKey: opts.apiKey,
-      // Preserve any concurrency tuning already on the backend — the save path
-      // overwrites these with whatever we send.
-      maxConcurrent: targets.backend?.maxConcurrent ?? undefined,
-      maxQueueDepth: targets.backend?.maxQueueDepth ?? undefined,
-      clearApiKey: opts.clearApiKey ?? false,
-      models: opts.models,
-      enabled: true,
+  function persistBackend(options: PersistBackendOptions) {
+    return persistInferenceBackend({
+      deployment,
+      options,
+      onSaveBackendConfig,
+      onSaveBehaviorConfig,
     });
-    // Re-save the behavior so it re-derives its model from the updated backend
-    // and points at it. Without this, the behavior keeps its stale model.
-    if (targets.behavior) {
-      await onSaveBehaviorConfig(
-        behaviorSaveFrom(
-          targets.behavior,
-          deployment.agentDid,
-          targets.backendId,
-        ),
-      );
-    }
   }
 
   function backendName(fallback: string) {
@@ -411,197 +338,50 @@ export function InferenceSetupWizard({
           ) : null}
 
           {!done && step === "openai" ? (
-            <div className="inference-wizard-form">
-              <label className="field">
-                <span>OpenAI API key</span>
-                <input
-                  data-testid="inference-openai-key"
-                  type="password"
-                  autoFocus
-                  placeholder="sk-…"
-                  value={openaiKey}
-                  onChange={(event) => setOpenaiKey(event.currentTarget.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Model</span>
-                <input
-                  data-testid="inference-openai-model"
-                  value={openaiModel}
-                  onChange={(event) =>
-                    setOpenaiModel(event.currentTarget.value)
-                  }
-                />
-              </label>
-              <p className="muted small">
-                The key is stored in the backend document on this agent.
-              </p>
-              <div className="inference-wizard-actions">
-                <button
-                  className="primary-button"
-                  data-testid="inference-openai-save"
-                  type="button"
-                  disabled={
-                    submitting || !openaiKey.trim() || !openaiModel.trim()
-                  }
-                  onClick={() => void submitOpenai()}
-                >
-                  {submitting ? "Saving…" : "Save"}
-                </button>
-              </div>
-            </div>
+            <OpenAiStep
+              apiKey={openaiKey}
+              model={openaiModel}
+              submitting={submitting}
+              onApiKeyChange={setOpenaiKey}
+              onModelChange={setOpenaiModel}
+              onSubmit={() => void submitOpenai()}
+            />
           ) : null}
 
           {!done && step === "local" ? (
-            <div className="inference-wizard-form">
-              <label className="field">
-                <span>Local server base URL</span>
-                <div className="inference-wizard-inline">
-                  <input
-                    data-testid="inference-local-url"
-                    value={localUrl}
-                    onChange={(event) => setLocalUrl(event.currentTarget.value)}
-                  />
-                  <button
-                    className="ghost-button"
-                    type="button"
-                    disabled={submitting || detection.status === "probing"}
-                    onClick={() => void reprobeLocal()}
-                  >
-                    {detection.status === "probing" ? "Detecting…" : "Detect"}
-                  </button>
-                </div>
-              </label>
-              <LocalDetectionHint detection={detection} />
-              {detection.status === "found" && detection.models.length > 0 ? (
-                <label className="field">
-                  <span>Model</span>
-                  <select
-                    data-testid="inference-local-model"
-                    value={localModel}
-                    onChange={(event) =>
-                      setLocalModel(event.currentTarget.value)
-                    }
-                  >
-                    {detection.models.map((model) => (
-                      <option key={model} value={model}>
-                        {model}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : (
-                <label className="field">
-                  <span>Model name</span>
-                  <input
-                    data-testid="inference-local-model"
-                    value={localModel}
-                    onChange={(event) =>
-                      setLocalModel(event.currentTarget.value)
-                    }
-                  />
-                </label>
-              )}
-              <div className="inference-wizard-actions">
-                <button
-                  className="primary-button"
-                  data-testid="inference-local-save"
-                  type="button"
-                  disabled={
-                    submitting || !localUrl.trim() || !localModel.trim()
-                  }
-                  onClick={() => void submitLocal()}
-                >
-                  {submitting ? "Saving…" : "Save"}
-                </button>
-              </div>
-            </div>
+            <LocalStep
+              detection={detection}
+              model={localModel}
+              submitting={submitting}
+              url={localUrl}
+              onDetect={() => void reprobeLocal()}
+              onModelChange={setLocalModel}
+              onSubmit={() => void submitLocal()}
+              onUrlChange={setLocalUrl}
+            />
           ) : null}
 
           {!done && step === "custom" ? (
-            <div className="inference-wizard-form">
-              <label className="field">
-                <span>Backend base URL (incl. /v1)</span>
-                <input
-                  data-testid="inference-custom-url"
-                  autoFocus
-                  placeholder="https://…/v1"
-                  value={customUrl}
-                  onChange={(event) => setCustomUrl(event.currentTarget.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Model name</span>
-                <input
-                  data-testid="inference-custom-model"
-                  value={customModel}
-                  onChange={(event) =>
-                    setCustomModel(event.currentTarget.value)
-                  }
-                />
-              </label>
-              <label className="field">
-                <span>API key (optional)</span>
-                <input
-                  data-testid="inference-custom-key"
-                  type="password"
-                  value={customKey}
-                  onChange={(event) => setCustomKey(event.currentTarget.value)}
-                />
-              </label>
-              <div className="inference-wizard-actions">
-                <button
-                  className="primary-button"
-                  data-testid="inference-custom-save"
-                  type="button"
-                  disabled={
-                    submitting || !customUrl.trim() || !customModel.trim()
-                  }
-                  onClick={() => void submitCustom()}
-                >
-                  {submitting ? "Saving…" : "Save"}
-                </button>
-              </div>
-            </div>
+            <CustomStep
+              apiKey={customKey}
+              model={customModel}
+              submitting={submitting}
+              url={customUrl}
+              onApiKeyChange={setCustomKey}
+              onModelChange={setCustomModel}
+              onSubmit={() => void submitCustom()}
+              onUrlChange={setCustomUrl}
+            />
           ) : null}
 
           {!done && step === "codex" ? (
-            <div className="inference-wizard-form">
-              <p className="muted">
-                Use your ChatGPT subscription. A browser window opens for you to
-                sign in; the credential is stored on this agent and refreshed
-                automatically.
-              </p>
-              {submitting && codexAuthUrl ? (
-                <p className="muted small">
-                  Didn’t the browser open?{" "}
-                  <span className="mono inference-wizard-authurl">
-                    {codexAuthUrl}
-                  </span>
-                </p>
-              ) : null}
-              <div className="inference-wizard-actions">
-                {signingIn ? (
-                  <button
-                    className="ghost-button"
-                    data-testid="inference-codex-cancel"
-                    type="button"
-                    onClick={cancelAndClose}
-                  >
-                    Cancel sign-in
-                  </button>
-                ) : null}
-                <button
-                  className="primary-button"
-                  data-testid="inference-codex-signin"
-                  type="button"
-                  disabled={submitting}
-                  onClick={() => void signInWithChatGpt()}
-                >
-                  {submitting ? "Waiting for sign-in…" : "Sign in with ChatGPT"}
-                </button>
-              </div>
-            </div>
+            <CodexStep
+              authUrl={codexAuthUrl}
+              signingIn={signingIn}
+              submitting={submitting}
+              onCancel={cancelAndClose}
+              onSubmit={() => void signInWithChatGpt()}
+            />
           ) : null}
         </div>
 
@@ -618,95 +398,4 @@ export function InferenceSetupWizard({
       </div>
     </div>
   );
-}
-
-function ChooseStep({
-  detection,
-  onPick,
-}: {
-  detection: Detection;
-  onPick: (step: WizardStep) => void;
-}) {
-  const localMeta =
-    detection.status === "found"
-      ? `Detected at ${detection.url}`
-      : detection.status === "probing"
-        ? "Looking for a local server…"
-        : "e.g. Ollama / llama-server";
-  return (
-    <ul
-      className="inference-wizard-options"
-      data-testid="inference-wizard-options"
-    >
-      <OptionCard
-        testid="inference-option-openai"
-        title="OpenAI API key"
-        meta="Paste a key; stored in the backend document"
-        onPick={() => onPick("openai")}
-      />
-      <OptionCard
-        testid="inference-option-local"
-        title="Local server"
-        meta={localMeta}
-        onPick={() => onPick("local")}
-      />
-      <OptionCard
-        testid="inference-option-custom"
-        title="Custom URL"
-        meta="Any OpenAI-compatible endpoint"
-        onPick={() => onPick("custom")}
-      />
-      <OptionCard
-        testid="inference-option-codex"
-        title="ChatGPT / Codex subscription"
-        meta="Sign in with your ChatGPT plan"
-        onPick={() => onPick("codex")}
-      />
-    </ul>
-  );
-}
-
-function OptionCard({
-  testid,
-  title,
-  meta,
-  onPick,
-}: {
-  testid: string;
-  title: string;
-  meta: string;
-  onPick: () => void;
-}) {
-  return (
-    <li>
-      <button
-        className="inference-wizard-option"
-        data-testid={testid}
-        type="button"
-        onClick={onPick}
-      >
-        <span className="inference-wizard-option-title">{title}</span>
-        <span className="inference-wizard-option-meta muted">{meta}</span>
-      </button>
-    </li>
-  );
-}
-
-function LocalDetectionHint({ detection }: { detection: Detection }) {
-  if (detection.status === "found") {
-    return (
-      <p className="muted small">
-        Detected a running server at {detection.url}.
-      </p>
-    );
-  }
-  if (detection.status === "none") {
-    return (
-      <p className="muted small">
-        No local server detected. Start one (Ollama or llama-server), then
-        Detect.
-      </p>
-    );
-  }
-  return null;
 }

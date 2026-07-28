@@ -10,6 +10,17 @@ Import the semantic token contract before the package stylesheet:
 ```
 
 The JavaScript entry point exports `CopyButton`, `ConfirmDialog`, `copyText`,
-and `formatMessageTime`. Components rely only on semantic CSS custom
-properties; hosts remain responsible for mapping their brand palette into
-those slots.
+and `formatMessageTime`. The stylesheet also owns the primitive classes emitted
+by the domain packages: buttons, panels, fields, chips, and typography
+utilities. Components rely only on semantic CSS custom properties.
+
+Complete host CSS order:
+
+```css
+@import "@source-inc/gents-desktop-tokens/semantic.css";
+@import "@source-inc/gents-desktop-ui/styles.css";
+@import "@source-inc/gents-desktop-chat/styles.css"; /* as used */
+@import "@source-inc/gents-desktop-fleet/styles.css";
+@import "@source-inc/gents-desktop-operations/styles.css";
+/* Define host semantic-token overrides after the package imports. */
+```

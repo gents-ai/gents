@@ -27,6 +27,21 @@ describe("formatPeerConnectionError", () => {
     );
   });
 
+  it("lets a white-label host own runtime and CLI names", () => {
+    expect(
+      formatPeerConnectionError(
+        "sending GET request to http://127.0.0.1:9191/api/v0/p2p/shareable-address",
+        "local-runtime",
+        {
+          runtimeProductName: "Indigo Relay",
+          cliBinaryName: "indigo",
+        },
+      ),
+    ).toBe(
+      "Could not reach the local Indigo Relay runtime at http://127.0.0.1:9191. Start `indigo server` and try again.",
+    );
+  });
+
   it("keeps already useful errors unchanged", () => {
     expect(
       formatPeerConnectionError(

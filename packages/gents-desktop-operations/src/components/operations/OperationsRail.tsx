@@ -12,6 +12,8 @@ import {
   type OperationsRailTabDescriptor,
   type OperationsRailTabId,
 } from "./operationsRailContext.js";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import { OperationsApiProvider } from "../../apiContext.js";
 import { OperationsRailTabPanel } from "./OperationsRailTabPanel.js";
 import { OperationsRailTabs } from "./OperationsRailTabs.js";
 
@@ -19,6 +21,8 @@ export type OperationsRailProviderProps = {
   tabs: OperationsRailTabDescriptor[];
   /** Initial active tab id. Defaults to the first registered tab. */
   initialActiveTabId?: OperationsRailTabId | null;
+  /** Instance-bound bridge API used by all package panels in this rail. */
+  api?: DesktopApiAdapter;
   children: ReactNode;
 };
 
@@ -32,6 +36,7 @@ export type OperationsRailProps = {
 export function OperationsRailProvider({
   tabs,
   initialActiveTabId,
+  api,
   children,
 }: OperationsRailProviderProps) {
   const [activeTabId, setActiveTabId] = useState<OperationsRailTabId | null>(
@@ -54,10 +59,15 @@ export function OperationsRailProvider({
     [tabs, activeTabId, setActiveTab],
   );
 
-  return (
+  const rail = (
     <OperationsRailContext.Provider value={value}>
       {children}
     </OperationsRailContext.Provider>
+  );
+  return api ? (
+    <OperationsApiProvider api={api}>{rail}</OperationsApiProvider>
+  ) : (
+    rail
   );
 }
 

@@ -27,13 +27,12 @@ tests, not runtime ACL reflection. Per-caller projection is a filed follow-up.
 (not yet `test-harness` on the bridge crate). The reusable store owns the shared
 snapshot subscription/coalescing boundary; Gents Desktop retains its mature
 session polling/restart coordinator in `useDesktopShell` and passes package
-components data + callbacks. Constructor injection currently governs
-`DesktopClient`/`DesktopStore`; prop-less domain component actions retain the
-compatibility API adapter seam, so making every domain action instance-bound is
-a follow-up rather than a claim of this extraction. Package CSS is
-semantic-token-only but preserves the existing class names to keep the
-extraction behavior-identical; a future collision-hardening release may prefix
-them. Live-lane verification of the serde camelCase fix remains fenced but not
+components data + callbacks. Each `DesktopClient` now owns a full
+transport-bound `client.api`; operations providers and fleet package-owned reads
+accept that adapter, while the global API seam remains only for compatibility.
+Package CSS is semantic-token-only but preserves the existing class names to
+keep the extraction behavior-identical; a future collision-hardening release
+may prefix them. Live-lane verification of the serde camelCase fix remains fenced but not
 discharged: a wire-format assertion is in `test:live:chat` (`itemKey` must
 arrive camelCase over real IPC), but the suite fails before reaching it on this
 branch **and at main HEAD** — a pre-existing backgrounded-tools liveness
@@ -686,12 +685,12 @@ tauriTransport(): DesktopTransport      // default; the only @tauri-apps/api imp
 
 The app and downstream hosts pass nothing and get the Tauri transport;
 `DesktopClient`/`DesktopStore` tests pass a fake through constructor injection.
-The `/testing` subpath exports that deterministic memory transport. The mature
-Gents Desktop harness and prop-less domain action components still use the
-compatibility `setDesktopApiAdapterForTests` /
-`setDesktopClientUpdatedListenerFactoryForTests` seams. All direct Tauri imports
-are nevertheless centralized in `transport.ts`; making those domain actions
-instance-bound is explicitly deferred rather than represented as complete.
+The `/testing` subpath exports that deterministic memory transport. The client
+also exposes a full `client.api` adapter over the same transport. Operations
+providers and fleet components accept it explicitly, so multi-client hosts and
+non-Tauri tests do not need process-global overrides. The mature Gents Desktop
+harness retains `setDesktopApiAdapterForTests` as a compatibility seam. All
+direct Tauri imports remain centralized in `transport.ts`.
 
 ### One store, one subscription, one refresh coordinator
 

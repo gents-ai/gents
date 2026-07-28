@@ -9,6 +9,22 @@ function wait(ms: number) {
 }
 
 describe("createDesktopStore", () => {
+  it("binds the full domain API to the injected transport", async () => {
+    const transport = createMemoryTransport({
+      handlers: {
+        desktop_network_status: () => ({ p2pEnabled: true }),
+      },
+    });
+    const client = createDesktopClient(transport);
+
+    await expect(client.api.fetchNetworkStatus()).resolves.toEqual({
+      p2pEnabled: true,
+    });
+    expect(transport.calls).toEqual([
+      { command: "desktop_network_status", args: undefined },
+    ]);
+  });
+
   it("serializes concurrent starts and owns one update subscription", async () => {
     let starts = 0;
     const transport = createMemoryTransport({

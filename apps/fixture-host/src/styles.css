@@ -1,73 +1,126 @@
+@layer tokens, primitives, chat, fleet, transcript, components, backend-health, backgrounded-tools, holds, mcp-health, utilities, trace, workspace, fixture;
+
 @import "@source-inc/gents-desktop-tokens/semantic.css";
 @import "@source-inc/gents-desktop-ui/styles.css";
 @import "@source-inc/gents-desktop-chat/styles.css";
 @import "@source-inc/gents-desktop-fleet/styles.css";
 @import "@source-inc/gents-desktop-operations/styles.css";
 
-:root {
-  color-scheme: light dark;
-  font-family: system-ui, sans-serif;
-  line-height: 1.4;
+/* Deliberately unlike the Source palette: this fixture is the executable
+   proof that a host can remap every reusable surface without package forks. */
+@layer tokens {
+  :root {
+    color-scheme: dark;
+    font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+    --font-heading: "Iowan Old Style", "Palatino Linotype", serif;
+    --font-body: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", "SFMono-Regular", ui-monospace, monospace;
+    --color-bg: #100d1f;
+    --color-bg-rgb: 16 13 31;
+    --color-surface: #211a3c;
+    --color-surface-rgb: 33 26 60;
+    --color-surface-strong: #18132d;
+    --color-surface-strong-rgb: 24 19 45;
+    --color-surface-deep: #0b0817;
+    --color-surface-deep-rgb: 11 8 23;
+    --color-surface-muted: #2a2149;
+    --color-surface-row: #1b1532;
+    --color-surface-row-rgb: 27 21 50;
+    --color-text: #fbf8ff;
+    --color-text-muted: #b8afd0;
+    --color-text-muted-rgb: 184 175 208;
+    --color-text-soft: #e2dcf1;
+    --color-text-warm: #f2eaff;
+    --color-accent: #8b7cff;
+    --color-accent-rgb: 139 124 255;
+    --color-accent-strong: #c0b7ff;
+    --color-accent-strong-rgb: 192 183 255;
+    --color-accent-muted: #aca0f4;
+    --color-success: #74e0c1;
+    --color-success-rgb: 116 224 193;
+    --color-success-strong: #45caa5;
+    --border-subtle: rgb(var(--color-accent-rgb) / 0.18);
+    --border-default: rgb(var(--color-accent-rgb) / 0.3);
+    --border-strong: rgb(var(--color-accent-rgb) / 0.48);
+    --border-selected: rgb(var(--color-accent-rgb) / 0.72);
+  }
 }
 
-body {
-  margin: 0;
-  background: #0f1410;
-  color: #e8f0e9;
-}
+@layer fixture {
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-text);
+  }
 
-main {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 1.5rem;
-}
+  main {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 1.5rem;
+  }
 
-h1 {
-  font-size: 1.25rem;
-  margin: 0 0 0.5rem;
-}
+  h1 {
+    font-size: 1.25rem;
+    margin: 0 0 0.5rem;
+  }
 
-.panel {
-  border: 1px solid #2a3a2e;
-  border-radius: 8px;
-  padding: 1rem;
-  margin: 1rem 0;
-  background: #151c17;
-}
+  .panel {
+    margin: 1rem 0;
+  }
 
-button {
-  margin-right: 0.5rem;
-  margin-top: 0.5rem;
-}
+  button {
+    margin-right: 0.5rem;
+    margin-top: 0.5rem;
+  }
 
-code,
-pre {
-  font-size: 0.85rem;
-}
+  code,
+  pre {
+    font-size: 0.85rem;
+  }
 
-.error {
-  color: #ff8a80;
-}
+  .error {
+    color: var(--color-error);
+  }
 
-.package-surface {
-  position: relative;
-  min-height: 240px;
-  margin: 1rem 0;
-  border: 1px solid var(--border-default);
-  padding: 1rem;
-  background: var(--color-bg);
-  color: var(--color-text);
-}
+  .fixture-brand {
+    display: grid;
+    gap: var(--space-1);
+    color: var(--color-text);
+  }
 
-.package-surface h2 {
-  font-size: var(--text-lg);
-}
+  .fixture-brand strong {
+    color: var(--color-accent-strong);
+    font-family: var(--font-heading);
+    font-size: var(--text-xl);
+  }
 
-.fixture-operations {
-  min-height: 520px;
-  overflow: hidden;
-}
+  .fixture-brand span {
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
 
-.fixture-domain-tab {
-  padding: var(--space-7);
+  .package-surface {
+    position: relative;
+    min-height: 240px;
+    margin: 1rem 0;
+    border: 1px solid var(--border-default);
+    padding: 1rem;
+    background: var(--color-bg);
+    color: var(--color-text);
+  }
+
+  .package-surface h2 {
+    font-size: var(--text-lg);
+  }
+
+  .fixture-operations {
+    min-height: 520px;
+    overflow: hidden;
+  }
+
+  .fixture-domain-tab {
+    padding: var(--space-7);
+  }
 }

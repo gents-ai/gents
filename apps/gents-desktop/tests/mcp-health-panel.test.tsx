@@ -1,23 +1,30 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@source-inc/gents-desktop-client", () => ({
-  listMcpServicesWithHealth: vi.fn(),
-  probeMcpService: vi.fn(),
-}));
-
 import {
-  listMcpServicesWithHealth,
-  probeMcpService,
+  createDesktopApiAdapter,
+  type MCPServiceHealthView,
+  type McpServiceProbeResult,
 } from "@source-inc/gents-desktop-client";
+import { createMemoryTransport } from "@source-inc/gents-desktop-client/testing";
 import {
   McpHealthPanel,
   McpHealthPanelView,
 } from "@source-inc/gents-desktop-operations";
-import type { MCPServiceHealthView } from "@source-inc/gents-desktop-client";
 
-const mockedList = vi.mocked(listMcpServicesWithHealth);
-const mockedProbe = vi.mocked(probeMcpService);
+const mockedList = vi.fn<() => Promise<MCPServiceHealthView[]>>();
+const mockedProbe = vi.fn<(serviceId: string) => Promise<McpServiceProbeResult>>();
+const api = createDesktopApiAdapter(
+  createMemoryTransport({
+    handlers: {
+      desktop_list_mcp_services_with_health: () => mockedList(),
+      desktop_probe_mcp_service: (args) => {
+        const { request } = args as { request: { serviceId: string } };
+        return mockedProbe(request.serviceId);
+      },
+    },
+  }),
+);
 
 function svc(
   overrides: Partial<MCPServiceHealthView> & { serviceId: string },
@@ -85,7 +92,7 @@ describe("McpHealthPanel probe feedback", () => {
       lastError: null,
     });
 
-    render(<McpHealthPanel />);
+    render(<McpHealthPanel api={api} />);
 
     fireEvent.click(await screen.findByTestId("mcp-health-probe-ok-svc"));
 
@@ -97,7 +104,7 @@ describe("McpHealthPanel probe feedback", () => {
   it("renders a per-row failure when the probe call itself fails", async () => {
     mockedProbe.mockRejectedValue(new Error("bridge unavailable"));
 
-    render(<McpHealthPanel />);
+    render(<McpHealthPanel api={api} />);
 
     fireEvent.click(await screen.findByTestId("mcp-health-probe-ok-svc"));
 

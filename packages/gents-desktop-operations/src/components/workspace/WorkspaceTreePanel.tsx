@@ -1,37 +1,48 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { listWorkspace } from "@source-inc/gents-desktop-client";
-import type { WorkspaceListingView } from "@source-inc/gents-desktop-client";
+import type {
+  DesktopApiAdapter,
+  WorkspaceListingView,
+} from "@source-inc/gents-desktop-client";
 import { CopyButton } from "@source-inc/gents-desktop-ui";
+import { useOperationsApi } from "../../apiContext.js";
 
 /// Read-only browser over the local agent's tool root — the workspace the
 /// code tools actually operate in. One directory per fetch (lazy descent),
 /// jailed server-side to the root.
-export function WorkspaceTreePanel() {
+export function WorkspaceTreePanel({
+  api: explicitApi,
+}: {
+  api?: DesktopApiAdapter;
+} = {}) {
+  const api = useOperationsApi(explicitApi);
   const [listing, setListing] = useState<WorkspaceListingView | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const generationRef = useRef(0);
 
-  const load = useCallback(async (subpath: string | null) => {
-    const generation = ++generationRef.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const next = await listWorkspace(subpath);
-      if (generationRef.current === generation) {
-        setListing(next);
+  const load = useCallback(
+    async (subpath: string | null) => {
+      const generation = ++generationRef.current;
+      setLoading(true);
+      setError(null);
+      try {
+        const next = await api.listWorkspace(subpath);
+        if (generationRef.current === generation) {
+          setListing(next);
+        }
+      } catch (err) {
+        if (generationRef.current === generation) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        if (generationRef.current === generation) {
+          setLoading(false);
+        }
       }
-    } catch (err) {
-      if (generationRef.current === generation) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
-    } finally {
-      if (generationRef.current === generation) {
-        setLoading(false);
-      }
-    }
-  }, []);
+    },
+    [api],
+  );
 
   useEffect(() => {
     void load(null);

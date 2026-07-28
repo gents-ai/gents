@@ -10,8 +10,8 @@ export type MemoryTransportOptions = {
 
 /**
  * Deterministic in-memory transport for DesktopClient/DesktopStore consumers.
- * Legacy prop-less domain components still use the compatibility API adapter
- * seam documented in api.ts until that surface is fully instance-bound.
+ * The resulting DesktopClient exposes a full instance-bound `api` adapter that
+ * reusable component providers can consume without touching global state.
  */
 export function createMemoryTransport(
   options: MemoryTransportOptions = {},

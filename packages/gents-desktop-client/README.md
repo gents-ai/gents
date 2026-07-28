@@ -26,13 +26,19 @@ const transport = createMemoryTransport({
 const client = createDesktopClient(transport);
 ```
 
-Constructor injection applies to `DesktopClient` and `DesktopStore`. The
-compatibility API adapter exports remain for the existing Gents Desktop harness
-and prop-less domain component actions; those actions are not yet bound to a
-specific `DesktopClient` instance. Direct Tauri API access is still centralized
-in `transport.ts`.
+Direct Tauri API access is centralized in `transport.ts`.
 
 The shared store coalesces aggregate snapshot refreshes; it does not yet contain
 Gents Desktop's active-session polling, restart/backoff, or P2P auto-restart
 coordinator. A downstream that needs Gents-equivalent streaming recovery must
 extract or implement that coordinator explicitly.
+
+`createDesktopClient(transport)` exposes both the lifecycle/snapshot methods and
+a full `client.api` adapter bound to that exact transport. Pass `client.api`
+into reusable package providers or component `api` props for multi-client and
+non-Tauri hosts. The exported global wrappers remain a compatibility fallback
+for the first-party shell and older tests.
+
+The command surface is split under `src/api/` by lifecycle, chat, fleet,
+configuration, and operations domains; `api.ts` is only the compatibility
+facade.

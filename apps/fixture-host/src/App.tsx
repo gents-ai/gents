@@ -10,11 +10,6 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   createDesktopClient,
   createDesktopStore,
-  pairBearer,
-  probePeerAddress,
-  removePeer,
-  renamePeer,
-  repairP2P,
   type DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 import {
@@ -177,7 +172,7 @@ export function App() {
 
   return (
     <main>
-      <h1 data-testid="fixture-title">Gents Fixture Host</h1>
+      <h1 data-testid="fixture-title">Indigo Relay Fixture Host</h1>
       <p>
         Downstream shell: own bundle id, <code>AppDataDir</code> home,
         paired-remote bootstrap (no runtime-admin), co-resident file-backed
@@ -284,6 +279,17 @@ export function App() {
         <h2>Fleet package</h2>
         <FleetDashboard
           addingPeer={busy}
+          api={bridge.api}
+          brand={
+            <div className="fixture-brand" data-testid="fixture-brand">
+              <strong>Indigo Relay</strong>
+              <span>Independent agent console</span>
+            </div>
+          }
+          copy={{
+            pairingQrHint:
+              "Scan an invite generated from the Indigo Relay administration console.",
+          }}
           bootstrap={snapshot?.bootstrap ?? null}
           deployments={deployments}
           loading={false}
@@ -294,25 +300,27 @@ export function App() {
             run("peer_add", () => bridge.peerAdd(request))
           }
           onPairBearer={(request) =>
-            run("peer_pair_bearer", () => pairBearer(request))
+            run("peer_pair_bearer", () => bridge.api.pairBearer(request))
           }
           onProbePeerAddress={(address) =>
-            run("peer_probe", () => probePeerAddress(address))
+            run("peer_probe", () => bridge.api.probePeerAddress(address))
           }
           onOpenChat={(agentDid) => push(`open_chat: ${agentDid}`)}
           onOpenConfig={(agentDid) => push(`open_config: ${agentDid}`)}
           onRemovePeer={(peerId) =>
-            run("peer_remove", () => removePeer(peerId)).then(() =>
+            run("peer_remove", () => bridge.api.removePeer(peerId)).then(() =>
               store.refresh(),
             )
           }
           onRenamePeer={(peerId, label) =>
-            run("peer_rename", () => renamePeer(peerId, label)).then(() =>
-              store.refresh(),
+            run("peer_rename", () => bridge.api.renamePeer(peerId, label)).then(
+              () => store.refresh(),
             )
           }
           onRepairP2P={() =>
-            run("repair_p2p", () => repairP2P()).then(() => store.refresh())
+            run("repair_p2p", () => bridge.api.repairP2P()).then(() =>
+              store.refresh(),
+            )
           }
         />
       </section>
@@ -322,7 +330,7 @@ export function App() {
         data-testid="fixture-operations-surface"
       >
         <h2>Operations package</h2>
-        <OperationsRailProvider tabs={operationsTabs}>
+        <OperationsRailProvider api={bridge.api} tabs={operationsTabs}>
           <OperationsRail
             open={operationsOpen}
             onOpenChange={setOperationsOpen}

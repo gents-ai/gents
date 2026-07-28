@@ -9,6 +9,7 @@ export type PeerConnectionAction =
 export function formatPeerConnectionError(
   error: unknown,
   action: PeerConnectionAction,
+  copy: Pick<FleetCopy, "runtimeProductName" | "cliBinaryName"> = {},
 ): string {
   const message = errorMessage(error);
   const url = requestUrlFromMessage(message);
@@ -18,7 +19,10 @@ export function formatPeerConnectionError(
 
   const endpoint = endpointLabel(url);
   if (action === "local-runtime") {
-    return `Could not reach the local Gents runtime at ${endpoint}. Start \`gents server\` and try again.`;
+    const productName =
+      copy.runtimeProductName?.trim() || DEFAULT_RUNTIME_PRODUCT_NAME;
+    const cliBinaryName = copy.cliBinaryName?.trim() || DEFAULT_CLI_BINARY_NAME;
+    return `Could not reach the local ${productName} runtime at ${endpoint}. Start \`${cliBinaryName} server\` and try again.`;
   }
 
   if (action === "peer-status") {
@@ -57,3 +61,8 @@ function endpointLabel(url: string): string {
     return url;
   }
 }
+import {
+  DEFAULT_CLI_BINARY_NAME,
+  DEFAULT_RUNTIME_PRODUCT_NAME,
+  type FleetCopy,
+} from "./copy.js";

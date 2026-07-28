@@ -54,6 +54,7 @@ export function FleetHostDashboard({
         <LocalRuntimeConnect
           bootstrap={fleetProps.bootstrap}
           busy={fleetProps.addingPeer || fleetProps.starting || fleetProps.loading}
+          copy={fleetProps.copy}
           onConnect={onInitLocalRuntime}
         />
       }
