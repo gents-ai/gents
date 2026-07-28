@@ -12,6 +12,15 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
   `desktop_probe_inference_endpoint`, `desktop_codex_login`, and
   `desktop_codex_login_cancel` under `config-write`; new one-shot
   `desktop://codex-login-url` event.
+- Inference onboarding request, response, and login-URL event payloads now come
+  from generated Rust bindings instead of handwritten TypeScript mirrors.
+- Local runtime initialization/reset is serialized with client start/shutdown
+  and rejects storage mutation while a client is live.
+
+### Runtime reliability
+
+- Request interrupt latches use the standard bounded DefraDB
+  transaction-conflict retry, eliminating an observed cascade-conformance flake.
 
 ### Bridge contract 0.4
 
@@ -43,9 +52,10 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
   - `@source-inc/gents-desktop-fleet` — discovery, pairing, health, and peer UI
   - `@source-inc/gents-desktop-operations` — rail, holds, health, lineage, traces
   - `@source-inc/gents-desktop-tokens` — semantic CSS tokens
-- Fixture host `apps/fixture-host` consumes all packages, registers a domain
-  operations tab, and proves co-residence under separate homes without
-  `runtime-admin`.
+- Fixture host `apps/fixture-host` consumes all packages, renders bridge session
+  snapshots, and registers a file-backed domain operations tab without
+  `runtime-admin`. It proves package/plugin composition; the automated two-node
+  Amygdala journey remains downstream evidence.
 - Tag releases attach clean-install-verified npm tarballs to the GitHub Release;
   downstreams pin those assets exactly.
 

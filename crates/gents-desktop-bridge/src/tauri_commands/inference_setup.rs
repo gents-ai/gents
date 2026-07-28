@@ -33,13 +33,13 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 /// user never clicks Cancel.
 const CODEX_LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct InferenceProbeRequest {
     pub endpoint: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct InferenceProbeResult {
     pub reachable: bool,
@@ -100,7 +100,7 @@ async fn probe_inference_models(base: &str) -> InferenceProbeResult {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CodexLoginRequest {
     pub agent_did: String,
@@ -110,7 +110,7 @@ pub(crate) struct CodexLoginRequest {
 
 /// A redacted view of a stored credential. Tokens never cross the bridge into
 /// the webview — only the metadata the UI needs to confirm the login worked.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CodexLoginResult {
     pub doc_id: String,
@@ -264,10 +264,10 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
     Ok(CodexLoginResult::redacted(doc_id, &credential))
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
-struct CodexLoginUrl {
-    url: String,
+pub(crate) struct CodexLoginUrl {
+    pub url: String,
 }
 
 /// Abort an in-flight ChatGPT/Codex sign-in (e.g. the user closed the browser).

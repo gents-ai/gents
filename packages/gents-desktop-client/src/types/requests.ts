@@ -11,6 +11,8 @@ import type { EventTriggerDeleteRequest as GeneratedEventTriggerDeleteRequest } 
 import type { EventTriggerSaveRequest as GeneratedEventTriggerSaveRequest } from "../generated/EventTriggerSaveRequest.js";
 import type { InferenceProfileDeleteRequest as GeneratedInferenceProfileDeleteRequest } from "../generated/InferenceProfileDeleteRequest.js";
 import type { InferenceProfileSaveRequest as GeneratedInferenceProfileSaveRequest } from "../generated/InferenceProfileSaveRequest.js";
+import type { InferenceProbeRequest as GeneratedInferenceProbeRequest } from "../generated/InferenceProbeRequest.js";
+import type { CodexLoginRequest as GeneratedCodexLoginRequest } from "../generated/CodexLoginRequest.js";
 import type { PeerAddRequest as GeneratedPeerAddRequest } from "../generated/PeerAddRequest.js";
 import type { PeerProbeRequest as GeneratedPeerProbeRequest } from "../generated/PeerProbeRequest.js";
 import type { PeerStatusFetchRequest as GeneratedPeerStatusFetchRequest } from "../generated/PeerStatusFetchRequest.js";
@@ -59,6 +61,9 @@ export type InferenceProfileDeleteRequest =
   RequestInput<GeneratedInferenceProfileDeleteRequest>;
 export type InferenceProfileSaveRequest =
   RequestInput<GeneratedInferenceProfileSaveRequest>;
+export type InferenceProbeRequest =
+  RequestInput<GeneratedInferenceProbeRequest>;
+export type CodexLoginRequest = RequestInput<GeneratedCodexLoginRequest>;
 export type PeerAddRequest = RequestInput<GeneratedPeerAddRequest>;
 export type PeerProbeRequest = RequestInput<GeneratedPeerProbeRequest>;
 export type PeerStatusFetchRequest =
@@ -86,21 +91,6 @@ export type ToolServiceTestRequest =
 export type { TaskRunResult } from "../generated/TaskRunResult.js";
 export type { ToolServiceTestResult } from "../generated/ToolServiceTestResult.js";
 export type { ToolServiceToolView } from "../generated/ToolServiceToolView.js";
-
-/** Direct runtime responses that do not pass through a bridge view struct. */
-export type InferenceProbeResult = {
-  reachable: boolean;
-  models: string[];
-};
-
-export type CodexLoginResult = {
-  docId: string;
-  credentialId: string;
-  agentDid: string;
-  provider: string;
-  accountId?: string | null;
-  chatgptPlanType?: string | null;
-  isFedramp: boolean;
-  accessTokenExpiresAt: string;
-  enabled: boolean;
-};
+export type { CodexLoginResult } from "../generated/CodexLoginResult.js";
+export type { CodexLoginUrl } from "../generated/CodexLoginUrl.js";
+export type { InferenceProbeResult } from "../generated/InferenceProbeResult.js";

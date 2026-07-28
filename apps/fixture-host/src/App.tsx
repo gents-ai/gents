@@ -15,6 +15,7 @@ import {
   removePeer,
   renamePeer,
   repairP2P,
+  type DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 import {
   ChatComposer,
@@ -35,8 +36,8 @@ function domainCmd(name: string) {
 }
 
 /**
- * Independent downstream shell proving that the packed surfaces compose with
- * a co-resident domain plugin and without runtime-admin.
+ * Independent downstream shell showing that the package surfaces compose with
+ * a co-resident file-backed domain plugin and without runtime-admin.
  */
 export function App() {
   const bridge = useMemo(() => createDesktopClient(), []);
@@ -46,6 +47,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState("");
+  const [session, setSession] = useState<DesktopSessionSnapshot | null>(null);
   const [operationsOpen, setOperationsOpen] = useState(true);
 
   useEffect(
@@ -91,6 +93,38 @@ export function App() {
   const deployments = runtime?.deployments ?? [];
   const selectedDeployment = deployments[0] ?? null;
   const selectedConversation = selectedDeployment?.conversations[0] ?? null;
+
+  useEffect(() => {
+    if (!selectedDeployment || !selectedConversation) {
+      setSession(null);
+      return;
+    }
+
+    let cancelled = false;
+    void bridge
+      .sessionSnapshot({
+        sessionId: selectedConversation.sessionId,
+        agentDid: selectedDeployment.agentDid,
+      })
+      .then((nextSession) => {
+        if (!cancelled) setSession(nextSession);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : String(err);
+        setError(message);
+        push(`session_snapshot ERROR: ${message}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    bridge,
+    push,
+    selectedConversation,
+    selectedDeployment,
+    storeState.generation,
+  ]);
 
   const operationsTabs = useMemo<OperationsRailTabDescriptor[]>(
     () => [
@@ -146,7 +180,8 @@ export function App() {
       <h1 data-testid="fixture-title">Gents Fixture Host</h1>
       <p>
         Downstream shell: own bundle id, <code>AppDataDir</code> home,
-        paired-remote bootstrap (no runtime-admin), co-resident domain plugin.
+        paired-remote bootstrap (no runtime-admin), co-resident file-backed
+        domain plugin.
       </p>
 
       <div className="panel">
@@ -224,10 +259,10 @@ export function App() {
         <h2>Chat package</h2>
         <ChatTranscriptPanel
           selectedSessionId={selectedConversation?.sessionId ?? null}
-          session={null}
+          session={session}
         />
         <ChatComposer
-          activeRequestId={null}
+          activeRequestId={session?.latestRequestId ?? null}
           approxSerializedBytes={runtime?.approxSerializedBytes ?? 0}
           behaviorLabel={selectedDeployment?.defaultBehaviorId ?? null}
           canSend={Boolean(selectedDeployment) && Boolean(draft.trim())}
@@ -238,7 +273,7 @@ export function App() {
           rowCount={runtime?.rowCount ?? 0}
           sendHint={selectedDeployment ? null : "Pair an agent before sending"}
           sending={busy}
-          turnState={null}
+          turnState={session?.turnState ?? null}
           onDraftChange={setDraft}
           onInterruptClick={() => undefined}
           onSend={sendChat}

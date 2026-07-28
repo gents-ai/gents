@@ -47,6 +47,9 @@ pub async fn desktop_init_local_standard(
         BootstrapPolicy::LocalRuntimeAllowed { .. } => {}
     }
 
+    let _lifecycle_guard = state.client_lifecycle.lock().await;
+    ensure_client_stopped_for_init(current_core(&state).is_some())?;
+
     let agent_home = state.policy.agent_home.clone().ok_or_else(|| {
         BridgeError::new(
             BridgeErrorCode::Unsupported,
@@ -73,6 +76,16 @@ pub async fn desktop_init_local_standard(
     })
     .await
     .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
+}
+
+fn ensure_client_stopped_for_init(client_is_running: bool) -> Result<(), BridgeError> {
+    if client_is_running {
+        return Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            "shut down the desktop client before initializing or resetting its storage",
+        ));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -258,4 +271,17 @@ pub async fn desktop_observer_metrics(
         local_write_redundant_fetches: snap.local_write_redundant_fetches,
         fetch_failures: snap.fetch_failures,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_init_rejects_a_live_client_before_touching_storage() {
+        let error = ensure_client_stopped_for_init(true).expect_err("live client must reject init");
+        assert_eq!(error.code, BridgeErrorCode::InvalidArgument);
+        assert!(error.message.contains("shut down"));
+        assert!(ensure_client_stopped_for_init(false).is_ok());
+    }
 }

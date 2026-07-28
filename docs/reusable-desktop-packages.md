@@ -4,18 +4,18 @@ _Design spec — 2026-07-27. Issue [#877](https://github.com/source-inc/gents/is
 
 **Implementation status (PR #878, honest):**
 
-| Phase                | Status             | Notes                                                                                                       |
-| -------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------- |
-| 1 Crate extract      | **done**           | `gents-desktop-bridge`                                                                                      |
-| 2 Contract prep      | **done**           | full ts-rs request/view generation, fingerprint, error taxonomy, freshness gates                            |
-| 3 Plugin-ization     | **done** (native)  | plugin, permissions, path strip, peer id rekey, BridgeError, projection seam                                |
-| 4 Fixture host       | **done** (in-tree) | co-resident domain plugin, separate homes, full package surfaces, Rust + frontend CI                        |
-| 5 Client package     | **done**           | typed transport, one subscription per store, generated public types, testing seam                           |
-| 6 Tokens + UI        | **done**           | semantic token contract, conformance fence, shared primitives                                               |
-| 7 Chat package       | **done**           | projection, transcript/composer/cancel/code/denial components, styles, tests                                |
-| 8 Fleet package      | **done**           | remote fleet surface + opt-in local-runtime subpath, brand slots, styles, tests                             |
-| 9 Operations package | **done**           | extensible rail, holds, health, lineage, trace, workspace surfaces, styles, tests                           |
-| 10 Release           | **wired**          | packed clean-consumer gate, exact pins, tag artifact workflow; first real tag remains release-time evidence |
+| Phase                | Status                 | Notes                                                                                              |
+| -------------------- | ---------------------- | -------------------------------------------------------------------------------------------------- |
+| 1 Crate extract      | **done**               | `gents-desktop-bridge`                                                                             |
+| 2 Contract prep      | **done**               | full ts-rs request/view generation, fingerprint, error taxonomy, freshness gates                   |
+| 3 Plugin-ization     | **done** (native)      | plugin, permissions, path strip, peer id rekey, BridgeError, projection seam                       |
+| 4 Fixture host       | **done** (composition) | host shell/home/capabilities, file-backed domain plugin, package surfaces, Rust + frontend CI      |
+| 5 Client package     | **done**               | typed transport, one subscription per store, generated public types, testing seam                  |
+| 6 Tokens + UI        | **done**               | semantic token contract, conformance fence, shared primitives                                      |
+| 7 Chat package       | **done**               | projection, transcript/composer/cancel/code/denial components, styles, tests                       |
+| 8 Fleet package      | **done**               | remote fleet surface + opt-in local-runtime subpath, brand slots, styles, tests                    |
+| 9 Operations package | **done**               | extensible rail, holds, health, lineage, trace, workspace surfaces, styles, tests                  |
+| 10 Release           | **wired**              | packed clean-consumer gate, exact pins, tag workflow; first real tag remains release-time evidence |
 
 **v1 snapshot projection model (accepted deviation):** grants are
 **process-wide** via `BridgeConfig.snapshot_grants` (host-declared, fail-closed
@@ -41,7 +41,11 @@ assertion failure tracked as
 [#884](https://github.com/source-inc/gents/issues/884); the fence discharges
 this obligation once #884 is fixed. External Amygdala authentication/Cargo-fetch
 and the first real tag publish remain release-environment evidence, not changes
-that can be proven inside this repository.
+that can be proven inside this repository. The in-tree fixture proves package
+and plugin composition plus native Gents-home isolation; it does **not** run a
+second domain DefraDB node or an automated pairing/chat/domain journey. Amygdala
+must retain or extract the app-private session polling/restart coordinator before
+it can claim Gents-equivalent chat recovery.
 
 Design approved 2026-07-27 after three review passes; security-hardened across
 PR #878 rounds. Base: [#875](https://github.com/source-inc/gents/pull/875)
@@ -61,10 +65,10 @@ Its kitchen-inventory domain stays out of Gents; the extension seam it needs liv
 here. Amygdala's architecture pairs with two authoritative peers — a Kitchen Gents
 runtime for chat and `kitchen-mcp` for inventory collections — and its v1 keeps the
 Kitchen domain in a **separate client store** under the Amygdala home. The v1 contract
-in this document matches that model exactly (§ Domain storage and co-resident
-plugins). Gents Desktop itself becomes the first-party consumer of every seam this
-document defines, so the public boundary is exercised on every CI run rather than
-trusted on faith.
+supports that model (§ Domain storage and co-resident plugins), but the in-tree
+fixture does not reproduce or validate the complete two-node topology. Gents Desktop
+itself becomes the first-party consumer of every extracted seam, so the package
+boundary is exercised on every CI run.
 
 Related docs: [gents.md](gents.md) (platform architecture),
 [operations.md](operations.md) (pairing and desktop operation),
@@ -457,9 +461,10 @@ snapshot through the shared refresh helper (`tauri_commands.rs:22`), and pairing
 peer-removal responses nest one. Because projection lives in the one builder that
 all of these call, every snapshot-bearing payload — direct, lifecycle, mutation
 refresh, or nested — is projected by the caller's grants. The gate matches the
-contract: the fixture's projection tests run **per grant profile** and assert every
+contract: the bridge projection suite runs **per grant profile** and asserts every
 snapshot-bearing response contains exactly the granted sections, not just the
-direct snapshot command under default grants.
+direct snapshot command under default grants. The fixture-host test separately
+checks that its declared `SnapshotGrants` match its capability file.
 
 Three refinements keep the projection honest without forcing broad grants:
 
@@ -569,12 +574,16 @@ co-location, the `BridgeHandle` design becomes its own issue with its own review
 (owner: maintainers + Amygdala, evidence: mobile resource profiles from the two-node
 fixture).
 
-**The fixture proves co-residence, not just composition.** The downstream fixture
-(§ Migration, phase 4) runs the Gents bridge plugin _and_ a fixture domain plugin
-with its own embedded store side by side in one process — two clients, two homes, two
-command namespaces, two event prefixes — and the CI gate asserts both operate
-concurrently (pairing + chat through the bridge while the domain plugin round-trips
-its own documents). One extra schema on the Gents node would prove the wrong thing.
+**The fixture proves composition and Gents-home isolation, not the complete
+Amygdala topology.** The downstream fixture (§ Migration, phase 4) runs the Gents
+bridge plugin and a co-resident fixture-domain Tauri plugin with a separate
+file-backed JSON document home, command namespace, and event prefix. It consumes all
+six frontend packages, loads real bridge session snapshots, and CI builds the host,
+runs its grant-composition test, and runs a native test with two concurrent
+`ClientCore` stores under distinct homes. The fixture-domain plugin is a
+`BTreeMap` persisted as JSON, not a second embedded DefraDB node, and CI does not
+drive bearer pairing, chat, and domain writes through a complete Tauri journey.
+That two-node product journey remains downstream/Amygdala integration evidence.
 
 ### Ownership split
 
@@ -694,7 +703,8 @@ thing that prevents all of that — its sequencing refs, trailing refresh queue,
 active-session polling, restart/backoff loop, and P2P auto-restart cooldown are
 coordination behavior that must survive extraction.
 
-That coordination therefore moves into `-client` as a **shared client store**:
+The aggregate refresh portion of that coordination moves into `-client` as a
+**shared client store**:
 
 ```ts
 createDesktopStore(client: DesktopClient, timing?: TimingConfig): DesktopStore
@@ -704,15 +714,17 @@ createDesktopStore(client: DesktopClient, timing?: TimingConfig): DesktopStore
 // - exposes subscribe/getState for useSyncExternalStore consumers
 ```
 
-The independent fixture consumes this store through `useSyncExternalStore`, proving
-that a host needs one update subscription and that a burst of update events produces
-one coalesced refresh. Domain components remain transport-agnostic and prop-driven:
+The independent fixture consumes this store through `useSyncExternalStore`; package
+tests prove that each store owns one update subscription and coalesces a burst of
+events into one refresh. Domain components remain transport-agnostic and prop-driven:
 hosts may project this store themselves or supply data/callbacks from another state
 layer. Gents Desktop deliberately retains the established session caches, active-turn
 polling, restart/backoff, and P2P cooldown policy in `useDesktopShell`; moving those
-policies was not required to make the package boundary reusable and would have made
-the behavior-preserving extraction materially riskier. `TimingConfig` remains a
-public constructor parameter for deterministic host tests.
+policies was not required to make the package boundary composable and would have made
+the behavior-preserving extraction materially riskier. Therefore a downstream such
+as Amygdala requires additional coordinator work to inherit equivalent active-chat
+polling and recovery behavior; recreating it independently is not implied by this PR.
+`TimingConfig` covers refresh debounce for deterministic host tests.
 
 ### Canonical types and the drift gate
 
@@ -898,25 +910,24 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
    default-only caller receives no session/fleet/config/operations sections in any
    of them); the phase-4 fixture green atop this PR (stacked-pair rule) before
    merge.
-4. **Minimal downstream fixture host — co-residence proof (stacked on phase 3;
+4. **Minimal downstream fixture host — composition proof (stacked on phase 3;
    phase 3 merges only with this green atop it).** `apps/fixture-host`
    (name open): a minimal Tauri app with a different bundle id, product name, icon,
    and `HomePolicy::AppDataDir` home, granting only `default + session-read +
 chat-write + fleet-read + fleet-admin + operations-read` permissions (no
-   `runtime-admin`, no `config-write` — and the fixture starting from a clean
-   install via client-store bootstrap alone is itself a required proof: the
-   paired-remote path must work without `runtime-admin`), registering the Gents
-   bridge plugin **and** a fixture domain plugin that owns its own embedded store,
-   commands, and event prefix. Its
-   frontend is deliberately thin (raw client calls; packages don't exist yet). CI
-   builds it and runs the co-residence smoke: bearer pairing + a chat round-trip
-   through the bridge while the domain plugin concurrently round-trips its own
-   documents in its own home. Exit: fixture in CI; a Rust integration test boots the
-   plugin under `FixedRoot` and asserts home isolation; clean-install iOS lane
-   re-run (storage-home paths are what it exercises).
+   `runtime-admin`, no `config-write`) and configuring the paired-remote policy,
+   registering the Gents
+   bridge plugin **and** a file-backed fixture-domain plugin with its own command
+   and event prefix. CI builds the host and runs its grant-composition test.
+   Exit delivered in this PR: fixture compiles in CI; a Rust integration test boots
+   two `ClientCore` stores simultaneously and asserts their resolved roots and
+   identity files do not collide; grant declarations match the capability file.
+   A second domain DefraDB node and automated pairing/chat/domain Tauri journey are
+   explicitly not claimed by this fixture.
 5. **npm workspaces + `@source-inc/gents-desktop-client`.** Workspace bootstrap;
    extract transport interface, injected client, the shared store/refresh
-   coordinator (absorbing `desktopShellRuntime`/`desktopShellEffects` policies),
+   coordinator for aggregate snapshots (the app-private active-session and restart
+   policies remain an explicit downstream requirement),
    generated types, `/testing` adapter contract; peer-dependency declarations;
    dependency-lint fence on. The ui-harness switches from test-only setters to
    public injection. The **packed-artifact gate** starts here: CI runs `npm pack` on
@@ -943,22 +954,18 @@ chat-write + fleet-read + fleet-admin + operations-read` permissions (no
    extraction.
 7. **`@source-inc/gents-desktop-chat`.** Headless projection + prop-driven
    components; `useMasterDetail`; semantic-only moved CSS; visual
-   baselines re-approved. The fixture host gains the chat surface, and its iOS
-   project comes online: `GENTS_IOS_BUNDLE_ID` (new env; today's hard-coded
-   `com.source-inc.gents` becomes the default) lets `test:ui:ios:e2e` prove
-   clean-install bearer pairing, replicated chat, recovery, interrupts, and
-   unexpected-exit detection inside the host-owned iOS shell with retained
-   evidence. Exit: chat unit suites run from the package; deterministic + live
-   agent-browser chat journeys green on `iphone` viewport for both apps; fixture
-   iOS lane green.
+   baselines re-approved. Delivered evidence: chat unit suites run from the
+   package, Gents Desktop retains its deterministic/live journeys, and the fixture
+   renders fetched bridge session snapshots. Not delivered here: a fixture iOS
+   project or automated fixture pairing/chat/recovery journey.
 8. **`@source-inc/gents-desktop-fleet`.** Same shape; `BrandLockup` stays in-app via
-   `brand` slot; fixture host swaps raw pairing calls for the package surface. Exit:
-   pairing (QR import, bearer) journeys green in deterministic + live agent-browser
-   and `test:live:fleet`, in both apps.
+   `brand` slot; the fixture host consumes the package surface. Delivered evidence:
+   package tests/build and the existing Gents Desktop pairing/fleet lanes. An
+   automated fixture clean-install pairing journey remains downstream evidence.
 9. **`@source-inc/gents-desktop-operations`.** Same shape, including the
-   host-extensible rail-tab registry (the fixture registers a domain tab). Exit:
-   `test:live:operations`, `test:live:interrupt`, `test:live:cascade` green from
-   package surfaces; fixture operations smoke green.
+   host-extensible rail-tab registry (the fixture registers a domain tab).
+   Delivered evidence: package tests/build, Gents Desktop operations lanes, and
+   fixture compilation; no automated fixture operations journey is claimed.
 10. **Release wiring.** Publish on tag (GitHub Packages or fallback per phase-5
     evidence); `CHANGELOG.md` + compat matrix; tag-validation extended to npm
     versions; documented downstream update workflow. Exit: a dry-run tag publishes
@@ -986,16 +993,16 @@ chat-write + fleet-read + fleet-admin + operations-read` permissions (no
 
 ### Traceability
 
-| #877 acceptance criterion                                                                       | Package / API                                                                                                                             | Phase       | Verification gate                                                                                                                          |
-| ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Minimal downstream app owns binary, identity, storage home, schema registration, extra commands | `gents-desktop-bridge::init(BridgeConfig)` + `HomePolicy`; domain plugins own their stores/schemas (co-residence contract)                | 3–4         | Fixture-host CI: co-residence smoke (bridge + domain plugin, two stores), home-isolation test, clean-install iOS lane under host bundle id |
-| Working chat surface: streaming, retry, interrupt, reconnect, recovery — no copied source       | `@source-inc/gents-desktop-chat` projection/components over the typed `-client` contract                                                  | 7           | Agent-browser deterministic + live chat journeys (`iphone`), `test:live:chat`, fixture-host chat journey + iOS lane                        |
-| Fleet pairing, health, peer management via package API                                          | `@source-inc/gents-desktop-fleet` (+ bridge `fleet-*` permission sets)                                                                    | 8           | `test:live:fleet`, QR/bearer agent-browser journeys, fixture-host pairing, iOS clean-install pairing                                       |
-| Operator holds/traces/cancellation via package API                                              | `@source-inc/gents-desktop-operations` (+ `operations-read`, interrupt, and hold permission sets)                                         | 9           | `test:live:operations`/`interrupt`/`cascade`, deterministic operations scenarios, fixture rail-tab registration                            |
-| Own branding, semantic theme, navigation, domain routes without patching components             | Semantic tokens contract (split before extraction), `brand` slots, host-owned navigation, rail-tab registry                               | 6–9         | Token-override smoke, fixture-host distinct branding + domain module, visual suite                                                         |
-| Gents Desktop builds and passes its checks consuming the extracted packages                     | App consumes all four packages + plugin                                                                                                   | every phase | Standing exit gates on each phase (app is the first consumer throughout)                                                                   |
-| Documented version-bump/update workflow                                                         | Lockstep train, exact pins, `CHANGELOG.md`, compat matrix, contract handshake with additive/breaking semantics                            | 10          | Dry-run tag publish + fixture pin-bump rehearsal; packed-artifact gate from phase 5                                                        |
-| Non-goals: no plugin marketplace; no Amygdala domain code upstream; no weakened Gents semantics | Extension = co-resident plugins, slots/registry, config only; fixture's domain stays in fixture; runtime authority unchanged (§ Security) | —           | Review fence: dependency-lint + crate graph + permission-set review; no runtime-semantic diffs in extraction PRs                           |
+| #877 acceptance criterion                                                                       | Package / API                                                                                                                             | Phase       | Verification gate                                                                                                                |
+| ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Minimal downstream app owns binary, identity, storage home, schema registration, extra commands | `gents-desktop-bridge::init(BridgeConfig)` + `HomePolicy`; domain plugins own their stores/schemas (co-residence contract)                | 3–4         | Fixture build + grant test; native concurrent-`ClientCore` home-isolation test. A second domain node remains downstream evidence |
+| Working chat surface: streaming, retry, interrupt, reconnect, recovery — no copied source       | `@source-inc/gents-desktop-chat` projection/components over the typed `-client` contract                                                  | 7           | Gents agent-browser/live chat lanes; fixture renders session snapshots. Downstream recovery coordinator/journey remains required |
+| Fleet pairing, health, peer management via package API                                          | `@source-inc/gents-desktop-fleet` (+ bridge `fleet-*` permission sets)                                                                    | 8           | Gents `test:live:fleet` and QR/bearer journeys; fixture composes the surface. Downstream clean-install pairing remains required  |
+| Operator holds/traces/cancellation via package API                                              | `@source-inc/gents-desktop-operations` (+ `operations-read`, interrupt, and hold permission sets)                                         | 9           | `test:live:operations`/`interrupt`/`cascade`, deterministic operations scenarios, fixture rail-tab registration                  |
+| Own branding, semantic theme, navigation, domain routes without patching components             | Semantic tokens contract (split before extraction), `brand` slots, host-owned navigation, rail-tab registry                               | 6–9         | Token-override smoke, fixture-host distinct branding + domain module, visual suite                                               |
+| Gents Desktop builds and passes its checks consuming the extracted packages                     | App consumes all four packages + plugin                                                                                                   | every phase | Standing exit gates on each phase (app is the first consumer throughout)                                                         |
+| Documented version-bump/update workflow                                                         | Lockstep train, exact pins, `CHANGELOG.md`, compat matrix, contract handshake with additive/breaking semantics                            | 10          | Dry-run tag publish + fixture pin-bump rehearsal; packed-artifact gate from phase 5                                              |
+| Non-goals: no plugin marketplace; no Amygdala domain code upstream; no weakened Gents semantics | Extension = co-resident plugins, slots/registry, config only; fixture's domain stays in fixture; runtime authority unchanged (§ Security) | —           | Review fence: dependency-lint + crate graph + permission-set review; no runtime-semantic diffs in extraction PRs                 |
 
 ## Security and runtime integrity
 
@@ -1070,7 +1077,7 @@ invariants and gets the full foundation flow when it is designed.
   its own authoritative peer), and it is unsafe without a designed
   `BridgeHandle`/document-store API for downstream access to the shared
   `ClientCore`. Deferred behind that future design, gated on mobile resource
-  measurements from the two-node fixture.
+  measurements from a future downstream two-node journey.
 - **One blanket plugin permission.** Rejected: a single `default` covering pairing,
   config mutation, and cancellation alongside reads would make the package split
   cosmetic at the native security boundary. Capability-scoped sets with a minimal
@@ -1125,8 +1132,8 @@ Stated openly rather than buried as implementation detail:
    reviewer.
 6. **`BridgeHandle`/document-store API for same-node domain schemas.** Deferred
    entirely; opened as its own issue only if mobile resource measurements from the
-   two-node fixture justify co-location. Owner: maintainers + Amygdala; evidence:
-   mobile profiles.
+   downstream two-node measurements justify co-location. Owner: maintainers +
+   Amygdala; evidence: mobile profiles.
 7. **Fixture-host location and iOS project generation** (`apps/fixture-host` with
    committed generated Xcode project vs XcodeGen-on-demand like the main app).
    Owner: phase-4/7 implementers; constraint: the lane must stay runnable on the

@@ -31,3 +31,8 @@ compatibility API adapter exports remain for the existing Gents Desktop harness
 and prop-less domain component actions; those actions are not yet bound to a
 specific `DesktopClient` instance. Direct Tauri API access is still centralized
 in `transport.ts`.
+
+The shared store coalesces aggregate snapshot refreshes; it does not yet contain
+Gents Desktop's active-session polling, restart/backoff, or P2P auto-restart
+coordinator. A downstream that needs Gents-equivalent streaming recovery must
+extract or implement that coordinator explicitly.

@@ -33,7 +33,6 @@ describe("createDesktopStore", () => {
     });
     const store = createDesktopStore(createDesktopClient(transport), {
       refreshDebounceMs: 1,
-      activeSessionPollMs: 1,
     });
 
     await Promise.all([store.start(), store.start(), store.start()]);
@@ -68,7 +67,6 @@ describe("createDesktopStore", () => {
     });
     const store = createDesktopStore(createDesktopClient(transport), {
       refreshDebounceMs: 5,
-      activeSessionPollMs: 1,
     });
     await store.start();
     const baseline = snapshots;
@@ -97,7 +95,6 @@ describe("createDesktopStore", () => {
     });
     const store = createDesktopStore(createDesktopClient(transport), {
       refreshDebounceMs: 1,
-      activeSessionPollMs: 1,
     });
 
     await Promise.all([store.refresh(), store.refresh()]);

@@ -9,8 +9,10 @@ Versioned, committed snapshots that fence the desktop bridge ↔ TypeScript boun
 
 The bridge suite also cross-checks the fingerprint command inventory against
 the plugin `generate_handler!` registration, `build.rs` command list, and both
-permission TOML files. Public serialized Rust contract types must derive `TS`,
-and every derived type must appear in the regenerated binding set.
+permission TOML files, including the exact expanded production `full` bundle.
+Bridge-visible serialized/deserialized Rust contract types must derive `TS`, and
+every derived type — including inference command and event payloads — must appear
+in the regenerated binding set.
 
 ## Regenerating
 

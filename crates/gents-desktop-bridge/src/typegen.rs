@@ -10,8 +10,9 @@
 //! - typeshare would require a separate CLI + attribute surface and has weaker
 //!   serde-attribute coverage for our existing view models.
 //!
-//! Every public request and serialized view is exported. Generated files land
-//! in both `crates/gents-desktop-bridge/bindings/` and
+//! Every production bridge-visible request, response, and event payload is
+//! exported. Generated files land in both
+//! `crates/gents-desktop-bridge/bindings/` and
 //! `@source-inc/gents-desktop-client/src/generated/` (both committed).
 
 use std::path::{Path, PathBuf};
@@ -21,6 +22,9 @@ use ts_rs::TS;
 use crate::contract::BridgeContract;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::tauri_commands::chat::{RequestResendResultView, SessionForkResultView};
+use crate::tauri_commands::inference_setup::{
+    CodexLoginRequest, CodexLoginResult, CodexLoginUrl, InferenceProbeRequest, InferenceProbeResult,
+};
 use crate::tauri_commands::lifecycle::DesktopObserverMetrics;
 use crate::tauri_commands::workspace::WorkspaceListingView;
 use crate::types::*;
@@ -87,7 +91,7 @@ fn normalize_generated_types(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn public_derived_types(source: &str, derive_marker: &str) -> Vec<String> {
+fn bridge_visible_derived_types(source: &str, derive_marker: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut derive = String::new();
     let mut collecting_derive = false;
@@ -122,7 +126,9 @@ fn public_derived_types(source: &str, derive_marker: &str) -> Vec<String> {
 
         let declaration = trimmed
             .strip_prefix("pub struct ")
-            .or_else(|| trimmed.strip_prefix("pub enum "));
+            .or_else(|| trimmed.strip_prefix("pub enum "))
+            .or_else(|| trimmed.strip_prefix("pub(crate) struct "))
+            .or_else(|| trimmed.strip_prefix("pub(crate) enum "));
         if let Some(declaration) = declaration {
             let name = declaration
                 .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
@@ -155,6 +161,7 @@ fn contract_source_paths() -> Vec<PathBuf> {
         source_root.join("contract.rs"),
         source_root.join("error.rs"),
         source_root.join("tauri_commands/chat.rs"),
+        source_root.join("tauri_commands/inference_setup.rs"),
         source_root.join("tauri_commands/lifecycle.rs"),
         source_root.join("tauri_commands/workspace.rs"),
     ];
@@ -212,6 +219,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         DesktopResolveHoldRequest,
         DesktopInterruptRequest,
         DesktopProbeMcpServiceRequest,
+        InferenceProbeRequest,
+        CodexLoginRequest,
     );
 
     // Response/view roots export their nested dependencies transitively.
@@ -244,6 +253,9 @@ fn export_all(dir: &Path) -> Result<(), String> {
         RequestResendResultView,
         WorkspaceListingView,
         DesktopObserverMetrics,
+        InferenceProbeResult,
+        CodexLoginResult,
+        CodexLoginUrl,
     );
 
     normalize_generated_types(dir)?;
@@ -301,7 +313,7 @@ fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
 }
 
 #[test]
-fn all_public_bridge_contract_roots_are_generated() {
+fn all_bridge_visible_contract_roots_are_generated() {
     let tmp = tempfile::tempdir().expect("tempdir");
     export_all(tmp.path()).expect("export");
 
@@ -309,25 +321,37 @@ fn all_public_bridge_contract_roots_are_generated() {
         .expect("list generated")
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
-    let mut serialized_types = std::collections::BTreeSet::new();
+    let mut wire_types = std::collections::BTreeSet::new();
     let mut typescript_types = std::collections::BTreeSet::new();
     for path in contract_source_paths() {
         let source = std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-        serialized_types.extend(public_derived_types(&source, "Serialize"));
-        typescript_types.extend(public_derived_types(&source, "TS"));
+        wire_types.extend(bridge_visible_derived_types(&source, "Serialize"));
+        wire_types.extend(bridge_visible_derived_types(&source, "Deserialize"));
+        typescript_types.extend(bridge_visible_derived_types(&source, "TS"));
     }
     assert!(
-        serialized_types.is_subset(&typescript_types),
-        "public serialized bridge types without TS derive: {:?}",
-        serialized_types
-            .difference(&typescript_types)
-            .collect::<Vec<_>>()
+        wire_types.is_subset(&typescript_types),
+        "bridge-visible serialized/deserialized types without TS derive: {:?}",
+        wire_types.difference(&typescript_types).collect::<Vec<_>>()
     );
     for expected in typescript_types.iter().map(|name| format!("{name}.ts")) {
         assert!(
             files.contains(&expected),
             "missing generated bridge contract {expected}"
+        );
+    }
+
+    for inference_wire_type in [
+        "InferenceProbeRequest.ts",
+        "InferenceProbeResult.ts",
+        "CodexLoginRequest.ts",
+        "CodexLoginResult.ts",
+        "CodexLoginUrl.ts",
+    ] {
+        assert!(
+            files.contains(inference_wire_type),
+            "inference onboarding wire type {inference_wire_type} is not generated"
         );
     }
 }

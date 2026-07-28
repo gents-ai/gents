@@ -8,13 +8,10 @@ import type { DesktopClientSnapshot } from "./types.js";
 export type TimingConfig = {
   /** Coalesce burst of client-updated events into one refresh. */
   refreshDebounceMs: number;
-  /** Active session poll interval while a turn is live. */
-  activeSessionPollMs: number;
 };
 
 export const DEFAULT_TIMING: TimingConfig = {
   refreshDebounceMs: 50,
-  activeSessionPollMs: 1500,
 };
 
 export type DesktopStoreState = {

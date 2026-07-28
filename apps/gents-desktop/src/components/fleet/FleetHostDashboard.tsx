@@ -11,6 +11,7 @@ import type {
   BackendSaveRequest,
   BehaviorSaveRequest,
   CodexLoginResult,
+  CodexLoginUrl,
   InferenceProbeResult,
 } from "@source-inc/gents-desktop-client";
 
@@ -66,7 +67,7 @@ export function FleetHostDashboard({
           onCodexLogin={onCodexLogin}
           onCancelCodexLogin={onCancelCodexLogin}
           onCodexLoginUrl={async (onUrl) =>
-            listen<{ url: string }>("desktop://codex-login-url", (event) =>
+            listen<CodexLoginUrl>("desktop://codex-login-url", (event) =>
               onUrl(event.payload?.url ?? null),
             )
           }

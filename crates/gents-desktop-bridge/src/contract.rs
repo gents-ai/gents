@@ -405,6 +405,63 @@ mod tests {
             default_commands, expected_default_commands,
             "permissions/default.toml must compose exactly core + client-lifecycle"
         );
+
+        let full = permission_file
+            .set
+            .iter()
+            .find(|set| set.identifier.as_deref() == Some("full"))
+            .expect("permissions/sets.toml full bundle");
+        let full_references = full.permissions.iter().cloned().collect::<BTreeSet<_>>();
+        let mut expected_full_references = actual_set_ids
+            .iter()
+            .filter(|set_id| {
+                !matches!(
+                    set_id.as_str(),
+                    "full" | "native-e2e" | "core" | "client-lifecycle"
+                )
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        expected_full_references.insert("default".to_string());
+        assert_eq!(
+            full_references, expected_full_references,
+            "production full bundle must compose default plus every production set exactly once"
+        );
+
+        let sets_by_id = permission_file
+            .set
+            .iter()
+            .filter_map(|set| {
+                set.identifier
+                    .as_ref()
+                    .map(|identifier| (identifier.as_str(), set))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut expanded_full_commands = BTreeSet::new();
+        for reference in &full.permissions {
+            let permissions = if reference == "default" {
+                &default_file.default.permissions
+            } else {
+                &sets_by_id
+                    .get(reference.as_str())
+                    .unwrap_or_else(|| panic!("full references unknown set {reference}"))
+                    .permissions
+            };
+            for permission in permissions {
+                expanded_full_commands.insert(permission_to_command(permission).unwrap_or_else(
+                    || panic!("full member {reference} contains non-command {permission}"),
+                ));
+            }
+        }
+        let expected_production_commands = inventory
+            .iter()
+            .filter(|(_, set)| set.as_str() != "native-e2e")
+            .map(|(command, _)| command.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            expanded_full_commands, expected_production_commands,
+            "production full bundle must expand to every production command and exclude native-e2e"
+        );
     }
 
     #[test]
