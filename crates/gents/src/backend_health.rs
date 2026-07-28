@@ -488,7 +488,9 @@ mod tests {
             let port = listener.local_addr().expect("local addr").port();
             let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let stop_for_thread = stop.clone();
+            let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
             let handle = std::thread::spawn(move || {
+                ready_tx.send(()).expect("signal models listener ready");
                 while !stop_for_thread.load(std::sync::atomic::Ordering::Relaxed) {
                     match listener.accept() {
                         Ok((mut stream, _)) => {
@@ -509,6 +511,7 @@ mod tests {
                     }
                 }
             });
+            ready_rx.recv().expect("models listener thread started");
             Self {
                 port,
                 stop,
