@@ -10,6 +10,7 @@ import {
 import {
   isTerminalTurnState,
   projectChatShell,
+  reconcileProjectedWorkflow,
   type ChatWorkflowState,
 } from "@source-inc/gents-desktop-chat";
 import {
@@ -131,6 +132,12 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     ],
   );
   const canSendMessage = shellProjection.sendStatus.kind === "ready";
+
+  useEffect(() => {
+    setLocalWorkflow((current) =>
+      reconcileProjectedWorkflow(current, shellProjection.workflow),
+    );
+  }, [shellProjection.workflow]);
 
   const selectedTrackedRequestId =
     trackedRequestIdForSession(selectedSessionId, shellProjection.workflow) ??

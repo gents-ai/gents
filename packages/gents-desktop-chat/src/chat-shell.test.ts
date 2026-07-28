@@ -10,6 +10,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import {
   projectChatShell,
+  reconcileProjectedWorkflow,
   type ChatBlockedReason,
   type ChatWorkflowState,
   type TurnState,
@@ -425,6 +426,63 @@ describe("projectChatShell", () => {
     expect(projection.activeRequestId).toBe("req-new");
     expect(projection.workflow.kind).toBe("turnInProgress");
     expect(projection.sendStatus.kind).toBe("disabled");
+  });
+
+  test("commits terminal projection before observing an automated follow-up", () => {
+    const trackedWorkflow: ChatWorkflowState = {
+      kind: "turnInProgress",
+      sessionId: "session-1",
+      requestId: "req-user",
+      turnState: "streaming",
+    };
+    const terminalProjection = projectChatShell({
+      clientAvailable: true,
+      selectedAgentDid: "did:test:amy",
+      selectedSessionId: "session-1",
+      draft: "",
+      sending: false,
+      selectedConversation: conversation({
+        latestRequestId: "req-wake",
+        turnState: "streaming",
+      }),
+      session: session({
+        latestRequestId: "req-user",
+        turnState: "completed",
+      }),
+      localWorkflow: trackedWorkflow,
+    });
+
+    expect(terminalProjection.workflow).toEqual({ kind: "ready" });
+    const reconciled = reconcileProjectedWorkflow(
+      trackedWorkflow,
+      terminalProjection.workflow,
+    );
+    expect(reconciled).toEqual({ kind: "ready" });
+
+    const wakeProjection = projectChatShell({
+      clientAvailable: true,
+      selectedAgentDid: "did:test:amy",
+      selectedSessionId: "session-1",
+      draft: "",
+      sending: false,
+      selectedConversation: conversation({
+        latestRequestId: "req-wake",
+        turnState: "streaming",
+      }),
+      session: session({
+        latestRequestId: "req-wake",
+        turnState: "streaming",
+      }),
+      localWorkflow: reconciled,
+    });
+
+    expect(wakeProjection.activeRequestId).toBe("req-wake");
+    expect(wakeProjection.workflow).toEqual({
+      kind: "turnInProgress",
+      sessionId: "session-1",
+      requestId: "req-wake",
+      turnState: "streaming",
+    });
   });
 
   test("keeps awaiting observation until the matching request is observed", () => {

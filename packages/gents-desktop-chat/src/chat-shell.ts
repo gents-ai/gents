@@ -60,6 +60,49 @@ export type ChatShellProjection = {
   activeRequestId: string | null;
 };
 
+/**
+ * Commit authoritative projection transitions back into the hook's local
+ * workflow state.
+ *
+ * `projectChatShell` is intentionally pure, but the request id it tracks is
+ * also used to select the next session snapshot. If a terminal projection is
+ * rendered without retiring that local id, the following snapshot refresh can
+ * pin the completed request again and resurrect the interrupt control.
+ */
+export function reconcileProjectedWorkflow(
+  localWorkflow: ChatWorkflowState,
+  projectedWorkflow: ChatWorkflowState,
+): ChatWorkflowState {
+  if (
+    (localWorkflow.kind === "awaitingObservation" ||
+      localWorkflow.kind === "turnInProgress") &&
+    projectedWorkflow.kind === "ready"
+  ) {
+    return projectedWorkflow;
+  }
+
+  if (
+    localWorkflow.kind === "awaitingObservation" &&
+    projectedWorkflow.kind === "turnInProgress" &&
+    localWorkflow.sessionId === projectedWorkflow.sessionId &&
+    localWorkflow.requestId === projectedWorkflow.requestId
+  ) {
+    return projectedWorkflow;
+  }
+
+  if (
+    localWorkflow.kind === "turnInProgress" &&
+    projectedWorkflow.kind === "turnInProgress" &&
+    localWorkflow.sessionId === projectedWorkflow.sessionId &&
+    localWorkflow.requestId === projectedWorkflow.requestId &&
+    localWorkflow.turnState !== projectedWorkflow.turnState
+  ) {
+    return projectedWorkflow;
+  }
+
+  return localWorkflow;
+}
+
 export function isTerminalTurnState(
   turnState?: string | null,
 ): turnState is "completed" | "failed" | "superseded" | "interrupted" {

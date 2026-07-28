@@ -86,6 +86,43 @@ async fn interrupt_request_returns_already_interrupted_for_second_call() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn interrupt_request_rejects_terminal_request_without_latching_it() {
+    let (core, _tmp) = seed_standalone_fixture().await;
+    let terminalize = r#"mutation {
+        update_AgentRequest(
+            filter: { request_id: { _eq: "req_solo" } },
+            input: { status: "completed", lifecycle_state: "completed" }
+        ) { _docID }
+    }"#;
+    let response = core.node().execute(terminalize).await;
+    assert!(
+        !response.has_errors(),
+        "terminalize fixture failed: {:?}",
+        response.errors
+    );
+
+    let error = interrupt_request(
+        &core,
+        &DesktopInterruptRequest {
+            request_id: "req_solo".into(),
+            agent_did: None,
+            cause: "userCancelled".into(),
+            cascade: false,
+            expected_preview_signature: None,
+        },
+    )
+    .await
+    .expect_err("terminal request must reject stale interrupt");
+
+    assert!(error.contains("already terminal"));
+    let after = fetch_request_row(&core, "req_solo").await;
+    assert!(
+        after.interrupt_requested_at.is_none(),
+        "rejected terminal interrupt must not corrupt the audit latch"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interrupt_request_rejects_non_user_cancelled_cause() {
     let (core, _tmp) = seed_standalone_fixture().await;
     let err = interrupt_request(

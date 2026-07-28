@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 use gents_protocol::timeline::{
-    build_timeline_order, TimelineMessageInput, TimelineRole, TimelineSlot,
+    build_timeline_order, OverlayInput, TimelineMessageInput, TimelineRole, TimelineSlot,
 };
 
 use super::super::types::{
@@ -119,12 +119,76 @@ fn overlay_matches_latest_assistant(
     false
 }
 
+fn tool_is_nonterminal(tool: &ToolCallView) -> bool {
+    matches!(
+        tool_status_kind(tool.lifecycle_state.as_deref().or(tool.status.as_deref())).as_str(),
+        "running" | "awaitingApproval"
+    )
+}
+
+fn render_timeline_order(
+    order: Vec<TimelineSlot>,
+    rendered_messages: &BTreeMap<String, RenderedTimelineItem>,
+    tool_groups: &BTreeMap<Option<i64>, Vec<ToolCallView>>,
+    pending_turn: Option<&PendingTurnView>,
+    overlay_content: &Option<String>,
+    overlay_reasoning: &Option<String>,
+) -> Vec<RenderedTimelineItem> {
+    let mut timeline = Vec::with_capacity(order.len());
+    for slot in order {
+        match slot {
+            TimelineSlot::Message { key, .. } => {
+                if let Some(item) = rendered_messages.get(&key) {
+                    timeline.push(item.clone());
+                }
+            }
+            TimelineSlot::ToolGroup { message_sequence } => {
+                let tools = tool_groups
+                    .get(&message_sequence)
+                    .cloned()
+                    .unwrap_or_default();
+                timeline.push(RenderedTimelineItem::ToolGroup {
+                    item_key: format!("tools-{}", message_sequence.unwrap_or(-1)),
+                    message_sequence,
+                    tools: tools.into_iter().map(render_tool_call).collect(),
+                });
+            }
+            TimelineSlot::Pending => {
+                if let Some(pending_turn) = pending_turn {
+                    timeline.push(RenderedTimelineItem::PendingUserTurn {
+                        item_key: format!("pending-{}", pending_turn.request_id),
+                        request_id: pending_turn.request_id.clone(),
+                        content: pending_turn.content.clone(),
+                        selected_skill_ids: pending_turn.selected_skill_ids.clone(),
+                        lifecycle_state: pending_turn.lifecycle_state.clone(),
+                        created_at: pending_turn.created_at.clone(),
+                    });
+                }
+            }
+            TimelineSlot::Overlay => {
+                if overlay_content.is_some() || overlay_reasoning.is_some() {
+                    timeline.push(RenderedTimelineItem::LiveAssistant {
+                        item_key: "live-assistant".to_string(),
+                        content: overlay_content.clone(),
+                        reasoning: overlay_reasoning.clone(),
+                    });
+                }
+            }
+        }
+    }
+    timeline
+}
+
 pub(super) fn build_rendered_timeline(
     messages: &[MessageView],
     tool_calls: &[ToolCallView],
     pending_turn: Option<&PendingTurnView>,
     active_response_overlay: Option<&ResponseView>,
+    active_response_request_id: Option<&str>,
 ) -> Vec<RenderedTimelineItem> {
+    // Group tool calls by their owning message sequence (rich lookup for the
+    // mapping-back step); the presentation-neutral ORDER is decided by the
+    // shared, Lean-fenced skeleton, not here.
     let mut tool_groups: BTreeMap<Option<i64>, Vec<ToolCallView>> = BTreeMap::new();
     for tool in tool_calls.iter().cloned() {
         tool_groups
@@ -134,6 +198,10 @@ pub(super) fn build_rendered_timeline(
     }
     let group_sequences: Vec<Option<i64>> = tool_groups.keys().copied().collect();
 
+    // Candidate messages (step-2 filter: drop tool-result rows and rows with no
+    // rendered content/reasoning/tool-calls — a presentation decision). For each
+    // candidate, project the ordering-relevant fields the skeleton consumes, and
+    // remember the rich content by key for mapping the slots back.
     let mut inputs: Vec<TimelineMessageInput> = Vec::new();
     let mut rendered_message: BTreeMap<String, RenderedTimelineItem> = BTreeMap::new();
     for message in messages.iter() {
@@ -186,6 +254,9 @@ pub(super) fn build_rendered_timeline(
                 .entry(message.message_key.clone())
                 .or_insert(item);
         }
+        // Presentation dedup token: the desktop only dedups by presentation when
+        // the message carries a sequence (None opts out). Serialize the same
+        // tuple the old `message_presentation_key` used, as an opaque token.
         let dedup_token =
             message_presentation_key(message, role, &normalized_content, &normalized_reasoning)
                 .map(|key| format!("{key:?}"));
@@ -202,58 +273,53 @@ pub(super) fn build_rendered_timeline(
         });
     }
 
-    let order = build_timeline_order(&inputs, &group_sequences, pending_turn.is_some(), None);
-
-    let mut timeline = Vec::with_capacity(order.len());
-    for slot in order {
-        match slot {
-            TimelineSlot::Message { key, .. } => {
-                if let Some(item) = rendered_message.get(&key) {
-                    timeline.push(item.clone());
-                }
-            }
-            TimelineSlot::ToolGroup { message_sequence } => {
-                let tools = tool_groups
-                    .get(&message_sequence)
-                    .cloned()
-                    .unwrap_or_default();
-                timeline.push(RenderedTimelineItem::ToolGroup {
-                    item_key: format!("tools-{}", message_sequence.unwrap_or(-1)),
-                    message_sequence,
-                    tools: tools.into_iter().map(render_tool_call).collect(),
-                });
-            }
-            TimelineSlot::Pending => {
-                if let Some(pending_turn) = pending_turn {
-                    timeline.push(RenderedTimelineItem::PendingUserTurn {
-                        item_key: format!("pending-{}", pending_turn.request_id),
-                        request_id: pending_turn.request_id.clone(),
-                        content: pending_turn.content.clone(),
-                        selected_skill_ids: pending_turn.selected_skill_ids.clone(),
-                        lifecycle_state: pending_turn.lifecycle_state.clone(),
-                        created_at: pending_turn.created_at.clone(),
-                    });
-                }
-            }
-            TimelineSlot::Overlay => {}
-        }
-    }
-
     let overlay_content =
         active_response_overlay.and_then(|overlay| normalize_optional(overlay.content.as_deref()));
     let overlay_reasoning = active_response_overlay
         .and_then(|overlay| normalize_optional(overlay.reasoning.as_deref()));
-    if (overlay_content.is_some() || overlay_reasoning.is_some())
-        && !overlay_matches_latest_assistant(&timeline, &overlay_content, &overlay_reasoning)
-    {
-        timeline.push(RenderedTimelineItem::LiveAssistant {
-            item_key: "live-assistant".to_string(),
-            content: overlay_content,
-            reasoning: overlay_reasoning,
-        });
-    }
 
-    timeline
+    // First assemble the durable timeline so the adapter can reduce the rich
+    // content comparison to the neutral duplicate bit consumed by the shared
+    // ordering contract.
+    let base_order = build_timeline_order(&inputs, &group_sequences, pending_turn.is_some(), None);
+    let base_timeline = render_timeline_order(
+        base_order,
+        &rendered_message,
+        &tool_groups,
+        pending_turn,
+        &overlay_content,
+        &overlay_reasoning,
+    );
+    let matches_trailing_assistant =
+        overlay_matches_latest_assistant(&base_timeline, &overlay_content, &overlay_reasoning);
+
+    // A tool belonging to this active, unmaterialized response is an orphan
+    // until its owning assistant message is persisted. Keep the live reasoning
+    // immediately before that running tool instead of letting it jump upward
+    // only after materialization.
+    let before_orphans = active_response_request_id.is_some_and(|request_id| {
+        tool_calls.iter().any(|tool| {
+            tool.request_id.as_deref() == Some(request_id)
+                && tool_is_nonterminal(tool)
+                && !inputs
+                    .iter()
+                    .any(|message| message.sequence == tool.message_sequence)
+        })
+    });
+    let overlay =
+        (overlay_content.is_some() || overlay_reasoning.is_some()).then_some(OverlayInput {
+            matches_trailing_assistant,
+            before_orphans,
+        });
+    let order = build_timeline_order(&inputs, &group_sequences, pending_turn.is_some(), overlay);
+    render_timeline_order(
+        order,
+        &rendered_message,
+        &tool_groups,
+        pending_turn,
+        &overlay_content,
+        &overlay_reasoning,
+    )
 }
 
 #[cfg(test)]
@@ -317,7 +383,7 @@ mod tests {
             },
         ];
 
-        let timeline = build_rendered_timeline(&messages, &[], None, None);
+        let timeline = build_rendered_timeline(&messages, &[], None, None, None);
 
         assert_eq!(materialized_user_turn_count(&messages), 1);
         assert_eq!(timeline.len(), 1);
@@ -333,7 +399,7 @@ mod tests {
         let content = gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
         let messages = vec![user_message("literal-user-text", 1, content)];
 
-        let timeline = build_rendered_timeline(&messages, &[], None, None);
+        let timeline = build_rendered_timeline(&messages, &[], None, None, None);
 
         assert_eq!(materialized_user_turn_count(&messages), 1);
         assert!(matches!(

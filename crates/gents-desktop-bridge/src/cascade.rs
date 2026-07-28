@@ -126,6 +126,28 @@ const TERMINAL_STATES: &[&str] = &[
     "interrupted",
 ];
 
+fn request_row_is_terminal(row: &Value) -> bool {
+    let lifecycle_terminal = string_field(row, "lifecycle_state")
+        .as_deref()
+        .is_some_and(|state| TERMINAL_STATES.contains(&state));
+    let status_terminal = string_field(row, "status")
+        .as_deref()
+        .is_some_and(|status| {
+            matches!(
+                status,
+                "completed"
+                    | "complete"
+                    | "error"
+                    | "failed"
+                    | "cancelled"
+                    | "superseded"
+                    | "dead"
+                    | "interrupted"
+            )
+        });
+    lifecycle_terminal || status_terminal
+}
+
 #[derive(Debug, Clone)]
 pub struct CascadeWalkRequest {
     pub root_request_id: String,
@@ -346,6 +368,7 @@ async fn fetch_request(
                 agent_did
                 behavior_id
                 session_id
+                status
                 lifecycle_state
                 interrupt_requested_at
             }}
@@ -455,6 +478,17 @@ pub async fn latch_root_interrupt(
         .await
         .map_err(|e| format!("latch_root_interrupt: {e}"))?;
 
+    // Request.Transition permits interrupt edges only from pending, claimed,
+    // and processing. A stale phone button must not write a fresh interrupt
+    // latch onto a terminal row: besides corrupting the audit trail, that
+    // falsely reports an accepted operator action after the work is done.
+    if request_row_is_terminal(&row) {
+        return Err(format!(
+            "request {request_id} is already terminal and cannot be interrupted"
+        ));
+    }
+
+    // 2. If already interrupted, return idempotent result.
     if let Some(existing) = string_field(&row, "interrupt_requested_at") {
         return Ok(LatchResult {
             interrupt_requested_at: existing,
@@ -476,15 +510,42 @@ pub async fn latch_root_interrupt(
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_id}" }}{agent_did_clause} }},
+                filter: {{
+                    request_id: {{ _eq: "{escaped_id}" }}{agent_did_clause},
+                    lifecycle_state: {{ _in: ["pending", "claimed", "processing"] }}
+                }},
                 input: {{ interrupt_requested_at: "{escaped_now}" }}
             ) {{ _docID }}
         }}"#
     );
 
-    access
+    let data = access
         .execute(core, &mutation, "latch_root_interrupt update_AgentRequest")
         .await?;
+    let updated = data
+        .get("update_AgentRequest")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    if updated == 0 {
+        let current = fetch_request(core, &access, request_id, agent_did)
+            .await
+            .map_err(|error| format!("latch_root_interrupt recheck: {error}"))?;
+        if request_row_is_terminal(&current) {
+            return Err(format!(
+                "request {request_id} became terminal before the interrupt could be latched"
+            ));
+        }
+        if let Some(existing) = string_field(&current, "interrupt_requested_at") {
+            return Ok(LatchResult {
+                interrupt_requested_at: existing,
+                was_first: false,
+            });
+        }
+        return Err(format!(
+            "request {request_id} did not accept an interrupt latch"
+        ));
+    }
 
     Ok(LatchResult {
         interrupt_requested_at: now,

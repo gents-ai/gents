@@ -393,6 +393,9 @@ pub fn build_session_snapshot_from_store_for_agent(
         &tool_calls,
         pending_turn.as_ref(),
         active_response_overlay.as_ref(),
+        active_response_overlay
+            .as_ref()
+            .and(latest_request_id.as_deref()),
     );
 
     Some(DesktopSessionSnapshot {

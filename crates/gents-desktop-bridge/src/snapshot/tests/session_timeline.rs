@@ -205,7 +205,7 @@ fn session_snapshot_hides_live_overlay_matching_last_materialized_assistant() {
 }
 
 #[test]
-fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overlay() {
+fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
     let store = ClientStore::from_rows(ClientStoreRows {
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
@@ -325,7 +325,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
             partial_output_seq: None,
             tool_call_key: "tool-1".to_string(),
             session_id: Some("session-1".to_string()),
-            request_id: None,
+            request_id: Some("req-2".to_string()),
             requester_did: None,
             message_sequence: None,
             tool_name: Some("glob".to_string()),
@@ -370,7 +370,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
             RenderedTimelineItem::LiveAssistant { .. } => "live",
         })
         .collect::<Vec<_>>();
-    assert_eq!(kinds, vec!["user", "pending", "tools", "live"]);
+    assert_eq!(kinds, vec!["user", "pending", "live", "tools"]);
 }
 
 #[test]
