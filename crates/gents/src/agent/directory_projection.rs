@@ -6,8 +6,8 @@
 //! `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean`; fenced by
 //! `tests/conformance/directory_projection.rs`. The sweep runs on source
 //! Update events, so the load-bearing property is that a settled state is a
-//! write-free fixpoint. The projection owns every row in the collection —
-//! derived state, rebuildable at any time.
+//! write-free fixpoint. Each runtime owns only the rows stamped with its
+//! source DID; replicated foreign rows remain outside its projection.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -26,6 +26,7 @@ use crate::graphql::escape_graphql_string;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DirectoryEntry {
     pub agent_did: String,
+    pub source_did: String,
     pub display_name: String,
     pub behaviors: Vec<String>,
     pub runtime_state: String,
@@ -50,9 +51,14 @@ pub trait DirectoryStore: Send + Sync {
     /// wall-clock — so the settled check stays a pure function of source
     /// rows.
     async fn load_runtime_states(&self) -> Result<BTreeMap<String, (String, String)>>;
-    async fn list_directory_entries(&self) -> Result<BTreeMap<String, DirectoryEntry>>;
+    /// Directory rows owned by `source_did`. Foreign replicated rows are
+    /// deliberately outside this projector's state partition.
+    async fn list_directory_entries(
+        &self,
+        source_did: &str,
+    ) -> Result<BTreeMap<String, DirectoryEntry>>;
     async fn upsert_directory_entry(&self, entry: &DirectoryEntry) -> Result<()>;
-    async fn delete_directory_entry(&self, agent_did: &str) -> Result<()>;
+    async fn delete_directory_entry(&self, source_did: &str, agent_did: &str) -> Result<()>;
 }
 
 /// Canonicalize a runtime `updated_at` into the exact lexical form DefraDB's
@@ -97,6 +103,7 @@ fn canonicalize_last_seen(updated_at: &str) -> String {
 /// derived `last_seen` matches its own stored `DateTime` round-trip.
 /// Mirrors Lean `project`.
 pub fn derive_directory_entries(
+    source_did: &str,
     principals: &[(String, String)],
     behaviors: &BTreeMap<String, Vec<String>>,
     runtimes: &BTreeMap<String, (String, String)>,
@@ -113,6 +120,7 @@ pub fn derive_directory_entries(
                 did.clone(),
                 DirectoryEntry {
                     agent_did: did.clone(),
+                    source_did: source_did.to_string(),
                     display_name: display_name.clone(),
                     behaviors: names,
                     runtime_state,
@@ -124,12 +132,15 @@ pub fn derive_directory_entries(
 }
 
 /// One reconcile sweep: derive the desired directory rows from source
-/// collections and diff against the live `AgentDirectoryEntry` rows,
+/// collections and diff against this source's `AgentDirectoryEntry` rows,
 /// upserting/refreshing/retracting exactly what has drifted. Mirrors Lean
 /// `projectStep`; a settled state (desired == existing) must be a
 /// write-free fixpoint (`settled_fixpoint`), since the sweep runs on every
 /// Update event.
-pub async fn reconcile_directory_tick(store: &dyn DirectoryStore) -> Result<DirectoryTickOutcome> {
+pub async fn reconcile_directory_tick(
+    store: &dyn DirectoryStore,
+    source_did: &str,
+) -> Result<DirectoryTickOutcome> {
     let principals = store
         .load_principals()
         .await
@@ -142,9 +153,9 @@ pub async fn reconcile_directory_tick(store: &dyn DirectoryStore) -> Result<Dire
         .load_runtime_states()
         .await
         .context("load runtime states")?;
-    let desired = derive_directory_entries(&principals, &behaviors, &runtimes);
+    let desired = derive_directory_entries(source_did, &principals, &behaviors, &runtimes);
     let existing = store
-        .list_directory_entries()
+        .list_directory_entries(source_did)
         .await
         .context("list directory entries")?;
 
@@ -187,7 +198,7 @@ pub async fn reconcile_directory_tick(store: &dyn DirectoryStore) -> Result<Dire
     }
     for did in existing.keys() {
         if !desired.contains_key(did) {
-            match store.delete_directory_entry(did).await {
+            match store.delete_directory_entry(source_did, did).await {
                 Ok(()) => {
                     outcome.retracted.insert(did.clone());
                 }
@@ -212,6 +223,7 @@ pub async fn reconcile_directory_tick(store: &dyn DirectoryStore) -> Result<Dire
 /// without P2P transport (the desktop reads it locally), so it always runs.
 pub async fn run_directory_projection(
     node: Arc<EmbeddedNode>,
+    source_did: String,
     cancel: CancellationToken,
 ) -> Result<()> {
     let store = GraphqlDirectoryStore::new(node.clone());
@@ -220,11 +232,11 @@ pub async fn run_directory_projection(
         tokio::time::interval(crate::agent::p2p_reconcile::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    sweep_directory(&store).await;
+    sweep_directory(&store, &source_did).await;
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
-            _ = interval.tick() => sweep_directory(&store).await,
+            _ = interval.tick() => sweep_directory(&store, &source_did).await,
             message = subscription.recv() => {
                 if message.is_none() {
                     tracing::warn!("directory projection update subscription closed; continuing with periodic sweeps");
@@ -234,14 +246,14 @@ pub async fn run_directory_projection(
                 if dropped > 0 {
                     tracing::warn!(dropped, "directory projection update subscription dropped messages");
                 }
-                sweep_directory(&store).await;
+                sweep_directory(&store, &source_did).await;
             }
         }
     }
 }
 
-async fn sweep_directory(store: &GraphqlDirectoryStore) {
-    match reconcile_directory_tick(store).await {
+async fn sweep_directory(store: &GraphqlDirectoryStore, source_did: &str) {
+    match reconcile_directory_tick(store, source_did).await {
         Ok(outcome) => {
             if !outcome.upserted.is_empty()
                 || !outcome.refreshed.is_empty()
@@ -278,6 +290,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
             AgentPrincipal {
                 agent_did
                 display_name
+                enabled
             }
         }"#;
         let response = self.node.execute(query).await;
@@ -285,6 +298,9 @@ impl DirectoryStore for GraphqlDirectoryStore {
         Ok(rows::<PrincipalRow>(&response, "AgentPrincipal")?
             .into_iter()
             .filter_map(|row| {
+                if !row.enabled.unwrap_or(true) {
+                    return None;
+                }
                 let did = row.agent_did?.trim().to_string();
                 if did.is_empty() {
                     return None;
@@ -306,12 +322,16 @@ impl DirectoryStore for GraphqlDirectoryStore {
                 agent_did
                 display_name
                 behavior_id
+                enabled
             }
         }"#;
         let response = self.node.execute(query).await;
         ensure_no_errors(&response, "query AgentBehavior")?;
         let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for row in rows::<BehaviorRow>(&response, "AgentBehavior")? {
+            if !row.enabled.unwrap_or(true) {
+                continue;
+            }
             let Some(did) = row.agent_did.map(|did| did.trim().to_string()) else {
                 continue;
             };
@@ -372,17 +392,24 @@ impl DirectoryStore for GraphqlDirectoryStore {
             .collect())
     }
 
-    async fn list_directory_entries(&self) -> Result<BTreeMap<String, DirectoryEntry>> {
-        let query = r#"{
-            AgentDirectoryEntry {
+    async fn list_directory_entries(
+        &self,
+        source_did: &str,
+    ) -> Result<BTreeMap<String, DirectoryEntry>> {
+        let source_did = escape_graphql_string(source_did);
+        let query = format!(
+            r#"{{
+            AgentDirectoryEntry(filter: {{ source_did: {{ _eq: "{source_did}" }} }}) {{
                 agent_did
+                source_did
                 display_name
                 behaviors
                 runtime_state
                 last_seen
-            }
-        }"#;
-        let response = self.node.execute(query).await;
+            }}
+        }}"#
+        );
+        let response = self.node.execute(&query).await;
         ensure_no_errors(&response, "query AgentDirectoryEntry")?;
         Ok(rows::<DirectoryRow>(&response, "AgentDirectoryEntry")?
             .into_iter()
@@ -393,6 +420,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
                 }
                 let entry = DirectoryEntry {
                     agent_did: did.clone(),
+                    source_did: row.source_did.unwrap_or_default(),
                     display_name: row.display_name.unwrap_or_default(),
                     behaviors: row.behaviors.unwrap_or_default(),
                     runtime_state: row.runtime_state.unwrap_or_default(),
@@ -410,8 +438,8 @@ impl DirectoryStore for GraphqlDirectoryStore {
         ensure_no_errors(&response, "upsert AgentDirectoryEntry")
     }
 
-    async fn delete_directory_entry(&self, agent_did: &str) -> Result<()> {
-        let mutation = delete_directory_entry_mutation(agent_did);
+    async fn delete_directory_entry(&self, source_did: &str, agent_did: &str) -> Result<()> {
+        let mutation = delete_directory_entry_mutation(source_did, agent_did);
         let response = self.node.execute(&mutation).await;
         ensure_no_errors(&response, "delete AgentDirectoryEntry")
     }
@@ -419,6 +447,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
 
 fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String {
     let agent_did = escape_graphql_string(&entry.agent_did);
+    let source_did = escape_graphql_string(&entry.source_did);
     let display_name = escape_graphql_string(&entry.display_name);
     let behaviors = graphql_string_list_literal(entry.behaviors.iter().map(String::as_str));
     let runtime_state = escape_graphql_string(&entry.runtime_state);
@@ -430,6 +459,7 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
                 filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
                 add: {{
                     agent_did: "{agent_did}",
+                    source_did: "{source_did}",
                     display_name: "{display_name}",
                     behaviors: {behaviors},
                     runtime_state: "{runtime_state}",
@@ -437,6 +467,7 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
                     updated_at: "{now}"
                 }},
                 update: {{
+                    source_did: "{source_did}",
                     display_name: "{display_name}",
                     behaviors: {behaviors},
                     runtime_state: "{runtime_state}",
@@ -448,11 +479,15 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
     )
 }
 
-fn delete_directory_entry_mutation(agent_did: &str) -> String {
+fn delete_directory_entry_mutation(source_did: &str, agent_did: &str) -> String {
+    let source_did = escape_graphql_string(source_did);
     let agent_did = escape_graphql_string(agent_did);
     format!(
         r#"mutation {{
-            delete_AgentDirectoryEntry(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ _docID }}
+            delete_AgentDirectoryEntry(filter: {{
+                source_did: {{ _eq: "{source_did}" }},
+                agent_did: {{ _eq: "{agent_did}" }}
+            }}) {{ _docID }}
         }}"#
     )
 }
@@ -514,6 +549,8 @@ struct PrincipalRow {
     agent_did: Option<String>,
     #[serde(default)]
     display_name: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -523,6 +560,8 @@ struct BehaviorRow {
     display_name: Option<String>,
     #[serde(default)]
     behavior_id: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -537,6 +576,8 @@ struct RuntimeRow {
 #[derive(Deserialize)]
 struct DirectoryRow {
     agent_did: Option<String>,
+    #[serde(default)]
+    source_did: Option<String>,
     #[serde(default)]
     display_name: Option<String>,
     #[serde(default)]
@@ -554,6 +595,7 @@ mod tests {
     fn entry(agent_did: &str, last_seen: &str) -> DirectoryEntry {
         DirectoryEntry {
             agent_did: agent_did.to_string(),
+            source_did: "did:key:home".to_string(),
             display_name: "Display".to_string(),
             behaviors: Vec::new(),
             runtime_state: "running".to_string(),
@@ -671,11 +713,11 @@ mod tests {
         ensure_no_errors(&response, "seed runtime-format updated_at")?;
 
         let store = GraphqlDirectoryStore::new(node.clone());
-        let first = reconcile_directory_tick(&store).await?;
+        let first = reconcile_directory_tick(&store, "did:key:home").await?;
         assert_eq!(first.upserted, BTreeSet::from(["did:key:real".to_string()]));
 
         // The stored, canonicalized last_seen is whole-second UTC `Z`.
-        let stored = store.list_directory_entries().await?;
+        let stored = store.list_directory_entries("did:key:home").await?;
         assert_eq!(
             stored.get("did:key:real").map(|e| e.last_seen.as_str()),
             Some(canonicalize_last_seen(&updated_at).as_str())
@@ -683,7 +725,7 @@ mod tests {
 
         // The load-bearing property: a second tick over unchanged sources is a
         // write-free fixpoint (no self-perpetuating storm).
-        let second = reconcile_directory_tick(&store).await?;
+        let second = reconcile_directory_tick(&store, "did:key:home").await?;
         assert_eq!(
             second,
             DirectoryTickOutcome::default(),
@@ -722,6 +764,24 @@ mod tests {
                 enabled: true,
                 created_at: "2026-07-23T00:00:00Z"
             }) { _docID }
+            create_AgentPrincipal(input: {
+                agent_did: "did:key:disabled",
+                display_name: "Disabled",
+                enabled: false,
+                created_at: "2026-07-23T00:00:00Z"
+            }) { _docID }
+            create_AgentBehavior(input: {
+                behavior_id: "enabled-behavior",
+                agent_did: "did:key:with-runtime",
+                display_name: "Enabled Behavior",
+                enabled: true
+            }) { _docID }
+            create_AgentBehavior(input: {
+                behavior_id: "disabled-behavior",
+                agent_did: "did:key:with-runtime",
+                display_name: "Disabled Behavior",
+                enabled: false
+            }) { _docID }
             create_AgentRuntime(input: {
                 agent_did: "did:key:with-runtime",
                 process_state: "running",
@@ -732,7 +792,7 @@ mod tests {
         ensure_no_errors(&response, "seed directory projection principals")?;
 
         let store = GraphqlDirectoryStore::new(node.clone());
-        let outcome = reconcile_directory_tick(&store).await?;
+        let outcome = reconcile_directory_tick(&store, "did:key:home").await?;
         assert_eq!(
             outcome.upserted,
             BTreeSet::from([
@@ -742,11 +802,16 @@ mod tests {
             "the runtime-less principal must not wedge the sweep"
         );
 
-        let entries = store.list_directory_entries().await?;
+        let entries = store.list_directory_entries("did:key:home").await?;
         let with_runtime = entries
             .get("did:key:with-runtime")
             .expect("with-runtime directory row");
         assert_eq!(with_runtime.runtime_state, "running");
+        assert_eq!(with_runtime.behaviors, vec!["Enabled Behavior".to_string()]);
+        assert!(
+            !entries.contains_key("did:key:disabled"),
+            "disabled principals must not be advertised"
+        );
         // The non-canonical `+00:00`/sub-second updated_at is quantized to
         // whole-second UTC `Z`, matching its own stored DateTime round-trip so
         // the second tick below is write-free rather than a self-perpetuating
@@ -762,7 +827,7 @@ mod tests {
 
         // Settled state is a write-free fixpoint: the runtime-less principal
         // must not keep re-triggering writes forever.
-        let second = reconcile_directory_tick(&store).await?;
+        let second = reconcile_directory_tick(&store, "did:key:home").await?;
         assert_eq!(second, DirectoryTickOutcome::default());
 
         let delete = r#"mutation {
@@ -771,13 +836,13 @@ mod tests {
         let response = node.execute(delete).await;
         ensure_no_errors(&response, "delete directory-projection principal")?;
 
-        let outcome = reconcile_directory_tick(&store).await?;
+        let outcome = reconcile_directory_tick(&store, "did:key:home").await?;
         assert_eq!(
             outcome.retracted,
             BTreeSet::from(["did:key:no-runtime".to_string()])
         );
 
-        let entries = store.list_directory_entries().await?;
+        let entries = store.list_directory_entries("did:key:home").await?;
         assert!(!entries.contains_key("did:key:no-runtime"));
         assert!(entries.contains_key("did:key:with-runtime"));
 

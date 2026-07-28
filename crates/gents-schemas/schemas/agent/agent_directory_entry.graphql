@@ -13,6 +13,9 @@
 # to attached clients — DefraDB only P2P-syncs branchable collections.
 type AgentDirectoryEntry @branchable {
     agent_did: String @index(unique: true)
+    # DID of the runtime that derived this row. Machine replication filters
+    # on this field, and each projector reconciles only its own partition.
+    source_did: String @index
     display_name: String
     # Behavior display names for the picker. Emitted as null (never []) when
     # the principal has no behaviors - empty list literals corrupt nillable

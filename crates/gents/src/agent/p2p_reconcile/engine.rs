@@ -921,6 +921,7 @@ impl GraphqlPairingStateStore {
         peer_id: &str,
         claimant_did: &str,
         address: &str,
+        template: &str,
     ) -> Result<()> {
         let readiness_key = derive_bearer_readiness_key(self.identity.did(), claimant_did);
         let mut record = BearerPairingReadyRecord {
@@ -928,7 +929,7 @@ impl GraphqlPairingStateStore {
             claimant_did: claimant_did.to_string(),
             peer_id: peer_id.to_string(),
             address: address.to_string(),
-            template: "conversation".to_string(),
+            template: template.to_string(),
             acknowledged_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
             sig: Vec::new(),
         };
@@ -1125,12 +1126,12 @@ impl PairingStateStore for GraphqlPairingStateStore {
         desired: Option<&PairingDesired>,
         applied: &PairingApplied,
     ) -> Result<()> {
-        let Some((claimant_did, address)) =
+        let Some((claimant_did, address, template)) =
             earned_bearer_readiness(desired, applied, self.identity.did())
         else {
             return self.delete_bearer_readiness_for_peer(peer_id).await;
         };
-        self.upsert_bearer_readiness(peer_id, &claimant_did, &address)
+        self.upsert_bearer_readiness(peer_id, &claimant_did, &address, &template)
             .await
     }
 
@@ -1412,7 +1413,7 @@ fn data_plane_desired_from_pairing_row(
 
 fn scope_requires_peer_did(scope: &Scope) -> bool {
     match scope {
-        Scope::PeerDid { .. } | Scope::PeerDidExcept { .. } => true,
+        Scope::PeerDid { .. } => true,
         Scope::Unscoped => false,
         Scope::PerCollection(rules) => rules
             .iter()
@@ -1422,7 +1423,7 @@ fn scope_requires_peer_did(scope: &Scope) -> bool {
 
 fn data_plane_scope_requires_signed_peer_did(scope: &Scope) -> bool {
     match scope {
-        Scope::PeerDid { .. } | Scope::PeerDidExcept { .. } | Scope::Unscoped => false,
+        Scope::PeerDid { .. } | Scope::Unscoped => false,
         Scope::PerCollection(rules) => rules
             .iter()
             .any(|rule| matches!(rule.source, DidSource::PeerDid)),
@@ -1448,19 +1449,6 @@ fn data_plane_scope_filter(
                 )
             })
             .collect(),
-        Scope::PeerDidExcept { field, exempt } => collections
-            .iter()
-            .filter(|&&col| !exempt.contains(&col))
-            .map(|&col| {
-                (
-                    col.to_string(),
-                    super::templates::FilterPredicate {
-                        field: (*field).to_string(),
-                        value: local_did.to_string(),
-                    },
-                )
-            })
-            .collect(),
         Scope::Unscoped => BTreeMap::new(),
         Scope::PerCollection(rules) => rules
             .iter()
@@ -1468,6 +1456,7 @@ fn data_plane_scope_filter(
                 let value = match rule.source {
                     DidSource::LocalDid => local_did,
                     DidSource::PeerDid => signed_peer_did,
+                    DidSource::HomeDid => local_did,
                 };
                 (
                     rule.collection.to_string(),
@@ -1528,16 +1517,23 @@ fn earned_bearer_readiness(
     desired: Option<&PairingDesired>,
     applied: &PairingApplied,
     local_did: &str,
-) -> Option<(String, String)> {
+) -> Option<(String, String, String)> {
     let desired = desired?;
-    if !desired.template_ids.contains("conversation")
-        || desired.replicator_addresses.len() != 1
+    let template_id = desired
+        .template_ids
+        .iter()
+        .filter(|id| super::templates::conversation_like(id))
+        // A layered desired state can temporarily carry both ids while an
+        // operator/base edge coexists with the bearer data-plane edge.
+        // Prefer the wider machine acknowledgement in that case.
+        .max()?;
+    if desired.replicator_addresses.len() != 1
         || applied.replicator_addresses != desired.replicator_addresses
         || applied.replicator_filter != desired.replicator_filter
     {
         return None;
     }
-    let template = resolve_template("conversation")?;
+    let template = resolve_template(template_id)?;
     if !template
         .collections
         .iter()
@@ -1571,7 +1567,7 @@ fn earned_bearer_readiness(
         .next()?
         .trim()
         .to_string();
-    (!address.is_empty()).then(|| (claimant_did.to_string(), address))
+    (!address.is_empty()).then(|| (claimant_did.to_string(), address, template.id.to_string()))
 }
 
 fn bearer_pairing_ready_record(
@@ -1747,8 +1743,8 @@ mod tests {
         filters
     }
 
-    fn conversation_desired(claimant_did: &str, address: &str) -> PairingDesired {
-        let template = resolve_template("conversation").expect("conversation template");
+    fn bearer_desired(template_id: &str, claimant_did: &str, address: &str) -> PairingDesired {
+        let template = resolve_template(template_id).expect("bearer template");
         PairingDesired {
             replicator_addresses: set(&[address]),
             replicator_collections: template
@@ -1762,14 +1758,14 @@ mod tests {
                 claimant_did,
                 "did:key:issuer",
             ),
-            template_ids: set(&["conversation"]),
+            template_ids: set(&[template_id]),
             ..Default::default()
         }
     }
 
     #[test]
     fn bearer_readiness_requires_exact_applied_conversation_replicator() {
-        let desired = conversation_desired("did:key:claimant", "iroh-ticket");
+        let desired = bearer_desired("conversation", "did:key:claimant", "iroh-ticket");
         let pending = PairingApplied::default();
         assert_eq!(
             earned_bearer_readiness(Some(&desired), &pending, "did:key:issuer"),
@@ -1783,7 +1779,11 @@ mod tests {
         };
         assert_eq!(
             earned_bearer_readiness(Some(&desired), &applied, "did:key:issuer"),
-            Some(("did:key:claimant".to_string(), "iroh-ticket".to_string()))
+            Some((
+                "did:key:claimant".to_string(),
+                "iroh-ticket".to_string(),
+                "conversation".to_string()
+            ))
         );
 
         let mut wrong_filter = applied;
@@ -1795,6 +1795,26 @@ mod tests {
         assert_eq!(
             earned_bearer_readiness(Some(&desired), &wrong_filter, "did:key:issuer"),
             None
+        );
+    }
+
+    #[test]
+    fn bearer_readiness_accepts_exact_applied_machine_replicator() {
+        let mut desired = bearer_desired("machine", "did:key:claimant", "iroh-ticket");
+        desired.template_ids.insert("conversation".to_string());
+        let applied = PairingApplied {
+            replicator_addresses: desired.replicator_addresses.clone(),
+            replicator_filter: desired.replicator_filter.clone(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            earned_bearer_readiness(Some(&desired), &applied, "did:key:issuer"),
+            Some((
+                "did:key:claimant".to_string(),
+                "iroh-ticket".to_string(),
+                "machine".to_string()
+            ))
         );
     }
 
@@ -1969,12 +1989,11 @@ mod tests {
     }
 
     /// #714 C1 regression: the `machine` template's conversation collections
-    /// must scope to the same DID `conversation` uses on the data plane
-    /// (self DID — the server pushes its own slice), and `AgentDirectoryEntry`
-    /// must be the sole exemption, replicating unfiltered so machine-paired
-    /// clients actually receive directory rows.
+    /// must scope to the same requester DID `conversation` uses on the data
+    /// plane, while `AgentDirectoryEntry` is restricted to this issuer's
+    /// source-owned projection.
     #[test]
-    fn data_plane_desired_machine_scopes_conversation_like_conversation_and_exempts_directory() {
+    fn data_plane_desired_machine_scopes_conversation_and_owned_directory() {
         let signed_endpoint = NetworkEndpointEntry {
             peer_id: "peer-b".to_string(),
             agent_did: "did:key:peer-b".to_string(),
@@ -2012,16 +2031,16 @@ mod tests {
                     .replicator_filter
                     .get(col)
                     .map(|filter| (filter.field.as_str(), filter.value.as_str())),
-                Some(("agent_did", "did:key:self")),
-                "conversation collection {col} must be self-scoped exactly like `conversation`"
+                Some(("requester_did", "did:key:peer-b")),
+                "conversation collection {col} must be requester-scoped exactly like `conversation`"
             );
         }
-        assert!(
+        assert_eq!(
             desired
                 .replicator_filter
                 .get(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION)
-                .is_none(),
-            "directory must replicate unfiltered on the data plane"
+                .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            Some(("source_did", "did:key:self"))
         );
     }
 
@@ -3390,9 +3409,9 @@ mod tests {
 
     /// #714 C1 regression: on the control plane, `machine`'s conversation
     /// collections must resolve to the peer DID exactly like `conversation`
-    /// does, and `AgentDirectoryEntry` must carry no filter (the exemption).
+    /// does, while `AgentDirectoryEntry` selects only this issuer's rows.
     #[test]
-    fn control_plane_desired_machine_scopes_conversation_like_conversation_and_exempts_directory() {
+    fn control_plane_desired_machine_scopes_conversation_and_owned_directory() {
         let desired = desired_from_pairing_row(
             desired_row(Some("machine"), Some("did:key:phone")),
             "did:key:server",
@@ -3421,15 +3440,15 @@ mod tests {
                 .replicator_filter
                 .get(col)
                 .unwrap_or_else(|| panic!("missing filter for conversation collection {col}"));
-            assert_eq!(pred.field, "agent_did");
+            assert_eq!(pred.field, "requester_did");
             assert_eq!(pred.value, "did:key:phone");
         }
-        assert!(
+        assert_eq!(
             desired
                 .replicator_filter
                 .get(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION)
-                .is_none(),
-            "directory must replicate unfiltered on the control plane"
+                .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            Some(("source_did", "did:key:server"))
         );
     }
 

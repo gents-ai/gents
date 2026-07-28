@@ -2239,7 +2239,9 @@ pub(super) async fn cleanup_saved_peer_p2p(
     record: &PeerRecord,
 ) -> Result<()> {
     let collections = if super::bearer_pairing::is_bearer_peer(record) {
-        super::bearer_pairing::bearer_replicator_collections()
+        super::bearer_pairing::bearer_replicator_collections(
+            record.pairing_template.as_deref().unwrap_or("conversation"),
+        )
     } else {
         subscribed_collection_names()
             .into_iter()

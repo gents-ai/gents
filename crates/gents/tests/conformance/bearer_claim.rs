@@ -29,6 +29,7 @@ fn verdicts(token: bool, fresh: bool, claim: bool) -> BearerClaimVerdicts {
 fn claim(nonce: &str, claimant: &str, template: &str) -> PreparedBearerClaim {
     PreparedBearerClaim {
         nonce: nonce.to_string(),
+        issued_at: "2026-07-28T00:00:00Z".to_string(),
         network_id: "default".to_string(),
         template: template.to_string(),
         claimant_did: claimant.to_string(),
@@ -268,7 +269,7 @@ async fn machine_reclaim_upgrades_existing_conversation_intent_template() {
     );
 }
 
-/// Last-claim-wins in the other direction (I2, #714): a member previously
+/// A newer claim in the other direction (I2, #714): a member previously
 /// recorded on the wider `machine` template who re-claims with a narrower
 /// `conversation` bearer token must have the intent row narrowed in place.
 /// This is deliberate, not a bug: re-pairing with a QR is an explicit
@@ -300,6 +301,37 @@ async fn conversation_reclaim_narrows_machine_intent_template() {
         Some(&"conversation".to_string()),
         "machine->conversation re-claim must narrow the intent template in place"
     );
+}
+
+/// Mirrors Lean `preferredClaim_newer_wins` and
+/// `preferredClaim_older_or_equal_cannot_overwrite`: all fresh claim rows may
+/// remain replicated, so their read order cannot determine the final intent.
+#[tokio::test]
+async fn preferred_claim_is_stable_across_input_order() {
+    for reverse in [false, true] {
+        let mut older = claim("nonce-older", "did:key:phone", "conversation");
+        older.issued_at = "2026-07-28T00:00:00Z".to_string();
+        let mut newer = claim("nonce-newer", "did:key:phone", "machine");
+        newer.issued_at = "2026-07-28T00:01:00Z".to_string();
+        let claims = if reverse {
+            vec![newer, older]
+        } else {
+            vec![older, newer]
+        };
+        let store = ClaimPartitionStore {
+            claims,
+            ..Default::default()
+        };
+
+        reconcile_bearer_claim_tick(&store, "did:key:server")
+            .await
+            .expect("tick");
+
+        assert_eq!(
+            store.intent_templates.lock().unwrap().get("did:key:phone"),
+            Some(&"machine".to_string())
+        );
+    }
 }
 
 /// Mirrors Lean `claimStep_ownership_safe`: claim processing never mutates

@@ -17,6 +17,8 @@ pub struct PeerRecord {
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pairing_network_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pairing_template: Option<String>,
     /// Bearer peers earn readiness only after the active membership and the
     /// issuer-signed reciprocal-replicator acknowledgement are both verified.
     #[serde(default)]
@@ -50,6 +52,7 @@ impl PeerRecord {
             default_behavior_id: None,
             source: None,
             pairing_network_id: None,
+            pairing_template: None,
             pairing_ready: false,
             graphql: None,
             created_at: now.clone(),
@@ -197,12 +200,14 @@ impl PeerDirectory {
         addr: &str,
         agent_did: &str,
         network_id: &str,
+        template: &str,
         default_behavior_id: Option<&str>,
     ) -> Result<PeerRecord> {
         let label = normalize_non_empty("label", label)?;
         let addr = normalize_non_empty("addr", addr)?;
         let agent_did = normalize_non_empty("agent_did", agent_did)?;
         let network_id = normalize_non_empty("network_id", network_id)?;
+        let template = normalize_non_empty("template", template)?;
         let default_behavior_id = normalize_optional(default_behavior_id);
 
         let mut record = self
@@ -220,6 +225,7 @@ impl PeerDirectory {
         record.default_behavior_id = default_behavior_id.map(str::to_owned);
         record.source = Some(super::core::bearer_pairing::BEARER_PAIRING_SOURCE.to_string());
         record.pairing_network_id = Some(network_id.to_string());
+        record.pairing_template = Some(template.to_string());
         record.pairing_ready = false;
         // Bearer pairing is transport-native. An unauthenticated HTTP endpoint
         // discovered earlier must not remain attached to the trusted record.
@@ -461,6 +467,7 @@ mod tests {
                 "iroh://fresh-ticket",
                 "did:test:amy",
                 "network-amy",
+                "machine",
                 Some("default"),
             )
             .await
@@ -471,6 +478,7 @@ mod tests {
         assert_eq!(paired.addr, "iroh://fresh-ticket");
         assert_eq!(paired.default_behavior_id.as_deref(), Some("default"));
         assert_eq!(paired.pairing_network_id.as_deref(), Some("network-amy"));
+        assert_eq!(paired.pairing_template.as_deref(), Some("machine"));
         assert!(!paired.pairing_ready);
         assert_eq!(
             paired.source.as_deref(),

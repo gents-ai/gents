@@ -52,8 +52,8 @@ pub use registry::{
     UpsertKind, DEFAULT_NETWORK_ID, NETWORK_ID_ENV, REGISTRY_HEARTBEAT_INTERVAL,
 };
 pub use templates::{
-    builtin_templates, resolve_template, scope_filter, Delivery, DidSource, FilterPredicate,
-    PairingFilters, Scope, ScopeTemplate,
+    builtin_templates, conversation_like, resolve_template, scope_filter, Delivery, DidSource,
+    FilterPredicate, PairingFilters, Scope, ScopeTemplate, AGENT_DIRECTORY_COLLECTION,
 };
 pub use trait_def::{
     RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteP2pDocument, RemoteReplicator,

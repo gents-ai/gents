@@ -102,7 +102,8 @@ theorem resolveTemplate_isSome_iff {cat : Catalog} {id : TemplateId} :
 /-- Resolve a scope and collection set against a concrete peer/local DID pair.
 Mirrors Rust `scope_filter`: `PeerDid {field}` filters every carried collection
 on `peerDid`; `Unscoped` yields no filters; `PerCollection` applies each
-collection-specific rule with either the local or peer DID as value. -/
+collection-specific rule with the local, peer, or home DID as value (`homeDid`
+is the runtime-local issuer in this model). -/
 def scopeFilter (scope : Scope) (collections : List String)
     (peerDid localDid : Did) : List CollectionScopeFilter :=
   match scope with
@@ -118,7 +119,8 @@ def scopeFilter (scope : Scope) (collections : List String)
           , value :=
               match r.source with
               | .localDid => localDid
-              | .peerDid => peerDid })
+              | .peerDid => peerDid
+              | .homeDid => localDid })
 
 /-- `scopeFilter` is the spec's case-split, proven by `cases` over `Scope`. -/
 theorem scopeFilter_spec (s : Scope) (collections : List String)
@@ -137,7 +139,8 @@ theorem scopeFilter_spec (s : Scope) (collections : List String)
               , value :=
                   match r.source with
                   | .localDid => localDid
-                  | .peerDid => peerDid }) := by
+                  | .peerDid => peerDid
+                  | .homeDid => localDid }) := by
   cases s <;> rfl
 
 /-- A `PeerDid` scope filters every carried collection on the peer DID. -/
@@ -204,6 +207,34 @@ theorem conversation_readiness_crossing_is_claimant_scoped (peerDid localDid : D
         (fun k => k.collection = "BearerPairingReady") =
           some { collection := "BearerPairingReady", field := "claimant_did", value := peerDid } := by
   simp [scopeFilter, conversationTemplate, conversationRules]
+
+/-- Machine pairing is the conversation projection plus exactly one
+issuer-owned directory partition. -/
+theorem machine_filter_eq (peerDid homeDid : Did) :
+    scopeFilter machineTemplate.scope [] peerDid homeDid =
+      scopeFilter conversationTemplate.scope [] peerDid homeDid ++
+        [ { collection := "AgentDirectoryEntry"
+          , field := "source_did"
+          , value := homeDid } ] := by
+  simp [scopeFilter, machineTemplate, machineRules, conversationTemplate]
+
+/-- Machine rules cover every declared collection, preventing the directory
+from becoming an accidental unfiltered exemption. -/
+theorem machine_filters_declared_collections (peerDid homeDid : Did) :
+    ((scopeFilter machineTemplate.scope [] peerDid homeDid).map
+        (fun k => k.collection)).toFinset
+      = machineTemplate.collections := by
+  simp [scopeFilter, machineTemplate, machineRules, machineCollections,
+    conversationRules, conversationCollections]
+
+/-- The directory predicate selects the home issuer's source-owned partition. -/
+theorem machine_directory_crossing_is_home_scoped (peerDid homeDid : Did) :
+    (scopeFilter machineTemplate.scope [] peerDid homeDid).find?
+        (fun k => k.collection = "AgentDirectoryEntry") =
+          some { collection := "AgentDirectoryEntry"
+               , field := "source_did"
+               , value := homeDid } := by
+  simp [scopeFilter, machineTemplate, machineRules, conversationRules]
 
 /-- The coordinator subagent leg carries only bridges addressed to the peer
 host. Coordinator-owned parent requests are not pair-specific and therefore
@@ -279,6 +310,11 @@ theorem subagentCoordinator_in_catalog :
 catalog. -/
 theorem subagentHost_in_catalog :
     resolveTemplate builtinCatalog "subagent-host" = some subagentHostTemplate := by
+  decide
+
+/-- Concrete catalog membership: machine discovery resolves from the catalog. -/
+theorem machine_in_catalog :
+    resolveTemplate builtinCatalog "machine" = some machineTemplate := by
   decide
 
 /-- Concrete catalog membership: the app-collections (bring-your-own) template

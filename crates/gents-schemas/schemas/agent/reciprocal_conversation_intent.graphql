@@ -9,9 +9,10 @@
 # server's entire conversation slice to whatever address the member's
 # self-signed PeerEndpoint advertises, so the reconciler's safety rests on the
 # standing control-plane assumption that these rows are only ever written
-# locally (by the invite CLI against this node): remote peers must never gain a
-# replication path into this collection. This is the same assumption the
-# pairing engine already makes for PeerPairingDesired/DataPlanePairingDesired.
+# locally (by the invite CLI or by the issuer-side reconciler after verifying a
+# signed bearer claim): remote peers must never gain a replication path into
+# this collection. This is the same assumption the pairing engine already
+# makes for PeerPairingDesired/DataPlanePairingDesired.
 # If that assumption ever weakens (e.g. broader inbound collection admission),
 # intent rows must become server-signed and verified on read.
 type ReciprocalConversationIntent {

@@ -37,8 +37,18 @@ impl DirectoryStore for DirectoryFixtureStore {
     async fn load_runtime_states(&self) -> Result<BTreeMap<String, (String, String)>> {
         Ok(self.runtimes.clone())
     }
-    async fn list_directory_entries(&self) -> Result<BTreeMap<String, DirectoryEntry>> {
-        Ok(self.entries.lock().unwrap().clone())
+    async fn list_directory_entries(
+        &self,
+        source_did: &str,
+    ) -> Result<BTreeMap<String, DirectoryEntry>> {
+        Ok(self
+            .entries
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, entry)| entry.source_did == source_did)
+            .map(|(did, entry)| (did.clone(), entry.clone()))
+            .collect())
     }
     async fn upsert_directory_entry(&self, entry: &DirectoryEntry) -> Result<()> {
         self.upserts.lock().unwrap().push(entry.agent_did.clone());
@@ -48,9 +58,15 @@ impl DirectoryStore for DirectoryFixtureStore {
             .insert(entry.agent_did.clone(), entry.clone());
         Ok(())
     }
-    async fn delete_directory_entry(&self, agent_did: &str) -> Result<()> {
+    async fn delete_directory_entry(&self, source_did: &str, agent_did: &str) -> Result<()> {
         self.deletes.lock().unwrap().push(agent_did.to_string());
-        self.entries.lock().unwrap().remove(agent_did);
+        let mut entries = self.entries.lock().unwrap();
+        if entries
+            .get(agent_did)
+            .is_some_and(|entry| entry.source_did == source_did)
+        {
+            entries.remove(agent_did);
+        }
         Ok(())
     }
 }
@@ -64,6 +80,7 @@ fn principal(did: &str, name: &str) -> (String, String) {
 #[test]
 fn derivation_projects_exactly_the_principals() {
     let derived = derive_directory_entries(
+        "did:key:home",
         &[principal("did:key:a", "Amy"), principal("did:key:b", "Bob")],
         &BTreeMap::from([("did:key:a".to_string(), vec!["coder".to_string()])]),
         &BTreeMap::from([(
@@ -76,6 +93,7 @@ fn derivation_projects_exactly_the_principals() {
         BTreeSet::from(["did:key:a".to_string(), "did:key:b".to_string()])
     );
     let a = &derived["did:key:a"];
+    assert_eq!(a.source_did, "did:key:home");
     assert_eq!(a.display_name, "Amy");
     assert_eq!(a.behaviors, vec!["coder".to_string()]);
     assert_eq!(a.runtime_state, "running");
@@ -98,6 +116,7 @@ async fn tick_converges_then_quiesces() {
             "did:key:a".to_string(),
             DirectoryEntry {
                 agent_did: "did:key:a".to_string(),
+                source_did: "did:key:home".to_string(),
                 display_name: "Amy".to_string(),
                 behaviors: Vec::new(),
                 runtime_state: "starting".to_string(), // drifted payload
@@ -107,10 +126,14 @@ async fn tick_converges_then_quiesces() {
         ..Default::default()
     };
 
-    let first = reconcile_directory_tick(&store).await.expect("first tick");
+    let first = reconcile_directory_tick(&store, "did:key:home")
+        .await
+        .expect("first tick");
     assert_eq!(first.refreshed, BTreeSet::from(["did:key:a".to_string()]));
 
-    let second = reconcile_directory_tick(&store).await.expect("second tick");
+    let second = reconcile_directory_tick(&store, "did:key:home")
+        .await
+        .expect("second tick");
     assert_eq!(
         second,
         DirectoryTickOutcome::default(),
@@ -134,6 +157,7 @@ async fn tick_retracts_only_removed_principals() {
                 "did:key:a".to_string(),
                 DirectoryEntry {
                     agent_did: "did:key:a".to_string(),
+                    source_did: "did:key:home".to_string(),
                     display_name: "Amy".to_string(),
                     behaviors: Vec::new(),
                     runtime_state: String::new(),
@@ -144,6 +168,7 @@ async fn tick_retracts_only_removed_principals() {
                 "did:key:b".to_string(),
                 DirectoryEntry {
                     agent_did: "did:key:b".to_string(),
+                    source_did: "did:key:home".to_string(),
                     display_name: "Bob".to_string(),
                     behaviors: Vec::new(),
                     runtime_state: String::new(),
@@ -154,11 +179,45 @@ async fn tick_retracts_only_removed_principals() {
         ..Default::default()
     };
 
-    let outcome = reconcile_directory_tick(&store).await.expect("tick");
+    let outcome = reconcile_directory_tick(&store, "did:key:home")
+        .await
+        .expect("tick");
     assert_eq!(outcome.retracted, BTreeSet::from(["did:key:a".to_string()]));
     assert_eq!(
         *store.deletes.lock().unwrap(),
         vec!["did:key:a".to_string()]
     );
     assert!(outcome.upserted.is_empty() && outcome.refreshed.is_empty());
+}
+
+/// Mirrors `projectStep_preserves_foreign`: a projector owns only rows whose
+/// source is its home DID and must not retract a replicated foreign partition.
+#[tokio::test]
+async fn tick_preserves_foreign_directory_rows() {
+    let foreign = DirectoryEntry {
+        agent_did: "did:key:foreign-agent".to_string(),
+        source_did: "did:key:foreign-home".to_string(),
+        display_name: "Foreign".to_string(),
+        behaviors: Vec::new(),
+        runtime_state: String::new(),
+        last_seen: String::new(),
+    };
+    let store = DirectoryFixtureStore {
+        entries: Mutex::new(BTreeMap::from([(
+            foreign.agent_did.clone(),
+            foreign.clone(),
+        )])),
+        ..Default::default()
+    };
+
+    let outcome = reconcile_directory_tick(&store, "did:key:local-home")
+        .await
+        .expect("tick");
+
+    assert_eq!(outcome, DirectoryTickOutcome::default());
+    assert_eq!(
+        store.entries.lock().unwrap().get("did:key:foreign-agent"),
+        Some(&foreign)
+    );
+    assert!(store.deletes.lock().unwrap().is_empty());
 }

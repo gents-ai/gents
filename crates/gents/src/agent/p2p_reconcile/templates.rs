@@ -41,15 +41,6 @@ pub enum Scope {
     /// Explicit per-collection filter rules for directional pairings where
     /// different collections scope to different DID sources.
     PerCollection(&'static [CollectionRule]),
-    /// Like `PeerDid`, but the named collections replicate unfiltered.
-    /// Plane-dependent exactly like `PeerDid` (control plane: peer DID;
-    /// data plane: local/self DID) — the exemption list is the only
-    /// difference. Needed by templates that mix a DID-scoped conversation
-    /// plane with unfiltered discovery collections (machine, #714).
-    PeerDidExcept {
-        field: &'static str,
-        exempt: &'static [&'static str],
-    },
 }
 
 /// DID source for one per-collection filter rule.
@@ -59,6 +50,12 @@ pub enum DidSource {
     LocalDid,
     /// Use the paired peer's agent DID.
     PeerDid,
+    /// Use the DID that owns the pairing's authoritative projection.
+    ///
+    /// This is the local DID on the issuer/runtime side and the remote issuer
+    /// DID on a bearer client. It lets both directions select the same
+    /// issuer-owned rows without replicating another runtime's projection.
+    HomeDid,
 }
 
 /// One exact per-collection filter rule.
@@ -190,7 +187,61 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "AgentSession",
     "AgentConversation",
     "CompactionEntry",
+    "BearerPairingReady",
     AGENT_DIRECTORY_COLLECTION,
+];
+
+const MACHINE_RULES: &[CollectionRule] = &[
+    CollectionRule {
+        collection: "AgentRequest",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentResponse",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentMessage",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentToolCall",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentToolResult",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentSession",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentConversation",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "CompactionEntry",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "BearerPairingReady",
+        field: "claimant_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: AGENT_DIRECTORY_COLLECTION,
+        field: "source_did",
+        source: DidSource::HomeDid,
+    },
 ];
 
 /// Agent-config collections: behavior + tool configuration.  Unscoped because
@@ -292,15 +343,7 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     ScopeTemplate {
         id: MACHINE_TEMPLATE,
         collections: MACHINE_COLLECTIONS,
-        // Conversation collections stay member-scoped exactly like the
-        // `conversation` template (plane-dependent: peer DID on the control
-        // plane, self DID on the data plane); `AgentDirectoryEntry` is the
-        // sole exemption and replicates unfiltered on both planes —
-        // directory rows carry the agent's DID, not the member's (#714 C1).
-        scope: Scope::PeerDidExcept {
-            field: "agent_did",
-            exempt: &[AGENT_DIRECTORY_COLLECTION],
-        },
+        scope: Scope::PerCollection(MACHINE_RULES),
         delivery: Delivery::Push,
     },
     ScopeTemplate {
@@ -370,9 +413,6 @@ pub fn resolve_template(id: &str) -> Option<&'static ScopeTemplate> {
 /// - `Scope::Unscoped` → empty map (no filtering).
 /// - `Scope::PerCollection(rules)` → insert each exact collection rule using
 ///   either the peer DID or local DID as the value source.
-/// - `Scope::PeerDidExcept { field, exempt }` → same as `PeerDid`, but
-///   collections named in `exempt` are skipped (no predicate, i.e.
-///   unfiltered on the control plane).
 pub fn scope_filter(
     scope: &Scope,
     collections: &[&str],
@@ -392,19 +432,6 @@ pub fn scope_filter(
                 )
             })
             .collect(),
-        Scope::PeerDidExcept { field, exempt } => collections
-            .iter()
-            .filter(|&&col| !exempt.contains(&col))
-            .map(|&col| {
-                (
-                    col.to_string(),
-                    FilterPredicate {
-                        field: (*field).to_string(),
-                        value: peer_did.to_string(),
-                    },
-                )
-            })
-            .collect(),
         Scope::Unscoped => BTreeMap::new(),
         Scope::PerCollection(rules) => rules
             .iter()
@@ -412,6 +439,7 @@ pub fn scope_filter(
                 let value = match rule.source {
                     DidSource::LocalDid => local_did,
                     DidSource::PeerDid => peer_did,
+                    DidSource::HomeDid => local_did,
                 };
                 (
                     rule.collection.to_string(),
@@ -617,21 +645,30 @@ mod tests {
     }
 
     #[test]
-    fn machine_template_scopes_conversation_but_not_directory() {
+    fn machine_template_scopes_conversation_and_issuer_owned_directory() {
         let t = resolve_template("machine").expect("machine template registered");
         assert_eq!(t.delivery, Delivery::Push);
-        assert_eq!(t.collections.len(), 9);
+        assert_eq!(t.collections.len(), 10);
         assert!(t.collections.contains(&AGENT_DIRECTORY_COLLECTION));
         let filters = scope_filter(&t.scope, t.collections, "did:key:phone", "did:key:server");
         // Conversation collections stay member-scoped exactly like `conversation`.
         for col in CONVERSATION_COLLECTIONS {
             let predicate = filters.get(*col).expect("conversation collection filtered");
-            assert_eq!(predicate.field, "agent_did");
+            let expected_field = if *col == "BearerPairingReady" {
+                "claimant_did"
+            } else {
+                "requester_did"
+            };
+            assert_eq!(predicate.field, expected_field);
             assert_eq!(predicate.value, "did:key:phone");
         }
-        // The directory replicates unfiltered: rows carry the AGENT's did,
-        // not the member's — a member-scoped filter would blank the picker.
-        assert!(filters.get(AGENT_DIRECTORY_COLLECTION).is_none());
+        assert_eq!(
+            filters.get(AGENT_DIRECTORY_COLLECTION),
+            Some(&FilterPredicate {
+                field: "source_did".to_string(),
+                value: "did:key:server".to_string(),
+            })
+        );
     }
 
     #[test]

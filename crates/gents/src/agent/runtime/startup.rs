@@ -527,11 +527,13 @@ pub(in crate::agent) async fn run_agent(
     });
 
     let directory_node = agent.node.clone();
+    let directory_source_did = agent.agent_did().to_string();
     let directory_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::DirectoryProjection(
             crate::agent::directory_projection::run_directory_projection(
                 directory_node,
+                directory_source_did,
                 directory_cancel,
             )
             .await,

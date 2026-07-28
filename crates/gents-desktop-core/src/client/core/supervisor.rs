@@ -239,6 +239,7 @@ async fn revalidate_bearer_pairing_readiness(
             remote_admin_actor.as_ref(),
             &record.agent_did,
             network_id,
+            record.pairing_template.as_deref().unwrap_or("conversation"),
             &local_endpoint,
         )
         .await

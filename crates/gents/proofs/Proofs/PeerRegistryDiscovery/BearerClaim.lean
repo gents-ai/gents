@@ -49,6 +49,10 @@ the bearer freshness window and hands the model the verdicts. -/
 structure BearerToken where
   nonce : Nonce
   template : String
+  /-- Deterministic authority-signed issue order. The Rust seam derives this
+  from `(issued_at, nonce)`, so distinct tokens have a total order even when
+  their wall-clock timestamps tie. -/
+  priority : Nat
   /-- The issuer's signature over the token verifies under the authority DID. -/
   authoritySigned : Bool
   /-- `issued_at` is within the bearer replay window at claim-processing time. -/
@@ -105,6 +109,24 @@ collection set (decided below the model's abstraction). Bool, not Prop, so
 `claimStep` stays a plain `if` and existing case splits keep working. -/
 def conversationLike (template : String) : Bool :=
   template = "conversation" || template = "machine"
+
+/-- Pick the authoritative claim when more than one still-fresh claim exists
+for the same claimant. Only a strictly newer authority-signed token replaces
+the current candidate; query/iteration order is irrelevant at the Rust seam. -/
+def preferredClaim (current candidate : Claim) : Claim :=
+  if current.token.priority < candidate.token.priority then candidate else current
+
+/-- A strictly newer authority-signed claim wins template selection. -/
+theorem preferredClaim_newer {current candidate : Claim}
+    (h : current.token.priority < candidate.token.priority) :
+    preferredClaim current candidate = candidate := by
+  simp [preferredClaim, h]
+
+/-- An older or equal-priority claim cannot overwrite the selected claim. -/
+theorem preferredClaim_older_or_equal {current candidate : Claim}
+    (h : candidate.token.priority ≤ current.token.priority) :
+    preferredClaim current candidate = current := by
+  simp [preferredClaim, Nat.not_lt.mpr h]
 
 /-- Atomic claim processing: an admitted claim binds the nonce, mints the
 membership, and records the conversation intent when (and only when) the token
