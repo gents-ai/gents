@@ -1,7 +1,10 @@
 import type { Dispatch, SetStateAction } from "react";
 
 import {
+  cancelCodexLogin,
+  codexLogin,
   deleteSkillConfig,
+  probeInferenceEndpoint,
   saveAgentConfig,
   saveBackendConfig,
   saveBehaviorConfig,
@@ -23,7 +26,9 @@ import type {
   AgentConfigSaveRequest,
   BackendSaveRequest,
   BehaviorSaveRequest,
+  CodexLoginResult,
   DesktopClientSnapshot,
+  InferenceProbeResult,
   InferenceProfileSaveRequest,
   SkillDeleteRequest,
   SkillSaveRequest,
@@ -271,6 +276,36 @@ export function createDesktopShellConfigActions({
     }
   }
 
+  async function onProbeInferenceEndpoint(
+    endpoint: string,
+  ): Promise<InferenceProbeResult> {
+    // A probe failing is the expected answer for an offline local server, not
+    // an app-level error — let the wizard render "not detected" itself.
+    return probeInferenceEndpoint(endpoint);
+  }
+
+  async function onCodexLogin(agentDid: string): Promise<CodexLoginResult> {
+    setError(null);
+    try {
+      // The credential upsert emits a client-updated event, so the shell's
+      // listener refetches the snapshot (and backend health) on its own.
+      return await codexLogin(agentDid);
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    }
+  }
+
+  async function onCancelCodexLogin(): Promise<void> {
+    // Best-effort abort of a sign-in whose browser was closed; a failure here
+    // (e.g. nothing in flight) must never block closing the wizard.
+    try {
+      await cancelCodexLogin();
+    } catch {
+      // Ignored.
+    }
+  }
+
   async function onSaveInferenceProfileConfig(request: InferenceProfileSaveRequest) {
     setSavingConfig(true);
     setError(null);
@@ -342,6 +377,9 @@ export function createDesktopShellConfigActions({
     onDeleteToolSelectionConfig,
     onDeleteToolServiceConfig,
     onDeleteBehaviorConfig,
+    onProbeInferenceEndpoint,
+    onCodexLogin,
+    onCancelCodexLogin,
     onSaveInferenceProfileConfig,
     onSaveSkillConfig,
     onSaveToolSelectionConfig,

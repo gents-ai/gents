@@ -141,6 +141,63 @@ describe("error card retry", () => {
     expect(screen.queryByTestId("retry-turn")).not.toBeInTheDocument();
   });
 
+  it("does not present an interrupted turn as a retryable failure", () => {
+    render(
+      <ChatTranscriptPanel
+        selectedSessionId="s1"
+        session={{
+          ...session,
+          turnState: "interrupted",
+          latestResponse: {
+            status: "interrupted",
+            errorMessage: "agent stream interrupted",
+            interruptedAt: "2026-07-25T20:00:00Z",
+            cancelCause: {
+              cause: "interrupted",
+              source: "responseInterruptedAt",
+              confidence: "direct",
+              at: "2026-07-25T20:00:00Z",
+              evidence: ["AgentResponse.interrupted_at = 2026-07-25T20:00:00Z"],
+            },
+          },
+        }}
+        onRetryMessage={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByTestId("response-error-card")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("retry-turn")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/interrupted/i, { selector: ".cause-badge" }),
+    ).toBeInTheDocument();
+  });
+
+  it("suppresses Retry as soon as a user-cancel cause is observed", () => {
+    render(
+      <ChatTranscriptPanel
+        selectedSessionId="s1"
+        session={{
+          ...session,
+          latestResponse: {
+            status: "failed",
+            errorMessage: "completion cancelled",
+            cancelCause: {
+              cause: "userCancelled",
+              source: "requestInterrupt",
+              confidence: "direct",
+              at: "2026-07-25T20:00:00Z",
+              evidence: ["AgentRequest.interrupt_requested_at = 2026-07-25T20:00:00Z"],
+            },
+          },
+        }}
+        onRetryMessage={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByTestId("response-error-card")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("retry-turn")).not.toBeInTheDocument();
+  });
+
   it("submits retry content through the shell when the composer draft is empty", async () => {
     const sendChatMessage = vi.fn().mockResolvedValue({
       agentDid: deployment.agentDid,

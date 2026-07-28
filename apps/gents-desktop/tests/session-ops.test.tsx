@@ -12,6 +12,47 @@ vi.mock("../src/components/backgroundedTools/useOperationsSnapshot", async (orig
 const mockedSnapshot = vi.mocked(useOperationsSnapshot);
 
 describe("session ops", () => {
+  it("reports pairing progress instead of calling an idle transport healthy", () => {
+    render(
+      <ChatHeader
+        selectedSessionId="session-1"
+        selectedConversationTitle="planning"
+        behaviorLabel={null}
+        runtimeHealth={{
+          status: "healthy",
+          connectedPeerCount: 0,
+          replicatorCount: 1,
+          consecutiveFailures: 0,
+        }}
+        configuredPeerCount={2}
+        dialedPeerCount={1}
+        onRenameConversationTitle={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Reconnecting 1/2")).toHaveAttribute(
+      "title",
+      "Transport healthy; 1/2 saved peers dialed; 0 active connections; 1 replicators",
+    );
+  });
+
+  it("offers a phone navigation control without changing desktop chat semantics", () => {
+    const onOpenMobileNavigation = vi.fn();
+    render(
+      <ChatHeader
+        selectedSessionId="session-1"
+        selectedConversationTitle="planning"
+        behaviorLabel="Amy"
+        runtimeHealth={null}
+        onRenameConversationTitle={vi.fn()}
+        onOpenMobileNavigation={onOpenMobileNavigation}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("mobile-chat-navigation"));
+    expect(onOpenMobileNavigation).toHaveBeenCalledOnce();
+  });
+
   it("offers Fork only for a selected conversation and forwards the session id", () => {
     const onForkConversation = vi.fn();
     const { rerender } = render(
@@ -40,6 +81,37 @@ describe("session ops", () => {
       />,
     );
     expect(screen.queryByTestId("conversation-fork")).not.toBeInTheDocument();
+  });
+
+  it("keeps a failed title rename open with the operator's draft", async () => {
+    const onRenameConversationTitle = vi
+      .fn()
+      .mockRejectedValue(new Error("replica unavailable"));
+    render(
+      <ChatHeader
+        selectedSessionId="session-1"
+        selectedConversationTitle="planning"
+        behaviorLabel={null}
+        runtimeHealth={null}
+        onRenameConversationTitle={onRenameConversationTitle}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("conversation-title-edit"));
+    const input = screen.getByTestId("conversation-title-input");
+    expect(input).toHaveAccessibleName("Rename planning");
+    fireEvent.change(input, { target: { value: "revised planning" } });
+    fireEvent.submit(input.closest("form")!);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("conversation-title-input")).toHaveValue(
+        "revised planning",
+      ),
+    );
+    expect(onRenameConversationTitle).toHaveBeenCalledWith(
+      "session-1",
+      "revised planning",
+    );
   });
 
   it("offers Resend on stuck diagnostics rows", async () => {

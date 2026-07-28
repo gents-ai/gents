@@ -4,6 +4,7 @@ import {
   gotoHarness,
   openConfig,
   openConfigTab,
+  openChatNavigation,
   saveConfig,
   test,
 } from "./desktopTest";
@@ -24,6 +25,7 @@ test.describe("desktop config workspace advanced flows", () => {
     );
 
     await page.getByTestId("config-back-tab").click();
+    await openChatNavigation(page);
     await expect(page.locator(".connected-peer-card")).toContainText(
       "Fleet Steward Harness",
     );

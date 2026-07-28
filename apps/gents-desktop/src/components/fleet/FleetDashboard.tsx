@@ -1,18 +1,39 @@
 import { useState } from "react";
 
 import type {
+  BackendSaveRequest,
+  BearerPairingRequest,
+  BearerPairingResponse,
+  BehaviorSaveRequest,
   BootstrapSummary,
+  CodexLoginResult,
   DeploymentView,
+  InferenceProbeResult,
   P2PHealth,
   PeerAddRequest,
 } from "../../lib/types";
 import { formatPeerConnectionError } from "../../lib/peerConnectionErrors";
 import { AddPeerForm } from "./AddPeerForm";
 import { BrandLockup } from "./BrandLockup";
+import { InferenceSetupWizard } from "./InferenceSetupWizard";
 import { ThemeToggle } from "../ThemeToggle";
 import { FleetRow } from "./FleetRow";
 import { NetworkPanel } from "./NetworkPanel";
 import { validateAgentDid } from "./peerConnectionImport";
+
+/** A deployment lacks a usable inference backend — the onboarding moment where
+ *  the guided setup is worth surfacing. */
+function needsInferenceSetup(deployment: DeploymentView): boolean {
+  const behavior =
+    deployment.behaviors.find((entry) => entry.isDefault) ?? deployment.behaviors[0];
+  const backend =
+    deployment.inferenceBackends.find(
+      (entry) => entry.backendId === behavior?.backendId,
+    ) ?? deployment.inferenceBackends[0];
+  if (!backend) return true;
+  if (backend.enabled === false) return true;
+  return backend.models.length === 0;
+}
 
 type FleetDashboardProps = {
   addingPeer: boolean;
@@ -23,6 +44,7 @@ type FleetDashboardProps = {
   repairingP2P: boolean;
   starting: boolean;
   onAddPeer: (request: PeerAddRequest) => Promise<unknown>;
+  onPairBearer: (request: BearerPairingRequest) => Promise<BearerPairingResponse>;
   onFetchPeerStatus: (serverAddress: string) => Promise<unknown>;
   onInitLocalRuntime: (label?: string | null) => Promise<unknown>;
   onOpenChat: (agentDid: string) => void;
@@ -31,6 +53,11 @@ type FleetDashboardProps = {
   onRemovePeer?: (peerId: string) => Promise<unknown> | void;
   onRenamePeer?: (peerId: string, label: string) => Promise<unknown> | void;
   onRepairP2P: () => Promise<unknown>;
+  onSaveBackendConfig: (request: BackendSaveRequest) => Promise<unknown>;
+  onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
+  onProbeInferenceEndpoint: (endpoint: string) => Promise<InferenceProbeResult>;
+  onCodexLogin: (agentDid: string) => Promise<CodexLoginResult>;
+  onCancelCodexLogin: () => Promise<unknown>;
 };
 
 const DEFAULT_PEER_FORM: PeerAddRequest = {
@@ -49,6 +76,7 @@ export function FleetDashboard({
   repairingP2P,
   starting,
   onAddPeer,
+  onPairBearer,
   onFetchPeerStatus,
   onInitLocalRuntime,
   onOpenChat,
@@ -57,12 +85,26 @@ export function FleetDashboard({
   onRemovePeer,
   onRenamePeer,
   onRepairP2P,
+  onSaveBackendConfig,
+  onSaveBehaviorConfig,
+  onProbeInferenceEndpoint,
+  onCodexLogin,
+  onCancelCodexLogin,
 }: FleetDashboardProps) {
   const [showAddPeer, setShowAddPeer] = useState(false);
   const [peerForm, setPeerForm] = useState(DEFAULT_PEER_FORM);
   const [peerFormError, setPeerFormError] = useState<string | null>(null);
   const [localRuntimeError, setLocalRuntimeError] = useState<string | null>(null);
+  const [wizardDeployment, setWizardDeployment] = useState<DeploymentView | null>(null);
+  const [pairingNotice, setPairingNotice] = useState<string | null>(null);
   const hasDeployments = deployments.length > 0;
+  const deploymentNeedingInference = deployments.find(needsInferenceSetup) ?? null;
+  // Keep the open wizard bound to the freshest copy of its deployment so a
+  // background snapshot refresh (post-save) flows into it.
+  const activeWizardDeployment = wizardDeployment
+    ? (deployments.find((entry) => entry.peerId === wizardDeployment.peerId) ??
+      wizardDeployment)
+    : null;
   // The repair command re-dials the desktop client's P2P connections as a
   // whole, so it lives here at fleet level — a per-row placement would lie
   // about its scope. Shown only when something actually needs repairing.
@@ -87,6 +129,17 @@ export function FleetDashboard({
     } catch (error) {
       setPeerFormError(formatPeerConnectionError(error, "add-peer"));
     }
+  }
+
+  async function pairWithBearer(request: BearerPairingRequest) {
+    const response = await onPairBearer(request);
+    setPeerFormError(null);
+    setLocalRuntimeError(null);
+    setPairingNotice(
+      `${response.pairing.label} is ready. Signed membership and bidirectional replication were observed.`,
+    );
+    setShowAddPeer(false);
+    return response;
   }
 
   async function connectLocalRuntime() {
@@ -122,7 +175,9 @@ export function FleetDashboard({
             className="fleet-remote-disclosure"
             data-testid="fleet-remote-disclosure"
           >
-            <summary>Connect a remote agent instead…</summary>
+            <summary aria-label="Connect a remote agent">
+              Connect a remote agent instead…
+            </summary>
             <AddPeerForm
               addingPeer={addingPeer}
               disabled={starting || loading}
@@ -130,6 +185,7 @@ export function FleetDashboard({
               peerForm={peerForm}
               onPeerFormChange={setPeerForm}
               onFetchPeerStatus={onFetchPeerStatus}
+              onPairBearer={pairWithBearer}
               onSubmit={submitPeer}
             />
           </details>
@@ -158,13 +214,50 @@ export function FleetDashboard({
           ) : null}
           <button
             className="primary-button"
-            onClick={() => setShowAddPeer((value) => !value)}
+            onClick={() => {
+              setPairingNotice(null);
+              setShowAddPeer((value) => !value);
+            }}
             type="button"
           >
             Add Agent
           </button>
         </div>
       </header>
+
+      {deploymentNeedingInference ? (
+        <section
+          className="panel fleet-inference-callout"
+          data-testid="fleet-inference-callout"
+        >
+          <div className="fleet-inference-callout-copy">
+            <span className="eyebrow">Inference</span>
+            <strong>Finish setting up {deploymentNeedingInference.label}</strong>
+            <span className="muted">
+              This agent has no model backend yet. Connect OpenAI, a local server, a
+              custom endpoint, or your ChatGPT subscription.
+            </span>
+          </div>
+          <button
+            className="primary-button"
+            data-testid="fleet-inference-setup"
+            type="button"
+            onClick={() => setWizardDeployment(deploymentNeedingInference)}
+          >
+            Set up inference
+          </button>
+        </section>
+      ) : null}
+
+      {pairingNotice ? (
+        <p
+          aria-live="polite"
+          className="fleet-pairing-success"
+          data-testid="fleet-pair-status"
+        >
+          {pairingNotice}
+        </p>
+      ) : null}
 
       {showAddPeer ? (
         <section className="panel fleet-add-panel">
@@ -181,6 +274,7 @@ export function FleetDashboard({
             peerForm={peerForm}
             onPeerFormChange={setPeerForm}
             onFetchPeerStatus={onFetchPeerStatus}
+            onPairBearer={pairWithBearer}
             onSubmit={submitPeer}
           />
         </section>
@@ -218,6 +312,18 @@ export function FleetDashboard({
       </div>
 
       <NetworkPanel />
+
+      {activeWizardDeployment ? (
+        <InferenceSetupWizard
+          deployment={activeWizardDeployment}
+          onClose={() => setWizardDeployment(null)}
+          onSaveBackendConfig={onSaveBackendConfig}
+          onSaveBehaviorConfig={onSaveBehaviorConfig}
+          onProbeInferenceEndpoint={onProbeInferenceEndpoint}
+          onCodexLogin={onCodexLogin}
+          onCancelCodexLogin={onCancelCodexLogin}
+        />
+      ) : null}
     </section>
   );
 }

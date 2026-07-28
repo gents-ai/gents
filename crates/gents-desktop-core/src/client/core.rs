@@ -1,3 +1,4 @@
+pub(super) mod bearer_pairing;
 mod bootstrap;
 mod materialization;
 mod p2p_ops;
@@ -28,6 +29,8 @@ use super::query::{
     load_agent_scoped_snapshot, load_full_snapshot, load_full_snapshot_from_graphql,
 };
 use crate::remote_admin::PairingErrorClass;
+
+pub use bearer_pairing::{BearerInvitePreview, BearerPairingResult};
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -290,6 +293,7 @@ pub struct ClientCore {
     p2p_health: watch::Sender<P2PHealth>,
     selected_agent_did: watch::Sender<Option<String>>,
     last_loaded_for: tokio::sync::Mutex<HashMap<String, std::time::Instant>>,
+    request_patch_signatures: tokio::sync::Mutex<HashMap<String, (usize, usize, u64)>>,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
     last_mutation_error: StdRwLock<Option<String>>,
     local_peer_id: String,
@@ -475,10 +479,13 @@ impl ClientCore {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| anyhow::anyhow!("peer {} has no GraphQL endpoint", record.label))?;
 
-        // Remote peers serve only their own agent's data, so the remote-side
-        // "full snapshot" is already agent-scoped from our perspective. The
-        // local-side merge is unchanged.
-        let mut snapshot = load_full_snapshot_from_graphql(graphql).await?;
+        // Scope legacy GraphQL recovery to the selected deployment and this
+        // desktop principal. A worker node can contain many unrelated
+        // conversations; fetching all of them is both incorrect and too large
+        // for a reliable phone reconnect.
+        let mut snapshot =
+            load_full_snapshot_from_graphql(graphql, &record.agent_did, self.principal.did())
+                .await?;
         snapshot.stamp_source_agent_did(&record.agent_did);
         let rows = snapshot.row_count();
         let version = self.store.merge_snapshot(snapshot);

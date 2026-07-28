@@ -398,7 +398,9 @@ describe("CodeToolItem", () => {
         }}
       />,
     );
-    expect(screen.getByTestId("code-file-edit")).toHaveTextContent("src/main.rs");
+    const fileEdit = screen.getByTestId("code-file-edit");
+    expect(fileEdit).not.toHaveAttribute("open");
+    expect(fileEdit).toHaveTextContent("src/main.rs");
     expect(screen.getByTestId("code-replacements")).toHaveTextContent("×12");
     const diff = screen.getByTestId("code-diff");
     expect(diff).toHaveTextContent("old line");
@@ -421,7 +423,9 @@ describe("CodeToolItem", () => {
         }}
       />,
     );
-    expect(screen.getByTestId("code-command")).toHaveTextContent("cargo test");
+    const command = screen.getByTestId("code-command");
+    expect(command).not.toHaveAttribute("open");
+    expect(command).toHaveTextContent("cargo test");
     expect(screen.getByTestId("code-exit")).toHaveTextContent("exit 0");
     expect(screen.getByTestId("code-terminal")).toHaveTextContent("test result: ok");
     expect(screen.getByTestId("code-stderr")).toHaveTextContent(

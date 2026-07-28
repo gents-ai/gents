@@ -42,6 +42,22 @@ describe("FleetRow", () => {
     expect(props.onOpenChat).toHaveBeenCalledWith(deployment.agentDid);
   });
 
+  it("keeps chat disabled while signed bearer readiness is pending", () => {
+    const props = renderRow(
+      {},
+      {
+        ...deployment,
+        source: "bearer-pairing",
+        pairingReady: false,
+      },
+    );
+
+    expect(screen.getByTestId("fleet-status-peer-1")).toHaveTextContent("Pairing");
+    expect(screen.getByTestId("fleet-chat-peer-1")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("fleet-chat-peer-1"));
+    expect(props.onOpenChat).not.toHaveBeenCalled();
+  });
+
   it("calls onOpenConfig with the agent DID when the config button is clicked", () => {
     const props = renderRow();
     fireEvent.click(screen.getByTestId("fleet-config-peer-1"));

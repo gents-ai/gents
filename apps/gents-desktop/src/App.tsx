@@ -13,6 +13,7 @@ import { useAppShortcuts } from "./hooks/useAppShortcuts";
 import { Sidebar } from "./components/Sidebar";
 import { useDesktopShell } from "./hooks/useDesktopShell";
 import { installExternalLinkGuard } from "./lib/externalLinks";
+import { startNativeSimulatorE2e } from "./lib/nativeSimulatorE2e";
 import "./App.css";
 
 function App() {
@@ -36,23 +37,36 @@ function AppShell() {
   // External links (e.g. markdown links in the transcript) must open in the
   // OS browser — an unguarded anchor click navigates the whole webview away.
   useEffect(() => installExternalLinkGuard(document), []);
+  useEffect(() => {
+    void startNativeSimulatorE2e();
+  }, []);
   const [workspaceView, setWorkspaceView] = useState<
     "fleet" | "chat" | "config" | "code"
   >("fleet");
+  const [mobileChatPane, setMobileChatPane] = useState<"navigation" | "conversation">(
+    "navigation",
+  );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   useAppShortcuts({
-    setView: setWorkspaceView,
+    setView: (view) => {
+      if (view === "chat" || view === "code") {
+        setMobileChatPane("conversation");
+      }
+      setWorkspaceView(view);
+    },
     newConversation: () => {
       const behaviorId =
         shell.selectedBehaviorId ?? shell.behaviorOptions[0]?.behaviorId ?? null;
       if (behaviorId) {
         setWorkspaceView("chat");
+        setMobileChatPane("conversation");
         shell.onStartNewConversation(behaviorId);
       }
     },
     focusComposer: () => {
       setWorkspaceView("chat");
+      setMobileChatPane("conversation");
       requestAnimationFrame(() => {
         document
           .querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]')
@@ -66,6 +80,7 @@ function AppShell() {
     if (agentDid) {
       shell.setSelectedAgentDid(agentDid);
     }
+    setMobileChatPane("conversation");
     setWorkspaceView("chat");
   }
 
@@ -73,6 +88,7 @@ function AppShell() {
     if (agentDid) {
       shell.setSelectedAgentDid(agentDid);
     }
+    setMobileChatPane("conversation");
     setWorkspaceView("code");
   }
 
@@ -84,7 +100,7 @@ function AppShell() {
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell app-view-${workspaceView}`}>
       <div aria-hidden="true" className="titlebar-drag-region" data-tauri-drag-region />
       {shell.error ? (
         <ErrorBanner message={shell.error} onDismiss={shell.onDismissError} />
@@ -101,6 +117,7 @@ function AppShell() {
           repairingP2P={shell.repairingP2P}
           starting={shell.starting}
           onAddPeer={shell.onAddPeer}
+          onPairBearer={shell.onPairBearer}
           onFetchPeerStatus={shell.onFetchPeerStatus}
           onInitLocalRuntime={shell.onInitLocalRuntime}
           onOpenChat={openChat}
@@ -109,9 +126,17 @@ function AppShell() {
           onRemovePeer={shell.onRemovePeer}
           onRenamePeer={shell.onRenamePeer}
           onRepairP2P={shell.onRepairP2P}
+          onSaveBackendConfig={shell.onSaveBackendConfig}
+          onSaveBehaviorConfig={shell.onSaveBehaviorConfig}
+          onProbeInferenceEndpoint={shell.onProbeInferenceEndpoint}
+          onCodexLogin={shell.onCodexLogin}
+          onCancelCodexLogin={shell.onCancelCodexLogin}
         />
       ) : workspaceView === "chat" || workspaceView === "code" ? (
-        <section className="workspace">
+        <section
+          className={`workspace mobile-chat-pane-${mobileChatPane}`}
+          data-mobile-chat-pane={mobileChatPane}
+        >
           <Sidebar
             behaviorOptions={shell.behaviorOptions}
             conversations={shell.selectedDeployment?.conversations ?? []}
@@ -125,8 +150,15 @@ function AppShell() {
               shell.setSelectedSessionId(null);
             }}
             onSelectSession={shell.onSelectSession}
+            onOpenSession={(sessionId) => {
+              shell.onSelectSession(sessionId);
+              setMobileChatPane("conversation");
+            }}
             onRenameConversationTitle={shell.onRenameConversationTitle}
-            onStartNewConversation={shell.onStartNewConversation}
+            onStartNewConversation={(behaviorId) => {
+              shell.onStartNewConversation(behaviorId);
+              setMobileChatPane("conversation");
+            }}
             selectedAgentDid={shell.selectedAgentDid}
             selectedBehaviorId={shell.selectedBehaviorId}
             selectedSessionId={shell.selectedSessionId}
@@ -141,15 +173,17 @@ function AppShell() {
               />
             ) : null}
             <ChatWorkspace
+              activeRequestId={
+                shell.activeRequestId ?? shell.session?.latestRequestId ?? null
+              }
               approxSerializedBytes={shell.snapshot?.client?.approxSerializedBytes ?? 0}
               canSend={shell.canSendMessage}
               configuredPeerCount={shell.snapshot?.client?.configuredPeerCount ?? 0}
               dialedPeerCount={shell.snapshot?.client?.dialedPeerCount ?? 0}
               draft={shell.draft}
+              interruptVisible={shell.interruptVisible}
               onDraftChange={shell.setDraft}
-              onRenameConversationTitle={(sessionId, title) =>
-                void shell.onRenameConversationTitle(sessionId, title)
-              }
+              onRenameConversationTitle={shell.onRenameConversationTitle}
               onSend={shell.onSendMessage}
               onRetryMessage={shell.onRetryMessage}
               rowCount={shell.snapshot?.client?.rowCount ?? 0}
@@ -167,7 +201,12 @@ function AppShell() {
               selectedSessionId={shell.selectedSessionId}
               sending={shell.sending}
               session={shell.session}
+              turnState={shell.turnState ?? shell.session?.turnState ?? null}
+              onOpenMobileNavigation={() => setMobileChatPane("navigation")}
               onForkedConversation={shell.onSelectSession}
+              onInterruptAccepted={async () => {
+                await shell.refreshSession(shell.selectedSessionId);
+              }}
             />
           </section>
         </section>

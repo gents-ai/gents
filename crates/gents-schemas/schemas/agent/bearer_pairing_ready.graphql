@@ -1,0 +1,15 @@
+# Issuer-authored acknowledgement that the reciprocal conversation replicator
+# for a bearer claimant was applied successfully. Clients must verify
+# `issuer_sig` and an active NetworkMembership before exposing Chat.
+# `@branchable` is required because the acknowledgement is delivered through
+# the just-applied, claimant-filtered P2P replicator.
+type BearerPairingReady @branchable {
+    readiness_key: String @index(unique: true) @immutable
+    issuer_did: String @index @immutable
+    claimant_did: String @index @immutable
+    peer_id: String @index
+    address: String
+    template: String @index
+    acknowledged_at: DateTime @index(direction: DESC)
+    issuer_sig: String
+}

@@ -428,11 +428,11 @@ def boundaries : List Boundary :=
     , domain := "P2PBackpressure"
     , subject := "hub admission obligation model vs shipping flood safety"
     , statement :=
-        "Proofs.P2PBackpressure and tla/P2PBackpressure are one-wave obligation models for success-ack backing, pending capacity, and timeout slot release. They do NOT refine the shipping p2p coordinator. Production still (a) spawns PushLog tasks before acquiring the push semaphore and retains JoinHandles until shutdown — so max_concurrent_push_tasks does not bound queued work under sustained multi-wave load, and (b) holds pending_dags in a process-local HashMap — success-ack after registration is not durable across receiver restart without anti-entropy/re-drive assumptions. Operator knobs on gents server are a mitigation surface, not a flood-safety fence."
+        "Proofs.P2PBackpressure and tla/P2PBackpressure are one-wave obligation models for success-ack backing, pending capacity, and timeout slot release. They do NOT refine the shipping p2p coordinator. The pinned DefraDB implementation now (a) admits compact jobs into a bounded item/byte queue before worker execution, coalesces and schedules per peer, and hands admission overflow to a persisted retry ladder, and (b) persists push-originated pending-DAG registrations before success acknowledgement and re-drives them after restart. Those multi-wave, store-before-ack, and restart properties remain outside the formal model and generated conformance contract."
     , acceptedFailureMode :=
-        some "Sustained writes can grow waiting push tasks and retained handles without bound even with a small worker count; a receiver crash can drop in-memory pending after the sender has stopped retrying on a success ack."
+        some "A future queue-admission, durable-retry, store-before-ack, or restart-recovery regression can pass this one-wave model; the separate pinned-struct observability and P2P end-to-end tests are implementation fences, not proofs of those properties."
     , acceptedFollowUp :=
-        some "defradb.rs: admit/bound the push queue before spawn, retire JoinHandles, export queued/in-flight diagnostics; either persist/recover pending-DAG registrations or delay success until merge / document anti-entropy. TLC-check MCP2PBackpressure* when Java is available. Tracked under #630."
+        some "Extend the distributed model to bounded multi-wave queue admission plus durable retry and pending-DAG restart recovery, bind its witness rows to the pinned DefraDB adapter, and TLC-check MCP2PBackpressure*. Tracked under #630."
     }
   ]
 

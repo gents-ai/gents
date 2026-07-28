@@ -126,6 +126,7 @@ impl Tool for ReadOnlyBashTool {
         validate_command_policy(&args.command, &args.args, &self.policy)?;
         run_command(
             &self.context,
+            Self::NAME,
             &args.command,
             &args.args,
             args.cwd.as_deref(),
@@ -206,6 +207,7 @@ impl Tool for UnrestrictedBashTool {
         validate_command_policy(command, &command_args, &self.policy)?;
         run_command(
             &self.context,
+            Self::NAME,
             command,
             &command_args,
             args.cwd.as_deref(),

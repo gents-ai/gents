@@ -5,7 +5,7 @@ import {
   AddPeerForm,
   type AddPeerFormProps,
 } from "../src/components/fleet/AddPeerForm";
-import type { PeerAddRequest } from "../src/lib/types";
+import type { BearerPairingResponse, PeerAddRequest } from "../src/lib/types";
 
 function renderForm(overrides: Partial<AddPeerFormProps> = {}) {
   const peerForm: PeerAddRequest = {
@@ -21,6 +21,25 @@ function renderForm(overrides: Partial<AddPeerFormProps> = {}) {
     peerForm,
     onPeerFormChange: vi.fn(),
     onFetchPeerStatus: vi.fn(async () => ({})),
+    onPairBearer: vi.fn(async () => ({
+      bootstrap: {} as BearerPairingResponse["bootstrap"],
+      client: null,
+      pairing: {
+        peerId: "peer-amy",
+        label: "Amy",
+        addr: "iroh://amy",
+        issuerDid: "did:key:zAmy",
+        claimantDid: "did:key:zPhone",
+        networkId: "amy-network",
+        template: "conversation",
+        connected: true,
+        claimSubmitted: true,
+        endpointPublished: true,
+        replicationConfigured: true,
+        membershipObserved: true,
+        bidirectionalReplicationObserved: true,
+      },
+    })),
     onSubmit: vi.fn(async () => undefined),
     ...overrides,
   };
@@ -29,6 +48,25 @@ function renderForm(overrides: Partial<AddPeerFormProps> = {}) {
 }
 
 describe("AddPeerForm", () => {
+  it("pairs from a signed bearer invite", async () => {
+    const props = renderForm();
+    fireEvent.change(screen.getByTestId("fleet-pair-label"), {
+      target: { value: "Amy" },
+    });
+    fireEvent.change(screen.getByTestId("fleet-pair-token"), {
+      target: { value: "dabear1-signed-invite" },
+    });
+    fireEvent.click(screen.getByTestId("fleet-pair-submit"));
+
+    await waitFor(() => {
+      expect(props.onPairBearer).toHaveBeenCalledWith({
+        token: "dabear1-signed-invite",
+        label: "Amy",
+      });
+      expect(screen.getByTestId("fleet-pair-status")).toHaveTextContent("Amy is ready");
+    });
+  });
+
   it("submits a complete manual peer via onSubmit without fetching /status", async () => {
     const props = renderForm();
     fireEvent.click(screen.getByTestId("fleet-add-submit"));

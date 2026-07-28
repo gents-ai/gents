@@ -20,6 +20,7 @@ export type ChatComposerProps = {
   configuredPeerCount: number;
   dialedPeerCount: number;
   draft: string;
+  interruptVisible: boolean;
   rowCount: number;
   sendHint: string | null;
   sending: boolean;
@@ -45,6 +46,7 @@ export function ChatComposer({
   activeRequestId,
   canSend,
   draft,
+  interruptVisible,
   sendHint,
   sending,
   turnState,
@@ -172,6 +174,7 @@ export function ChatComposer({
           </ul>
         ) : null}
         <textarea
+          aria-label="Message the selected agent"
           className="composer-input"
           data-testid="composer-input"
           ref={inputRef}
@@ -200,6 +203,7 @@ export function ChatComposer({
         <div className="composer-actions">
           <CancelButton
             activeRequestId={activeRequestId}
+            forceVisible={interruptVisible}
             turnState={turnState}
             onInterruptClick={onInterruptClick}
           />

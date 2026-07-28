@@ -14,6 +14,7 @@ pub(crate) struct MessageView {
     pub reasoning: Option<String>,
     pub has_tool_calls: bool,
     pub has_tool_results: bool,
+    pub runtime_control: bool,
     pub timestamp: Option<String>,
 }
 

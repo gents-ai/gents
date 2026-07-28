@@ -30,8 +30,8 @@ pub enum Delivery {
 /// Scoping policy for per-peer document filtering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
-    /// Filter each collection on a single field that must equal the peer's
-    /// `agent_did`.
+    /// Filter each collection on a single field that must equal the paired
+    /// peer's DID.
     PeerDid {
         /// The field name on each collection document.
         field: &'static str,
@@ -113,7 +113,7 @@ pub type PairingFilters = BTreeMap<String, FilterPredicate>;
 // ---------------------------------------------------------------------------
 
 /// Conversation collections: all request/response/turn artifacts, scoped by
-/// the peer's agent DID.
+/// the immutable requester route carried through the complete transcript.
 const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentResponse",
@@ -123,6 +123,55 @@ const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentSession",
     "AgentConversation",
     "CompactionEntry",
+    "BearerPairingReady",
+];
+
+const CONVERSATION_RULES: &[CollectionRule] = &[
+    CollectionRule {
+        collection: "AgentRequest",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentResponse",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentMessage",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentToolCall",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentToolResult",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentSession",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentConversation",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "CompactionEntry",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "BearerPairingReady",
+        field: "claimant_did",
+        source: DidSource::PeerDid,
+    },
 ];
 
 /// The fleet-discovery directory collection replicated by the `machine`
@@ -237,7 +286,7 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     ScopeTemplate {
         id: "conversation",
         collections: CONVERSATION_COLLECTIONS,
-        scope: Scope::PeerDid { field: "agent_did" },
+        scope: Scope::PerCollection(CONVERSATION_RULES),
         delivery: Delivery::Push,
     },
     ScopeTemplate {
@@ -395,12 +444,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn conversation_is_scoped_push_with_eight_collections() {
+    fn conversation_is_scoped_push_with_transcript_and_readiness_collections() {
         let t = resolve_template("conversation").unwrap();
         assert_eq!(t.delivery, Delivery::Push);
-        assert!(matches!(t.scope, Scope::PeerDid { field } if field == "agent_did"));
-        assert_eq!(t.collections.len(), 8);
+        assert!(matches!(t.scope, Scope::PerCollection(_)));
+        assert_eq!(t.collections.len(), 9);
         assert!(t.collections.contains(&"AgentRequest"));
+        assert!(t.collections.contains(&"BearerPairingReady"));
     }
 
     #[test]
@@ -420,13 +470,16 @@ mod tests {
     }
 
     #[test]
-    fn scope_filter_builds_per_collection_agent_did_equality() {
+    fn conversation_scope_filters_transcript_by_requester_and_readiness_by_claimant() {
         let t = resolve_template("conversation").unwrap();
         let f = scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice");
-        assert_eq!(f.len(), 8);
+        assert_eq!(f.len(), 9);
         let p = f.get("AgentRequest").unwrap();
-        assert_eq!(p.field, "agent_did");
+        assert_eq!(p.field, "requester_did");
         assert_eq!(p.value, "did:key:bob");
+        let ready = f.get("BearerPairingReady").unwrap();
+        assert_eq!(ready.field, "claimant_did");
+        assert_eq!(ready.value, "did:key:bob");
     }
 
     #[test]

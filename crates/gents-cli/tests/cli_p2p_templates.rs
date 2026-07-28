@@ -9,7 +9,7 @@
 //!   collections — filtered push with no gossip subscription.
 //! - **Replicate** (`agent-config` / `backup`): subscribed collections AND a
 //!   replicator with an EMPTY filter — whole-collection subscribe+replicate.
-//! - **Filter change**: changing the scoped value (the peer's `agent_did`)
+//! - **Filter change**: changing the scoped value (the peer's DID)
 //!   re-resolves the filter and reinstalls the replicator, updating the applied
 //!   `replicator_filter`.
 //!
@@ -198,8 +198,8 @@ fn peer_id_of(readiness: &Value) -> Result<String> {
 /// Test 1 (green now). Pair via the `conversation` (Push) template and assert
 /// the local applied row is a *filtered push*: a replicator is installed
 /// (replicator_addresses non-empty), the scope filter is recorded
-/// (replicator_filter carries the peer's agent_did), and NO collections are
-/// subscribed.
+/// (replicator_filter carries the peer's DID through each collection's
+/// canonical route field), and NO collections are subscribed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_push_template_installs_filtered_replicator_no_subscription() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -295,8 +295,8 @@ async fn conversation_push_template_installs_filtered_replicator_no_subscription
         "Push replicator_filter must record the scoped peer DID {agent_did_src}: {filter}"
     );
     assert!(
-        filter.contains("agent_did"),
-        "Push replicator_filter must scope on the agent_did field: {filter}"
+        filter.contains("requester_did"),
+        "Push replicator_filter must scope transcript collections on requester_did: {filter}"
     );
 
     Ok(())
@@ -405,7 +405,7 @@ async fn agent_config_replicate_template_subscribes_with_empty_filter() -> Resul
 }
 
 /// Test 3 (green now, local). Pair via the `conversation` (Push) template, then
-/// change the scoped value (the peer's `agent_did`) so the resolved filter
+/// change the scoped value (the peer's DID) so the resolved filter
 /// differs. Assert the applied `replicator_filter` updates — the reconciler
 /// reinstalls the replicator under the new filter identity. Asserted entirely
 /// on one node's applied row; no cross-node transit needed.
@@ -559,7 +559,7 @@ async fn filter_change_reinstalls_replicator_under_new_scope() -> Result<()> {
 }
 
 /// Test 4 (BUMP-GATED acceptance test). End-to-end scoped filtering: write docs
-/// for two different `agent_did`s on the source node, pair via the
+/// for two different `requester_did`s on the source node, pair via the
 /// `conversation` (Push) template, and assert ONLY the scoped DID's docs appear
 /// on the peer.
 ///
@@ -614,7 +614,7 @@ async fn end_to_end_scoped_filtering_only_replicates_scoped_did() -> Result<()> 
         spawn_p2p_node(&home_peer, port_peer, &graphql_peer, &agent_did_peer).await?;
 
     // The peer's DID is the scope: conversation Push filters the source's
-    // documents down to those tagged with the peer's agent_did.
+    // documents down to those whose immutable requester route names the peer.
     let scoped_did = agent_did_peer.clone();
     let other_did = format!("{agent_did_peer}-other");
 
@@ -622,8 +622,14 @@ async fn end_to_end_scoped_filtering_only_replicates_scoped_did() -> Result<()> 
     // the SOURCE node. Only the scoped one should ever land on the peer.
     let scoped_request_id = format!("scoped-{}", Uuid::new_v4().simple());
     let other_request_id = format!("other-{}", Uuid::new_v4().simple());
-    write_agent_request(&graphql_src, &scoped_request_id, &scoped_did).await?;
-    write_agent_request(&graphql_src, &other_request_id, &other_did).await?;
+    write_agent_request(
+        &graphql_src,
+        &scoped_request_id,
+        &agent_did_src,
+        &scoped_did,
+    )
+    .await?;
+    write_agent_request(&graphql_src, &other_request_id, &agent_did_src, &other_did).await?;
 
     // Source pairs toward the peer via conversation (Push): it installs a
     // filtered replicator pushing only the peer-scoped slice.
@@ -664,14 +670,20 @@ async fn end_to_end_scoped_filtering_only_replicates_scoped_did() -> Result<()> 
     Ok(())
 }
 
-/// Write a minimal `AgentRequest` document for `agent_did` on `graphql`.
-async fn write_agent_request(graphql: &str, request_id: &str, agent_did: &str) -> Result<()> {
+/// Write a minimal `AgentRequest` document with an immutable requester route.
+async fn write_agent_request(
+    graphql: &str,
+    request_id: &str,
+    agent_did: &str,
+    requester_did: &str,
+) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
                 agent_did: "{agent_did}",
+                requester_did: "{requester_did}",
                 session_id: "{request_id}-session",
                 content: "scope filtering probe",
                 status: "pending",
@@ -681,6 +693,7 @@ async fn write_agent_request(graphql: &str, request_id: &str, agent_did: &str) -
         }}"#,
         request_id = escape_graphql_string(request_id),
         agent_did = escape_graphql_string(agent_did),
+        requester_did = escape_graphql_string(requester_did),
         now = escape_graphql_string(&now),
     );
     graphql_query(graphql, &mutation).await?;

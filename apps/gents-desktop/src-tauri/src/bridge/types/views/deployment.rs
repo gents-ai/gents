@@ -1,3 +1,4 @@
+use gents_desktop_core::client::BearerPairingResult;
 use serde::Serialize;
 
 use gents_desktop_core::client::PeerMutationResult;
@@ -262,6 +263,7 @@ pub(crate) struct DeploymentView {
     pub source: Option<String>,
     pub graphql: Option<String>,
     pub dial_succeeded: bool,
+    pub pairing_ready: bool,
     pub last_error: Option<String>,
     pub default_behavior_id: Option<String>,
     pub agent_principal: AgentPrincipalView,
@@ -330,6 +332,61 @@ pub(crate) struct PeerRemoveResponse {
     #[serde(flatten)]
     pub snapshot: DesktopClientSnapshot,
     pub mutation: PeerMutationView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BearerPairingView {
+    pub peer_id: String,
+    pub label: String,
+    pub addr: String,
+    pub issuer_did: String,
+    pub claimant_did: String,
+    pub network_id: String,
+    pub template: String,
+    pub connected: bool,
+    pub claim_submitted: bool,
+    pub endpoint_published: bool,
+    pub replication_configured: bool,
+    pub membership_observed: bool,
+    pub bidirectional_replication_observed: bool,
+}
+
+impl From<BearerPairingResult> for BearerPairingView {
+    fn from(result: BearerPairingResult) -> Self {
+        Self {
+            peer_id: result.peer_id,
+            label: result.label,
+            addr: result.addr,
+            issuer_did: result.issuer_did,
+            claimant_did: result.claimant_did,
+            network_id: result.network_id,
+            template: result.template,
+            connected: result.connected,
+            claim_submitted: result.claim_submitted,
+            endpoint_published: result.endpoint_published,
+            replication_configured: result.replication_configured,
+            membership_observed: result.membership_observed,
+            bidirectional_replication_observed: result.bidirectional_replication_observed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BearerPairingResponse {
+    #[serde(flatten)]
+    pub snapshot: DesktopClientSnapshot,
+    pub pairing: BearerPairingView,
+}
+
+impl BearerPairingResponse {
+    pub(crate) fn new(snapshot: DesktopClientSnapshot, pairing: BearerPairingResult) -> Self {
+        Self {
+            snapshot,
+            pairing: pairing.into(),
+        }
+    }
 }
 
 impl PeerRemoveResponse {

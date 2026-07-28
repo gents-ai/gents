@@ -56,6 +56,22 @@
     opacity: 1;
   }
 
+  @media (hover: none), (pointer: coarse), (max-width: 760px) {
+    .conversation-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 44px;
+    }
+
+    .conversation-rename {
+      position: static;
+      width: 44px;
+      height: 100%;
+      min-height: 44px;
+      opacity: 1;
+      transform: none;
+    }
+  }
+
   .conversation-rename-input {
     width: 100%;
     min-height: 0;

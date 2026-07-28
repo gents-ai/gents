@@ -15,7 +15,7 @@ use super::super::mutations::{
 };
 use super::super::observe::ObservedStore;
 use super::super::peer_directory::PeerRecord;
-use super::super::query::load_chat_patch_from_graphql;
+use super::super::query::{load_chat_patch, load_chat_patch_from_graphql};
 use super::super::schema::subscribed_collection_names;
 use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::{
@@ -29,6 +29,7 @@ use super::{ClientCore, ClientPeerStatus, PEER_ADD_OPERATION_TIMEOUT};
 
 const REMOTE_REQUEST_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const REMOTE_REQUEST_REFRESH_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
 
 fn is_terminal_lifecycle_state(value: Option<&str>) -> bool {
     matches!(
@@ -82,6 +83,33 @@ fn chat_patch_signature(patch: &ClientStore) -> (usize, usize, u64) {
     }
 }
 
+fn behavior_id_for_write(
+    requested_behavior_id: Option<&str>,
+    peer_record: Option<&PeerRecord>,
+) -> Option<String> {
+    requested_behavior_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            peer_record
+                .filter(|record| record.is_bearer_pairing())
+                .and_then(|record| record.default_behavior_id.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        })
+}
+
+fn ensure_peer_chat_ready(peer_record: Option<&PeerRecord>) -> Result<()> {
+    if peer_record.is_some_and(|record| !record.is_chat_ready()) {
+        bail!(
+            "bearer pairing is still waiting for signed membership and reciprocal-replication readiness"
+        );
+    }
+    Ok(())
+}
+
 impl ClientCore {
     pub async fn create_conversation(
         &self,
@@ -89,11 +117,15 @@ impl ClientCore {
         behavior_id: Option<&str>,
     ) -> Result<CreatedConversation> {
         let snapshot = self.store.snapshot();
+        let peer_record = self.peer_record_for_agent(agent_did).await;
+        ensure_peer_chat_ready(peer_record.as_ref())?;
+        let behavior_id = behavior_id_for_write(behavior_id, peer_record.as_ref());
         match mutations::create_conversation(
             self.node.as_ref(),
             snapshot.as_ref(),
             agent_did,
-            behavior_id,
+            self.principal.did(),
+            behavior_id.as_deref(),
         )
         .await
         {
@@ -139,13 +171,17 @@ impl ClientCore {
         options: SubmitRequestOptions,
     ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
+        let peer_record = self.peer_record_for_agent(agent_did).await;
+        ensure_peer_chat_ready(peer_record.as_ref())?;
+        let behavior_id = behavior_id_for_write(behavior_id, peer_record.as_ref());
         match mutations::submit_request(
             self.node.as_ref(),
             snapshot.as_ref(),
             session_id,
             agent_did,
+            self.principal.did(),
             content,
-            behavior_id,
+            behavior_id.as_deref(),
             options,
         )
         .await
@@ -178,13 +214,16 @@ impl ClientCore {
     ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
         let peer_record = self.peer_record_for_agent(agent_did).await;
+        ensure_peer_chat_ready(peer_record.as_ref())?;
+        let behavior_id = behavior_id_for_write(behavior_id, peer_record.as_ref());
         match mutations::submit_request_to_graphql(
             graphql,
             snapshot.as_ref(),
             session_id,
             agent_did,
+            self.principal.did(),
             content,
-            behavior_id,
+            behavior_id.as_deref(),
             options,
         )
         .await
@@ -544,6 +583,117 @@ impl ClientCore {
             .iter()
             .find(|record| record.agent_did == agent_did)
             .cloned()
+    }
+
+    /// Refresh one selected legacy GraphQL request. Unlike the submit-time
+    /// poller, this path survives app relaunch because the UI can invoke it
+    /// while reconstructing an already-active session.
+    pub async fn refresh_remote_request(
+        &self,
+        agent_did: &str,
+        request_id: &str,
+    ) -> Result<Option<u64>> {
+        let Some(record) = self.peer_record_for_agent(agent_did).await else {
+            return Ok(None);
+        };
+        let Some(graphql) = record
+            .graphql
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(None);
+        };
+        let request_id = request_id.trim();
+        if request_id.is_empty() {
+            return Ok(None);
+        }
+
+        let mut patch = load_chat_patch_from_graphql(graphql, request_id).await?;
+        patch.stamp_source_agent_did(agent_did);
+        let signature = chat_patch_signature(&patch);
+        let cache_key = format!("{agent_did}\0{request_id}");
+        {
+            let mut signatures = self.request_patch_signatures.lock().await;
+            if signatures.get(&cache_key) == Some(&signature) {
+                return Ok(None);
+            }
+            if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
+                signatures.clear();
+            }
+            signatures.insert(cache_key, signature);
+        }
+
+        let (rows, bytes, _hash) = signature;
+        let terminal = patch
+            .request_row(request_id)
+            .is_some_and(|row| is_terminal_lifecycle_state(row.lifecycle_state.as_deref()));
+        let version = self.store.merge_chat_patch(patch);
+        tracing::info!(
+            target: "gents_desktop_core::writes",
+            request_id,
+            agent_did,
+            peer_id = %record.peer_id,
+            peer_label = %record.label,
+            graphql,
+            version,
+            rows,
+            bytes,
+            terminal,
+            "desktop selected remote request patch merged"
+        );
+        Ok(Some(version))
+    }
+
+    /// Re-read one active conversation from the embedded replica. The normal
+    /// observer remains the fast path; this bounded query is a watchdog for
+    /// missed/coalesced notifications during P2P-heavy turns.
+    pub async fn refresh_local_request(
+        &self,
+        agent_did: &str,
+        request_id: &str,
+    ) -> Result<Option<u64>> {
+        let agent_did = agent_did.trim();
+        let request_id = request_id.trim();
+        if agent_did.is_empty() || request_id.is_empty() {
+            return Ok(None);
+        }
+
+        let mut patch = load_chat_patch(self.node.as_ref(), request_id).await?;
+        let rows = patch.row_count();
+        if rows == 0 {
+            return Ok(None);
+        }
+        patch.stamp_source_agent_did(agent_did);
+        let signature = chat_patch_signature(&patch);
+        let cache_key = format!("local\0{agent_did}\0{request_id}");
+        {
+            let mut signatures = self.request_patch_signatures.lock().await;
+            if signatures.get(&cache_key) == Some(&signature) {
+                return Ok(None);
+            }
+            if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
+                signatures.clear();
+            }
+            signatures.insert(cache_key, signature);
+        }
+
+        let (_rows, bytes, _hash) = signature;
+        let terminal = patch
+            .request_row(request_id)
+            .is_some_and(|row| is_terminal_lifecycle_state(row.lifecycle_state.as_deref()));
+        let version = self.store.merge_chat_patch(patch);
+        tracing::debug!(
+            target: "gents_desktop_core::replication",
+            request_id,
+            agent_did,
+            version,
+            rows,
+            bytes,
+            terminal,
+            "desktop selected local request patch merged"
+        );
+        Ok(Some(version))
     }
 
     pub async fn rename_conversation(&self, session_id: &str, title: &str) -> Result<()> {
@@ -1260,8 +1410,13 @@ impl ClientCore {
 
     pub async fn resend_request(&self, stale_request_id: &str) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
-        match mutations::resend_request(self.node.as_ref(), snapshot.as_ref(), stale_request_id)
-            .await
+        match mutations::resend_request(
+            self.node.as_ref(),
+            snapshot.as_ref(),
+            stale_request_id,
+            self.principal.did(),
+        )
+        .await
         {
             Ok(result) => {
                 self.store
@@ -1299,7 +1454,14 @@ impl ClientCore {
 
     pub async fn retry_request(&self, parent: &AgentRequestRow) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
-        match mutations::retry_request(self.node.as_ref(), snapshot.as_ref(), parent).await {
+        match mutations::retry_request(
+            self.node.as_ref(),
+            snapshot.as_ref(),
+            parent,
+            self.principal.did(),
+        )
+        .await
+        {
             Ok(result) => {
                 self.store
                     .set_focused_request_id(Some(result.request_id.clone()));
@@ -1340,16 +1502,26 @@ impl ClientCore {
         addr: &str,
         agent_did: &str,
         graphql: Option<&str>,
+        default_behavior_id: Option<&str>,
     ) -> Result<PeerMutationResult> {
         let label = normalize_required("label", label)?;
         let addr = normalize_required("addr", addr)?;
         let agent_did = normalize_required("agent_did", agent_did)?;
         let graphql = graphql.map(str::trim).filter(|value| !value.is_empty());
+        let default_behavior_id = default_behavior_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
 
         let record = {
             let mut peer_directory = self.peer_directory.write().await;
             peer_directory
-                .upsert_saved_peer_with_graphql(label, addr, agent_did, graphql)
+                .upsert_saved_peer_with_graphql(
+                    label,
+                    addr,
+                    agent_did,
+                    graphql,
+                    default_behavior_id,
+                )
                 .await?
         };
 
@@ -1919,7 +2091,7 @@ impl ClientCore {
         }
     }
 
-    fn update_peer_status(&self, status: ClientPeerStatus) {
+    pub(super) fn update_peer_status(&self, status: ClientPeerStatus) {
         let mut statuses = self
             .peer_statuses
             .write()
@@ -1940,7 +2112,7 @@ impl ClientCore {
         }
     }
 
-    fn clear_mutation_error(&self) {
+    pub(super) fn clear_mutation_error(&self) {
         *self
             .last_mutation_error
             .write()
@@ -2066,10 +2238,14 @@ pub(super) async fn cleanup_saved_peer_p2p(
     p2p: &Arc<dyn P2POps>,
     record: &PeerRecord,
 ) -> Result<()> {
-    let collections = subscribed_collection_names()
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
+    let collections = if super::bearer_pairing::is_bearer_peer(record) {
+        super::bearer_pairing::bearer_replicator_collections()
+    } else {
+        subscribed_collection_names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    };
     let replicator_result = p2p_remove_replicator(p2p, collections, &record.addr).await;
     // The pinned transport defines disconnect as idempotent for absent peers,
     // so always attempt it even when the deployment never connected or the
@@ -2167,6 +2343,52 @@ mod delete_source_tests {
             "subagent_targets": subagent_targets,
         }))
         .expect("tool selection row")
+    }
+
+    fn peer_record(source: Option<&str>, default_behavior_id: Option<&str>) -> PeerRecord {
+        let mut record = PeerRecord::new("Amy", "endpoint-amy", "did:key:amy");
+        record.source = source.map(str::to_owned);
+        record.default_behavior_id = default_behavior_id.map(str::to_owned);
+        record
+    }
+
+    #[test]
+    fn bearer_peer_signed_default_is_used_when_caller_omits_behavior() {
+        let mut peer = peer_record(
+            Some(super::super::bearer_pairing::BEARER_PAIRING_SOURCE),
+            Some("default"),
+        );
+        peer.pairing_ready = true;
+
+        ensure_peer_chat_ready(Some(&peer)).unwrap();
+        assert_eq!(
+            behavior_id_for_write(None, Some(&peer)).as_deref(),
+            Some("default")
+        );
+        assert_eq!(
+            behavior_id_for_write(Some(" review "), Some(&peer)).as_deref(),
+            Some("review")
+        );
+    }
+
+    #[test]
+    fn pending_bearer_peer_rejects_chat_writes() {
+        let peer = peer_record(
+            Some(super::super::bearer_pairing::BEARER_PAIRING_SOURCE),
+            Some("default"),
+        );
+
+        assert!(ensure_peer_chat_ready(Some(&peer))
+            .unwrap_err()
+            .to_string()
+            .contains("still waiting"));
+    }
+
+    #[test]
+    fn unsigned_legacy_peer_default_is_not_trusted_for_routing() {
+        let peer = peer_record(Some("server-status"), Some("forged"));
+
+        assert_eq!(behavior_id_for_write(None, Some(&peer)), None);
     }
 
     #[test]

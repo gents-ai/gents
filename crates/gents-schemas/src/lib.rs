@@ -68,6 +68,9 @@ pub const RECIPROCAL_CONVERSATION_INTENT: &str =
 pub const PAIRING_BEARER_CLAIM_NAME: &str = "PairingBearerClaim";
 pub const PAIRING_BEARER_CLAIM: &str =
     include_str!("../schemas/agent/pairing_bearer_claim.graphql");
+pub const BEARER_PAIRING_READY_NAME: &str = "BearerPairingReady";
+pub const BEARER_PAIRING_READY: &str =
+    include_str!("../schemas/agent/bearer_pairing_ready.graphql");
 pub const AGENT_NETWORK_NAME: &str = "AgentNetwork";
 pub const AGENT_NETWORK: &str = include_str!("../schemas/agent/agent_network.graphql");
 pub const NETWORK_MEMBERSHIP_NAME: &str = "NetworkMembership";
@@ -108,6 +111,7 @@ pub const ALL: &[&str] = &[
     CONSUMED_INVITE_NONCE,
     RECIPROCAL_CONVERSATION_INTENT,
     PAIRING_BEARER_CLAIM,
+    BEARER_PAIRING_READY,
     AGENT_NETWORK,
     NETWORK_MEMBERSHIP,
     PEER_ENDPOINT,
@@ -144,6 +148,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     CONSUMED_INVITE_NONCE_NAME,
     RECIPROCAL_CONVERSATION_INTENT_NAME,
     PAIRING_BEARER_CLAIM_NAME,
+    BEARER_PAIRING_READY_NAME,
     AGENT_NETWORK_NAME,
     NETWORK_MEMBERSHIP_NAME,
     PEER_ENDPOINT_NAME,

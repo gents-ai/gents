@@ -9,6 +9,7 @@ description = "Reusable desktop client runtime for Gents"
 [dependencies]
 anyhow.workspace = true
 async-trait = "0.1"
+bs58 = "0.5"
 chrono.workspace = true
 crypto.workspace = true
 gents = { path = "../gents" }

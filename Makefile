@@ -46,6 +46,7 @@ help:
 	@echo "  make desktop-ui-screenshots  Capture stable desktop screenshot artifacts"
 	@echo "  make desktop-ui-fuzz       Run desktop Bombadil smoke (FUZZ_TIME=$(FUZZ_TIME))"
 	@echo "  make desktop-ui-fuzz-long  Run longer desktop Bombadil sweep"
+	@echo "  make desktop-ui-agent      Start the JSONL browser driver for LLM agents"
 	@echo "  make desktop-ui-visual     Run desktop visual baseline checks"
 	@echo "  make desktop-ui-live-e2e   Run live browser-to-runtime desktop smoke"
 	@echo "  make desktop-ui-live-e2e-real  Run live browser smoke against a configured real provider"
@@ -139,7 +140,7 @@ test-agent-e2e:
 test-cli:
 	$(CARGO) test -p gents-cli -- --nocapture --test-threads=1
 
-.PHONY: desktop-ui desktop-ui-qa-sweep desktop-ui-unit desktop-ui-e2e desktop-ui-invariants desktop-ui-screenshots desktop-ui-fuzz desktop-ui-fuzz-long desktop-ui-visual desktop-ui-live-e2e desktop-ui-live-e2e-real desktop-native-preflight desktop-native-dev desktop-native-build
+.PHONY: desktop-ui desktop-ui-qa-sweep desktop-ui-unit desktop-ui-e2e desktop-ui-invariants desktop-ui-screenshots desktop-ui-fuzz desktop-ui-fuzz-long desktop-ui-agent desktop-ui-visual desktop-ui-live-e2e desktop-ui-live-e2e-real desktop-native-preflight desktop-native-dev desktop-native-build
 desktop-ui:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui
 
@@ -163,6 +164,9 @@ desktop-ui-fuzz:
 
 desktop-ui-fuzz-long:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:fuzz:long
+
+desktop-ui-agent:
+	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:agent
 
 desktop-ui-visual:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:visual

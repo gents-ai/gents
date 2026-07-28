@@ -54,12 +54,14 @@ pub async fn submit_request(
     store: &ClientStore,
     session_id: &str,
     agent_did: &str,
+    requester_did: &str,
     content: &str,
     behavior_id: Option<&str>,
     options: SubmitRequestOptions,
 ) -> Result<SubmittedRequest> {
     let session_id = normalize_required("session_id", session_id)?;
     let agent_did = normalize_required("agent_did", agent_did)?;
+    let requester_did = normalize_required("requester_did", requester_did)?;
     let content = normalize_required("content", content)?;
     let (content, options) = prepare_prompt_submission(content, options)?;
     let request_id = Uuid::new_v4().to_string();
@@ -82,6 +84,8 @@ pub async fn submit_request(
         "session",
         store,
         session_id,
+        agent_did,
+        requester_did,
         &binding.agent_name,
         &binding.behavior_id,
         &created_at,
@@ -90,6 +94,7 @@ pub async fn submit_request(
         "request",
         &request_id,
         agent_did,
+        requester_did,
         binding.behavior_id.as_deref().unwrap_or(""),
         session_id,
         &retry_parent_request,
@@ -107,6 +112,7 @@ pub async fn submit_request(
         store,
         session_id,
         agent_did,
+        requester_did,
         &binding.agent_name,
         &binding.behavior_id,
         &request_id,
@@ -131,6 +137,7 @@ pub async fn submit_request_to_graphql(
     store: &ClientStore,
     session_id: &str,
     agent_did: &str,
+    requester_did: &str,
     content: &str,
     behavior_id: Option<&str>,
     options: SubmitRequestOptions,
@@ -138,6 +145,7 @@ pub async fn submit_request_to_graphql(
     let graphql = normalize_required("graphql", graphql)?;
     let session_id = normalize_required("session_id", session_id)?;
     let agent_did = normalize_required("agent_did", agent_did)?;
+    let requester_did = normalize_required("requester_did", requester_did)?;
     let content = normalize_required("content", content)?;
     if options.retry_parent_request.is_some() {
         bail!("remote GraphQL chat submission does not yet support retry threading");
@@ -151,6 +159,8 @@ pub async fn submit_request_to_graphql(
         "session",
         store,
         session_id,
+        agent_did,
+        requester_did,
         &binding.agent_name,
         &binding.behavior_id,
         &created_at,
@@ -159,6 +169,7 @@ pub async fn submit_request_to_graphql(
         "request",
         &request_id,
         agent_did,
+        requester_did,
         binding.behavior_id.as_deref().unwrap_or(""),
         session_id,
         "",
@@ -176,6 +187,7 @@ pub async fn submit_request_to_graphql(
         store,
         session_id,
         agent_did,
+        requester_did,
         &binding.agent_name,
         &binding.behavior_id,
         &request_id,
@@ -246,14 +258,23 @@ pub async fn retry_request(
     node: &EmbeddedNode,
     store: &ClientStore,
     parent: &AgentRequestRow,
+    requester_did: &str,
 ) -> Result<SubmittedRequest> {
-    retry_request_with_request_id(node, store, parent, Uuid::new_v4().to_string()).await
+    retry_request_with_request_id(
+        node,
+        store,
+        parent,
+        requester_did,
+        Uuid::new_v4().to_string(),
+    )
+    .await
 }
 
 async fn retry_request_with_request_id(
     node: &EmbeddedNode,
     store: &ClientStore,
     parent: &AgentRequestRow,
+    requester_did: &str,
     request_id: String,
 ) -> Result<SubmittedRequest> {
     let parent_request_id = normalize_required("request_id", &parent.request_id)?;
@@ -272,6 +293,7 @@ async fn retry_request_with_request_id(
             .as_deref()
             .context("retry parent request must have an agent_did")?,
     )?;
+    let requester_did = normalize_required("requester_did", requester_did)?;
     let content = normalize_required(
         "content",
         parent
@@ -316,6 +338,8 @@ async fn retry_request_with_request_id(
         "session",
         store,
         &session_id,
+        agent_did,
+        requester_did,
         &binding.agent_name,
         &binding.behavior_id,
         &created_at,
@@ -324,6 +348,7 @@ async fn retry_request_with_request_id(
         "request",
         &request_id,
         agent_did,
+        requester_did,
         binding.behavior_id.as_deref().unwrap_or(""),
         &session_id,
         parent_request_id,
@@ -348,6 +373,7 @@ async fn retry_request_with_request_id(
         store,
         &session_id,
         agent_did,
+        requester_did,
         &binding.agent_name,
         &binding.behavior_id,
         &request_id,
@@ -580,6 +606,7 @@ fn build_add_agent_request_field(
     alias: &str,
     request_id: &str,
     agent_did: &str,
+    requester_did: &str,
     behavior_id: &str,
     session_id: &str,
     retry_parent_request: &str,
@@ -594,6 +621,7 @@ fn build_add_agent_request_field(
 ) -> String {
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_requester_did = escape_graphql_string(requester_did);
     let escaped_behavior_id = escape_graphql_string(behavior_id);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_retry_parent = escape_graphql_string(retry_parent_request);
@@ -607,6 +635,7 @@ fn build_add_agent_request_field(
         r#"{alias}: add_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 agent_did: "{escaped_agent_did}",
+                requester_did: "{escaped_requester_did}",
                 behavior_id: "{escaped_behavior_id}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "{escaped_retry_parent}",
@@ -641,6 +670,7 @@ pub async fn resend_request(
     node: &EmbeddedNode,
     store: &ClientStore,
     stale_request_id: &str,
+    requester_did: &str,
 ) -> Result<SubmittedRequest> {
     let stale = fetch_request_view(node, stale_request_id).await?;
     if stale.lifecycle_state != "dead" || stale.failure_reason != "Stale" {
@@ -656,6 +686,7 @@ pub async fn resend_request(
         store,
         &retry_session_id,
         &stale.agent_did,
+        requester_did,
         &stale.content,
         stale.behavior_id.as_deref(),
         SubmitRequestOptions {
@@ -1361,6 +1392,7 @@ mod tests {
             core.node(),
             snapshot.as_ref(),
             parent,
+            core.principal().did(),
             injection.new_request_id,
         )
         .await?;
@@ -1624,6 +1656,78 @@ mod tests {
             .unwrap_or_default())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let core = ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(tempdir.path()),
+            ClientCoreOptions::local_only(),
+        )
+        .await?;
+        let requester_did = core.principal().did().to_string();
+        let agent_did = "did:test:amy";
+        let created = core
+            .create_conversation(agent_did, Some("amy-code"))
+            .await?;
+        let submitted = core
+            .submit_request(
+                &created.session_id,
+                agent_did,
+                "requester route regression",
+                None,
+            )
+            .await?;
+
+        let session_id = escape_graphql_string(&created.session_id);
+        let request_id = escape_graphql_string(&submitted.request_id);
+        let response = core
+            .node()
+            .execute(&format!(
+                r#"{{
+                    AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
+                        agent_did
+                        requester_did
+                    }}
+                    AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, limit: 1) {{
+                        agent_did
+                        requester_did
+                    }}
+                    AgentConversation(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, limit: 1) {{
+                        agent_did
+                        requester_did
+                    }}
+                }}"#
+            ))
+            .await;
+        if response.has_errors() {
+            bail!(
+                "querying desktop requester routes failed: {:?}",
+                response.errors
+            );
+        }
+        let data = response.data.context("requester route query data")?;
+        for collection in ["AgentRequest", "AgentSession", "AgentConversation"] {
+            let row = data
+                .get(collection)
+                .and_then(serde_json::Value::as_array)
+                .and_then(|rows| rows.first())
+                .with_context(|| format!("missing {collection} row"))?;
+            assert_eq!(
+                row.get("agent_did").and_then(serde_json::Value::as_str),
+                Some(agent_did),
+                "{collection} must retain the remote agent owner"
+            );
+            assert_eq!(
+                row.get("requester_did").and_then(serde_json::Value::as_str),
+                Some(requester_did.as_str()),
+                "{collection} must carry the immutable desktop requester route"
+            );
+        }
+
+        core.shutdown().await?;
+        Ok(())
+    }
+
     async fn force_request_state_for_test(
         node: &EmbeddedNode,
         request_id: &str,
@@ -1714,6 +1818,7 @@ mod tests {
             core.node(),
             snapshot.as_ref(),
             &parent,
+            core.principal().did(),
             duplicate_request_id.to_string(),
         )
         .await
@@ -1832,6 +1937,7 @@ mod tests {
             "duplicate",
             request_id,
             agent_did,
+            "did:test:desktop",
             behavior_id,
             session_id,
             "",

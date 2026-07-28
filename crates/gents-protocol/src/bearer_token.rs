@@ -27,6 +27,7 @@ use std::io::Cursor;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::network_token::NetworkRecord;
 use crate::pairing_token::check_issued_at_freshness;
@@ -48,6 +49,11 @@ pub struct BearerInviteToken {
     /// consequences: `conversation` claims also record a
     /// `ReciprocalConversationIntent` for the claimant.
     pub template: String,
+    /// Signed routing hint for chat clients that intentionally do not receive
+    /// the agent's mutable configuration collections. Optional for backwards
+    /// compatibility with bearer invites minted before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_behavior_id: Option<String>,
     /// Admin-signed network root record, so the claimant can TOFU-pin the
     /// network identity it is joining before writing anything.
     pub network: NetworkRecord,
@@ -152,9 +158,61 @@ impl BearerClaimRecord {
     }
 }
 
+/// Deterministic key for the issuer's latest readiness acknowledgement for one
+/// claimant. The issuer and claimant are both included so acknowledgements
+/// from multiple paired agents can coexist in a client's replicated store.
+pub fn derive_bearer_readiness_key(issuer_did: &str, claimant_did: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(issuer_did.as_bytes());
+    digest.update(b"\x1f");
+    digest.update(claimant_did.as_bytes());
+    let digest = digest.finalize();
+    format!("ready-{}", bs58::encode(&digest[..16]).into_string())
+}
+
+/// Issuer-signed evidence that the reciprocal conversation replicator for a
+/// bearer claimant was applied. This acknowledgement is necessary but not
+/// sufficient for Chat: the client also verifies its active signed membership.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BearerPairingReadyRecord {
+    pub issuer_did: String,
+    pub claimant_did: String,
+    pub peer_id: String,
+    pub address: String,
+    pub template: String,
+    pub acknowledged_at: String,
+    /// Issuer DID's signature over the record with this field zeroed.
+    pub sig: Vec<u8>,
+}
+
+impl BearerPairingReadyRecord {
+    pub fn signing_payload(&self) -> Vec<u8> {
+        let mut unsigned = self.clone();
+        unsigned.sig = Vec::new();
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(&unsigned, &mut bytes)
+            .expect("CBOR serialisation of bearer readiness is infallible");
+        bytes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Serialize)]
+    struct LegacyBearerInviteToken {
+        v: u8,
+        issuer_did: String,
+        peer_id: String,
+        ticket: String,
+        nonce: String,
+        network_id: String,
+        issued_at: String,
+        template: String,
+        network: NetworkRecord,
+        sig: Vec<u8>,
+    }
 
     fn sample_network() -> NetworkRecord {
         NetworkRecord {
@@ -177,6 +235,7 @@ mod tests {
             network_id: "default".into(),
             issued_at: "2026-07-08T00:00:00Z".into(),
             template: "conversation".into(),
+            default_behavior_id: Some("default".into()),
             network: sample_network(),
             sig: vec![1, 2, 3],
         }
@@ -207,6 +266,10 @@ mod tests {
         assert_ne!(bearer_signing_payload(&a), bearer_signing_payload(&b));
 
         let mut b = a.clone();
+        b.default_behavior_id = Some("review".into());
+        assert_ne!(bearer_signing_payload(&a), bearer_signing_payload(&b));
+
+        let mut b = a.clone();
         b.network.admin_did = "did:key:other".into();
         assert_ne!(bearer_signing_payload(&a), bearer_signing_payload(&b));
 
@@ -217,6 +280,74 @@ mod tests {
             bearer_signing_payload(&b),
             "version must be signed (downgrade guard)"
         );
+    }
+
+    #[test]
+    fn readiness_key_is_deterministic_and_party_bound() {
+        let key = derive_bearer_readiness_key("did:key:issuer", "did:key:claimant");
+        assert_eq!(
+            key,
+            derive_bearer_readiness_key("did:key:issuer", "did:key:claimant")
+        );
+        assert_ne!(
+            key,
+            derive_bearer_readiness_key("did:key:other", "did:key:claimant")
+        );
+        assert_ne!(
+            key,
+            derive_bearer_readiness_key("did:key:issuer", "did:key:other")
+        );
+    }
+
+    #[test]
+    fn readiness_signing_payload_covers_reciprocal_endpoint() {
+        let record = BearerPairingReadyRecord {
+            issuer_did: "did:key:issuer".into(),
+            claimant_did: "did:key:claimant".into(),
+            peer_id: "peer-claimant".into(),
+            address: "ticket-claimant".into(),
+            template: "conversation".into(),
+            acknowledged_at: "2026-07-27T00:00:00Z".into(),
+            sig: vec![1, 2, 3],
+        };
+        let mut resigned = record.clone();
+        resigned.sig = vec![9, 9, 9];
+        assert_eq!(
+            record.signing_payload(),
+            resigned.signing_payload(),
+            "signature bytes are excluded"
+        );
+
+        let mut changed = record.clone();
+        changed.address = "ticket-other".into();
+        assert_ne!(record.signing_payload(), changed.signing_payload());
+    }
+
+    #[test]
+    fn missing_behavior_hint_preserves_legacy_signing_payload() {
+        let legacy = LegacyBearerInviteToken {
+            v: BEARER_TOKEN_VERSION,
+            issuer_did: "did:key:issuer".into(),
+            peer_id: "peer-issuer".into(),
+            ticket: "/ticket/issuer".into(),
+            nonce: "nonce-a".into(),
+            network_id: "default".into(),
+            issued_at: "2026-07-08T00:00:00Z".into(),
+            template: "conversation".into(),
+            network: sample_network(),
+            sig: Vec::new(),
+        };
+        let mut legacy_bytes = Vec::new();
+        ciborium::ser::into_writer(&legacy, &mut legacy_bytes).unwrap();
+        let encoded = format!(
+            "{BEARER_TOKEN_PREFIX}{}",
+            bs58::encode(&legacy_bytes).into_string()
+        );
+
+        let decoded = decode_bearer(&encoded).unwrap();
+
+        assert_eq!(decoded.default_behavior_id, None);
+        assert_eq!(bearer_signing_payload(&decoded), legacy_bytes);
     }
 
     #[test]

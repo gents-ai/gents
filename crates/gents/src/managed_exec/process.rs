@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -37,6 +38,9 @@ pub(crate) struct ManagedExecRequest {
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) max_output_bytes: usize,
     pub(crate) stdin: Vec<u8>,
+    /// `None` inherits the daemon environment. `Some` replaces it wholesale
+    /// with the supplied, already-filtered environment.
+    pub(crate) environment: Option<HashMap<String, String>>,
     pub(crate) tool_name: Option<String>,
     pub(crate) live_output: Option<LiveToolOutputWriter>,
 }
@@ -61,6 +65,9 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if let Some(environment) = request.environment.as_ref() {
+        command.env_clear().envs(environment);
+    }
 
     unsafe {
         command.pre_exec(|| {
@@ -193,6 +200,9 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if let Some(environment) = request.environment.as_ref() {
+        command.env_clear().envs(environment);
+    }
 
     let mut child = match ManagedChildJob::spawn(&mut command) {
         Ok(child) => child,

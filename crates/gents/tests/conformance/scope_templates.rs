@@ -24,23 +24,47 @@ fn resolve_template_is_total_over_catalog_and_id_faithful() {
     );
 }
 
-/// Mirrors Lean `scopeFilter_peerDid` + `push_template_has_filter`: a `PeerDid`
-/// scope (the conversation/Push template) resolves to a per-collection equality
-/// filter keyed on the field and the peer DID — push is never silently
-/// unfiltered.
+/// Mirrors Lean `conversation_filter_eq` /
+/// `conversation_filters_requester_lineage`: the conversation/Push template
+/// resolves every transcript collection to the paired requester's DID and the
+/// readiness acknowledgement to the same claimant DID — push is never
+/// silently unfiltered and same-agent third-party history cannot cross.
 #[test]
-fn peer_did_scope_resolves_to_per_collection_filter() {
+fn conversation_scope_resolves_to_requester_filter_for_every_collection() {
     let t = resolve_template("conversation").expect("conversation in catalog");
     assert_eq!(t.delivery, Delivery::Push);
-    assert!(matches!(t.scope, Scope::PeerDid { field } if field == "agent_did"));
+    assert!(matches!(t.scope, Scope::PerCollection(_)));
 
     let filter = scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice");
     assert_eq!(filter.len(), t.collections.len());
     for col in t.collections {
         let pred = filter.get(*col).expect("filter for every collection");
-        assert_eq!(pred.field, "agent_did");
+        let expected_field = if *col == "BearerPairingReady" {
+            "claimant_did"
+        } else {
+            "requester_did"
+        };
+        assert_eq!(pred.field, expected_field);
         assert_eq!(pred.value, "did:key:bob");
     }
+}
+
+/// Mirrors Lean `conversation_request_crossing_is_peer_scoped`: two clients
+/// talking to the same agent get disjoint conversation slices because the
+/// immutable requester route, not owner identity, decides what crosses.
+#[test]
+fn conversation_scope_excludes_another_requester_on_the_same_agent() {
+    let t = resolve_template("conversation").expect("conversation in catalog");
+    let phone_filter = scope_filter(&t.scope, t.collections, "did:key:phone", "did:key:amy");
+    let predicate = phone_filter
+        .get("AgentRequest")
+        .expect("request filter is present");
+
+    let phone_request = ("did:key:amy", Some("did:key:phone"));
+    let classifier_request = ("did:key:amy", None);
+    assert_eq!(predicate.field, "requester_did");
+    assert_eq!(phone_request.1, Some(predicate.value.as_str()));
+    assert_ne!(classifier_request.1, Some(predicate.value.as_str()));
 }
 
 /// Mirrors Lean `scopeFilter_unscoped` + `scopeFilter_isSome_iff`: an `Unscoped`

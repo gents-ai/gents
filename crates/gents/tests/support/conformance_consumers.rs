@@ -616,6 +616,27 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "managed_exec_liveness_cases_pin_native_process_boundary",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::managed_exec_tool_boundary_cases_cover_every_native_subprocess_tool",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "managed_exec_tool_boundary_cases_cover_every_native_subprocess_tool",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::lean_emits_await_mode_vocabulary",
             package: "gents",
             source_path: "crates/gents/tests/conformance.rs",

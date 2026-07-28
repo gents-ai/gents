@@ -329,6 +329,7 @@ mod tests {
                     bind_addr: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                     relay_mode: IrohRelayModeConfig::Disabled,
                     discovery: IrohDiscoveryConfig::Disabled,
+                    max_concurrent_multipath_paths: None,
                     secret_key_path: None,
                     load_persisted_collections: false,
                     max_concurrent_dag_fetches: p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES,
@@ -721,22 +722,12 @@ mod tests {
         seed_subagent_return_artifacts(&sender, "match", Some("did:key:coord")).await;
         seed_subagent_return_artifacts(&sender, "unrelated", None).await;
 
-        let available_collections = vec![
-            "AgentRequest".to_string(),
-            "AgentResponse".to_string(),
-            "AgentMessage".to_string(),
-            "AgentToolCall".to_string(),
-            "AgentSession".to_string(),
-            "AgentConversation".to_string(),
-        ];
-        sender_admin
-            .add_p2p_collections(&available_collections)
-            .await
-            .expect("add sender p2p collections");
-        receiver_admin
-            .add_p2p_collections(&available_collections)
-            .await
-            .expect("add receiver p2p collections");
+        let template = resolve_template(SUBAGENT_HOST_TEMPLATE).expect("subagent-host template");
+        let collections = template
+            .collections
+            .iter()
+            .map(|collection| (*collection).to_string())
+            .collect::<Vec<_>>();
 
         sender_admin
             .connect(&receiver_addresses)
@@ -744,21 +735,14 @@ mod tests {
             .expect("connect sender to receiver");
         wait_for_active_peer(&sender_admin).await;
         wait_for_active_peer(&receiver_admin).await;
+        // `subagent-host` is a Push template. Production deliberately leaves
+        // the subscription set empty so whole collections never gossip; the
+        // two per-peer replicators below are the only authorized channels.
         receiver_admin
-            .add_replicator(
-                &sender_addresses,
-                &available_collections,
-                &PairingFilters::default(),
-            )
+            .add_replicator(&sender_addresses, &collections, &PairingFilters::default())
             .await
-            .expect("authorize sender as receiver-side replicator");
+            .expect("authorize only the subagent return projection");
 
-        let template = resolve_template(SUBAGENT_HOST_TEMPLATE).expect("subagent-host template");
-        let collections = template
-            .collections
-            .iter()
-            .map(|collection| (*collection).to_string())
-            .collect::<Vec<_>>();
         let filters = scope_filter(
             &template.scope,
             template.collections,

@@ -10,6 +10,21 @@ export function parsePeerConnectionJson(input: string): PeerAddRequest {
     throw new Error("Connection JSON must be an object");
   }
 
+  const p2pTransport =
+    stringAt(record, "p2pTransport") ??
+    stringAt(record, "p2p_transport") ??
+    stringAt(record, "p2p.p2pTransport") ??
+    stringAt(record, "p2p.p2p_transport") ??
+    stringAt(record, "runtime_state.p2p_transport");
+  if (
+    p2pTransport?.toLowerCase() === "none" ||
+    valueAt(record, "p2p.enabled") === false
+  ) {
+    throw new Error(
+      "This runtime has P2P disabled. Restart it with --p2p-transport iroh and fetch again.",
+    );
+  }
+
   const agentDid =
     stringAt(record, "agentDid") ??
     stringAt(record, "agent_did") ??
@@ -39,6 +54,14 @@ export function parsePeerConnectionJson(input: string): PeerAddRequest {
     stringAt(record, "graphql") ??
     stringAt(record, "checks.graphql.endpoint") ??
     stringAt(record, "runtime_state.graphql");
+  const defaultBehaviorId =
+    stringAt(record, "defaultBehaviorId") ??
+    stringAt(record, "default_behavior_id") ??
+    stringAt(record, "runtime.defaultBehaviorId") ??
+    stringAt(record, "runtime.default_behavior_id") ??
+    stringAt(record, "runtime_state.defaultBehaviorId") ??
+    stringAt(record, "runtime_state.default_behavior_id") ??
+    defaultBehaviorIdFromStatus(record);
 
   return {
     label:
@@ -53,6 +76,7 @@ export function parsePeerConnectionJson(input: string): PeerAddRequest {
     agentDid: validatedAgentDid,
     addr,
     ...(graphql ? { graphql } : {}),
+    ...(defaultBehaviorId ? { defaultBehaviorId } : {}),
   };
 }
 
@@ -110,6 +134,27 @@ function valueAt(record: JsonRecord, path: string): unknown {
     cursor = current[segment];
   }
   return cursor;
+}
+
+function defaultBehaviorIdFromStatus(record: JsonRecord) {
+  for (const path of ["behaviors", "runtime.behaviors", "runtime_state.behaviors"]) {
+    const behaviors = valueAt(record, path);
+    if (!Array.isArray(behaviors)) {
+      continue;
+    }
+    for (const behavior of behaviors) {
+      const candidate = asRecord(behavior);
+      if (!candidate || candidate.enabled === false) {
+        continue;
+      }
+      const behaviorId =
+        stringAt(candidate, "behaviorId") ?? stringAt(candidate, "behavior_id");
+      if (behaviorId === "default") {
+        return behaviorId;
+      }
+    }
+  }
+  return null;
 }
 
 function asRecord(value: unknown): JsonRecord | null {

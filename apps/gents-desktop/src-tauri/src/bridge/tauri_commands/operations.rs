@@ -411,7 +411,34 @@ pub(crate) async fn desktop_interrupt_request(
 ) -> Result<InterruptRequestResult, String> {
     let core = super::super::state::current_core(&state)
         .ok_or_else(|| "desktop bridge core not initialized".to_string())?;
-    crate::bridge::cascade::interrupt_request(&core, &request).await
+    tracing::info!(
+        target: "gents_desktop::interrupt",
+        request_id = %request.request_id,
+        agent_did = %request.agent_did.as_deref().unwrap_or(""),
+        cascade = request.cascade,
+        "desktop interrupt action received"
+    );
+    let result = crate::bridge::cascade::interrupt_request(&core, &request).await;
+    match &result {
+        Ok(result) => tracing::info!(
+            target: "gents_desktop::interrupt",
+            request_id = %result.request_id,
+            accepted = result.accepted,
+            already_interrupted = result.already_interrupted,
+            stale_preview = result.stale_preview,
+            interrupt_requested_at = %result.interrupt_requested_at.as_deref().unwrap_or(""),
+            "desktop interrupt action completed"
+        ),
+        Err(error) => tracing::warn!(
+            target: "gents_desktop::interrupt",
+            request_id = %request.request_id,
+            agent_did = %request.agent_did.as_deref().unwrap_or(""),
+            cascade = request.cascade,
+            error,
+            "desktop interrupt action failed"
+        ),
+    }
+    result
 }
 
 #[tauri::command]

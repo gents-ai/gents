@@ -12,6 +12,7 @@
 		4C7A1B799015363FAC449FD6 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4A9A0C77855ED19483490C28 /* UIKit.framework */; };
 		534FEA2C4EA85FA47A571685 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4FB100F63CC4233DE1144D72 /* Metal.framework */; };
 		55FE4F8B14637ABE2163A2AA /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 95EF0069A5DA94E81250E543 /* MetalKit.framework */; };
+		5DA6544B44A458E0C361C447 /* GentsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5C9537E32F3F70D432C59D3 /* GentsUITests.swift */; };
 		71C6080565821E5F55BC7BC4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4AA87E72BB6F6E6A9013ED37 /* Assets.xcassets */; };
 		8143829881E3F0C0DB8A6D6E /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 29FC53575AC1D708DC7E349B /* libapp.a */; };
 		88EFB05DB5D303BB4A995A0B /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 4B930D4D1CC1491CC8188CAD /* LaunchScreen.storyboard */; };
@@ -21,6 +22,16 @@
 		F19ADFFB68E1FEAE6E78893E /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 62176889B485E53F753CA7C2 /* Security.framework */; };
 		FA4E95488594095CF8C4159F /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BD70A9B920D4EF2F217086B4 /* QuartzCore.framework */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		4ECE68EBB2B8429B2636649C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E26EA2099383F0EADC2E802A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C639EC47185605E9FEA2AED6;
+			remoteInfo = "gents-desktop-tauri_iOS";
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		00BAEACAD942A3E5DDBD9F2A /* requests.rs */ = {isa = PBXFileReference; path = requests.rs; sourceTree = "<group>"; };
@@ -96,9 +107,11 @@
 		CC50889ED03AB4275A06EF9B /* tool_service.rs */ = {isa = PBXFileReference; path = tool_service.rs; sourceTree = "<group>"; };
 		D170A1F87B919C05C065FF7B /* session.rs */ = {isa = PBXFileReference; path = session.rs; sourceTree = "<group>"; };
 		D2172BF362F6CD537098D454 /* session_timeline.rs */ = {isa = PBXFileReference; path = session_timeline.rs; sourceTree = "<group>"; };
+		D83A83F9A3605460844E4531 /* operations_holds.rs */ = {isa = PBXFileReference; path = operations_holds.rs; sourceTree = "<group>"; };
 		DD5008E68313613CEB75DF6C /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 		DF999997666534D30CBC7799 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		E2C7CAFA67BC8062EEAB81A7 /* workspace.rs */ = {isa = PBXFileReference; path = workspace.rs; sourceTree = "<group>"; };
+		E5C9537E32F3F70D432C59D3 /* GentsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GentsUITests.swift; sourceTree = "<group>"; };
 		E685C32AC8407A695759E600 /* http.rs */ = {isa = PBXFileReference; path = http.rs; sourceTree = "<group>"; };
 		E855A68A25A6B068CF2C8252 /* subagent_lineage.rs */ = {isa = PBXFileReference; path = subagent_lineage.rs; sourceTree = "<group>"; };
 		E9C58EEBC65B600D8B3C394B /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
@@ -106,6 +119,7 @@
 		EFB4B45637A81E1CF5AD1572 /* runtime.rs */ = {isa = PBXFileReference; path = runtime.rs; sourceTree = "<group>"; };
 		F459B945226C7020C753E97C /* operations_signature.rs */ = {isa = PBXFileReference; path = operations_signature.rs; sourceTree = "<group>"; };
 		FC2300ED6A083D1CA68BE5A8 /* task.rs */ = {isa = PBXFileReference; path = task.rs; sourceTree = "<group>"; };
+		FDE61B711ED917DCE5677618 /* GentsUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = GentsUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -134,8 +148,8 @@
 				DF999997666534D30CBC7799 /* assets */,
 				4AA87E72BB6F6E6A9013ED37 /* Assets.xcassets */,
 				4B930D4D1CC1491CC8188CAD /* LaunchScreen.storyboard */,
-				A451FFEA485414052E4266F7 /* Externals */,
 				E578A9CE50CAD151F94E888C /* gents-desktop-tauri_iOS */,
+				0F8C42C2795F7E73E8279429 /* ios */,
 				E1F731CFA4D72A5157CF32D7 /* Sources */,
 				F93A41AA294428FFBCE5F70D /* src */,
 				C3F98401656EFA6C28A17CEF /* Frameworks */,
@@ -150,6 +164,15 @@
 				514A425B3B1875BAA8A5226F /* bindings */,
 			);
 			path = "gents-desktop-tauri";
+			sourceTree = "<group>";
+		};
+		0F8C42C2795F7E73E8279429 /* ios */ = {
+			isa = PBXGroup;
+			children = (
+				E5C9537E32F3F70D432C59D3 /* GentsUITests.swift */,
+			);
+			name = ios;
+			path = ../../../tests/ios;
 			sourceTree = "<group>";
 		};
 		15EF5454D0C9C1E6DA82A5ED /* snapshot */ = {
@@ -230,6 +253,7 @@
 				C27ACD102719D7FC32A7A958 /* cause_derivation.rs */,
 				802645E191828B3D41B8ED9D /* mod.rs */,
 				604316652DED14696063DFF4 /* operations_cascade.rs */,
+				D83A83F9A3605460844E4531 /* operations_holds.rs */,
 				858C2C84AB09FE17ED8D2AAA /* operations_interrupt.rs */,
 				5B5A7408B9252B2996C02FEB /* support.rs */,
 			);
@@ -269,13 +293,6 @@
 				7E209A2DC97CECD8A16D7B04 /* workspace.rs */,
 			);
 			path = live_fixture;
-			sourceTree = "<group>";
-		};
-		A451FFEA485414052E4266F7 /* Externals */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Externals;
 			sourceTree = "<group>";
 		};
 		C3F98401656EFA6C28A17CEF /* Frameworks */ = {
@@ -328,6 +345,7 @@
 			isa = PBXGroup;
 			children = (
 				77DA72D0507C153C811F9678 /* gents-desktop-tauri_iOS.app */,
+				FDE61B711ED917DCE5677618 /* GentsUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -394,6 +412,13 @@
 			path = runner;
 			sourceTree = "<group>";
 		};
+		"TEMP_7E630D03-3BB9-4CC9-A60D-B4EEADA4966A" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -417,6 +442,24 @@
 			productReference = 77DA72D0507C153C811F9678 /* gents-desktop-tauri_iOS.app */;
 			productType = "com.apple.product-type.application";
 		};
+		C6A04145B332F55AD1B74BC8 /* GentsUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AD1C1D48E0D06592613C87C7 /* Build configuration list for PBXNativeTarget "GentsUITests" */;
+			buildPhases = (
+				04BD0D2AB50907DBBA7927EE /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D163D2A9AB5E66956339EE13 /* PBXTargetDependency */,
+			);
+			name = GentsUITests;
+			packageProductDependencies = (
+			);
+			productName = GentsUITests;
+			productReference = FDE61B711ED917DCE5677618 /* GentsUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -428,6 +471,10 @@
 				TargetAttributes = {
 					C639EC47185605E9FEA2AED6 = {
 						DevelopmentTeam = NXJ753WW5X;
+					};
+					C6A04145B332F55AD1B74BC8 = {
+						DevelopmentTeam = NXJ753WW5X;
+						TestTargetID = C639EC47185605E9FEA2AED6;
 					};
 				};
 			};
@@ -446,6 +493,7 @@
 			projectRoot = "";
 			targets = (
 				C639EC47185605E9FEA2AED6 /* gents-desktop-tauri_iOS */,
+				C6A04145B332F55AD1B74BC8 /* GentsUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -483,11 +531,19 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}";
+			shellScript = "if [ \"${GENTS_SKIP_TAURI_XCODE_SCRIPT:-0}\" = \"1\" ]; then exit 0; fi; npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}";
 		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		04BD0D2AB50907DBBA7927EE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5DA6544B44A458E0C361C447 /* GentsUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		B3F9FD548C157DCE39F108BD /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -498,7 +554,33 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		D163D2A9AB5E66956339EE13 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C639EC47185605E9FEA2AED6 /* gents-desktop-tauri_iOS */;
+			targetProxy = 4ECE68EBB2B8429B2636649C /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		4279EF4B21DC53568550B57E /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = NXJ753WW5X;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.source-inc.gents.uitests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "gents-desktop-tauri_iOS";
+			};
+			name = debug;
+		};
 		46A8A7BA2C63305B77CE5752 /* debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -509,7 +591,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "gents-desktop-tauri_iOS/gents-desktop-tauri_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = NXJ753WW5X;
+				DEVELOPMENT_TEAM = "NXJ753WW5X";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -523,8 +605,8 @@
 				);
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.source-inc.gents";
-				PRODUCT_NAME = Gents;
+				PRODUCT_BUNDLE_IDENTIFIER = com.source-inc.gents;
+				PRODUCT_NAME = "Gents";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -541,7 +623,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "gents-desktop-tauri_iOS/gents-desktop-tauri_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = NXJ753WW5X;
+				DEVELOPMENT_TEAM = "NXJ753WW5X";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -555,8 +637,8 @@
 				);
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.source-inc.gents";
-				PRODUCT_NAME = Gents;
+				PRODUCT_BUNDLE_IDENTIFIER = com.source-inc.gents;
+				PRODUCT_NAME = "Gents";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -616,6 +698,24 @@
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
+			};
+			name = release;
+		};
+		A3FAE5F8187293E8E48BEEA4 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = NXJ753WW5X;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.source-inc.gents.uitests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "gents-desktop-tauri_iOS";
 			};
 			name = release;
 		};
@@ -690,6 +790,15 @@
 			buildConfigurations = (
 				C064E2C7C1E37E5C8C7EF561 /* debug */,
 				865DB50A113D3E6EC2E52ACD /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+		AD1C1D48E0D06592613C87C7 /* Build configuration list for PBXNativeTarget "GentsUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4279EF4B21DC53568550B57E /* debug */,
+				A3FAE5F8187293E8E48BEEA4 /* release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = debug;

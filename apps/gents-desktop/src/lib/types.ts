@@ -1,5 +1,8 @@
 export type {
   BootstrapSummary,
+  BearerPairingRequest,
+  BearerPairingResponse,
+  BearerPairingResult,
   InitSummary,
   P2PHealth,
   PeerAddRequest,
@@ -39,7 +42,9 @@ export type {
   AgentConfigSaveRequest,
   BackendSaveRequest,
   BehaviorSaveRequest,
+  CodexLoginResult,
   EventTriggerSaveRequest,
+  InferenceProbeResult,
   InferenceProfileSaveRequest,
   ScheduleRunRequest,
   ScheduleSaveRequest,

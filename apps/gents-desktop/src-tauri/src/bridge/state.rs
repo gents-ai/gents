@@ -16,6 +16,9 @@ pub(crate) struct DesktopAppState {
 pub(crate) struct DesktopBridge {
     pub core: Option<Arc<ClientCore>>,
     pub updates_task: Option<JoinHandle<()>>,
+    /// Cancel handle for an in-flight ChatGPT/Codex login server, so a closed
+    /// browser can be aborted instead of hanging the callback wait.
+    pub codex_login_cancel: Option<codex_login::ShutdownHandle>,
 }
 
 pub(crate) fn spawn_client_update_task(app: AppHandle, core: Arc<ClientCore>) -> JoinHandle<()> {

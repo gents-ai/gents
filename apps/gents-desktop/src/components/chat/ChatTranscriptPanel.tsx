@@ -117,8 +117,14 @@ export function ChatTranscriptPanel({
     setAutoFollowTranscript(remaining < 64);
   }
 
-  const responseError = session?.latestResponse?.errorMessage?.trim() ?? "";
-  const showResponseError = Boolean(responseError);
+  const latestResponse = session?.latestResponse;
+  const responseError = latestResponse?.errorMessage?.trim() ?? "";
+  const responseWasInterrupted =
+    session?.turnState === "interrupted" ||
+    Boolean(latestResponse?.interruptedAt) ||
+    latestResponse?.cancelCause?.cause === "interrupted" ||
+    latestResponse?.cancelCause?.cause === "userCancelled";
+  const showResponseError = Boolean(responseError) && !responseWasInterrupted;
 
   // Animated placeholder between send and the assistant's first visible
   // output — without it the transcript sits inert while the turn runs.

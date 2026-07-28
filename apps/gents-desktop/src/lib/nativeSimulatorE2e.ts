@@ -1,0 +1,316 @@
+import { invoke } from "@tauri-apps/api/core";
+
+type NativeE2eConfig = {
+  agentLabel: string;
+  pairToken: string;
+  prompt: string;
+  expectedResponse: string;
+  expectEmptyConversationSlice: boolean;
+};
+
+type NativeE2eStatus = {
+  stage: string;
+  detail?: string;
+};
+
+type TauriBridgeWindow = Window & {
+  __TAURI_INTERNALS__?: {
+    invoke?: unknown;
+  };
+};
+
+let activeRun: Promise<void> | null = null;
+
+export function startNativeSimulatorE2e(): Promise<void> {
+  if (activeRun) {
+    return activeRun;
+  }
+  if (typeof (window as TauriBridgeWindow).__TAURI_INTERNALS__?.invoke !== "function") {
+    return Promise.resolve();
+  }
+
+  activeRun = runNativeSimulatorE2e();
+  return activeRun;
+}
+
+async function runNativeSimulatorE2e() {
+  const config = await invoke<NativeE2eConfig | null>("desktop_native_e2e_config");
+  if (!config) {
+    return;
+  }
+
+  try {
+    await reportStatus({ stage: "starting" });
+    await waitForText("Fleet Dashboard", 30_000);
+
+    let chatButton = await waitForOptional(
+      () => findAgentChatButton(config.agentLabel),
+      15_000,
+    );
+    if (!chatButton) {
+      await reportStatus({ stage: "pairing" });
+      await pairAgent(config);
+      chatButton = await waitFor(
+        () => findAgentChatButton(config.agentLabel),
+        300_000,
+        `${config.agentLabel} deployment`,
+      );
+    }
+
+    await reportStatus({ stage: "waiting-ready" });
+    chatButton.click();
+
+    const newChatButton = await waitFor(
+      () => findNewChatButton(config.agentLabel),
+      300_000,
+      `${config.agentLabel} default behavior readiness`,
+    );
+    if (config.expectEmptyConversationSlice) {
+      await delay(3_000);
+      const conversationCount = conversationRowCount(document);
+      if (conversationCount > 0) {
+        throw new Error(
+          `Requester-scoped pairing leaked ${conversationCount} pre-existing conversation(s)`,
+        );
+      }
+    }
+    newChatButton.click();
+
+    const composer = await waitFor(
+      () =>
+        document.querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]'),
+      30_000,
+      "chat composer",
+    );
+    await reportStatus({ stage: "ready" });
+    setControlledValue(composer, config.prompt);
+
+    const sendButton = await waitFor(
+      () => {
+        const button = document.querySelector<HTMLButtonElement>(
+          '[data-testid="composer-send"]',
+        );
+        return button && !button.disabled ? button : null;
+      },
+      30_000,
+      "send button after entering the prompt",
+    );
+
+    await reportStatus({ stage: "chat-open" });
+    sendButton.click();
+    await reportStatus({ stage: "sent" });
+
+    await waitFor(
+      () => findAssistantResponseMarker(document, config.expectedResponse),
+      180_000,
+      `${config.agentLabel} response marker ${config.expectedResponse}`,
+    );
+
+    await reportStatus({ stage: "waiting-terminal" });
+    await waitFor(
+      () =>
+        isConversationTurnSettled(document, config.expectedResponse)
+          ? document.body
+          : null,
+      180_000,
+      `${config.agentLabel} terminal turn state`,
+    );
+
+    await reportStatus({ stage: "passed" });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    await reportStatus({ stage: "failed", detail }).catch(() => {});
+  }
+}
+
+async function pairAgent(config: NativeE2eConfig) {
+  const disclosure = await waitFor(
+    () =>
+      document.querySelector<HTMLElement>(
+        '[data-testid="fleet-remote-disclosure"] summary',
+      ),
+    30_000,
+    "remote-agent disclosure",
+  );
+  disclosure.click();
+
+  const labelInput = await waitFor(
+    () => document.querySelector<HTMLInputElement>('[data-testid="fleet-pair-label"]'),
+    10_000,
+    "pairing label input",
+  );
+  const tokenInput = await waitFor(
+    () =>
+      document.querySelector<HTMLTextAreaElement>('[data-testid="fleet-pair-token"]'),
+    10_000,
+    "pairing invite input",
+  );
+  setControlledValue(labelInput, config.agentLabel);
+  setControlledValue(tokenInput, config.pairToken);
+
+  const submit = await waitFor(
+    () => {
+      const button = document.querySelector<HTMLButtonElement>(
+        '[data-testid="fleet-pair-submit"]',
+      );
+      return button && !button.disabled ? button : null;
+    },
+    10_000,
+    "enabled secure-pairing button",
+  );
+  submit.click();
+}
+
+function findAgentChatButton(label: string): HTMLButtonElement | null {
+  const expected = normalized(label);
+  return (
+    Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        '[data-testid^="fleet-chat-name-"], [aria-label^="Open "][aria-label$=" chat"]',
+      ),
+    ).find((button) => normalized(button.textContent ?? "").includes(expected)) ?? null
+  );
+}
+
+function findNewChatButton(label: string): HTMLButtonElement | null {
+  const expected = normalized(`Start new chat with ${label}`);
+  return (
+    Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        '[aria-label^="Start new chat with "]',
+      ),
+    ).find(
+      (button) => normalized(button.getAttribute("aria-label") ?? "") === expected,
+    ) ?? null
+  );
+}
+
+export function findAssistantResponseMarker(
+  root: ParentNode,
+  expectedResponse: string,
+): HTMLElement | null {
+  return (
+    Array.from(
+      root.querySelectorAll<HTMLElement>('[data-testid="assistant-message"]'),
+    ).find((message) =>
+      message
+        .querySelector<HTMLElement>(".message-content")
+        ?.textContent?.includes(expectedResponse),
+    ) ?? null
+  );
+}
+
+export function conversationRowCount(root: ParentNode): number {
+  return root.querySelectorAll(
+    '.conversation-list .conversation-row > button[data-testid^="conversation-"]',
+  ).length;
+}
+
+export function isConversationTurnSettled(
+  root: ParentNode,
+  expectedResponse: string,
+): boolean {
+  return (
+    findAssistantResponseMarker(root, expectedResponse) !== null &&
+    root.querySelector('[data-testid="cancel-button"]') === null
+  );
+}
+
+function setControlledValue(
+  element: HTMLInputElement | HTMLTextAreaElement,
+  value: string,
+) {
+  const prototype =
+    element instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+  if (!setter) {
+    throw new Error(`Could not set ${element.tagName.toLowerCase()} value`);
+  }
+  setter.call(element, value);
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+async function waitForText(expected: string, timeoutMs: number) {
+  await waitFor(
+    () => (document.body.textContent?.includes(expected) ? document.body : null),
+    timeoutMs,
+    `visible text ${expected}`,
+  );
+}
+
+async function waitFor<T>(
+  sample: () => T | null | undefined,
+  timeoutMs: number,
+  description: string,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = sample();
+    if (value) {
+      return value;
+    }
+    const pairingError = document.querySelector<HTMLElement>(
+      '[data-testid="fleet-pair-status"].fleet-inline-error',
+    );
+    if (pairingError?.textContent?.trim()) {
+      throw new Error(pairingError.textContent.trim());
+    }
+    await delay(250);
+  }
+  throw new Error(`Timed out waiting for ${description}`);
+}
+
+async function waitForOptional<T>(
+  sample: () => T | null | undefined,
+  timeoutMs: number,
+): Promise<T | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = sample();
+    if (value) {
+      return value;
+    }
+    await delay(250);
+  }
+  return null;
+}
+
+async function reportStatus(status: NativeE2eStatus) {
+  renderStatus(status);
+  await invoke("desktop_native_e2e_status", { status });
+}
+
+function renderStatus(status: NativeE2eStatus) {
+  let banner = document.querySelector<HTMLElement>("#gents-native-e2e-status");
+  if (!banner) {
+    banner = document.createElement("aside");
+    banner.id = "gents-native-e2e-status";
+    banner.setAttribute("role", "status");
+    Object.assign(banner.style, {
+      background: "#00150d",
+      border: "1px solid #00d477",
+      bottom: "12px",
+      color: "#dcfff0",
+      font: "600 12px/1.4 ui-monospace, monospace",
+      left: "12px",
+      maxWidth: "calc(100vw - 24px)",
+      padding: "8px 10px",
+      position: "fixed",
+      zIndex: "2147483647",
+    });
+    document.body.append(banner);
+  }
+  const detail = status.detail ? ` · ${status.detail}` : "";
+  banner.textContent = `Native E2E: ${status.stage}${detail}`;
+}
+
+function normalized(value: string) {
+  return value.trim().toLocaleLowerCase();
+}
+
+function delay(milliseconds: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}

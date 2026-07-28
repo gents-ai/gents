@@ -183,6 +183,7 @@ export type DesktopPreviewInterruptCascadeRequest = {
 
 export type DesktopInterruptRequestRequest = {
   requestId: string;
+  agentDid?: string | null;
   cause: "userCancelled";
   cascade: boolean;
   expectedPreviewSignature?: string | null;

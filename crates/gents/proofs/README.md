@@ -40,9 +40,13 @@ local lemmas only — not listed as fenced proven areas):
 - P2P backpressure/admission (`Proofs/P2PBackpressure.lean` + TLA
   `P2PBackpressure`): one-wave success-ack backing, pending capacity, and
   strict outbound push-slot release. **Operator mitigation / obligation
-  model only** — not a flood-safety fence. Shipping still may spawn PushLog
-  work before the push semaphore and keeps pending in memory (not durable
-  across restart). See `boundary.p2p-backpressure.obligation-model`.
+  model only** — not a flood-safety fence. The pinned DefraDB implementation
+  now admits compact jobs into a bounded queue before spawning worker work,
+  defers overflow to its persisted retry ladder, and durably stores
+  push-originated pending-DAG registrations before success acknowledgement.
+  Those newer multi-wave and restart properties are not yet modeled or
+  conformance-fenced here. See
+  `boundary.p2p-backpressure.obligation-model`.
 
 ## Quick Start
 
@@ -246,9 +250,10 @@ preflight or `call_tool` retry drift before idempotency metadata changes.
 
 ManagedExec exports its state vocabulary, legal transition table, and
 deadline/cancel liveness witness rows. Rust consumes those contracts in the
-managed-exec unit tests and `state_machine_conformance`, while native
-filesystem boundary cases now name `managedExecProcessGroupBoundary` for
-`list_files`, `glob`, and `grep`.
+managed-exec unit tests and `state_machine_conformance`. A generated native
+subprocess inventory also requires `managedExecProcessGroupBoundary`,
+process-tree termination, and bounded output drain for `list_files`, `glob`,
+`grep`, `bash`, and `bash_unrestricted`.
 
 The Lean `pendingSpawn` state is intentionally one step finer than the Rust
 registry surface: Rust records an active executor only after `Command::spawn`

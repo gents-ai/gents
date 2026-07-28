@@ -52,9 +52,9 @@ use lean_vocab_test::{
     lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
     lean_event_delivery_transition_cases, lean_fleet_slot_accounting_case,
     lean_inference_slot_accounting_case, lean_inference_slot_accounting_cases,
-    lean_managed_exec_liveness_cases, lean_mcp_health_cases, lean_process_transition_cases,
-    lean_queue_deadline_case, lean_queue_deadline_cases, lean_r4c_background_work_case,
-    lean_r4c_background_work_cases, lean_r5_cross_deployment_cases,
+    lean_managed_exec_liveness_cases, lean_managed_exec_tool_boundary_cases, lean_mcp_health_cases,
+    lean_process_transition_cases, lean_queue_deadline_case, lean_queue_deadline_cases,
+    lean_r4c_background_work_case, lean_r4c_background_work_cases, lean_r5_cross_deployment_cases,
     lean_r6_background_theorem_witness, lean_r6_background_theorem_witnesses,
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_equivalence_cases,
     lean_recovery_outcome_cases, lean_recovery_sweep_cases, lean_request_transition_cases,
@@ -325,6 +325,21 @@ fn completion_retry_lean_witness_cases_hold() {
 #[test]
 fn managed_exec_liveness_cases_pin_native_process_boundary() {
     managed_exec::managed_exec_liveness_cases_pin_native_process_boundary();
+}
+
+#[test]
+fn managed_exec_tool_boundary_cases_cover_every_native_subprocess_tool() {
+    managed_exec::managed_exec_tool_boundary_cases_cover_every_native_subprocess_tool();
+}
+
+#[test]
+fn pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep() {
+    pairing_reconcile::pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep();
+}
+
+#[test]
+fn pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer() {
+    pairing_reconcile::pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer();
 }
 
 #[test]

@@ -4,15 +4,19 @@ import type { BackendHealth } from "../components/backendHealth/types";
 import type {
   AgentConfigSaveRequest,
   BackendSaveRequest,
+  BearerPairingRequest,
+  BearerPairingResponse,
   BehaviorSaveRequest,
   CascadeCancelPreview,
   ChatSendResult,
+  CodexLoginResult,
   DesktopClientSnapshot,
   DesktopInterruptRequestRequest,
   DesktopListSubagentTreeRequest,
   DesktopPreviewInterruptCascadeRequest,
   DesktopSessionSnapshot,
   EventTriggerSaveRequest,
+  InferenceProbeResult,
   InferenceProfileSaveRequest,
   InitSummary,
   InterruptRequestResult,
@@ -124,6 +128,7 @@ export type DesktopApiAdapter = {
   shutdownDesktopClient: () => Promise<DesktopClientSnapshot>;
   setSelectedAgent: (agentDid: string | null) => Promise<void>;
   addPeer: (request: PeerAddRequest) => Promise<DesktopClientSnapshot>;
+  pairBearer: (request: BearerPairingRequest) => Promise<BearerPairingResponse>;
   removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
   fetchPeerStatus: (serverAddress: string) => Promise<unknown>;
@@ -184,6 +189,9 @@ export type DesktopApiAdapter = {
     request: BehaviorDeleteRequest,
   ) => Promise<DesktopClientSnapshot>;
   saveBackendConfig: (request: BackendSaveRequest) => Promise<DesktopClientSnapshot>;
+  probeInferenceEndpoint: (endpoint: string) => Promise<InferenceProbeResult>;
+  codexLogin: (agentDid: string, provider?: string | null) => Promise<CodexLoginResult>;
+  cancelCodexLogin: () => Promise<void>;
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
@@ -240,6 +248,11 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   addPeer(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_peer_add", { request });
+  },
+  pairBearer(request) {
+    return invokeDesktop<BearerPairingResponse>("desktop_peer_pair_bearer", {
+      request,
+    });
   },
   removePeer(peerId) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_peer_remove", { peerId });
@@ -350,6 +363,19 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   saveBackendConfig(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_backend_save", { request });
+  },
+  probeInferenceEndpoint(endpoint) {
+    return invokeDesktop<InferenceProbeResult>("desktop_probe_inference_endpoint", {
+      request: { endpoint },
+    });
+  },
+  codexLogin(agentDid, provider) {
+    return invokeDesktop<CodexLoginResult>("desktop_codex_login", {
+      request: { agentDid, provider: provider ?? null },
+    });
+  },
+  cancelCodexLogin() {
+    return invokeDesktop<void>("desktop_codex_login_cancel");
   },
   saveInferenceProfileConfig(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_save", {
@@ -475,6 +501,10 @@ export async function addPeer(request: PeerAddRequest) {
   return desktopApiAdapter().addPeer(request);
 }
 
+export async function pairBearer(request: BearerPairingRequest) {
+  return desktopApiAdapter().pairBearer(request);
+}
+
 export async function removePeer(peerId: string) {
   return desktopApiAdapter().removePeer(peerId);
 }
@@ -596,6 +626,18 @@ export async function deleteBehaviorConfig(request: BehaviorDeleteRequest) {
 
 export async function saveBackendConfig(request: BackendSaveRequest) {
   return desktopApiAdapter().saveBackendConfig(request);
+}
+
+export async function probeInferenceEndpoint(endpoint: string) {
+  return desktopApiAdapter().probeInferenceEndpoint(endpoint);
+}
+
+export async function codexLogin(agentDid: string, provider?: string | null) {
+  return desktopApiAdapter().codexLogin(agentDid, provider);
+}
+
+export async function cancelCodexLogin() {
+  return desktopApiAdapter().cancelCodexLogin();
 }
 
 export async function saveInferenceProfileConfig(request: InferenceProfileSaveRequest) {
