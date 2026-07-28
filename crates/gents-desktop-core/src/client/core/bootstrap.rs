@@ -158,6 +158,7 @@ fn desktop_p2p_config(paths: &DesktopPaths, options: &ClientCoreOptions) -> P2PC
         bind_addr: options.bind_addr,
         relay_mode: options.relay_mode.clone(),
         discovery: options.discovery.clone(),
+        max_concurrent_multipath_paths: None,
         secret_key_path: Some(paths.iroh_secret_key_path().to_path_buf()),
         load_persisted_collections: options.load_persisted_collections,
         max_concurrent_dag_fetches: options.max_concurrent_dag_fetches,

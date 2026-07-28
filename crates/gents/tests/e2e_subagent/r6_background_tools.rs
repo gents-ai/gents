@@ -206,6 +206,21 @@ async fn fetch_background_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<Wa
         .unwrap_or_default()
 }
 
+async fn wait_for_background_wakes(
+    node: &EmbeddedNode,
+    session_id: &str,
+    expected_count: usize,
+) -> Vec<WakeRequestRow> {
+    for _ in 0..20 {
+        let wakes = fetch_background_wakes(node, session_id).await;
+        if wakes.len() >= expected_count {
+            return wakes;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("expected at least {expected_count} background wake rows for session {session_id}");
+}
+
 fn registry(tools: Vec<Box<dyn ToolDyn>>, allowlist: &[&str]) -> BackgroundToolRegistry {
     BackgroundToolRegistry::from_tools(
         tools,
@@ -331,7 +346,7 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
     assert!(message.content.contains(r#"status="completed""#));
     assert!(message.content.contains("<result>done</result>"));
 
-    let wakes = fetch_background_wakes(db.node.as_ref(), &session_id).await;
+    let wakes = wait_for_background_wakes(db.node.as_ref(), &session_id, 1).await;
     assert_eq!(wakes.len(), 1);
     let metadata: serde_json::Value =
         serde_json::from_str(wakes[0].metadata.as_deref().unwrap()).unwrap();
@@ -563,7 +578,7 @@ async fn cancel_tool_cancels_running_background_row_without_persisting_cancel_to
     assert!(message.content.contains(r#"status="cancelled""#));
     assert!(message.content.contains("<reason>explicit_cancel</reason>"));
 
-    let wakes = fetch_background_wakes(db.node.as_ref(), &session_id).await;
+    let wakes = wait_for_background_wakes(db.node.as_ref(), &session_id, 1).await;
     assert_eq!(wakes.len(), 1);
 }
 
