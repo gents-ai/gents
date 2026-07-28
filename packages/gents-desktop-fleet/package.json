@@ -6,7 +6,8 @@
   "type": "module",
   "sideEffects": [
     "./styles.css",
-    "./local-runtime.css"
+    "./local-runtime.css",
+    "./styles/**/*.css"
   ],
   "exports": {
     ".": {

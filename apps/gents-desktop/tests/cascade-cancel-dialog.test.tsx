@@ -3,13 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   CascadeCancelDialog,
-  interruptRequest,
-  previewInterruptCascade,
+  interruptChatRequest,
+  previewChatInterruptCascade,
 } from "@source-inc/gents-desktop-chat";
 import type { CascadeCancelPreview } from "@source-inc/gents-desktop-client";
 
-const mockedPreview = vi.fn<typeof previewInterruptCascade>();
-const mockedInterrupt = vi.fn<typeof interruptRequest>();
+const mockedPreview = vi.fn<typeof previewChatInterruptCascade>();
+const mockedInterrupt = vi.fn<typeof interruptChatRequest>();
 
 const examplePreview: CascadeCancelPreview = {
   rootRequestId: "req_root",

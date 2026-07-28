@@ -26,13 +26,13 @@ export type DesktopInterruptRequestArgs = {
   expectedPreviewSignature?: string;
 };
 
-export async function previewInterruptCascade(
+export async function previewChatInterruptCascade(
   request: DesktopPreviewInterruptCascadeArgs,
 ): Promise<CascadeCancelPreview> {
   return _previewInterruptCascade(request);
 }
 
-export async function interruptRequest(
+export async function interruptChatRequest(
   request: DesktopInterruptRequestArgs,
 ): Promise<InterruptRequestResult> {
   return _interruptRequest(request);

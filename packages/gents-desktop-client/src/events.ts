@@ -1,5 +1,4 @@
-import { listen } from "@tauri-apps/api/event";
-import type { ClientUpdateEvent } from "./transport.js";
+import { tauriTransport, type ClientUpdateEvent } from "./transport.js";
 
 export type DesktopClientUpdatedEvent = ClientUpdateEvent;
 export type DesktopClientUpdatedHandler = (
@@ -9,19 +8,12 @@ export type DesktopClientUpdatedUnlisten = () => void;
 export type DesktopClientUpdatedListenerFactory = (
   handler: DesktopClientUpdatedHandler,
 ) => Promise<DesktopClientUpdatedUnlisten>;
+export type DesktopClientUpdatedErrorHandler = (error: unknown) => void;
 
 async function defaultDesktopClientUpdatedListenerFactory(
   handler: DesktopClientUpdatedHandler,
 ) {
-  const unlisten = await listen<DesktopClientUpdatedEvent>(
-    "desktop://client-updated",
-    (event) => {
-      void handler(event.payload ?? {});
-    },
-  );
-  return () => {
-    unlisten();
-  };
+  return tauriTransport().listenClientUpdated(handler);
 }
 
 let desktopClientUpdatedListenerFactoryOverride: DesktopClientUpdatedListenerFactory | null =
@@ -35,9 +27,18 @@ export function setDesktopClientUpdatedListenerFactoryForTests(
 
 export function listenToDesktopClientUpdates(
   handler: DesktopClientUpdatedHandler,
+  onError: DesktopClientUpdatedErrorHandler = () => undefined,
 ) {
+  const safeHandler: DesktopClientUpdatedHandler = (event) =>
+    Promise.resolve(handler(event)).catch((error) => {
+      try {
+        onError(error);
+      } catch {
+        // Error reporting must not create another unhandled event rejection.
+      }
+    });
   return (
     desktopClientUpdatedListenerFactoryOverride ??
     defaultDesktopClientUpdatedListenerFactory
-  )(handler);
+  )(safeHandler);
 }

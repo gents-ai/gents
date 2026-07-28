@@ -22,6 +22,9 @@ pub struct ResolvedBridgePolicy {
 
 pub struct DesktopAppState {
     pub bridge: Mutex<DesktopBridge>,
+    /// Serializes start/shutdown so concurrent host calls cannot create an
+    /// untracked second ClientCore between the state check and installation.
+    pub client_lifecycle: tokio::sync::Mutex<()>,
     pub policy: ResolvedBridgePolicy,
 }
 
@@ -41,6 +44,7 @@ impl DesktopAppState {
                 updates_task: None,
                 codex_login_cancel: None,
             }),
+            client_lifecycle: tokio::sync::Mutex::new(()),
             policy,
         }
     }

@@ -9,8 +9,9 @@ export type MemoryTransportOptions = {
 };
 
 /**
- * Deterministic in-memory transport for harnesses and package tests.
- * Replaces setDesktopApiAdapterForTests with constructor injection.
+ * Deterministic in-memory transport for DesktopClient/DesktopStore consumers.
+ * Legacy prop-less domain components still use the compatibility API adapter
+ * seam documented in api.ts until that surface is fully instance-bound.
  */
 export function createMemoryTransport(
   options: MemoryTransportOptions = {},

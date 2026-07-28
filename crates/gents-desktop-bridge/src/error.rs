@@ -1,11 +1,8 @@
 //! Typed bridge errors for the phase-3 plugin boundary.
 //!
-//! Today commands still return stringly `Result<T, String>`. This module
-//! invents the closed `BridgeErrorCode` taxonomy that phase 3 will wire into
-//! every command, so names, generated types, and the fingerprint change
-//! together once. The inventory is driven by the string-matched failure modes
-//! already in use (peerConnectionErrors, "desktop client is not running",
-//! cascade signature mismatches, validation `bail!`s, etc.).
+//! Commands expose the closed `BridgeErrorCode` taxonomy below. Legacy
+//! string-returning implementation seams are classified at the command
+//! boundary while new call sites construct codes directly.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -75,6 +72,12 @@ impl BridgeErrorCode {
     /// migrate call sites incrementally. Prefer constructing `BridgeError`
     /// directly at new sites.
     pub fn classify_legacy_message(message: &str) -> Self {
+        fn contains_pairing_word(message: &str) -> bool {
+            message
+                .split(|character: char| !character.is_ascii_alphanumeric())
+                .any(|word| matches!(word, "pair" | "paired" | "pairing"))
+        }
+
         let lower = message.to_ascii_lowercase();
         if lower.contains("desktop client is not running")
             || lower.contains("desktop bridge not initialized")
@@ -132,7 +135,7 @@ impl BridgeErrorCode {
         {
             return Self::InvalidArgument;
         }
-        if lower.contains("pair")
+        if contains_pairing_word(&lower)
             || lower.contains("bearer")
             || lower.contains("invite")
             || lower.contains("ticket")
@@ -238,6 +241,18 @@ mod tests {
         assert_eq!(
             BridgeErrorCode::classify_legacy_message("task demo was not found"),
             BridgeErrorCode::NotFound
+        );
+    }
+
+    #[test]
+    fn pairing_word_match_does_not_classify_repair_as_pairing() {
+        assert_eq!(
+            BridgeErrorCode::classify_legacy_message("P2P repair was requested"),
+            BridgeErrorCode::Unknown
+        );
+        assert_eq!(
+            BridgeErrorCode::classify_legacy_message("peer pairing failed"),
+            BridgeErrorCode::Pairing
         );
     }
 

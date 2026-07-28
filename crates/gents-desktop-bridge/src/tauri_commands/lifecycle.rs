@@ -80,6 +80,7 @@ pub async fn desktop_client_start<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
+    let _lifecycle_guard = state.client_lifecycle.lock().await;
     let grants = snapshot_grants(&state);
     if let Some(core) = current_core(&state) {
         return build_client_snapshot_with_grants(Some(&core), Some(&state.policy), grants)
@@ -114,6 +115,7 @@ pub async fn desktop_client_shutdown<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
+    let _lifecycle_guard = state.client_lifecycle.lock().await;
     let (core, updates_task) = {
         let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
         (bridge.core.take(), bridge.updates_task.take())

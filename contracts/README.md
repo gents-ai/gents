@@ -2,10 +2,15 @@
 
 Versioned, committed snapshots that fence the desktop bridge ↔ TypeScript boundary.
 
-| Artifact | Owner | Freshness gate |
-|---|---|---|
-| `desktop-bridge.json` | `gents-desktop-bridge::contract` | `cargo test -p gents-desktop-bridge fingerprint_matches` |
-| `crates/gents-desktop-bridge/bindings/*.ts` | `ts-rs` derives on bridge types | `cargo test -p gents-desktop-bridge committed_bindings` |
+| Artifact                                    | Owner                            | Freshness gate                                           |
+| ------------------------------------------- | -------------------------------- | -------------------------------------------------------- |
+| `desktop-bridge.json`                       | `gents-desktop-bridge::contract` | `cargo test -p gents-desktop-bridge fingerprint_matches` |
+| `crates/gents-desktop-bridge/bindings/*.ts` | `ts-rs` derives on bridge types  | `cargo test -p gents-desktop-bridge committed_bindings`  |
+
+The bridge suite also cross-checks the fingerprint command inventory against
+the plugin `generate_handler!` registration, `build.rs` command list, and both
+permission TOML files. Public serialized Rust contract types must derive `TS`,
+and every derived type must appear in the regenerated binding set.
 
 ## Regenerating
 

@@ -8,8 +8,8 @@ import {
 } from "react";
 
 import {
-  interruptRequest,
-  previewInterruptCascade,
+  interruptChatRequest,
+  previewChatInterruptCascade,
 } from "../../interruptRequest.js";
 import type {
   CascadeAffectedRequest,
@@ -30,8 +30,8 @@ export type CascadeCancelDialogProps = {
   /** Optional: called on preview fetch error. Parent decides how to surface. */
   onError?: (message: string) => void;
   /** Optional operation adapters for non-Tauri hosts and focused tests. */
-  previewInterrupt?: typeof previewInterruptCascade;
-  interrupt?: typeof interruptRequest;
+  previewInterrupt?: typeof previewChatInterruptCascade;
+  interrupt?: typeof interruptChatRequest;
 };
 
 type Phase = "loading" | "showing" | "submitting";
@@ -47,8 +47,8 @@ export function CascadeCancelDialog(
     onAccepted,
     onAlreadyInterrupted,
     onError,
-    previewInterrupt = previewInterruptCascade,
-    interrupt = interruptRequest,
+    previewInterrupt = previewChatInterruptCascade,
+    interrupt = interruptChatRequest,
   } = props;
 
   const [phase, setPhase] = useState<Phase>("loading");

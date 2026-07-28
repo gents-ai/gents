@@ -24,12 +24,13 @@ fn bridge_config() -> BridgeConfig {
             app_name: "Gents Fixture Host".into(),
             app_version: env!("CARGO_PKG_VERSION").into(),
         },
-        // Process-wide profile matching capabilities/default.json (chat+fleet).
+        // Process-wide profile matching capabilities/default.json
+        // (chat + fleet + read-only operations).
         snapshot_grants: SnapshotGrants {
             session_read: true,
             fleet_read: true,
             config_read: false,
-            operations_read: false,
+            operations_read: true,
             runtime_admin: false,
         },
     }
@@ -37,19 +38,20 @@ fn bridge_config() -> BridgeConfig {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Resolve domain + client homes first so tracing never uses Gents defaults.
+    // The bridge resolves its real client home from Tauri's app_data_dir during
+    // plugin setup. The host separately owns its logs and domain-plugin home.
     let host_root = dirs::data_local_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("gents-fixture-host");
-    let client_home = host_root.join("client");
+    let log_home = host_root.join("logs");
     let domain_home = std::env::var_os("FIXTURE_DOMAIN_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| host_root.join("domain"));
-    let _ = std::fs::create_dir_all(&client_home);
+    let _ = std::fs::create_dir_all(&log_home);
     let _ = std::fs::create_dir_all(&domain_home);
 
     install_tracing(TracingConfig {
-        log_path: client_home.join("fixture-host.log"),
+        log_path: log_home.join("fixture-host.log"),
         filter: None,
         console: true,
     });

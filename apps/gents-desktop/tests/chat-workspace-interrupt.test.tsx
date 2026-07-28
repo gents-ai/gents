@@ -3,13 +3,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("@source-inc/gents-desktop-chat", async (importOriginal) => ({
   ...(await importOriginal()),
-  previewInterruptCascade: vi.fn(),
-  interruptRequest: vi.fn(),
+  previewChatInterruptCascade: vi.fn(),
+  interruptChatRequest: vi.fn(),
 }));
 
 import {
-  previewInterruptCascade,
-  interruptRequest,
+  previewChatInterruptCascade,
+  interruptChatRequest,
 } from "@source-inc/gents-desktop-chat";
 import { ActiveChatWorkspace } from "../src/components/ChatWorkspace";
 import type {
@@ -17,8 +17,8 @@ import type {
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 
-const mockedPreview = vi.mocked(previewInterruptCascade);
-const mockedInterrupt = vi.mocked(interruptRequest);
+const mockedPreview = vi.mocked(previewChatInterruptCascade);
+const mockedInterrupt = vi.mocked(interruptChatRequest);
 
 const baseDeployment: DeploymentView = {
   deploymentId: "dep-1",

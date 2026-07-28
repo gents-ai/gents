@@ -365,7 +365,6 @@ describe("FleetHostDashboard guided inference callout", () => {
         repairingP2P={false}
         starting={false}
         onAddPeer={vi.fn()}
-        onFetchPeerStatus={vi.fn()}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}

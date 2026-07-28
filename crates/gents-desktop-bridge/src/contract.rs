@@ -106,7 +106,7 @@ pub fn command_inventory() -> Vec<CommandContract> {
         // holds-read / holds-control
         ("desktop_list_tool_call_holds", "holds-read"),
         ("desktop_resolve_tool_call_hold", "holds-control"),
-        // config-write (save/delete/test — 17 commands)
+        // config-write (save/delete/test/auth — 20 commands)
         ("desktop_agent_config_save", "config-write"),
         ("desktop_behavior_save", "config-write"),
         ("desktop_skill_save", "config-write"),
@@ -253,7 +253,159 @@ pub const FINGERPRINT_REL_PATH: &str = "contracts/desktop-bridge.json";
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
+
+    #[derive(Debug, Deserialize)]
+    struct PermissionSetFile {
+        set: Vec<PermissionSetDefinition>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct DefaultPermissionFile {
+        default: PermissionSetDefinition,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct PermissionSetDefinition {
+        identifier: Option<String>,
+        permissions: Vec<String>,
+    }
+
+    fn inventory_by_name() -> BTreeMap<String, String> {
+        command_inventory()
+            .into_iter()
+            .map(|command| (command.name, command.permission_set))
+            .collect()
+    }
+
+    fn build_script_commands() -> BTreeSet<String> {
+        let source = include_str!("../build.rs");
+        let block = source
+            .split_once("const COMMANDS: &[&str] = &[")
+            .expect("build.rs COMMANDS declaration")
+            .1
+            .split_once("];")
+            .expect("build.rs COMMANDS terminator")
+            .0;
+        block
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix('"')
+                    .and_then(|line| line.strip_suffix("\","))
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
+    fn plugin_handler_commands() -> BTreeSet<String> {
+        let source = include_str!("plugin.rs");
+        let block = source
+            .split_once("tauri::generate_handler![")
+            .expect("plugin generate_handler declaration")
+            .1
+            .split_once("])")
+            .expect("plugin generate_handler terminator")
+            .0;
+        block
+            .lines()
+            .filter_map(|line| {
+                let path = line.trim().trim_end_matches(',');
+                path.contains("::")
+                    .then(|| path.rsplit("::").next().expect("command path").to_string())
+            })
+            .collect()
+    }
+
+    fn permission_to_command(permission: &str) -> Option<String> {
+        permission
+            .strip_prefix("allow-")
+            .map(|name| name.replace('-', "_"))
+    }
+
+    #[test]
+    fn command_contract_matches_plugin_build_and_permission_sets() {
+        let inventory = inventory_by_name();
+        let inventory_names = inventory.keys().cloned().collect::<BTreeSet<_>>();
+        assert_eq!(
+            plugin_handler_commands(),
+            inventory_names,
+            "plugin generate_handler! and contract command inventory drifted"
+        );
+        assert_eq!(
+            build_script_commands(),
+            inventory_names,
+            "build.rs COMMANDS and contract command inventory drifted"
+        );
+
+        let permission_file: PermissionSetFile =
+            toml::from_str(include_str!("../permissions/sets.toml"))
+                .expect("permissions/sets.toml parses");
+        let actual_set_ids = permission_file
+            .set
+            .iter()
+            .filter_map(|set| set.identifier.clone())
+            .collect::<BTreeSet<_>>();
+        let advertised_set_ids = permission_set_inventory()
+            .into_iter()
+            .map(|set| set.name)
+            .filter(|name| name != "default" && name != "config-read")
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            actual_set_ids, advertised_set_ids,
+            "permissions/sets.toml and advertised permission-set inventory drifted"
+        );
+
+        for set in permission_file
+            .set
+            .iter()
+            .filter(|set| set.identifier.as_deref() != Some("full"))
+        {
+            let set_id = set.identifier.as_deref().expect("set identifier");
+            let actual_commands = set
+                .permissions
+                .iter()
+                .map(|permission| {
+                    permission_to_command(permission).unwrap_or_else(|| {
+                        panic!("{set_id} contains non-command permission {permission}")
+                    })
+                })
+                .collect::<BTreeSet<_>>();
+            let expected_commands = inventory
+                .iter()
+                .filter(|(_, permission_set)| permission_set.as_str() == set_id)
+                .map(|(command, _)| command.clone())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                actual_commands, expected_commands,
+                "permission set {set_id} and contract command assignments drifted"
+            );
+        }
+
+        let default_file: DefaultPermissionFile =
+            toml::from_str(include_str!("../permissions/default.toml"))
+                .expect("permissions/default.toml parses");
+        let default_commands = default_file
+            .default
+            .permissions
+            .iter()
+            .map(|permission| {
+                permission_to_command(permission)
+                    .unwrap_or_else(|| panic!("default contains non-command {permission}"))
+            })
+            .collect::<BTreeSet<_>>();
+        let expected_default_commands = inventory
+            .iter()
+            .filter(|(_, set)| set.as_str() == "core" || set.as_str() == "client-lifecycle")
+            .map(|(command, _)| command.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            default_commands, expected_default_commands,
+            "permissions/default.toml must compose exactly core + client-lifecycle"
+        );
+    }
 
     #[test]
     fn no_fine_grained_permission_set_mixes_read_and_mutate() {
@@ -375,7 +527,7 @@ mod tests {
 
     #[test]
     fn command_inventory_is_unique() {
-        let mut seen = std::collections::BTreeSet::new();
+        let mut seen = BTreeSet::new();
         for command in command_inventory() {
             assert!(
                 seen.insert(command.name.clone()),
@@ -383,12 +535,6 @@ mod tests {
                 command.name
             );
         }
-        // 53 production + 2 native-e2e + desktop_bridge_contract (phase 3)
-        assert!(
-            seen.len() >= 55,
-            "expected at least 55 commands, got {}",
-            seen.len()
-        );
     }
 
     #[test]

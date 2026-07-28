@@ -8725,6 +8725,7 @@ dependencies = [
  "tauri-plugin",
  "tempfile",
  "tokio",
+ "toml 0.8.2",
  "tracing",
  "tracing-subscriber",
  "ts-rs 10.1.0",

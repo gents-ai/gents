@@ -34,6 +34,31 @@ fn package_bindings_dir() -> PathBuf {
         .join("../../packages/gents-desktop-client/src/generated")
 }
 
+fn replace_typescript_identifier(source: &str, from: &str, to: &str) -> String {
+    fn is_identifier_char(byte: u8) -> bool {
+        byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
+    }
+
+    let bytes = source.as_bytes();
+    let mut output = String::with_capacity(source.len());
+    let mut cursor = 0;
+    while let Some(offset) = source[cursor..].find(from) {
+        let start = cursor + offset;
+        let end = start + from.len();
+        let left_is_identifier = start > 0 && is_identifier_char(bytes[start - 1]);
+        let right_is_identifier = end < bytes.len() && is_identifier_char(bytes[end]);
+        output.push_str(&source[cursor..start]);
+        if left_is_identifier || right_is_identifier {
+            output.push_str(from);
+        } else {
+            output.push_str(to);
+        }
+        cursor = end;
+    }
+    output.push_str(&source[cursor..]);
+    output
+}
+
 fn normalize_generated_types(dir: &Path) -> Result<(), String> {
     for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
         let path = entry.map_err(|e| e.to_string())?.path();
@@ -44,8 +69,7 @@ fn normalize_generated_types(dir: &Path) -> Result<(), String> {
         // Tauri IPC carries serde integers as JavaScript numbers. ts-rs maps
         // Rust's 64-bit integer types to bigint by default, which describes the
         // Rust value range rather than the JSON wire representation.
-        let normalized = source
-            .replace("bigint", "number")
+        let normalized = replace_typescript_identifier(&source, "bigint", "number")
             .lines()
             .map(|line| {
                 let trimmed = line.trim_end();
@@ -61,6 +85,82 @@ fn normalize_generated_types(dir: &Path) -> Result<(), String> {
         std::fs::write(path, normalized).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+fn public_derived_types(source: &str, derive_marker: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut derive = String::new();
+    let mut collecting_derive = false;
+    let mut pending_match = false;
+
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("#[derive(") {
+            derive.clear();
+            collecting_derive = true;
+        }
+        if collecting_derive {
+            derive.push_str(trimmed);
+            if trimmed.ends_with(")]") {
+                collecting_derive = false;
+                pending_match = derive
+                    .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+                    .any(|token| token == derive_marker);
+            }
+            continue;
+        }
+        if !pending_match {
+            continue;
+        }
+        if trimmed.is_empty()
+            || trimmed.starts_with("///")
+            || trimmed.starts_with("#[")
+            || trimmed.starts_with("//")
+        {
+            continue;
+        }
+
+        let declaration = trimmed
+            .strip_prefix("pub struct ")
+            .or_else(|| trimmed.strip_prefix("pub enum "));
+        if let Some(declaration) = declaration {
+            let name = declaration
+                .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+                .next()
+                .unwrap_or_default();
+            if !name.is_empty() {
+                names.push(name.to_string());
+            }
+        }
+        pending_match = false;
+    }
+
+    names
+}
+
+fn contract_source_paths() -> Vec<PathBuf> {
+    fn collect_rust_files(directory: &Path, output: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(directory).expect("read contract source directory") {
+            let path = entry.expect("contract source entry").path();
+            if path.is_dir() {
+                collect_rust_files(&path, output);
+            } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+                output.push(path);
+            }
+        }
+    }
+
+    let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut paths = vec![
+        source_root.join("contract.rs"),
+        source_root.join("error.rs"),
+        source_root.join("tauri_commands/chat.rs"),
+        source_root.join("tauri_commands/lifecycle.rs"),
+        source_root.join("tauri_commands/workspace.rs"),
+    ];
+    collect_rust_files(&source_root.join("types"), &mut paths);
+    paths.sort();
+    paths
 }
 
 fn export_all(dir: &Path) -> Result<(), String> {
@@ -205,26 +305,40 @@ fn all_public_bridge_contract_roots_are_generated() {
     let tmp = tempfile::tempdir().expect("tempdir");
     export_all(tmp.path()).expect("export");
 
-    let files = list_ts_files(tmp.path()).expect("list generated");
+    let files = list_ts_files(tmp.path())
+        .expect("list generated")
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut serialized_types = std::collections::BTreeSet::new();
+    let mut typescript_types = std::collections::BTreeSet::new();
+    for path in contract_source_paths() {
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        serialized_types.extend(public_derived_types(&source, "Serialize"));
+        typescript_types.extend(public_derived_types(&source, "TS"));
+    }
     assert!(
-        files.len() >= 90,
-        "expected full request/view coverage, generated only {} files",
-        files.len()
+        serialized_types.is_subset(&typescript_types),
+        "public serialized bridge types without TS derive: {:?}",
+        serialized_types
+            .difference(&typescript_types)
+            .collect::<Vec<_>>()
     );
-    for expected in [
-        "DesktopClientSnapshot.ts",
-        "DesktopSessionSnapshot.ts",
-        "DesktopOperationsSnapshot.ts",
-        "BridgeContract.ts",
-        "PeerAddRequest.ts",
-        "ChatSendRequest.ts",
-        "DesktopInterruptRequest.ts",
-    ] {
+    for expected in typescript_types.iter().map(|name| format!("{name}.ts")) {
         assert!(
-            files.iter().any(|file| file == expected),
+            files.contains(&expected),
             "missing generated bridge contract {expected}"
         );
     }
+}
+
+#[test]
+fn bigint_normalization_only_rewrites_typescript_identifier_tokens() {
+    let source = "type Wire = bigint | Array<bigint>; type bigintCounter = string;\n";
+    assert_eq!(
+        replace_typescript_identifier(source, "bigint", "number"),
+        "type Wire = number | Array<number>; type bigintCounter = string;\n"
+    );
 }
 
 #[test]

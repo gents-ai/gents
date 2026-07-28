@@ -159,25 +159,37 @@ export function useDesktopShellEffects({
       }
     });
 
+    const reportListenerError = (listenerError: unknown) => {
+      if (disposed) {
+        return;
+      }
+      const message =
+        listenerError instanceof Error ? listenerError.message : String(listenerError);
+      logShellEvent(`desktop update listener failed: ${message}`);
+      setError(message);
+    };
+
     void listenToDesktopClientUpdates(async () => {
       if (disposed) {
         return;
       }
       await refreshQueue.request();
-    }).then((cleanup) => {
-      if (disposed) {
-        cleanup();
-        return;
-      }
-      unlisten = cleanup;
-    });
+    }, reportListenerError)
+      .then((cleanup) => {
+        if (disposed) {
+          cleanup();
+          return;
+        }
+        unlisten = cleanup;
+      })
+      .catch(reportListenerError);
 
     return () => {
       disposed = true;
       refreshQueue.dispose();
       unlisten?.();
     };
-  }, [selectedAgentDid, selectedSessionId, selectedTrackedRequestId]);
+  }, [selectedAgentDid, selectedSessionId, selectedTrackedRequestId, setError]);
 
   useEffect(() => {
     if (!deployments.length) {

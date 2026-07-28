@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "verify": "node verify-artifacts.mjs"
   },
   "dependencies": {
     "react": "^19.1.0",

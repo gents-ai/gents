@@ -5,7 +5,8 @@
   "description": "Reusable operations rail, liveness, health, lineage, trace, and workspace surfaces for Gents desktop",
   "type": "module",
   "sideEffects": [
-    "./styles.css"
+    "./styles.css",
+    "./styles/**/*.css"
   ],
   "exports": {
     ".": {

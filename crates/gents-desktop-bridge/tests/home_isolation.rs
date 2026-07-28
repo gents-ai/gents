@@ -26,7 +26,7 @@ async fn fixed_root_homes_do_not_collide() {
             bootstrap: BootstrapPolicy::PairedRemoteOnly,
             app_meta: AppMeta {
                 app_name: "fixture".into(),
-                app_version: "0.8.0".into(),
+                app_version: env!("CARGO_PKG_VERSION").into(),
             },
             snapshot_grants: SnapshotGrants::chat_package(),
         },
@@ -45,12 +45,25 @@ async fn fixed_root_homes_do_not_collide() {
         "domain home must stay distinct"
     );
 
-    // Boot a real client under the bridge FixedRoot — proves the home is usable.
-    let paths = DesktopPaths::from_root(&bridge_root);
-    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
+    // Keep two real ClientCore/DefraDB stores live concurrently under distinct
+    // roots. This catches process-global or path-resolution collisions that a
+    // sequential marker-file assertion cannot.
+    let bridge_core = Arc::new(
+        ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(&bridge_root),
+            ClientCoreOptions::local_only(),
+        )
         .await
-        .expect("client starts under FixedRoot");
-    let core = Arc::new(core);
+        .expect("bridge client starts under FixedRoot"),
+    );
+    let domain_core = Arc::new(
+        ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(&domain_root),
+            ClientCoreOptions::local_only(),
+        )
+        .await
+        .expect("second store starts concurrently under domain root"),
+    );
 
     // Marker file only under domain root.
     std::fs::write(domain_root.join("domain-marker"), b"domain").unwrap();
@@ -60,7 +73,8 @@ async fn fixed_root_homes_do_not_collide() {
     );
     assert!(domain_root.join("domain-marker").exists());
 
-    core.shutdown().await.expect("shutdown");
+    domain_core.shutdown().await.expect("domain store shutdown");
+    bridge_core.shutdown().await.expect("bridge store shutdown");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -79,7 +93,7 @@ async fn local_runtime_allowed_binds_fixed_agent_home() {
             },
             app_meta: AppMeta {
                 app_name: "fixture".into(),
-                app_version: "0.8.0".into(),
+                app_version: env!("CARGO_PKG_VERSION").into(),
             },
             snapshot_grants: SnapshotGrants::all(),
         },

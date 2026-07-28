@@ -5,7 +5,8 @@
   "description": "Headless chat projection and workflow helpers for Gents desktop",
   "type": "module",
   "sideEffects": [
-    "./styles.css"
+    "./styles.css",
+    "./styles/**/*.css"
   ],
   "exports": {
     ".": {

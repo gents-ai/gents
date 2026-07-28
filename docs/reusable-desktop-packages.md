@@ -4,18 +4,18 @@ _Design spec — 2026-07-27. Issue [#877](https://github.com/source-inc/gents/is
 
 **Implementation status (PR #878, honest):**
 
-| Phase | Status | Notes |
-|---|---|---|
-| 1 Crate extract | **done** | `gents-desktop-bridge` |
-| 2 Contract prep | **done** | full ts-rs request/view generation, fingerprint, error taxonomy, freshness gates |
-| 3 Plugin-ization | **done** (native) | plugin, permissions, path strip, peer id rekey, BridgeError, projection seam |
-| 4 Fixture host | **done** (in-tree) | co-resident domain plugin, separate homes, full package surfaces, Rust + frontend CI |
-| 5 Client package | **done** | typed transport, single-subscription snapshot store, generated public types, testing seam |
-| 6 Tokens + UI | **done** | semantic token contract, conformance fence, shared primitives |
-| 7 Chat package | **done** | projection, transcript/composer/cancel/code/denial components, styles, tests |
-| 8 Fleet package | **done** | remote fleet surface + opt-in local-runtime subpath, brand slots, styles, tests |
-| 9 Operations package | **done** | extensible rail, holds, health, lineage, trace, workspace surfaces, styles, tests |
-| 10 Release | **wired** | packed clean-consumer gate, exact pins, tag artifact workflow; first real tag remains release-time evidence |
+| Phase                | Status             | Notes                                                                                                       |
+| -------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------- |
+| 1 Crate extract      | **done**           | `gents-desktop-bridge`                                                                                      |
+| 2 Contract prep      | **done**           | full ts-rs request/view generation, fingerprint, error taxonomy, freshness gates                            |
+| 3 Plugin-ization     | **done** (native)  | plugin, permissions, path strip, peer id rekey, BridgeError, projection seam                                |
+| 4 Fixture host       | **done** (in-tree) | co-resident domain plugin, separate homes, full package surfaces, Rust + frontend CI                        |
+| 5 Client package     | **done**           | typed transport, one subscription per store, generated public types, testing seam                           |
+| 6 Tokens + UI        | **done**           | semantic token contract, conformance fence, shared primitives                                               |
+| 7 Chat package       | **done**           | projection, transcript/composer/cancel/code/denial components, styles, tests                                |
+| 8 Fleet package      | **done**           | remote fleet surface + opt-in local-runtime subpath, brand slots, styles, tests                             |
+| 9 Operations package | **done**           | extensible rail, holds, health, lineage, trace, workspace surfaces, styles, tests                           |
+| 10 Release           | **wired**          | packed clean-consumer gate, exact pins, tag artifact workflow; first real tag remains release-time evidence |
 
 **v1 snapshot projection model (accepted deviation):** grants are
 **process-wide** via `BridgeConfig.snapshot_grants` (host-declared, fail-closed
@@ -27,13 +27,17 @@ tests, not runtime ACL reflection. Per-caller projection is a filed follow-up.
 (not yet `test-harness` on the bridge crate). The reusable store owns the shared
 snapshot subscription/coalescing boundary; Gents Desktop retains its mature
 session polling/restart coordinator in `useDesktopShell` and passes package
-components data + callbacks. Package CSS is semantic-token-only but preserves the
-existing class names to keep the extraction behavior-identical; a future
-collision-hardening release may prefix them. Live-lane verification of the serde
-camelCase fix remains fenced but not discharged: a wire-format assertion is in
-`test:live:chat` (`itemKey` must arrive camelCase over real IPC), but the suite
-fails before reaching it on this branch **and at main HEAD** — a pre-existing
-backgrounded-tools liveness assertion failure tracked as
+components data + callbacks. Constructor injection currently governs
+`DesktopClient`/`DesktopStore`; prop-less domain component actions retain the
+compatibility API adapter seam, so making every domain action instance-bound is
+a follow-up rather than a claim of this extraction. Package CSS is
+semantic-token-only but preserves the existing class names to keep the
+extraction behavior-identical; a future collision-hardening release may prefix
+them. Live-lane verification of the serde camelCase fix remains fenced but not
+discharged: a wire-format assertion is in `test:live:chat` (`itemKey` must
+arrive camelCase over real IPC), but the suite fails before reaching it on this
+branch **and at main HEAD** — a pre-existing backgrounded-tools liveness
+assertion failure tracked as
 [#884](https://github.com/source-inc/gents/issues/884); the fence discharges
 this obligation once #884 is fixed. External Amygdala authentication/Cargo-fetch
 and the first real tag publish remain release-environment evidence, not changes
@@ -278,7 +282,7 @@ The aggregate snapshot is projected at the shared builder seam by
 `SnapshotGrants` on `BridgeConfig`. **v1 is single-profile-per-process:** every
 webview of a host process sees the same projected sections. The host sets
 `snapshot_grants` to match the maximum capability profile it grants any window
-(Gents Desktop: `SnapshotGrants::all()`; fixture: chat+fleet bits only).
+(Gents Desktop: `SnapshotGrants::all()`; fixture: chat+fleet+operations bits).
 `BridgeConfig::default()` uses `core_only()` (fail closed).
 
 This deliberately does **not** introspect Tauri ACL per invoke. That was the
@@ -353,7 +357,7 @@ path.** The client home is resolved exactly once, from `BridgeConfig.home`, at
 plugin init, and every command — start, initialization, bootstrap summary,
 reset/overwrite — operates on that one resolved home. This is a deliberate contract
 change: today's `DesktopInitRequest` accepts **two** path fields, `desktop_home`
-*and* `agent_home` (`bridge/types/requests.rs:7`), which `desktop_init_local_standard`
+_and_ `agent_home` (`bridge/types/requests.rs:7`), which `desktop_init_local_standard`
 uses directly (`tauri_commands/lifecycle.rs`) — so a `runtime-admin` webview could
 point initialization, including the reset/overwrite flags, at arbitrary filesystem
 paths, bypassing `AppDataDir`/`FixedRoot` entirely. Plugin-ization removes **both**
@@ -394,28 +398,28 @@ the package boundary at exactly the layer where it matters most. The plugin inst
 declares **capability-scoped permission sets**, aligned with the frontend package
 split, and hosts opt into each in their capability files:
 
-| Permission set | Commands (grouped) |
-|---|---|
-| `core` | `desktop_bridge_contract`, `desktop_bootstrap_summary` (**lifecycle-projected** — see below), `desktop_client_snapshot` (**permission-projected** — sections require the matching read grants, see below), `desktop_observer_metrics` |
-| `client-lifecycle` | `desktop_client_start`, `desktop_client_shutdown`, `desktop_set_selected_agent` |
-| `runtime-admin` | `desktop_init_local_standard` |
-| `session-read` | session snapshot |
-| `trace-read` | request timeline |
-| `tool-surface-read` | tool-surface explain |
-| `chat-write` | send, conversation rename, session fork |
-| `resend-control` | request resend |
-| `fleet-read` | peer status fetch (**by saved peer id only** — see below), network status |
-| `workspace-read` | workspace list |
-| `fleet-admin` | peer add/remove/rename, bearer pairing, P2P repair (all address-accepting flows live only here) |
-| `operations-read` | operations snapshot, subagent tree, backend/MCP health lists, MCP probe |
-| `interrupt-read` | interrupt-cascade preview |
-| `interrupt-control` | interrupt request |
-| `holds-read` | tool-call hold list |
-| `holds-control` | tool-call hold resolve |
-| `config-read` | config sections of the projected snapshot (backends, profiles, tools, skills, behaviors, tasks, schedules, triggers) |
-| `config-write` | all 17 config save/delete/test commands |
-| `tasks` | task/schedule/event-trigger save + run |
-| `native-e2e` | the two debug-only E2E commands; never part of any default |
+| Permission set      | Commands (grouped)                                                                                                                                                                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core`              | `desktop_bridge_contract`, `desktop_bootstrap_summary` (**lifecycle-projected** — see below), `desktop_client_snapshot` (**permission-projected** — sections require the matching read grants, see below), `desktop_observer_metrics` |
+| `client-lifecycle`  | `desktop_client_start`, `desktop_client_shutdown`, `desktop_set_selected_agent`                                                                                                                                                       |
+| `runtime-admin`     | `desktop_init_local_standard`                                                                                                                                                                                                         |
+| `session-read`      | session snapshot                                                                                                                                                                                                                      |
+| `trace-read`        | request timeline                                                                                                                                                                                                                      |
+| `tool-surface-read` | tool-surface explain                                                                                                                                                                                                                  |
+| `chat-write`        | send, conversation rename, session fork                                                                                                                                                                                               |
+| `resend-control`    | request resend                                                                                                                                                                                                                        |
+| `fleet-read`        | peer status fetch (**by saved peer id only** — see below), network status                                                                                                                                                             |
+| `workspace-read`    | workspace list                                                                                                                                                                                                                        |
+| `fleet-admin`       | peer add/remove/rename, bearer pairing, P2P repair (all address-accepting flows live only here)                                                                                                                                       |
+| `operations-read`   | operations snapshot, subagent tree, backend/MCP health lists, MCP probe                                                                                                                                                               |
+| `interrupt-read`    | interrupt-cascade preview                                                                                                                                                                                                             |
+| `interrupt-control` | interrupt request                                                                                                                                                                                                                     |
+| `holds-read`        | tool-call hold list                                                                                                                                                                                                                   |
+| `holds-control`     | tool-call hold resolve                                                                                                                                                                                                                |
+| `config-read`       | config sections of the projected snapshot (backends, profiles, tools, skills, behaviors, tasks, schedules, triggers)                                                                                                                  |
+| `config-write`      | all 17 config save/delete/test commands                                                                                                                                                                                               |
+| `tasks`             | task/schedule/event-trigger save + run                                                                                                                                                                                                |
+| `native-e2e`        | the two debug-only E2E commands; never part of any default                                                                                                                                                                            |
 
 The shipped `default` set is minimal: `core` + `client-lifecycle`. Notably it
 excludes `runtime-admin` — a webview should not be able to provision a local
@@ -437,7 +441,7 @@ lives exclusively in `desktop_init_local_standard` (`runtime-admin`), with
 conversation previews, system prompts, backend endpoints, tool selections, skills,
 tasks, schedules, triggers, and fleet data — so putting it in a "minimal" default
 would hand `-client` all of that without any read grant and make `config-read`
-meaningless. Under the plugin, command *availability* comes from `core`, but the
+meaningless. Under the plugin, command _availability_ comes from `core`, but the
 payload is **projected by grant**: each read set carries a Tauri permission scope
 entry for its snapshot sections (`session-read` → conversations/sessions,
 `fleet-read` → peers/network, `config-read` → the config sections listed in the
@@ -492,16 +496,16 @@ Three refinements keep the projection honest without forcing broad grants:
   exactly why those commands live in `fleet-admin`, a grant a host extends only to
   surfaces that administer the fleet.
 
-Fine-grained sets are the enforcement unit, but the *supported setup* unit is the
+Fine-grained sets are the enforcement unit, but the _supported setup_ unit is the
 **package grant profile** — the sets a frontend package's full surface needs. A host
 following a package's documented install must never hit permission-denied:
 
-| Package | Required permission sets |
-|---|---|
-| `-client` | `default` (`core` + `client-lifecycle`, which covers the restart/backoff loop's shutdown-then-start) |
-| `-chat` | `default` + `session-read` + `chat-write` + `resend-control` (retry) + `interrupt-read` (cascade preview for the cancel dialog) + `interrupt-control` (interrupt is part of the promised chat UX). **Never the hold sets** — enumerating or approving held tool executions is not a chat capability |
-| `-fleet` | `default` + `fleet-read`; add `fleet-admin` for the pairing surfaces (`AddPeerForm`, QR pairing). The local-runtime onboarding affordance ("Connect Local Agent", today inside `FleetDashboard`) is extracted as an **opt-in subcomponent** with its own declared requirement of `runtime-admin` + `BootstrapPolicy::LocalRuntimeAllowed`; the base fleet profile never includes `runtime-admin`, and paired-remote hosts simply don't render it |
-| `-operations` | `default` + `operations-read` + `interrupt-read` + `interrupt-control` + `holds-read` + `holds-control` + `trace-read` (`RequestTracePanel` timelines) + `resend-control` (backgrounded-tools resume) + `workspace-read` (`WorkspaceTreePanel`) |
+| Package       | Required permission sets                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `-client`     | `default` (`core` + `client-lifecycle`, which covers the restart/backoff loop's shutdown-then-start)                                                                                                                                                                                                                                                                                                                                             |
+| `-chat`       | `default` + `session-read` + `chat-write` + `resend-control` (retry) + `interrupt-read` (cascade preview for the cancel dialog) + `interrupt-control` (interrupt is part of the promised chat UX). **Never the hold sets** — enumerating or approving held tool executions is not a chat capability                                                                                                                                              |
+| `-fleet`      | `default` + `fleet-read`; add `fleet-admin` for the pairing surfaces (`AddPeerForm`, QR pairing). The local-runtime onboarding affordance ("Connect Local Agent", today inside `FleetDashboard`) is extracted as an **opt-in subcomponent** with its own declared requirement of `runtime-admin` + `BootstrapPolicy::LocalRuntimeAllowed`; the base fleet profile never includes `runtime-admin`, and paired-remote hosts simply don't render it |
+| `-operations` | `default` + `operations-read` + `interrupt-read` + `interrupt-control` + `holds-read` + `holds-control` + `trace-read` (`RequestTracePanel` timelines) + `resend-control` (backgrounded-tools resume) + `workspace-read` (`WorkspaceTreePanel`)                                                                                                                                                                                                  |
 
 The app-private config workspace (not packaged in v1) uses `config-read` +
 `config-write` + `tool-surface-read` + `tasks` — `tool-surface-read` belongs to the
@@ -535,7 +539,7 @@ client store first; same-node co-location only as a later, measured optimization
 the plugin must not own process-wide resources, and the contract enumerates every
 global it touches:
 
-- **Async runtime**: the 32 MiB-stack Tokio runtime is *not* installed by the plugin
+- **Async runtime**: the 32 MiB-stack Tokio runtime is _not_ installed by the plugin
   (Tauri requires `async_runtime::set` before the builder anyway). The host calls
   `install_runtime()` once; the helper is idempotent and documented as required on
   iOS (DefraDB history replay overflows default stacks — iPhone-branch evidence).
@@ -566,7 +570,7 @@ co-location, the `BridgeHandle` design becomes its own issue with its own review
 fixture).
 
 **The fixture proves co-residence, not just composition.** The downstream fixture
-(§ Migration, phase 4) runs the Gents bridge plugin *and* a fixture domain plugin
+(§ Migration, phase 4) runs the Gents bridge plugin _and_ a fixture domain plugin
 with its own embedded store side by side in one process — two clients, two homes, two
 command namespaces, two event prefixes — and the CI gate asserts both operate
 concurrently (pairing + chat through the bridge while the domain plugin round-trips
@@ -584,7 +588,7 @@ product name, icons, plists, entitlements, windows, title-bar style, CSP), the
 capability files and which permission sets they grant, every non-Gents plugin
 (including its domain plugins and their stores), its own commands and managed state,
 process-global setup via the provided helpers, and — through `BridgeConfig` — the
-storage home and bootstrap policy. Identity is *derived from* the storage home:
+storage home and bootstrap policy. Identity is _derived from_ the storage home:
 `PrincipalIdentity::load_or_create` in the home the host chose means each host app
 install mints its own principal DID. Amygdala installs are distinct principals from
 Gents Desktop installs by construction; nothing in the extraction lets one app assume
@@ -606,7 +610,7 @@ The bridge's public contract, versioned as one unit (§ Compatibility):
   surfaces a structured startup error otherwise. The contract-fingerprint gate
   (§ Frontend composition contract) classifies each diff as additive or breaking and
   fails CI when the version bump doesn't match the classification. Because an older
-  client may legitimately face a *newer* MINOR, forward compatibility is a client
+  client may legitimately face a _newer_ MINOR, forward compatibility is a client
   obligation, not an accident: a generated closed TypeScript union cannot model
   future additive variants by itself, so the client wraps generated types in a parse
   layer that maps unrecognized event reasons and error codes to explicit
@@ -614,14 +618,14 @@ The bridge's public contract, versioned as one unit (§ Compatibility):
   **forward-compatibility fixture test** runs the client against a fingerprint with
   an extra reason, error code, and optional field.
 - **Events**: `desktop://client-updated` with `reason ∈ {store, health, lifecycle,
-  config}`. The coarse ping-then-refetch model is the contract; fine-grained
+config}`. The coarse ping-then-refetch model is the contract; fine-grained
   streaming events are explicitly out of scope for v1.
 - **Errors**: commands currently return stringly errors, and the frontend already
   string-matches them (`peerConnectionErrors.ts`). The plugin-ization PR — the one
   breaking change window — moves to a serialized
   `BridgeError { code, message, retryable }` with `code` as a closed enum, and the
   client package maps codes to presentation. The code taxonomy is inventoried
-  *before* that window (§ Migration, phase 2) so names, errors, and generated types
+  _before_ that window (§ Migration, phase 2) so names, errors, and generated types
   change together, once.
 - **View models**: the serialized shapes in `bridge/types/views/*` and
   `bridge/types/requests/*`, with no Gents branding, shell, or navigation assumptions
@@ -635,7 +639,7 @@ The bridge's public contract, versioned as one unit (§ Compatibility):
   (`run-ios-simulator-e2e.mjs`, the live harness) pass `--features native-e2e` to
   their build steps; release packaging builds without it, and a release gate asserts
   the commands are absent. Compilation alone is not activation: the webview must
-  also be *granted* the plugin's `native-e2e` permission. That grant lives in an
+  also be _granted_ the plugin's `native-e2e` permission. That grant lives in an
   E2E-only capability file (`capabilities/native-e2e.json`) — and a pitfall makes
   explicit enumeration mandatory: when `app.security.capabilities` is omitted or
   empty, Tauri includes **every** file under `capabilities/`, and today's
@@ -671,14 +675,14 @@ createDesktopClient(transport?: DesktopTransport): DesktopClient  // typed comma
 tauriTransport(): DesktopTransport      // default; the only @tauri-apps/api import
 ```
 
-The app and downstream hosts pass nothing and get the Tauri transport; tests and the
-browser harnesses pass a fake. This replaces the module-global
-`setDesktopApiAdapterForTests` / `setDesktopClientUpdatedListenerFactoryForTests`
-seams with ordinary constructor injection through a supported public API — the same
-capability the harness uses today, no longer a test-only backdoor. The
-`/testing` subpath export ships the deterministic in-memory adapter contract so the
-existing `desktopHarness.ts` scenarios become package-level fixtures any consumer can
-run their UI against.
+The app and downstream hosts pass nothing and get the Tauri transport;
+`DesktopClient`/`DesktopStore` tests pass a fake through constructor injection.
+The `/testing` subpath exports that deterministic memory transport. The mature
+Gents Desktop harness and prop-less domain action components still use the
+compatibility `setDesktopApiAdapterForTests` /
+`setDesktopClientUpdatedListenerFactoryForTests` seams. All direct Tauri imports
+are nevertheless centralized in `transport.ts`; making those domain actions
+instance-bound is explicitly deferred rather than represented as complete.
 
 ### One store, one subscription, one refresh coordinator
 
@@ -723,7 +727,7 @@ gates replace today's "1:1 mirror — keep in sync" comments:
    names, permission sets, event names, error codes, and type schemas — is
    snapshot-checked. Any diff is classified additive vs breaking and must be matched
    by the corresponding `contract_version` MINOR or MAJOR bump in the same PR, plus
-   a changelog entry. This is how breaking bridge/view-model changes are *identified*
+   a changelog entry. This is how breaking bridge/view-model changes are _identified_
    rather than noticed.
 
 This deliberately does not touch the Lean JSON contract machinery
@@ -833,7 +837,7 @@ boundary is discovered before the breaking change lands, not in a later phase. F
 phase 4 onward the fixture grows with every package.
 
 Entry criterion for every phase: previous phase merged — with the one stated
-exception that phase 4 enters when phase 3's PR is *open and green*, since it is
+exception that phase 4 enters when phase 3's PR is _open and green_, since it is
 developed stacked on that branch and the pair merges in order (3, then 4) once
 phase 4 is green atop it. Standing exit criteria for
 every phase: `cargo check --workspace --all-targets`, `cargo test -p gents`, affected
@@ -853,7 +857,7 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
 2. **Contract prep (non-breaking).** The type-generation spike on real view models
    decides `ts-rs` vs `typeshare` (enum representations, serde attrs, chrono/uuid
    handling are the differentiators); generation + the contract-fingerprint snapshot
-   are wired against the *current* bridge types and command list. The
+   are wired against the _current_ bridge types and command list. The
    `BridgeError.code` taxonomy is inventoried from today's string-matched failure
    modes (`peerConnectionErrors.ts`, live sad-path suites) and reviewed. Exit: CI
    drift gates run (and go red on a synthetic change — test the fence itself);
@@ -898,11 +902,12 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
    phase 3 merges only with this green atop it).** `apps/fixture-host`
    (name open): a minimal Tauri app with a different bundle id, product name, icon,
    and `HomePolicy::AppDataDir` home, granting only `default + session-read +
-   chat-write + fleet-read + fleet-admin` permissions (no `runtime-admin`, no
-   `config-write` — and the fixture starting from a clean install via client-store
-   bootstrap alone is itself a required proof: the paired-remote path must work
-   without `runtime-admin`), registering the Gents bridge plugin **and** a fixture
-   domain plugin that owns its own embedded store, commands, and event prefix. Its
+chat-write + fleet-read + fleet-admin + operations-read` permissions (no
+   `runtime-admin`, no `config-write` — and the fixture starting from a clean
+   install via client-store bootstrap alone is itself a required proof: the
+   paired-remote path must work without `runtime-admin`), registering the Gents
+   bridge plugin **and** a fixture domain plugin that owns its own embedded store,
+   commands, and event prefix. Its
    frontend is deliberately thin (raw client calls; packages don't exist yet). CI
    builds it and runs the co-residence smoke: bearer pairing + a chat round-trip
    through the bridge while the domain plugin concurrently round-trips its own
@@ -919,7 +924,7 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
    tree (no workspace links), catching missing `exports`, undeclared deps, and
    dropped CSS assets. Distribution access is validated **end to end from Amygdala
    CI** here: GitHub Packages auth for npm (or the registry decision flips to the
-   fallback) *and* an external Cargo fetch of the private Rust chain — a clean
+   fallback) _and_ an external Cargo fetch of the private Rust chain — a clean
    environment outside this workspace resolving `gents-desktop-bridge` by **exact
    commit revision** (no release tag carrying the crate exists yet; tag consumption
    is proven at phase 10), including the transitive `gents` and ssh-pinned DefraDB
@@ -981,16 +986,16 @@ that touch the live bridge or native surface add the live/iOS lanes named below.
 
 ### Traceability
 
-| #877 acceptance criterion | Package / API | Phase | Verification gate |
-|---|---|---|---|
-| Minimal downstream app owns binary, identity, storage home, schema registration, extra commands | `gents-desktop-bridge::init(BridgeConfig)` + `HomePolicy`; domain plugins own their stores/schemas (co-residence contract) | 3–4 | Fixture-host CI: co-residence smoke (bridge + domain plugin, two stores), home-isolation test, clean-install iOS lane under host bundle id |
-| Working chat surface: streaming, retry, interrupt, reconnect, recovery — no copied source | `@source-inc/gents-desktop-chat` projection/components over the typed `-client` contract | 7 | Agent-browser deterministic + live chat journeys (`iphone`), `test:live:chat`, fixture-host chat journey + iOS lane |
-| Fleet pairing, health, peer management via package API | `@source-inc/gents-desktop-fleet` (+ bridge `fleet-*` permission sets) | 8 | `test:live:fleet`, QR/bearer agent-browser journeys, fixture-host pairing, iOS clean-install pairing |
-| Operator holds/traces/cancellation via package API | `@source-inc/gents-desktop-operations` (+ `operations-read`, interrupt, and hold permission sets) | 9 | `test:live:operations`/`interrupt`/`cascade`, deterministic operations scenarios, fixture rail-tab registration |
-| Own branding, semantic theme, navigation, domain routes without patching components | Semantic tokens contract (split before extraction), `brand` slots, host-owned navigation, rail-tab registry | 6–9 | Token-override smoke, fixture-host distinct branding + domain module, visual suite |
-| Gents Desktop builds and passes its checks consuming the extracted packages | App consumes all four packages + plugin | every phase | Standing exit gates on each phase (app is the first consumer throughout) |
-| Documented version-bump/update workflow | Lockstep train, exact pins, `CHANGELOG.md`, compat matrix, contract handshake with additive/breaking semantics | 10 | Dry-run tag publish + fixture pin-bump rehearsal; packed-artifact gate from phase 5 |
-| Non-goals: no plugin marketplace; no Amygdala domain code upstream; no weakened Gents semantics | Extension = co-resident plugins, slots/registry, config only; fixture's domain stays in fixture; runtime authority unchanged (§ Security) | — | Review fence: dependency-lint + crate graph + permission-set review; no runtime-semantic diffs in extraction PRs |
+| #877 acceptance criterion                                                                       | Package / API                                                                                                                             | Phase       | Verification gate                                                                                                                          |
+| ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Minimal downstream app owns binary, identity, storage home, schema registration, extra commands | `gents-desktop-bridge::init(BridgeConfig)` + `HomePolicy`; domain plugins own their stores/schemas (co-residence contract)                | 3–4         | Fixture-host CI: co-residence smoke (bridge + domain plugin, two stores), home-isolation test, clean-install iOS lane under host bundle id |
+| Working chat surface: streaming, retry, interrupt, reconnect, recovery — no copied source       | `@source-inc/gents-desktop-chat` projection/components over the typed `-client` contract                                                  | 7           | Agent-browser deterministic + live chat journeys (`iphone`), `test:live:chat`, fixture-host chat journey + iOS lane                        |
+| Fleet pairing, health, peer management via package API                                          | `@source-inc/gents-desktop-fleet` (+ bridge `fleet-*` permission sets)                                                                    | 8           | `test:live:fleet`, QR/bearer agent-browser journeys, fixture-host pairing, iOS clean-install pairing                                       |
+| Operator holds/traces/cancellation via package API                                              | `@source-inc/gents-desktop-operations` (+ `operations-read`, interrupt, and hold permission sets)                                         | 9           | `test:live:operations`/`interrupt`/`cascade`, deterministic operations scenarios, fixture rail-tab registration                            |
+| Own branding, semantic theme, navigation, domain routes without patching components             | Semantic tokens contract (split before extraction), `brand` slots, host-owned navigation, rail-tab registry                               | 6–9         | Token-override smoke, fixture-host distinct branding + domain module, visual suite                                                         |
+| Gents Desktop builds and passes its checks consuming the extracted packages                     | App consumes all four packages + plugin                                                                                                   | every phase | Standing exit gates on each phase (app is the first consumer throughout)                                                                   |
+| Documented version-bump/update workflow                                                         | Lockstep train, exact pins, `CHANGELOG.md`, compat matrix, contract handshake with additive/breaking semantics                            | 10          | Dry-run tag publish + fixture pin-bump rehearsal; packed-artifact gate from phase 5                                                        |
+| Non-goals: no plugin marketplace; no Amygdala domain code upstream; no weakened Gents semantics | Extension = co-resident plugins, slots/registry, config only; fixture's domain stays in fixture; runtime authority unchanged (§ Security) | —           | Review fence: dependency-lint + crate graph + permission-set review; no runtime-semantic diffs in extraction PRs                           |
 
 ## Security and runtime integrity
 
@@ -1035,10 +1040,10 @@ not this contract.
 config, and renames invoke paths. It does not change legal runtime transitions,
 invariants, or provider inputs, so it requires no speculative proof changes. Two
 watchpoints where implementation could drift into Lean territory, called out so
-follow-up PRs treat them correctly: (1) `BootstrapPolicy` must only *gate* the
+follow-up PRs treat them correctly: (1) `BootstrapPolicy` must only _gate_ the
 existing `init_standard_local_runtime` path behind the `runtime-admin` command —
 never add a new lifecycle and never let `desktop_client_start` become a
-*runtime-provisioning* path (the client-store bootstrap inside `ClientCore::start`
+_runtime-provisioning_ path (the client-store bootstrap inside `ClientCore::start`
 is existing behavior and stays); (2) any temptation to enrich the event contract beyond the coarse
 `client-updated` ping into semantic lifecycle events would put event ordering into
 the contract and must go through the Lean model → conformance test → Rust flow
@@ -1101,7 +1106,7 @@ Stated openly rather than buried as implementation detail:
    **decided
    by the phase-5 validation from Amygdala CI** — neither the registry nor the
    git-tag Rust story is committed to until Amygdala CI has authenticated to the
-   npm registry *and* fetched `gents-desktop-bridge` (with transitive `gents` +
+   npm registry _and_ fetched `gents-desktop-bridge` (with transitive `gents` +
    ssh-pinned DefraDB revisions) via Cargo from outside this workspace. Owner:
    maintainers + Amygdala.
 3. **Type-generation tool: `ts-rs` vs `typeshare`.** Decided by the phase-2 spike on
@@ -1134,8 +1139,8 @@ Issue: [#877](https://github.com/source-inc/gents/issues/877). Base series:
 formerly `agent/iphone-amy-bearer-pairing`) — mobile bearer pairing with
 cryptographically verified reciprocal readiness and relaunch revalidation, chat
 recovery/interrupt routing, responsive shell, agent-browser harness, native
-Simulator E2E. Downstream design: *Amygdala App Platform — Downstream Product on
-Gents* (2026-07-26, Amygdala repository,
+Simulator E2E. Downstream design: _Amygdala App Platform — Downstream Product on
+Gents_ (2026-07-26, Amygdala repository,
 `docs/superpowers/specs/2026-07-26-amygdala-app-platform-design.md`) — two
 authoritative peers, separate Kitchen client store, composition API. Key code
 anchors: `apps/gents-desktop/src-tauri/src/bridge/mod.rs` (builder + 55-command

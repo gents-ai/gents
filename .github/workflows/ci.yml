@@ -187,7 +187,7 @@ jobs:
           cargo test -p gents-desktop-bridge
           cargo test -p gents-desktop-tauri --lib
           cargo test -p fixture-domain-plugin --lib
-          cargo check -p gents-fixture-host --all-targets
+          cargo test -p gents-fixture-host
 
       - name: Run full library and integration tests
         if: github.event_name != 'pull_request'
@@ -201,7 +201,7 @@ jobs:
           cargo test -p gents-desktop-bridge
           cargo test -p gents-desktop-tauri --lib
           cargo test -p fixture-domain-plugin --lib
-          cargo check -p gents-fixture-host --all-targets
+          cargo test -p gents-fixture-host
 
       - name: Run full CLI test suite
         if: github.event_name != 'pull_request'
@@ -337,7 +337,8 @@ jobs:
           npm run build:packages
           npm run test:packages
           npm run build --workspace @source-inc/fixture-host-ui
-          ./scripts/pack-desktop-packages.sh
+          # Exercise the same relative output path used by the release workflow.
+          ./scripts/pack-desktop-packages.sh target/desktop-npm-ci
 
       - name: Install Playwright browser
         working-directory: apps/gents-desktop

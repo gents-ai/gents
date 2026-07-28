@@ -1,6 +1,4 @@
-/**
- * Injected transport — the only place that knows about Tauri (or a test fake).
- */
+/** Injected transport and the package's only Tauri API import boundary. */
 
 import type { ClientUpdateEvent as GeneratedClientUpdateEvent } from "./generated/ClientUpdateEvent.js";
 
@@ -25,7 +23,7 @@ export function bridgeCommand(command: string): string {
   return `plugin:${BRIDGE_PLUGIN}|${command}`;
 }
 
-/** Default Tauri transport. The only @tauri-apps/api import in this package. */
+/** Default Tauri transport. */
 export function tauriTransport(): DesktopTransport {
   return {
     async invoke<T>(command: string, args?: unknown): Promise<T> {

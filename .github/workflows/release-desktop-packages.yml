@@ -10,7 +10,6 @@ on:
         description: Release version without the v prefix; must match the lockstep workspace version.
         required: true
         type: string
-        default: "0.9.0"
 
 permissions:
   contents: write
@@ -62,7 +61,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gents-desktop-npm-${{ github.ref_name }}
+          name: gents-desktop-npm-${{ github.run_id }}
           path: target/desktop-npm-release/*.tgz
           if-no-files-found: error
 

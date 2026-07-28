@@ -7,8 +7,8 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { displayBehaviorLabel } from "@source-inc/gents-desktop-client";
 import {
-  previewInterruptCascade,
-  interruptRequest,
+  previewChatInterruptCascade,
+  interruptChatRequest,
 } from "@source-inc/gents-desktop-chat";
 import { BackendHealthPanel } from "@source-inc/gents-desktop-operations";
 import { CascadeCancelDialog } from "@source-inc/gents-desktop-chat";
@@ -190,7 +190,7 @@ export function ActiveChatWorkspace({
   const beginInterrupt = useCallback(
     async (requestId: string) => {
       try {
-        const preview = await previewInterruptCascade({
+        const preview = await previewChatInterruptCascade({
           requestId,
           agentDid: selectedDeployment.agentDid,
           includeTerminal: false,
@@ -200,7 +200,7 @@ export function ActiveChatWorkspace({
           preview.willDetach.length +
           preview.unknownPolicy.length;
         if (childCount === 0) {
-          const result = await interruptRequest({
+          const result = await interruptChatRequest({
             requestId,
             agentDid: selectedDeployment.agentDid,
             cause: "userCancelled",
@@ -388,8 +388,8 @@ export function ActiveChatWorkspace({
           open
           rootRequestId={cascade.rootRequestId}
           agentDid={selectedDeployment.agentDid}
-          previewInterrupt={previewInterruptCascade}
-          interrupt={interruptRequest}
+          previewInterrupt={previewChatInterruptCascade}
+          interrupt={interruptChatRequest}
           onClose={() => setCascade(null)}
           onAccepted={(at) => {
             setCascade(null);

@@ -1,6 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-
 import { normalizeInvokeError } from "./errors.js";
+import { bridgeCommand, tauriTransport } from "./transport.js";
 import type { BackendHealth } from "./types/backendHealth.js";
 import type {
   AgentConfigSaveRequest,
@@ -73,16 +72,7 @@ function hasTauriInvokeBridge() {
   );
 }
 
-/** Tauri 2 plugin invoke path for gents-desktop-bridge commands. */
-const BRIDGE_PLUGIN = "gents-desktop-bridge";
-
-function bridgeCommand(command: string): string {
-  // Plugin commands: plugin:<name>|<command>
-  if (command.startsWith("plugin:")) {
-    return command;
-  }
-  return `plugin:${BRIDGE_PLUGIN}|${command}`;
-}
+const defaultDesktopTransport = tauriTransport();
 
 function invokeDesktop<T>(
   command: string,
@@ -96,9 +86,11 @@ function invokeDesktop<T>(
     );
   }
 
-  return invoke<T>(bridgeCommand(command), args).catch((error: unknown) => {
-    throw normalizeInvokeError(error);
-  });
+  return defaultDesktopTransport
+    .invoke<T>(bridgeCommand(command), args)
+    .catch((error: unknown) => {
+      throw normalizeInvokeError(error);
+    });
 }
 
 type InitSummaryWire = InitSummary & {
@@ -563,6 +555,9 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
 };
 
+// Compatibility seam for the mature Gents Desktop harnesses and prop-less
+// package components. New store/client tests use constructor-injected
+// DesktopTransport; domain API unification remains an explicit follow-up.
 let desktopApiAdapterOverride: DesktopApiAdapter | null = null;
 
 function desktopApiAdapter() {

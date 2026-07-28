@@ -147,12 +147,6 @@ mod session;
 pub use session::build_session_snapshot_from_store;
 pub use session::build_session_snapshot_from_store_for_agent;
 
-pub async fn build_client_snapshot(
-    core: Option<&Arc<ClientCore>>,
-) -> Result<DesktopClientSnapshot, String> {
-    build_client_snapshot_with_grants(core, None, SnapshotGrants::all()).await
-}
-
 /// Snapshot builder seam: always projects by `grants` so lifecycle returns,
 /// mutation refreshes, and nested pairing/removal responses stay consistent.
 pub async fn build_client_snapshot_with_grants(

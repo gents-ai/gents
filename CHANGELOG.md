@@ -24,8 +24,15 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 - Additive: structured `BridgeError` on command error paths; `SnapshotGrants`
   projection at the snapshot builder seam; `native-e2e` cargo feature.
-- See prior entries for 0.2 (`desktop_bridge_contract`, peer probe by address /
-  status by saved peer id).
+- Command failures now serialize as `{ code, message, retryable }`; the client
+  accepts both structured errors and legacy bare strings during migration.
+- `RenderedTimelineItem` variant fields now serialize in camelCase, repairing
+  the latent Rust/frontend mismatch (`itemKey`, not `item_key`).
+- Breaking for pre-package bridge consumers: `desktop_peer_status_fetch`
+  accepts a saved `peerId`, not an arbitrary `serverAddress`; arbitrary-address
+  probing is restricted to the fleet-admin command.
+- See prior entries for 0.2 (`desktop_bridge_contract`, address probe, and the
+  saved-peer status lookup).
 
 ### Packages
 
@@ -51,9 +58,9 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Compatibility matrix
 
-| Tag | Bridge crate | npm packages | contract_version | Notes |
-|-----|--------------|--------------|------------------|-------|
-| unreleased | 0.9.0 | 0.9.0 | 0.5 | Reusable desktop packages implemented in #878 |
+| Tag        | Bridge crate | npm packages | contract_version | Notes                                         |
+| ---------- | ------------ | ------------ | ---------------- | --------------------------------------------- |
+| unreleased | 0.9.0        | 0.9.0        | 0.5              | Reusable desktop packages implemented in #878 |
 
 ## 0.8.0
 

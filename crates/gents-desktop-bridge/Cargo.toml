@@ -46,3 +46,4 @@ tauri-plugin = { version = "2", features = ["build"] }
 [dev-dependencies]
 gents-lean-contract.workspace = true
 tempfile = "3"
+toml.workspace = true
