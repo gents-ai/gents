@@ -49,6 +49,15 @@ export function FleetHostDashboard({
     <FleetDashboard
       {...fleetProps}
       brand={<BrandLockup />}
+      copy={{
+        ...fleetProps.copy,
+        pairingQrHint: fleetProps.copy?.pairingQrHint ?? (
+          <>
+            Point the camera at the QR code printed by{" "}
+            <code>gents p2p pairings invite --bearer --qr</code>.
+          </>
+        ),
+      }}
       headerLeadingActions={<ThemeToggle />}
       localRuntimeSetup={
         <LocalRuntimeConnect

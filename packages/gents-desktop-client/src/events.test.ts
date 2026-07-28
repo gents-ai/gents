@@ -11,6 +11,24 @@ afterEach(() => {
 });
 
 describe("listenToDesktopClientUpdates", () => {
+  it("prefers an instance-bound listener over the process-global test seam", async () => {
+    const globalFactory = vi.fn(async () => vi.fn());
+    const instanceCleanup = vi.fn();
+    const instanceFactory = vi.fn(async () => instanceCleanup);
+    setDesktopClientUpdatedListenerFactoryForTests(globalFactory);
+
+    const unlisten = await listenToDesktopClientUpdates(
+      vi.fn(),
+      undefined,
+      instanceFactory,
+    );
+
+    expect(instanceFactory).toHaveBeenCalledOnce();
+    expect(globalFactory).not.toHaveBeenCalled();
+    unlisten();
+    expect(instanceCleanup).toHaveBeenCalledOnce();
+  });
+
   it("routes async handler failures without leaking unhandled rejections", async () => {
     let registered: DesktopClientUpdatedHandler | null = null;
     const cleanup = vi.fn();

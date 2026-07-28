@@ -1,8 +1,4 @@
 export * from "./apiContext.js";
-export {
-  createOperationsRailRegistry,
-  type OperationsRailTab,
-} from "./railRegistry.js";
 export * from "./shortId.js";
 export * from "./components/operations/index.js";
 export * from "./components/operations/HoldsPanel.js";

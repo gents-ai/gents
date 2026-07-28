@@ -1,0 +1,171 @@
+@layer mcp-health {
+  .mcp-health-panel {
+    display: grid;
+    gap: var(--space-7);
+    padding: var(--space-7);
+    min-width: 0;
+  }
+
+  .mcp-health-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-5);
+    flex-wrap: wrap;
+  }
+
+  .mcp-health-header h2 {
+    margin: 0;
+    font-size: var(--text-2xl);
+  }
+
+  .mcp-health-subtitle {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+    margin-top: var(--space-2);
+    max-width: 56ch;
+  }
+
+  .mcp-health-refresh {
+    padding: var(--space-2) var(--space-5);
+    background: transparent;
+    color: var(--color-text-soft);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    font: inherit;
+    font-size: var(--text-sm);
+    cursor: pointer;
+  }
+
+  .mcp-health-refresh:hover {
+    color: var(--color-text);
+    border-color: var(--border-strong);
+    background: rgb(var(--color-accent-rgb) / 0.06);
+  }
+
+  .mcp-health-refresh:disabled {
+    cursor: progress;
+    color: var(--color-text-muted);
+  }
+
+  .mcp-health-meta {
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+    min-height: 16px;
+  }
+
+  .mcp-health-error {
+    color: var(--color-error);
+    font-family: var(--font-mono);
+  }
+
+  .mcp-health-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  .mcp-health-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-4) var(--space-2) var(--space-3);
+    border: 1px solid var(--border-subtle);
+    background: rgb(var(--scrim-rgb) / 0.45);
+    border-radius: var(--radius-pill);
+    font-size: var(--text-sm);
+    color: var(--color-text-soft);
+  }
+
+  .mcp-health-pill-count {
+    color: var(--color-text);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mcp-health-pill-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    box-shadow: 0 0 0 3px rgb(var(--overlay-rgb) / 0.04);
+  }
+
+  .mcp-health-pill-green .mcp-health-pill-dot {
+    background: var(--color-success-strong);
+  }
+
+  .mcp-health-pill-yellow .mcp-health-pill-dot {
+    background: var(--color-warning);
+  }
+
+  .mcp-health-pill-red .mcp-health-pill-dot {
+    background: var(--color-error-strong);
+  }
+
+  .mcp-health-pill-blue .mcp-health-pill-dot {
+    background: var(--color-info);
+  }
+
+  .mcp-health-pill-gray .mcp-health-pill-dot {
+    background: var(--color-text-muted);
+  }
+
+  .mcp-health-filters {
+    display: flex;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .mcp-health-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-5);
+    border: 1px solid var(--border-default);
+    background: var(--color-surface-row);
+    color: var(--color-text-soft);
+    border-radius: var(--radius-pill);
+    font: inherit;
+    font-size: var(--text-sm);
+    cursor: pointer;
+  }
+
+  .mcp-health-chip:hover {
+    color: var(--color-text);
+    border-color: var(--border-strong);
+  }
+
+  .mcp-health-chip.is-active {
+    background: rgb(var(--color-accent-rgb) / 0.14);
+    color: var(--color-text-warm);
+    border-color: var(--border-selected);
+  }
+
+  .mcp-health-chip-count {
+    color: var(--color-text-muted);
+  }
+
+  .mcp-health-chip.is-active .mcp-health-chip-count {
+    color: var(--color-text-warm);
+  }
+
+  .mcp-health-empty {
+    padding: 48px var(--space-7);
+    text-align: center;
+    color: var(--color-text-muted);
+    background: var(--color-surface-row);
+    border: 1px dashed var(--border-default);
+    border-radius: var(--radius-md);
+  }
+
+  .mcp-health-empty-emoji {
+    font-size: var(--text-3xl);
+    opacity: 0.5;
+    margin-bottom: var(--space-3);
+  }
+
+  .mcp-health-empty-title {
+    color: var(--color-text);
+    font-size: var(--text-base);
+    margin-bottom: var(--space-2);
+  }
+}

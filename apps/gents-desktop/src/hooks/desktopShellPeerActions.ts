@@ -1,24 +1,15 @@
 import type { Dispatch, SetStateAction } from "react";
 
-import {
-  addPeer,
-  fetchPeerStatus,
-  probePeerAddress,
-  initLocalStandardRuntime,
-  pairBearer,
-  removePeer,
-  renamePeer,
-  repairP2P,
-  startDesktopClient,
-} from "@source-inc/gents-desktop-client";
 import { formatPeerConnectionError } from "@source-inc/gents-desktop-fleet";
 import type {
   BearerPairingRequest,
+  DesktopApiAdapter,
   DesktopClientSnapshot,
   PeerAddRequest,
 } from "@source-inc/gents-desktop-client";
 
 type PeerActionParams = {
+  api: DesktopApiAdapter;
   snapshot: DesktopClientSnapshot | null;
   setAddingPeer: Dispatch<SetStateAction<boolean>>;
   setError: Dispatch<SetStateAction<string | null>>;
@@ -29,6 +20,7 @@ type PeerActionParams = {
 };
 
 export function createDesktopShellPeerActions({
+  api,
   snapshot,
   setAddingPeer,
   setError,
@@ -42,7 +34,7 @@ export function createDesktopShellPeerActions({
     setStarting(true);
     setError(null);
     try {
-      const summary = await initLocalStandardRuntime({
+      const summary = await api.initLocalStandardRuntime({
         label: label?.trim() || "Local Agent",
         dangerouslyOverwrite: false,
         reset: false,
@@ -54,8 +46,8 @@ export function createDesktopShellPeerActions({
         graphql: summary.graphql,
       };
       const next = snapshot?.client
-        ? await addPeer(peerRequest)
-        : await startDesktopClient();
+        ? await api.addPeer(peerRequest)
+        : await api.startDesktopClient();
       setSnapshot(next);
       setSelectedAgentDid(summary.agentDid);
       return summary;
@@ -75,10 +67,10 @@ export function createDesktopShellPeerActions({
     try {
       if (!snapshot?.client) {
         setStarting(true);
-        const started = await startDesktopClient();
+        const started = await api.startDesktopClient();
         setSnapshot(started);
       }
-      const next = await addPeer(request);
+      const next = await api.addPeer(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       return next;
@@ -98,10 +90,10 @@ export function createDesktopShellPeerActions({
     try {
       if (!snapshot?.client) {
         setStarting(true);
-        const started = await startDesktopClient();
+        const started = await api.startDesktopClient();
         setSnapshot(started);
       }
-      const response = await pairBearer(request);
+      const response = await api.pairBearer(request);
       setSnapshot({
         bootstrap: response.bootstrap,
         client: response.client,
@@ -121,7 +113,7 @@ export function createDesktopShellPeerActions({
   async function onFetchPeerStatus(peerId: string) {
     setError(null);
     try {
-      return await fetchPeerStatus(peerId);
+      return await api.fetchPeerStatus(peerId);
     } catch (err) {
       const message = formatPeerConnectionError(err, "peer-status");
       setError(message);
@@ -133,7 +125,7 @@ export function createDesktopShellPeerActions({
   async function onProbePeerAddress(serverAddress: string) {
     setError(null);
     try {
-      return await probePeerAddress(serverAddress);
+      return await api.probePeerAddress(serverAddress);
     } catch (err) {
       const message = formatPeerConnectionError(err, "peer-status");
       setError(message);
@@ -144,7 +136,7 @@ export function createDesktopShellPeerActions({
   async function onRemovePeer(peerId: string) {
     setError(null);
     try {
-      const next = await removePeer(peerId);
+      const next = await api.removePeer(peerId);
       setSnapshot(next);
       return next;
     } catch (err) {
@@ -157,7 +149,7 @@ export function createDesktopShellPeerActions({
   async function onRenamePeer(peerId: string, label: string) {
     setError(null);
     try {
-      const next = await renamePeer(peerId, label);
+      const next = await api.renamePeer(peerId, label);
       setSnapshot(next);
       return next;
     } catch (err) {
@@ -171,7 +163,7 @@ export function createDesktopShellPeerActions({
     setRepairingP2P(true);
     setError(null);
     try {
-      const next = await repairP2P();
+      const next = await api.repairP2P();
       setSnapshot(next);
       return next;
     } catch (err) {

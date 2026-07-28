@@ -5,6 +5,7 @@ import type {
   BehaviorSaveRequest,
   BootstrapSummary,
   DeploymentView,
+  DesktopApiAdapter,
   EventTriggerSaveRequest,
   InferenceProfileSaveRequest,
   ScheduleSaveRequest,
@@ -44,6 +45,7 @@ import { ConfigNavigationGuardProvider } from "./config/ConfigNavigationGuard";
 import sourceMarkUrl from "../assets/source-mark-light.png";
 
 type ConfigWorkspaceProps = {
+  api?: DesktopApiAdapter;
   bootstrap: BootstrapSummary | null;
   selectedDeployment: DeploymentView | null;
   selectedBehaviorId: string | null;
@@ -83,6 +85,7 @@ type ConfigWorkspaceProps = {
 };
 
 export function ConfigWorkspace({
+  api,
   bootstrap,
   selectedDeployment,
   selectedBehaviorId,
@@ -321,6 +324,7 @@ export function ConfigWorkspace({
 
           {activeTab === "behavior" ? (
             <BehaviorConfigPanel
+              api={api}
               onDeleteBehaviorConfig={onDeleteBehaviorConfig}
               onDeletedBehavior={() => selectConfigBehavior(null)}
               deployment={selectedDeployment}

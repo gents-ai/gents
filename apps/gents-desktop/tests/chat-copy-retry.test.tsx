@@ -5,6 +5,7 @@ import { ChatTranscriptPanel } from "@source-inc/gents-desktop-chat";
 import { MessageList } from "@source-inc/gents-desktop-chat";
 import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
 import {
+  getDesktopApiAdapter,
   setDesktopApiAdapterForTests,
   type DesktopApiAdapter,
 } from "@source-inc/gents-desktop-client";
@@ -222,6 +223,7 @@ describe("error card retry", () => {
     expect(shellProjection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
 
     const actions = createDesktopShellChatActions({
+      api: getDesktopApiAdapter(),
       draft: "",
       newConversationAgentRef: { current: null },
       refreshSession: vi.fn(),

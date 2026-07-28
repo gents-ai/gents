@@ -31,7 +31,7 @@
   }
   .subagent-lineage-meta {
     color: var(--color-text-muted);
-    font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+    font-family: var(--font-mono);
     font-size: var(--text-xs);
   }
 
@@ -131,7 +131,7 @@
     list-style: none;
     padding: 0;
     margin: 0;
-    font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+    font-family: var(--font-mono);
   }
   .subagent-lineage-children {
     list-style: none;
@@ -305,7 +305,7 @@
   .subagent-lineage-detail-grid dd {
     margin: 0;
     color: var(--color-text);
-    font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+    font-family: var(--font-mono);
     word-break: break-all;
   }
   .subagent-lineage-detail-grid dd.is-muted {
@@ -313,6 +313,6 @@
     font-style: italic;
   }
   .subagent-lineage-detail-grid dd.is-mono {
-    font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+    font-family: var(--font-mono);
   }
 }

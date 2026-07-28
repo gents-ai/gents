@@ -28,6 +28,7 @@ export function setDesktopClientUpdatedListenerFactoryForTests(
 export function listenToDesktopClientUpdates(
   handler: DesktopClientUpdatedHandler,
   onError: DesktopClientUpdatedErrorHandler = () => undefined,
+  listenerFactory?: DesktopClientUpdatedListenerFactory,
 ) {
   const safeHandler: DesktopClientUpdatedHandler = (event) =>
     Promise.resolve(handler(event)).catch((error) => {
@@ -38,6 +39,7 @@ export function listenToDesktopClientUpdates(
       }
     });
   return (
+    listenerFactory ??
     desktopClientUpdatedListenerFactoryOverride ??
     defaultDesktopClientUpdatedListenerFactory
   )(safeHandler);

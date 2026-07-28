@@ -1,13 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 
-import {
-  runSchedule,
-  runTask,
-  saveEventTriggerConfig,
-  saveScheduleConfig,
-  saveTaskConfig,
-} from "@source-inc/gents-desktop-client";
 import type {
+  DesktopApiAdapter,
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
   EventTriggerSaveRequest,
@@ -19,6 +13,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 type TaskActionParams = {
+  api: DesktopApiAdapter;
   refreshSession: (
     nextSessionId: string | null,
   ) => Promise<DesktopSessionSnapshot | null>;
@@ -31,6 +26,7 @@ type TaskActionParams = {
 };
 
 export function createDesktopShellTaskActions({
+  api,
   refreshSession,
   refreshSnapshot,
   setError,
@@ -43,7 +39,7 @@ export function createDesktopShellTaskActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await saveTaskConfig(request);
+      const next = await api.saveTaskConfig(request);
       setSnapshot(next);
       return next;
     } catch (err) {
@@ -58,7 +54,7 @@ export function createDesktopShellTaskActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await saveScheduleConfig(request);
+      const next = await api.saveScheduleConfig(request);
       setSnapshot(next);
       return next;
     } catch (err) {
@@ -73,7 +69,7 @@ export function createDesktopShellTaskActions({
     setRunningTask(true);
     setError(null);
     try {
-      const result = await runSchedule(request);
+      const result = await api.runSchedule(request);
       await refreshSnapshot();
       if (result.sessionId) {
         setSelectedSessionId(result.sessionId);
@@ -92,7 +88,7 @@ export function createDesktopShellTaskActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await saveEventTriggerConfig(request);
+      const next = await api.saveEventTriggerConfig(request);
       setSnapshot(next);
       return next;
     } catch (err) {
@@ -107,7 +103,7 @@ export function createDesktopShellTaskActions({
     setRunningTask(true);
     setError(null);
     try {
-      const result = await runTask(request);
+      const result = await api.runTask(request);
       await refreshSnapshot();
       if (result.sessionId) {
         setSelectedSessionId(result.sessionId);

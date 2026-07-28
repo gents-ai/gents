@@ -18,8 +18,9 @@ import {
 } from "@source-inc/gents-desktop-fleet/local-runtime";
 import {
   BackgroundedToolsPanel,
-  createOperationsRailRegistry,
   OperationsRail,
+  OperationsRailProvider,
+  type OperationsRailTabDescriptor,
 } from "@source-inc/gents-desktop-operations";
 import {
   ConfirmDialog,
@@ -31,7 +32,13 @@ const client = createDesktopClient();
 const store = createDesktopStore(client);
 const generatedContract: BridgeContract | null = null;
 const publicSnapshot: DesktopClientSnapshot | null = null;
-const registry = createOperationsRailRegistry();
+const operationsTabs: OperationsRailTabDescriptor[] = [
+  {
+    id: "background",
+    label: "Background",
+    render: () => <BackgroundedToolsPanel />,
+  },
+];
 const timestamp = formatMessageTime("2026-07-27T00:00:00Z");
 const parsed = parsePeerConnectionJson(
   JSON.stringify({
@@ -66,7 +73,9 @@ const publicComponents: ReactNode[] = [
     onCancel={() => undefined}
     onConfirm={() => undefined}
   />,
-  <OperationsRail />,
+  <OperationsRailProvider api={client.api} tabs={operationsTabs}>
+    <OperationsRail />
+  </OperationsRailProvider>,
   <BackgroundedToolsPanel />,
 ];
 
@@ -79,7 +88,6 @@ void projectChatShell;
 void store;
 void generatedContract;
 void publicSnapshot;
-void registry;
 void timestamp;
 void parsed;
 void publicComponents;

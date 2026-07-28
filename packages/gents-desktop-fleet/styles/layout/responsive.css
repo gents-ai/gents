@@ -1,0 +1,61 @@
+@layer fleet {
+  @media (max-width: 760px) {
+    .fleet-dashboard {
+      gap: var(--space-5);
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior-y: contain;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .fleet-brand {
+      align-items: flex-start;
+    }
+
+    .fleet-brand h1 {
+      font-size: var(--text-2xl);
+    }
+
+    .fleet-local-runtime,
+    .fleet-bearer-form,
+    .fleet-discovery-row,
+    .fleet-add-form,
+    .fleet-empty-card .fleet-add-form,
+    .fleet-empty-card .fleet-discovery-row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .fleet-header {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .fleet-header-actions {
+      justify-content: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .fleet-empty-card {
+      width: min(100%, calc(100vw - 24px));
+    }
+
+    .fleet-empty {
+      height: auto;
+      min-height: 100%;
+      place-content: start center;
+      overflow: visible;
+      padding-block: var(--space-2);
+    }
+
+    .fleet-local-runtime .primary-button,
+    .fleet-pair-actions,
+    .fleet-add-actions .primary-button {
+      width: 100%;
+    }
+
+    .fleet-pair-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+}

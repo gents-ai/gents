@@ -4,6 +4,8 @@ import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
 import { conversationBelongsToBehavior } from "@source-inc/gents-desktop-chat";
 import type {
   DeploymentView,
+  DesktopApiAdapter,
+  DesktopClientUpdatedListenerFactory,
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
   P2PHealth,
@@ -14,16 +16,17 @@ import {
   shouldAutoRestartP2P,
   timingConfig,
 } from "./desktopShellRuntime";
-import { setSelectedAgent } from "@source-inc/gents-desktop-client";
 import { listenToDesktopClientUpdates } from "@source-inc/gents-desktop-client";
 
 type DesktopShellEffectsArgs = {
+  api: DesktopApiAdapter;
   autoRestartInFlight: MutableRefObject<boolean>;
   autostartAttempted: MutableRefObject<boolean>;
   deployments: DeploymentView[];
   lastObservedP2PHealth: MutableRefObject<P2PHealth | null>;
   lastP2PAutoRestartAt: MutableRefObject<number | null>;
   localWorkflow: ChatWorkflowState;
+  listenToUpdates: DesktopClientUpdatedListenerFactory;
   newConversationAgentRef: MutableRefObject<string | null>;
   refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
   refreshSnapshot: () => Promise<void>;
@@ -48,12 +51,14 @@ type DesktopShellEffectsArgs = {
 };
 
 export function useDesktopShellEffects({
+  api,
   autoRestartInFlight,
   autostartAttempted,
   deployments,
   lastObservedP2PHealth,
   lastP2PAutoRestartAt,
   localWorkflow,
+  listenToUpdates,
   newConversationAgentRef,
   refreshSession,
   refreshSnapshot,
@@ -169,12 +174,16 @@ export function useDesktopShellEffects({
       setError(message);
     };
 
-    void listenToDesktopClientUpdates(async () => {
-      if (disposed) {
-        return;
-      }
-      await refreshQueue.request();
-    }, reportListenerError)
+    void listenToDesktopClientUpdates(
+      async () => {
+        if (disposed) {
+          return;
+        }
+        await refreshQueue.request();
+      },
+      reportListenerError,
+      listenToUpdates,
+    )
       .then((cleanup) => {
         if (disposed) {
           cleanup();
@@ -189,7 +198,13 @@ export function useDesktopShellEffects({
       refreshQueue.dispose();
       unlisten?.();
     };
-  }, [selectedAgentDid, selectedSessionId, selectedTrackedRequestId, setError]);
+  }, [
+    listenToUpdates,
+    selectedAgentDid,
+    selectedSessionId,
+    selectedTrackedRequestId,
+    setError,
+  ]);
 
   useEffect(() => {
     if (!deployments.length) {
@@ -213,7 +228,7 @@ export function useDesktopShellEffects({
     }
 
     let disposed = false;
-    void setSelectedAgent(selectedAgentDid).catch((err) => {
+    void api.setSelectedAgent(selectedAgentDid).catch((err) => {
       if (disposed) {
         return;
       }
@@ -223,7 +238,7 @@ export function useDesktopShellEffects({
     return () => {
       disposed = true;
     };
-  }, [clientAvailable, selectedAgentDid, setError]);
+  }, [api, clientAvailable, selectedAgentDid, setError]);
 
   useEffect(() => {
     if (!selectedDeployment) {

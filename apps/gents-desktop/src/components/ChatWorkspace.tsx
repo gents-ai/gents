@@ -2,22 +2,27 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 
 import type {
   DeploymentView,
+  DesktopApiAdapter,
   DesktopSessionSnapshot,
   P2PHealth,
 } from "@source-inc/gents-desktop-client";
-import { displayBehaviorLabel } from "@source-inc/gents-desktop-client";
 import {
-  previewChatInterruptCascade,
-  interruptChatRequest,
-} from "@source-inc/gents-desktop-chat";
+  displayBehaviorLabel,
+  forkSession,
+  getDesktopApiAdapter,
+  resendRequest,
+} from "@source-inc/gents-desktop-client";
 import { BackendHealthPanel } from "@source-inc/gents-desktop-operations";
-import { CascadeCancelDialog } from "@source-inc/gents-desktop-chat";
+import {
+  CascadeCancelDialog,
+  interruptChatRequest,
+  previewChatInterruptCascade,
+} from "@source-inc/gents-desktop-chat";
 import {
   ChatComposer,
   ChatHeader,
   ChatTranscriptPanel,
 } from "@source-inc/gents-desktop-chat";
-import { forkSession, resendRequest } from "@source-inc/gents-desktop-client";
 import { effectiveBehaviorSkills } from "@source-inc/gents-desktop-chat";
 import { McpHealthPanel } from "@source-inc/gents-desktop-operations";
 import {
@@ -34,6 +39,7 @@ import { useOperationsSnapshot } from "@source-inc/gents-desktop-operations";
 import { SubagentLineageView } from "@source-inc/gents-desktop-operations";
 
 export type ChatWorkspaceProps = {
+  api?: DesktopApiAdapter;
   activeRequestId: string | null;
   selectedDeployment: DeploymentView | null;
   selectedConversationTitle: string | null;
@@ -84,6 +90,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 }
 
 export function ActiveChatWorkspace({
+  api: explicitApi,
   activeRequestId,
   selectedDeployment,
   selectedConversationTitle,
@@ -109,6 +116,10 @@ export function ActiveChatWorkspace({
   onOpenMobileNavigation,
   onInterruptAccepted,
 }: ActiveChatWorkspaceProps) {
+  const api = getDesktopApiAdapter(explicitApi);
+  const previewInterrupt =
+    explicitApi?.previewInterruptCascade ?? previewChatInterruptCascade;
+  const interrupt = explicitApi?.interruptRequest ?? interruptChatRequest;
   const activeBehaviorId =
     selectedBehaviorId ?? selectedDeployment.defaultBehaviorId ?? null;
   const activeBehavior =
@@ -137,7 +148,7 @@ export function ActiveChatWorkspace({
     ).length;
     setForking(true);
     try {
-      const outcome = await forkSession({
+      const outcome = await (explicitApi?.forkSession ?? forkSession)({
         agentDid: selectedDeployment.agentDid,
         sessionId,
         atUserTurn,
@@ -159,7 +170,7 @@ export function ActiveChatWorkspace({
 
   async function resendStaleRequest(requestId: string) {
     try {
-      const submitted = await resendRequest(requestId);
+      const submitted = await (explicitApi?.resendRequest ?? resendRequest)(requestId);
       setInterruptResultBanner({
         text: `Request resent as ${submitted.requestId.slice(0, 14)}…`,
         tone: "info",
@@ -190,7 +201,7 @@ export function ActiveChatWorkspace({
   const beginInterrupt = useCallback(
     async (requestId: string) => {
       try {
-        const preview = await previewChatInterruptCascade({
+        const preview = await previewInterrupt({
           requestId,
           agentDid: selectedDeployment.agentDid,
           includeTerminal: false,
@@ -200,7 +211,7 @@ export function ActiveChatWorkspace({
           preview.willDetach.length +
           preview.unknownPolicy.length;
         if (childCount === 0) {
-          const result = await interruptChatRequest({
+          const result = await interrupt({
             requestId,
             agentDid: selectedDeployment.agentDid,
             cause: "userCancelled",
@@ -221,7 +232,7 @@ export function ActiveChatWorkspace({
         });
       }
     },
-    [onInterruptAccepted, selectedDeployment.agentDid],
+    [interrupt, onInterruptAccepted, previewInterrupt, selectedDeployment.agentDid],
   );
 
   // Workspace-level poll so the closed drawer can still raise attention —
@@ -231,6 +242,7 @@ export function ActiveChatWorkspace({
     [selectedDeployment.agentDid],
   );
   const { snapshot: opsSnapshot } = useOperationsSnapshot(opsSnapshotRequest, {
+    api,
     enabled: !operationsOpen,
   });
   const stuckCount =
@@ -239,7 +251,7 @@ export function ActiveChatWorkspace({
       : 0;
   // Held-approval count for the Holds tab badge. The panel runs its own
   // instance of this hook; both poll the same cheap indexed query.
-  const { holds: heldToolCalls } = useToolCallHolds(selectedDeployment.agentDid);
+  const { holds: heldToolCalls } = useToolCallHolds(selectedDeployment.agentDid, api);
   const heldCount = heldToolCalls?.length ?? 0;
 
   const operationsRailTabs = useMemo<OperationsRailTabDescriptor[]>(() => {
@@ -323,7 +335,7 @@ export function ActiveChatWorkspace({
   }
 
   return (
-    <OperationsRailProvider tabs={operationsRailTabs}>
+    <OperationsRailProvider api={api} tabs={operationsRailTabs}>
       <ChatHeader
         behaviorLabel={behaviorLabel}
         configuredPeerCount={configuredPeerCount}
@@ -388,8 +400,8 @@ export function ActiveChatWorkspace({
           open
           rootRequestId={cascade.rootRequestId}
           agentDid={selectedDeployment.agentDid}
-          previewInterrupt={previewChatInterruptCascade}
-          interrupt={interruptChatRequest}
+          previewInterrupt={previewInterrupt}
+          interrupt={interrupt}
           onClose={() => setCascade(null)}
           onAccepted={(at) => {
             setCascade(null);

@@ -228,6 +228,16 @@ for (const name of packageNames) {
         `${relative(root, file)} references a host-private --source-* token`,
       );
     }
+    if (
+      name !== "gents-desktop-tokens" &&
+      /font-family\s*:[^;]*(?:JetBrains|SFMono|SF Mono|Menlo|Monaco|ui-monospace|monospace)/i.test(
+        css,
+      )
+    ) {
+      failures.push(
+        `${relative(root, file)} must consume var(--font-mono) instead of a literal mono stack`,
+      );
+    }
     for (const match of css.matchAll(/@keyframes\s+([\w-]+)/g)) {
       keyframes.add(match[1]);
     }
@@ -331,12 +341,20 @@ const fleetLayoutStyles = readFileSync(
   join(root, "packages/gents-desktop-fleet/styles/layout.css"),
   "utf8",
 );
+const fleetLayoutPartials = filesUnder(
+  join(root, "packages/gents-desktop-fleet/styles/layout"),
+  (path) => path.endsWith(".css"),
+)
+  .map((path) => readFileSync(path, "utf8"))
+  .join("\n");
 if (
   !fleetBaseStyles.includes("./styles/layout.css") ||
-  !fleetLayoutStyles.includes(".fleet-inference-callout")
+  !fleetLayoutStyles.includes('./layout/dashboard.css"') ||
+  !fleetLayoutStyles.includes('./layout/pairing.css"') ||
+  !fleetLayoutPartials.includes(".fleet-inference-callout")
 ) {
   failures.push(
-    "FleetDashboard inference callout styles must ship in the base fleet entrypoint",
+    "FleetDashboard modular layout styles must ship through the base fleet entrypoint",
   );
 }
 
@@ -344,8 +362,58 @@ const mcpHealthStyles = readFileSync(
   join(root, "packages/gents-desktop-operations/styles/mcp-health.css"),
   "utf8",
 );
-if (!/@layer\s+mcp-health\s*\{/.test(mcpHealthStyles)) {
-  failures.push("operations MCP health CSS must use the mcp-health layer");
+const mcpHealthPartials = filesUnder(
+  join(root, "packages/gents-desktop-operations/styles/mcp-health"),
+  (path) => path.endsWith(".css"),
+)
+  .map((path) => readFileSync(path, "utf8"))
+  .join("\n");
+if (
+  !mcpHealthStyles.includes('./mcp-health/overview.css"') ||
+  !mcpHealthStyles.includes('./mcp-health/table.css"') ||
+  !mcpHealthStyles.includes('./mcp-health/detail.css"') ||
+  !/@layer\s+mcp-health\s*\{/.test(mcpHealthPartials)
+) {
+  failures.push(
+    "operations MCP health CSS must ship layered partials through its barrel",
+  );
+}
+
+const backendHealthStyles = readFileSync(
+  join(root, "packages/gents-desktop-operations/styles/backend-health.css"),
+  "utf8",
+);
+const backendHealthPartials = filesUnder(
+  join(root, "packages/gents-desktop-operations/styles/backend-health"),
+  (path) => path.endsWith(".css"),
+)
+  .map((path) => readFileSync(path, "utf8"))
+  .join("\n");
+if (
+  !backendHealthStyles.includes('./backend-health/overview.css"') ||
+  !backendHealthStyles.includes('./backend-health/list.css"') ||
+  !backendHealthStyles.includes('./backend-health/detail.css"') ||
+  !/@layer\s+backend-health\s*\{/.test(backendHealthPartials)
+) {
+  failures.push(
+    "operations backend health CSS must ship its partials through the public barrel",
+  );
+}
+
+const operationsIndex = readFileSync(
+  join(root, "packages/gents-desktop-operations/src/index.ts"),
+  "utf8",
+);
+if (
+  statSync(
+    join(root, "packages/gents-desktop-operations/src/railRegistry.ts"),
+    { throwIfNoEntry: false },
+  ) ||
+  operationsIndex.includes("createOperationsRailRegistry")
+) {
+  failures.push(
+    "operations must expose one live rail composition API through its provider and descriptors",
+  );
 }
 
 const semanticPath = join(root, "packages/gents-desktop-tokens/semantic.css");
@@ -406,6 +474,58 @@ if (
   );
 }
 
+const desktopApp = readFileSync(
+  join(root, "apps/gents-desktop/src/App.tsx"),
+  "utf8",
+);
+const desktopShell = readFileSync(
+  join(root, "apps/gents-desktop/src/hooks/useDesktopShell.ts"),
+  "utf8",
+);
+if (
+  !desktopApp.includes("const client = createDesktopClient();") ||
+  !desktopApp.includes("const shell = useDesktopShell(bridge);") ||
+  !desktopApp.includes("api={bridge.api}") ||
+  !desktopShell.includes(
+    "export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge)",
+  )
+) {
+  failures.push(
+    "Gents Desktop production composition must own and inject one instance-bound bridge",
+  );
+}
+for (const path of [
+  "apps/gents-desktop/src/hooks/desktopShellChatActions.ts",
+  "apps/gents-desktop/src/hooks/desktopShellConfigActions.ts",
+  "apps/gents-desktop/src/hooks/desktopShellPeerActions.ts",
+  "apps/gents-desktop/src/hooks/desktopShellTaskActions.ts",
+]) {
+  if (
+    !readFileSync(join(root, path), "utf8").includes("api: DesktopApiAdapter")
+  ) {
+    failures.push(`${path} must use the shell's instance-bound API adapter`);
+  }
+}
+
+const qrScanner = readFileSync(
+  join(root, "packages/gents-desktop-fleet/src/components/QrScannerDialog.tsx"),
+  "utf8",
+);
+const fleetHostDashboard = readFileSync(
+  join(root, "apps/gents-desktop/src/components/fleet/FleetHostDashboard.tsx"),
+  "utf8",
+);
+if (qrScanner.includes("gents p2p pairings")) {
+  failures.push(
+    "the reusable QR scanner default copy must not name the Gents CLI",
+  );
+}
+if (!fleetHostDashboard.includes("gents p2p pairings invite --bearer --qr")) {
+  failures.push(
+    "the Gents host must retain its CLI-specific QR pairing guidance",
+  );
+}
+
 const breakpointSource = readFileSync(
   join(root, "packages/gents-desktop-client/src/index.ts"),
   "utf8",
@@ -426,7 +546,7 @@ if (
 }
 for (const path of [
   "packages/gents-desktop-chat/styles/chat.css",
-  "packages/gents-desktop-fleet/styles/layout.css",
+  "packages/gents-desktop-fleet/styles/layout/responsive.css",
   "packages/gents-desktop-operations/styles/rail.css",
 ]) {
   const css = readFileSync(join(root, path), "utf8");
@@ -487,8 +607,41 @@ for (const [path, maximumLines] of [
     "packages/gents-desktop-operations/src/components/backgroundedTools/useBackgroundedToolsModel.ts",
     200,
   ],
+  [
+    "packages/gents-desktop-operations/src/components/subagentLineage/SubagentLineageView.tsx",
+    120,
+  ],
+  [
+    "packages/gents-desktop-operations/src/components/subagentLineage/SubagentLineageBody.tsx",
+    120,
+  ],
+  [
+    "packages/gents-desktop-operations/src/components/subagentLineage/SubagentLineageFilters.tsx",
+    100,
+  ],
+  [
+    "packages/gents-desktop-operations/src/components/subagentLineage/useSubagentLineageData.ts",
+    190,
+  ],
+  [
+    "packages/gents-desktop-operations/src/components/subagentLineage/useSubagentLineageNavigation.ts",
+    180,
+  ],
   ["packages/gents-desktop-chat/src/components/Transcript.tsx", 100],
   ["packages/gents-desktop-chat/src/components/codeTools/codeTools.ts", 100],
+  ["packages/gents-desktop-fleet/styles/layout.css", 20],
+  ["packages/gents-desktop-fleet/styles/layout/dashboard.css", 180],
+  ["packages/gents-desktop-fleet/styles/layout/network.css", 120],
+  ["packages/gents-desktop-fleet/styles/layout/pairing.css", 230],
+  ["packages/gents-desktop-fleet/styles/layout/responsive.css", 100],
+  ["packages/gents-desktop-operations/styles/backend-health.css", 20],
+  ["packages/gents-desktop-operations/styles/backend-health/overview.css", 120],
+  ["packages/gents-desktop-operations/styles/backend-health/list.css", 230],
+  ["packages/gents-desktop-operations/styles/backend-health/detail.css", 240],
+  ["packages/gents-desktop-operations/styles/mcp-health.css", 20],
+  ["packages/gents-desktop-operations/styles/mcp-health/overview.css", 200],
+  ["packages/gents-desktop-operations/styles/mcp-health/table.css", 220],
+  ["packages/gents-desktop-operations/styles/mcp-health/detail.css", 160],
 ]) {
   const lines = readFileSync(join(root, path), "utf8").split(/\r?\n/).length;
   if (lines > maximumLines) {

@@ -8,12 +8,6 @@ import {
 } from "react";
 
 import {
-  fetchDesktopSnapshot,
-  fetchSessionSnapshot,
-  shutdownDesktopClient,
-  startDesktopClient,
-} from "@source-inc/gents-desktop-client";
-import {
   isTerminalTurnState,
   projectChatShell,
   type ChatWorkflowState,
@@ -31,6 +25,8 @@ import { useDesktopShellEffects } from "./desktopShellEffects";
 import { createDesktopShellPeerActions } from "./desktopShellPeerActions";
 import { createDesktopShellTaskActions } from "./desktopShellTaskActions";
 import type {
+  DesktopApiAdapter,
+  DesktopClientUpdatedListenerFactory,
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
   P2PHealth,
@@ -38,7 +34,12 @@ import type {
 
 export { setDesktopShellTimingConfigForTests };
 
-export function useDesktopShell() {
+export type DesktopShellBridge = {
+  api: DesktopApiAdapter;
+  listenToUpdates: DesktopClientUpdatedListenerFactory;
+};
+
+export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
   const autostartAttempted = useRef(false);
   const autoRestartInFlight = useRef(false);
   const lastP2PAutoRestartAt = useRef<number | null>(null);
@@ -145,7 +146,7 @@ export function useDesktopShell() {
     snapshotRefreshSeq.current = refreshSeq;
     setLoading(true);
     try {
-      const next = await fetchDesktopSnapshot();
+      const next = await api.fetchDesktopSnapshot();
       if (snapshotRefreshSeq.current === refreshSeq) {
         setSnapshot(next);
         setError(null);
@@ -175,7 +176,7 @@ export function useDesktopShell() {
     }
 
     try {
-      const next = await fetchSessionSnapshot(
+      const next = await api.fetchSessionSnapshot(
         nextSessionId,
         selectedAgentDidRef.current,
         selectedTrackedRequestIdRef.current,
@@ -196,7 +197,7 @@ export function useDesktopShell() {
     setStarting(true);
     setError(null);
     try {
-      const next = await startDesktopClient();
+      const next = await api.startDesktopClient();
       setSnapshot(next);
     } catch (err) {
       setError(String(err));
@@ -226,9 +227,9 @@ export function useDesktopShell() {
       ) {
         try {
           logShellEvent(`restart attempt=${attempt} phase=shutdown`);
-          await shutdownDesktopClient();
+          await api.shutdownDesktopClient();
           logShellEvent(`restart attempt=${attempt} phase=start`);
-          next = await startDesktopClient();
+          next = await api.startDesktopClient();
           logShellEvent(`restart attempt=${attempt} phase=started`);
           break;
         } catch (err) {
@@ -262,12 +263,14 @@ export function useDesktopShell() {
   }
 
   useDesktopShellEffects({
+    api,
     autoRestartInFlight,
     autostartAttempted,
     deployments,
     lastObservedP2PHealth,
     lastP2PAutoRestartAt,
     localWorkflow,
+    listenToUpdates,
     newConversationAgentRef,
     onStartClient,
     refreshSession,
@@ -301,6 +304,7 @@ export function useDesktopShell() {
     onRenamePeer,
     onRepairP2P,
   } = createDesktopShellPeerActions({
+    api,
     snapshot,
     setAddingPeer,
     setError,
@@ -353,6 +357,7 @@ export function useDesktopShell() {
     onSaveToolServiceConfig,
     onTestToolService,
   } = createDesktopShellConfigActions({
+    api,
     setError,
     setSavingBehaviorConfig,
     setSavingConfig,
@@ -368,6 +373,7 @@ export function useDesktopShell() {
     onSendMessage,
     onStartNewConversation,
   } = createDesktopShellChatActions({
+    api,
     draft,
     newConversationAgentRef,
     refreshSession,
@@ -393,6 +399,7 @@ export function useDesktopShell() {
     onSaveScheduleConfig,
     onSaveTaskConfig,
   } = createDesktopShellTaskActions({
+    api,
     refreshSession,
     refreshSnapshot,
     setError,

@@ -215,10 +215,7 @@ export function QrScannerDialog({
         {error ? <p className="fleet-inline-error">{error}</p> : null}
         <p className="muted">
           {pairingHint ?? (
-            <>
-              Point the camera at the QR code printed by{" "}
-              <code>gents p2p pairings invite --bearer --qr</code>.
-            </>
+            <>Point the camera at the pairing QR code shown by your agent.</>
           )}
         </p>
         <canvas aria-hidden="true" ref={canvasRef} />

@@ -2,8 +2,6 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import App from "../../src/App";
-import { setDesktopApiAdapterForTests } from "@source-inc/gents-desktop-client";
-import { setDesktopClientUpdatedListenerFactoryForTests } from "@source-inc/gents-desktop-client";
 import { setDesktopShellTimingConfigForTests } from "../../src/hooks/useDesktopShell";
 import { createDesktopUiHarness } from "./desktopHarness";
 import { createLiveDesktopUiHarness } from "./liveBridgeHarness";
@@ -22,8 +20,6 @@ if ("bridgeUrl" in harness && harness.bridgeUrl) {
   document.documentElement.dataset.desktopUiHarnessBridgeUrl = harness.bridgeUrl;
 }
 
-setDesktopApiAdapterForTests(harness.adapter);
-setDesktopClientUpdatedListenerFactoryForTests(harness.listenerFactory);
 setDesktopShellTimingConfigForTests({
   clientRestartBackoffMs: 1,
   clientRestartMaxAttempts: 2,
@@ -32,6 +28,11 @@ setDesktopShellTimingConfigForTests({
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <App
+      bridge={{
+        api: harness.adapter,
+        listenToUpdates: harness.listenerFactory,
+      }}
+    />
   </React.StrictMode>,
 );
