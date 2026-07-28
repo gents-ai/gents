@@ -77,6 +77,6 @@
       "doc_id": "child-req-b-crash"
     },
     { "op": "RunBackgroundCompletionObserverOnA" },
-    { "op": "WaitForConvergence", "timeout_secs": 10 }
+    { "op": "WaitForConvergence" }
   ]
 }

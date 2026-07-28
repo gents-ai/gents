@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use anyhow::{bail, Result};
 use gents::background_completion::{
     observe_cancel_cascade_ack, project_background_subagent_completion,
@@ -204,15 +202,14 @@ impl Harness {
             Action::AdvanceClockOn { node, seconds } => {
                 advance_r5_clock_effects(self.node(node)?, *seconds).await?;
             }
-            Action::WaitForConvergence { timeout_secs } => {
-                self.wait_for_convergence(Duration::from_secs(*timeout_secs))
-                    .await?;
+            Action::WaitForConvergence => {
+                self.wait_for_convergence().await?;
             }
         }
         Ok(())
     }
 
-    async fn wait_for_convergence(&mut self, _timeout: Duration) -> Result<()> {
+    async fn wait_for_convergence(&mut self) -> Result<()> {
         run_background_completion_on_a(&self.a).await?;
         let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), NODE_A_DID).await?;
         run_cancel_mirror_on_b(&self.b).await?;

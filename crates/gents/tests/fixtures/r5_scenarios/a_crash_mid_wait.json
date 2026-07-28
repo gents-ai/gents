@@ -162,6 +162,6 @@
     { "op": "Crash", "node": "A" },
     { "op": "RunRecoverySweepOn", "node": "A" },
     { "op": "RunBackgroundCompletionObserverOnA" },
-    { "op": "WaitForConvergence", "timeout_secs": 10 }
+    { "op": "WaitForConvergence" }
   ]
 }

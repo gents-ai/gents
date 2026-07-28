@@ -65,7 +65,5 @@ pub enum Action {
         node: NodeId,
         seconds: u64,
     },
-    WaitForConvergence {
-        timeout_secs: u64,
-    },
+    WaitForConvergence,
 }
