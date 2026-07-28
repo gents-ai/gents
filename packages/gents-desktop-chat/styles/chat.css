@@ -169,7 +169,16 @@
     background: var(--color-surface-deep);
     color: var(--color-text-soft);
     font-size: var(--text-sm);
-    animation: fade-in var(--motion-fast) ease-out;
+    animation: chat-toast-fade-in var(--motion-fast) ease-out;
+  }
+
+  @keyframes chat-toast-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
   }
 
   .chat-toast.is-error {

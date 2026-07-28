@@ -45,7 +45,19 @@
     height: 8px;
     border-radius: var(--radius-pill);
     background: var(--color-warning);
-    animation: thinking-pulse var(--motion-pulse) ease-in-out infinite;
+    animation: backgrounded-tools-pulse var(--motion-pulse) ease-in-out infinite;
+  }
+
+  @keyframes backgrounded-tools-pulse {
+    0%,
+    100% {
+      opacity: 0.25;
+      transform: translateY(0);
+    }
+    30% {
+      opacity: 1;
+      transform: translateY(-2px);
+    }
   }
 
   .background-tools-panel .stuck-diagnostic.is-critical .stuck-diagnostic-dot {

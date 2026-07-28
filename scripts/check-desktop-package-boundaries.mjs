@@ -216,13 +216,33 @@ for (const name of packageNames) {
     }
   }
 
-  for (const file of filesUnder(join(root, "packages", name), (path) =>
+  const packageCssFiles = filesUnder(packageRoot, (path) =>
     path.endsWith(".css"),
-  )) {
+  );
+  const keyframes = new Set();
+  const animations = [];
+  for (const file of packageCssFiles) {
     const css = readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
     if (css.includes("--source-")) {
       failures.push(
         `${relative(root, file)} references a host-private --source-* token`,
+      );
+    }
+    for (const match of css.matchAll(/@keyframes\s+([\w-]+)/g)) {
+      keyframes.add(match[1]);
+    }
+    for (const match of css.matchAll(
+      /\banimation(?:-name)?\s*:\s*([\w-]+)(?=[\s;,}])/g,
+    )) {
+      if (match[1] !== "none") {
+        animations.push({ file, name: match[1] });
+      }
+    }
+  }
+  for (const animation of animations) {
+    if (!keyframes.has(animation.name)) {
+      failures.push(
+        `${relative(root, animation.file)} uses animation ${animation.name} without owning its @keyframes in ${name}`,
       );
     }
   }
@@ -423,8 +443,50 @@ for (const path of [
 for (const [path, maximumLines] of [
   ["packages/gents-desktop-client/src/api.ts", 100],
   ["packages/gents-desktop-client/src/api/adapter.ts", 350],
-  ["packages/gents-desktop-fleet/src/InferenceSetupWizard.tsx", 450],
+  ["packages/gents-desktop-fleet/src/InferenceSetupWizard.tsx", 100],
+  [
+    "packages/gents-desktop-fleet/src/inference/InferenceWizardContent.tsx",
+    180,
+  ],
+  ["packages/gents-desktop-fleet/src/inference/useInferenceSetup.ts", 320],
   ["packages/gents-desktop-fleet/src/inference/steps.tsx", 400],
+  ["packages/gents-desktop-fleet/src/components/AddPeerForm.tsx", 100],
+  [
+    "packages/gents-desktop-fleet/src/components/addPeer/BearerPairingForm.tsx",
+    180,
+  ],
+  [
+    "packages/gents-desktop-fleet/src/components/addPeer/ManualPeerDiscoveryForm.tsx",
+    220,
+  ],
+  [
+    "packages/gents-desktop-fleet/src/components/addPeer/useManualPeerDiscovery.ts",
+    160,
+  ],
+  [
+    "packages/gents-desktop-operations/src/components/backgroundedTools/BackgroundedToolsPanel.tsx",
+    140,
+  ],
+  [
+    "packages/gents-desktop-operations/src/components/backgroundedTools/BackgroundedToolsFilters.tsx",
+    160,
+  ],
+  [
+    "packages/gents-desktop-operations/src/components/backgroundedTools/BackgroundedToolsSummary.tsx",
+    80,
+  ],
+  [
+    "packages/gents-desktop-operations/src/components/backgroundedTools/StuckDiagnostics.tsx",
+    100,
+  ],
+  [
+    "packages/gents-desktop-operations/src/components/backgroundedTools/BackgroundedToolsTable.tsx",
+    220,
+  ],
+  [
+    "packages/gents-desktop-operations/src/components/backgroundedTools/useBackgroundedToolsModel.ts",
+    200,
+  ],
   ["packages/gents-desktop-chat/src/components/Transcript.tsx", 100],
   ["packages/gents-desktop-chat/src/components/codeTools/codeTools.ts", 100],
 ]) {
