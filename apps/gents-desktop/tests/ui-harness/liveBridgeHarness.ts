@@ -1,5 +1,5 @@
-import type { DesktopApiAdapter } from "../../src/lib/desktop-api";
-import type { DesktopClientUpdatedListenerFactory } from "../../src/lib/desktop-events";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import type { DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desktop-client";
 import { createBridgeHttpAdapter } from "../live-bridge-runner/adapter";
 import {
   createVersionPollingListenerFactory,

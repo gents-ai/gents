@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-preview-interrupt-cascade"
+description = "Enables the desktop_preview_interrupt_cascade command without any pre-configured scope."
+commands.allow = ["desktop_preview_interrupt_cascade"]
+
+[[permission]]
+identifier = "deny-desktop-preview-interrupt-cascade"
+description = "Denies the desktop_preview_interrupt_cascade command without any pre-configured scope."
+commands.deny = ["desktop_preview_interrupt_cascade"]

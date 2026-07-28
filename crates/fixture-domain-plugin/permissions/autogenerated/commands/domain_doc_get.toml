@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-domain-doc-get"
+description = "Enables the domain_doc_get command without any pre-configured scope."
+commands.allow = ["domain_doc_get"]
+
+[[permission]]
+identifier = "deny-domain-doc-get"
+description = "Denies the domain_doc_get command without any pre-configured scope."
+commands.deny = ["domain_doc_get"]

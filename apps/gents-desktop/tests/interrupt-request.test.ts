@@ -6,9 +6,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import { invoke } from "@tauri-apps/api/core";
 import {
-  interruptRequest,
-  previewInterruptCascade,
-} from "../src/lib/tauri/interruptRequest";
+  interruptChatRequest,
+  previewChatInterruptCascade,
+} from "@source-inc/gents-desktop-chat";
 
 const mockedInvoke = vi.mocked(invoke);
 
@@ -22,7 +22,7 @@ beforeEach(() => {
   });
 });
 
-describe("previewInterruptCascade", () => {
+describe("previewChatInterruptCascade", () => {
   beforeEach(() => {
     mockedInvoke.mockReset();
   });
@@ -35,23 +35,26 @@ describe("previewInterruptCascade", () => {
       alreadyTerminal: [],
       unknownPolicy: [],
     });
-    const result = await previewInterruptCascade({
+    const result = await previewChatInterruptCascade({
       requestId: "req_root",
       agentDid: "did:test:op",
       includeTerminal: true,
     });
-    expect(mockedInvoke).toHaveBeenCalledWith("desktop_preview_interrupt_cascade", {
-      request: {
-        requestId: "req_root",
-        agentDid: "did:test:op",
-        includeTerminal: true,
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "plugin:gents-desktop-bridge|desktop_preview_interrupt_cascade",
+      {
+        request: {
+          requestId: "req_root",
+          agentDid: "did:test:op",
+          includeTerminal: true,
+        },
       },
-    });
+    );
     expect(result.rootRequestId).toBe("req_root");
   });
 });
 
-describe("interruptRequest", () => {
+describe("interruptChatRequest", () => {
   beforeEach(() => {
     mockedInvoke.mockReset();
   });
@@ -63,20 +66,23 @@ describe("interruptRequest", () => {
       stalePreview: false,
       interruptRequestedAt: "2026-05-20T10:32:14Z",
     });
-    const result = await interruptRequest({
+    const result = await interruptChatRequest({
       requestId: "req_root",
       agentDid: "did:test:op",
       cause: "userCancelled",
       cascade: false,
     });
-    expect(mockedInvoke).toHaveBeenCalledWith("desktop_interrupt_request", {
-      request: {
-        requestId: "req_root",
-        agentDid: "did:test:op",
-        cause: "userCancelled",
-        cascade: false,
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "plugin:gents-desktop-bridge|desktop_interrupt_request",
+      {
+        request: {
+          requestId: "req_root",
+          agentDid: "did:test:op",
+          cause: "userCancelled",
+          cascade: false,
+        },
       },
-    });
+    );
     expect(result.accepted).toBe(true);
   });
 
@@ -87,19 +93,22 @@ describe("interruptRequest", () => {
       alreadyInterrupted: false,
       stalePreview: false,
     });
-    await interruptRequest({
+    await interruptChatRequest({
       requestId: "req_root",
       cause: "userCancelled",
       cascade: true,
       expectedPreviewSignature: "sig123",
     });
-    expect(mockedInvoke).toHaveBeenCalledWith("desktop_interrupt_request", {
-      request: {
-        requestId: "req_root",
-        cause: "userCancelled",
-        cascade: true,
-        expectedPreviewSignature: "sig123",
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "plugin:gents-desktop-bridge|desktop_interrupt_request",
+      {
+        request: {
+          requestId: "req_root",
+          cause: "userCancelled",
+          cascade: true,
+          expectedPreviewSignature: "sig123",
+        },
       },
-    });
+    );
   });
 });

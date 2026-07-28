@@ -1,5 +1,0 @@
-@layer utilities {
-  .small {
-    font-size: var(--text-sm);
-  }
-}

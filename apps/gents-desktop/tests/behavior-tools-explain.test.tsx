@@ -2,8 +2,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BehaviorToolSurface } from "../src/components/config/BehaviorToolSurface";
-import { setDesktopApiAdapterForTests } from "../src/lib/desktop-api";
-import type { DesktopApiAdapter } from "../src/lib/desktop-api";
+import { setDesktopApiAdapterForTests } from "@source-inc/gents-desktop-client";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
 function withExplanation(payload: unknown, fail = false) {
   setDesktopApiAdapterForTests({

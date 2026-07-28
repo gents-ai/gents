@@ -1,23 +1,20 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { NetworkPanel } from "../src/components/fleet/NetworkPanel";
-import { setDesktopApiAdapterForTests } from "../src/lib/desktop-api";
-import type { DesktopApiAdapter } from "../src/lib/desktop-api";
+import { NetworkPanel } from "@source-inc/gents-desktop-fleet";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
 function withStatus(status: unknown, fail = false) {
-  setDesktopApiAdapterForTests({
+  return {
     fetchNetworkStatus: fail
       ? vi.fn().mockRejectedValue(new Error("p2p subsystem offline"))
       : vi.fn().mockResolvedValue(status),
-  } as unknown as DesktopApiAdapter);
+  } as unknown as DesktopApiAdapter;
 }
 
 describe("network panel", () => {
-  afterEach(() => setDesktopApiAdapterForTests(null));
-
   it("stays collapsed until opened, then shows probes with peer labels", async () => {
-    withStatus({
+    const api = withStatus({
       localPeerId: "12D3KooWLocal",
       listenAddresses: ["/ip4/127.0.0.1/tcp/9292"],
       connectedPeers: ["peer-edge"],
@@ -39,7 +36,7 @@ describe("network panel", () => {
         },
       ],
     });
-    render(<NetworkPanel />);
+    render(<NetworkPanel api={api} />);
 
     expect(screen.queryByTestId("network-refresh")).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("network-toggle"));
@@ -53,7 +50,7 @@ describe("network panel", () => {
   });
 
   it("renders per-probe errors without hiding healthy probes", async () => {
-    withStatus({
+    const api = withStatus({
       localPeerId: "12D3KooWLocal",
       listenAddresses: [],
       listenAddressesError: "timed out reading desktop P2P listen addresses",
@@ -61,7 +58,7 @@ describe("network panel", () => {
       replicators: [],
       savedPeers: [],
     });
-    render(<NetworkPanel />);
+    render(<NetworkPanel api={api} />);
     fireEvent.click(screen.getByTestId("network-toggle"));
 
     await waitFor(() =>
@@ -73,8 +70,7 @@ describe("network panel", () => {
   });
 
   it("surfaces a whole-fetch failure with retry", async () => {
-    withStatus(null, true);
-    render(<NetworkPanel />);
+    render(<NetworkPanel api={withStatus(null, true)} />);
     fireEvent.click(screen.getByTestId("network-toggle"));
 
     await waitFor(() =>

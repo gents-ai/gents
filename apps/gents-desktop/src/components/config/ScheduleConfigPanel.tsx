@@ -8,8 +8,8 @@ import type {
   ScheduleView,
   TaskRunResult,
   TaskView,
-} from "../../lib/types";
-import { ConfirmDialog } from "../ConfirmDialog";
+} from "@source-inc/gents-desktop-client";
+import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import { ignoreHandledActionError, isOptionalInt, parseOptionalInt } from "./formUtils";

@@ -1,13 +1,10 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { RequestTracePanel } from "../src/components/trace/RequestTracePanel";
-import {
-  eventSummary,
-  eventTimestamp,
-} from "../src/components/trace/RequestTracePanel";
-import { setDesktopApiAdapterForTests } from "../src/lib/desktop-api";
-import type { DesktopApiAdapter } from "../src/lib/desktop-api";
+import { RequestTracePanel } from "@source-inc/gents-desktop-operations";
+import { eventSummary, eventTimestamp } from "@source-inc/gents-desktop-operations";
+import { setDesktopApiAdapterForTests } from "@source-inc/gents-desktop-client";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
 function adapterWith(timeline: unknown, fail = false) {
   return {

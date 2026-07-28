@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { parsePeerConnectionJson } from "../src/components/fleet/peerConnectionImport";
-import type { ChatSendResult } from "../src/lib/types";
+import { parsePeerConnectionJson } from "@source-inc/gents-desktop-fleet";
+import type { ChatSendResult } from "@source-inc/gents-desktop-client";
 import { LiveBridgeRunner } from "./live-bridge-runner";
 import { liveRunnerOptionsFromEnv } from "./tauri-driver-live/harness";
 

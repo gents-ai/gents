@@ -1,22 +1,32 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/lib/desktop-api", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/lib/desktop-api")>();
-  return {
-    ...original,
-    listBackendsWithHealth: vi.fn(),
-    listSubagentTree: vi.fn(),
-  };
-});
+import {
+  createDesktopApiAdapter,
+  type BackendHealth,
+  type DesktopListSubagentTreeRequest,
+  type SubagentTreeView,
+} from "@source-inc/gents-desktop-client";
+import { createMemoryTransport } from "@source-inc/gents-desktop-client/testing";
+import { BackendHealthPanel } from "@source-inc/gents-desktop-operations";
+import { SubagentLineageView } from "@source-inc/gents-desktop-operations";
 
-import { listBackendsWithHealth, listSubagentTree } from "../src/lib/desktop-api";
-import { BackendHealthPanel } from "../src/components/backendHealth";
-import type { BackendHealth } from "../src/components/backendHealth/types";
-import { SubagentLineageView } from "../src/components/subagentLineage";
-
-const mockedBackends = vi.mocked(listBackendsWithHealth);
-const mockedTree = vi.mocked(listSubagentTree);
+const mockedBackends = vi.fn<() => Promise<BackendHealth[]>>();
+const mockedTree =
+  vi.fn<(request: DesktopListSubagentTreeRequest) => Promise<SubagentTreeView>>();
+const api = createDesktopApiAdapter(
+  createMemoryTransport({
+    handlers: {
+      desktop_list_backends_with_health: () => mockedBackends(),
+      desktop_list_subagent_tree: (args) => {
+        const { request } = args as {
+          request: DesktopListSubagentTreeRequest;
+        };
+        return mockedTree(request);
+      },
+    },
+  }),
+);
 
 describe("ops panel liveness", () => {
   beforeEach(() => {
@@ -31,7 +41,7 @@ describe("ops panel liveness", () => {
 
   it("backend health keeps polling instead of freezing at mount", async () => {
     mockedBackends.mockResolvedValue([]);
-    render(<BackendHealthPanel />);
+    render(<BackendHealthPanel api={api} />);
     await waitFor(() => expect(mockedBackends).toHaveBeenCalledTimes(1));
 
     await vi.advanceTimersByTimeAsync(10_000);
@@ -70,7 +80,7 @@ describe("ops panel liveness", () => {
     };
     mockedBackends.mockResolvedValue([backend]);
 
-    render(<BackendHealthPanel />);
+    render(<BackendHealthPanel api={api} />);
     await screen.findByText(/0s ago/);
 
     await vi.advanceTimersByTimeAsync(10_000);
@@ -84,7 +94,9 @@ describe("ops panel liveness", () => {
       edges: [],
     } as never);
 
-    render(<SubagentLineageView rootRequestId="req_root" agentDid="did:test:op" />);
+    render(
+      <SubagentLineageView rootRequestId="req_root" agentDid="did:test:op" api={api} />,
+    );
     await waitFor(() => expect(mockedTree).toHaveBeenCalledTimes(1));
 
     await vi.advanceTimersByTimeAsync(5_000);
@@ -101,7 +113,9 @@ describe("ops panel liveness", () => {
         edges: [],
       } as never);
 
-    render(<SubagentLineageView rootRequestId="req_root" agentDid="did:test:op" />);
+    render(
+      <SubagentLineageView rootRequestId="req_root" agentDid="did:test:op" api={api} />,
+    );
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "temporary bridge failure",
     );

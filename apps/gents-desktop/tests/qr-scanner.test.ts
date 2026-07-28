@@ -1,7 +1,7 @@
 import { gzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 
-import { decodePairingQrPayload } from "../src/components/fleet/QrScannerDialog";
+import { decodePairingQrPayload } from "@source-inc/gents-desktop-fleet";
 
 const compactMagic = new Uint8Array([
   0x64, 0x61, 0x62, 0x65, 0x61, 0x72, 0x31, 0x7a, 0x00,

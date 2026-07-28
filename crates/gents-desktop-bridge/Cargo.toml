@@ -1,0 +1,49 @@
+[package]
+name = "gents-desktop-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Tauri plugin and desktop bridge logic for Gents"
+links = "tauri-plugin-gents-desktop-bridge"
+build = "build.rs"
+
+[features]
+default = []
+# Compiles real native-E2E command bodies (still double-gated by debug_assertions
+# + GENTS_NATIVE_E2E=1). Never in default; app forwards for E2E launchers only.
+native-e2e = []
+
+[dependencies]
+anyhow.workspace = true
+blake3 = "1"
+chrono.workspace = true
+codex-login.workspace = true
+gents = { path = "../gents" }
+gents-desktop-core.workspace = true
+gents-protocol.workspace = true
+hostname.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = [] }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# ts-rs is the source-of-truth generator for the public desktop request/view
+# contract. serde-compat handles rename_all and tagged enums
+# (RenderedTimelineItem) without hand-written mirror types.
+ts-rs = { version = "10.1", default-features = false, features = [
+    "serde-compat",
+    "chrono-impl",
+    "no-serde-warnings",
+] }
+uuid.workspace = true
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
+
+[dev-dependencies]
+gents-lean-contract.workspace = true
+tempfile = "3"
+toml.workspace = true

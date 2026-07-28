@@ -1,10 +1,17 @@
 import type { Dispatch, FormEvent, MutableRefObject, SetStateAction } from "react";
 
-import { renameConversation, sendChatMessage } from "../lib/desktop-api";
-import type { ChatShellProjection, ChatWorkflowState } from "../lib/chat-shell";
-import type { DeploymentView, DesktopSessionSnapshot } from "../lib/types";
+import type {
+  ChatShellProjection,
+  ChatWorkflowState,
+} from "@source-inc/gents-desktop-chat";
+import type {
+  DeploymentView,
+  DesktopApiAdapter,
+  DesktopSessionSnapshot,
+} from "@source-inc/gents-desktop-client";
 
 type ChatActionParams = {
+  api: DesktopApiAdapter;
   draft: string;
   newConversationAgentRef: MutableRefObject<string | null>;
   refreshSession: (
@@ -26,6 +33,7 @@ type ChatActionParams = {
 };
 
 export function createDesktopShellChatActions({
+  api,
   draft,
   newConversationAgentRef,
   refreshSession,
@@ -61,7 +69,7 @@ export function createDesktopShellChatActions({
     setSending(true);
     setError(null);
     try {
-      const result = await sendChatMessage({
+      const result = await api.sendChatMessage({
         agentDid: selectedDeployment.agentDid,
         behaviorId: selectedBehaviorId,
         sessionId: selectedSessionId,
@@ -99,7 +107,7 @@ export function createDesktopShellChatActions({
   async function onRenameConversationTitle(sessionId: string, title: string) {
     setError(null);
     try {
-      await renameConversation({ sessionId, title });
+      await api.renameConversation({ sessionId, title });
       await refreshSnapshot();
       await refreshSession(sessionId);
     } catch (err) {

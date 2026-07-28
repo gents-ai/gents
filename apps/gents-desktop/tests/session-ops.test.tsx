@@ -1,15 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { ChatHeader } from "../src/components/chat/ChatHeader";
-import { BackgroundedToolsPanel } from "../src/components/backgroundedTools";
-import { useOperationsSnapshot } from "../src/components/backgroundedTools/useOperationsSnapshot";
+import { ChatHeader } from "@source-inc/gents-desktop-chat";
+import { BackgroundedToolsPanel } from "@source-inc/gents-desktop-operations";
+import { useOperationsSnapshot } from "@source-inc/gents-desktop-operations";
 
-vi.mock("../src/components/backgroundedTools/useOperationsSnapshot", async (orig) => ({
-  ...(await orig()),
-  useOperationsSnapshot: vi.fn(),
-}));
-const mockedSnapshot = vi.mocked(useOperationsSnapshot);
+const mockedSnapshot = vi.fn<typeof useOperationsSnapshot>();
 
 describe("session ops", () => {
   it("reports pairing progress instead of calling an idle transport healthy", () => {
@@ -133,7 +129,11 @@ describe("session ops", () => {
     } as never);
     const onResendRequest = vi.fn();
     render(
-      <BackgroundedToolsPanel agentDid="did:a" onResendRequest={onResendRequest} />,
+      <BackgroundedToolsPanel
+        agentDid="did:a"
+        onResendRequest={onResendRequest}
+        useSnapshot={mockedSnapshot}
+      />,
     );
 
     await waitFor(() =>

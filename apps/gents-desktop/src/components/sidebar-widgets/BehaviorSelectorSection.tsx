@@ -1,4 +1,4 @@
-import type { BehaviorView } from "../../lib/types";
+import type { BehaviorView } from "@source-inc/gents-desktop-client";
 import { boolText } from "./sidebarUtils";
 
 export type BehaviorSelectorSectionProps = {

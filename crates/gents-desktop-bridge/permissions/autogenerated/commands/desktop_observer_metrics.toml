@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-observer-metrics"
+description = "Enables the desktop_observer_metrics command without any pre-configured scope."
+commands.allow = ["desktop_observer_metrics"]
+
+[[permission]]
+identifier = "deny-desktop-observer-metrics"
+description = "Denies the desktop_observer_metrics command without any pre-configured scope."
+commands.deny = ["desktop_observer_metrics"]

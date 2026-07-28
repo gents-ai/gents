@@ -1,0 +1,210 @@
+@layer backend-health {
+  .backend-health__detail {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-9);
+    padding: var(--space-7) var(--space-7) var(--space-9);
+    border-top: 1px solid var(--border-subtle);
+    background: rgb(var(--scrim-rgb) / 0.2);
+  }
+
+  .backend-health__detail-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .backend-health__detail-heading {
+    margin: 0;
+    font-family: var(--font-heading);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-text-muted);
+  }
+
+  .backend-health__config-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: var(--space-5);
+  }
+
+  .backend-health__config-cell {
+    padding: var(--space-5);
+    background: var(--color-surface-strong);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .backend-health__config-label {
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--color-text-muted);
+  }
+
+  .backend-health__config-value {
+    font-family: var(--font-mono);
+    font-size: var(--text-md);
+    color: var(--color-text);
+    font-variant-numeric: tabular-nums;
+    word-break: break-word;
+  }
+
+  .backend-health__config-value--muted {
+    color: var(--color-text-muted);
+  }
+
+  .backend-health__config-value[data-tone="success"] {
+    color: var(--color-success);
+  }
+
+  .backend-health__config-value[data-tone="warning"] {
+    color: var(--color-warning);
+  }
+
+  .backend-health__config-value[data-tone="error"] {
+    color: var(--color-error);
+  }
+
+  .backend-health__model-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .backend-health__model-chip {
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-pill);
+    background: var(--color-surface-muted);
+    border: 1px solid var(--border-subtle);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--color-text-soft);
+  }
+
+  .backend-health__calls-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+  }
+
+  .backend-health__calls-table th,
+  .backend-health__calls-table td {
+    padding: var(--space-3) var(--space-4);
+    text-align: left;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .backend-health__calls-table th {
+    font-weight: 500;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: var(--text-2xs);
+  }
+
+  .backend-health__calls-table td {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text-soft);
+  }
+
+  .backend-health__calls-table tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .backend-health__call-state {
+    display: inline-block;
+    padding: 1px var(--space-3);
+    border-radius: var(--radius-pill);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+
+  .backend-health__call-state[data-state="completed"] {
+    color: var(--color-success);
+    background: rgb(var(--color-accent-rgb) / 0.1);
+  }
+
+  .backend-health__call-state[data-state="running"] {
+    color: var(--color-info);
+    background: rgb(var(--color-info-rgb) / 0.1);
+  }
+
+  .backend-health__call-state[data-state="queued"] {
+    color: var(--color-text-muted);
+    background: var(--color-surface-muted);
+  }
+
+  .backend-health__call-state[data-state="failed"] {
+    color: var(--color-error);
+    background: rgb(var(--color-error-strong-rgb) / 0.1);
+  }
+
+  .backend-health__call-state[data-state="cancelled"] {
+    color: var(--color-warning);
+    background: rgb(var(--color-warning-rgb) / 0.1);
+  }
+
+  .backend-health__call-reason {
+    color: var(--color-error);
+  }
+
+  .backend-health__empty-calls {
+    padding: var(--space-7);
+    background: var(--color-surface-strong);
+    border: 1px dashed var(--border-subtle);
+    border-radius: var(--radius-md);
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: var(--text-md);
+  }
+
+  .backend-health__empty-fleet {
+    padding: var(--space-10);
+    border: 1px dashed var(--border-default);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface);
+    text-align: center;
+    color: var(--color-text-muted);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    align-items: center;
+  }
+
+  .backend-health__empty-icon {
+    font-size: var(--text-3xl);
+    color: var(--color-text-soft);
+  }
+
+  .backend-health__empty-heading {
+    margin: 0;
+    font-family: var(--font-heading);
+    font-weight: 500;
+    font-size: var(--text-xl);
+    color: var(--color-text);
+  }
+
+  .backend-health__empty-body {
+    margin: 0;
+    max-width: 420px;
+    font-size: var(--text-md);
+  }
+
+  .backend-health__empty-body code {
+    padding: 1px var(--space-2);
+    background: var(--color-surface-strong);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+    font-size: var(--text-sm);
+    color: var(--color-text-soft);
+  }
+}

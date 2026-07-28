@@ -6,7 +6,7 @@ import type {
   TaskView,
   ToolSelectionView,
   ToolServiceRegistryView,
-} from "../../src/lib/types";
+} from "@source-inc/gents-desktop-client";
 
 export const backend: InferenceBackendView = {
   backendId: "default-backend",

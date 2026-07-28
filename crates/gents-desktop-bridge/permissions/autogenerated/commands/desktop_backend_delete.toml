@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-backend-delete"
+description = "Enables the desktop_backend_delete command without any pre-configured scope."
+commands.allow = ["desktop_backend_delete"]
+
+[[permission]]
+identifier = "deny-desktop-backend-delete"
+description = "Denies the desktop_backend_delete command without any pre-configured scope."
+commands.deny = ["desktop_backend_delete"]

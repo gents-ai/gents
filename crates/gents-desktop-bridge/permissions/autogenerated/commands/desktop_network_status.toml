@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-network-status"
+description = "Enables the desktop_network_status command without any pre-configured scope."
+commands.allow = ["desktop_network_status"]
+
+[[permission]]
+identifier = "deny-desktop-network-status"
+description = "Denies the desktop_network_status command without any pre-configured scope."
+commands.deny = ["desktop_network_status"]

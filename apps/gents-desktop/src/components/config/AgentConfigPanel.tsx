@@ -7,7 +7,7 @@ import type {
   BehaviorView,
   BootstrapSummary,
   DeploymentView,
-} from "../../lib/types";
+} from "@source-inc/gents-desktop-client";
 import { EditorStatusChip, FieldHint, PencilIcon } from "./ConfigChrome";
 
 export type AgentConfigPanelProps = {

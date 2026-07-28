@@ -1,12 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { FleetDashboard } from "../src/components/fleet/FleetDashboard";
+import { FleetHostDashboard } from "../src/components/fleet/FleetHostDashboard";
 import type {
   BearerPairingResponse,
   BootstrapSummary,
   DeploymentView,
-} from "../src/lib/types";
+} from "@source-inc/gents-desktop-client";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 // The guided-inference props are exercised by their own suite below; the
@@ -35,12 +35,12 @@ const bootstrap: BootstrapSummary = {
   savedPeers: [],
 };
 
-describe("FleetDashboard add connection flow", () => {
+describe("FleetHostDashboard add connection flow", () => {
   it("connects the local runtime from the fleet empty state", async () => {
     const onInitLocalRuntime = vi.fn(async () => undefined);
 
     render(
-      <FleetDashboard
+      <FleetHostDashboard
         addingPeer={false}
         bootstrap={bootstrap}
         deployments={[]}
@@ -50,7 +50,7 @@ describe("FleetDashboard add connection flow", () => {
         starting={false}
         onAddPeer={vi.fn()}
         onPairBearer={vi.fn()}
-        onFetchPeerStatus={vi.fn()}
+        onProbePeerAddress={vi.fn()}
         onInitLocalRuntime={onInitLocalRuntime}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -67,7 +67,7 @@ describe("FleetDashboard add connection flow", () => {
   });
 
   it("discovers peer connection details from a server /status address", async () => {
-    const onFetchPeerStatus = vi.fn(async () => ({
+    const onProbePeerAddress = vi.fn(async () => ({
       agent_name: "worker-a",
       agent_did: "did:key:z6MkWorkerA",
       desktop_graphql: "http://127.0.0.1:9181/api/v0/graphql",
@@ -78,7 +78,7 @@ describe("FleetDashboard add connection flow", () => {
     const onAddPeer = vi.fn(async () => undefined);
 
     render(
-      <FleetDashboard
+      <FleetHostDashboard
         addingPeer={false}
         bootstrap={null}
         deployments={[]}
@@ -88,7 +88,7 @@ describe("FleetDashboard add connection flow", () => {
         starting={false}
         onAddPeer={onAddPeer}
         onPairBearer={vi.fn()}
-        onFetchPeerStatus={onFetchPeerStatus}
+        onProbePeerAddress={onProbePeerAddress}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -103,7 +103,7 @@ describe("FleetDashboard add connection flow", () => {
     fireEvent.click(screen.getByTestId("fleet-add-submit"));
 
     await waitFor(() => {
-      expect(onFetchPeerStatus).toHaveBeenCalledWith("http://127.0.0.1:9181");
+      expect(onProbePeerAddress).toHaveBeenCalledWith("http://127.0.0.1:9181");
       expect(onAddPeer).toHaveBeenCalledWith({
         label: "worker-a",
         agentDid: "did:key:z6MkWorkerA",
@@ -114,14 +114,14 @@ describe("FleetDashboard add connection flow", () => {
   });
 
   it("lets users preview discovered /status details before adding", async () => {
-    const onFetchPeerStatus = vi.fn(async () => ({
+    const onProbePeerAddress = vi.fn(async () => ({
       agent_name: "api-gateway",
       agent_did: "did:key:z6MkGateway",
       p2p_shareable_address: "iroh://gateway",
     }));
 
     render(
-      <FleetDashboard
+      <FleetHostDashboard
         addingPeer={false}
         bootstrap={null}
         deployments={[]}
@@ -131,7 +131,7 @@ describe("FleetDashboard add connection flow", () => {
         starting={false}
         onAddPeer={vi.fn()}
         onPairBearer={vi.fn()}
-        onFetchPeerStatus={onFetchPeerStatus}
+        onProbePeerAddress={onProbePeerAddress}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -161,7 +161,7 @@ describe("FleetDashboard add connection flow", () => {
   });
 
   it("surfaces a P2P-disabled discovery result beside the fetch controls", async () => {
-    const onFetchPeerStatus = vi.fn(async () => ({
+    const onProbePeerAddress = vi.fn(async () => ({
       agent_name: "amy",
       agent_did: "did:key:z6MkAmy",
       p2p_transport: "none",
@@ -172,7 +172,7 @@ describe("FleetDashboard add connection flow", () => {
     }));
 
     render(
-      <FleetDashboard
+      <FleetHostDashboard
         addingPeer={false}
         bootstrap={null}
         deployments={[]}
@@ -182,11 +182,12 @@ describe("FleetDashboard add connection flow", () => {
         starting={false}
         onAddPeer={vi.fn()}
         onPairBearer={vi.fn()}
-        onFetchPeerStatus={onFetchPeerStatus}
+        onProbePeerAddress={onProbePeerAddress}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
         onRepairP2P={vi.fn()}
+        {...inferenceProps}
       />,
     );
 
@@ -207,11 +208,11 @@ describe("FleetDashboard add connection flow", () => {
   });
 
   it("saves a typed GraphQL endpoint when manually adding a peer", async () => {
-    const onFetchPeerStatus = vi.fn();
+    const onProbePeerAddress = vi.fn();
     const onAddPeer = vi.fn(async () => undefined);
 
     render(
-      <FleetDashboard
+      <FleetHostDashboard
         addingPeer={false}
         bootstrap={null}
         deployments={[]}
@@ -221,7 +222,7 @@ describe("FleetDashboard add connection flow", () => {
         starting={false}
         onAddPeer={onAddPeer}
         onPairBearer={vi.fn()}
-        onFetchPeerStatus={onFetchPeerStatus}
+        onProbePeerAddress={onProbePeerAddress}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -247,7 +248,7 @@ describe("FleetDashboard add connection flow", () => {
     fireEvent.click(screen.getByTestId("fleet-add-submit"));
 
     await waitFor(() => {
-      expect(onFetchPeerStatus).not.toHaveBeenCalled();
+      expect(onProbePeerAddress).not.toHaveBeenCalled();
       expect(onAddPeer).toHaveBeenCalledWith({
         label: "studio-1-steward",
         agentDid: "did:key:z6MkStudio",
@@ -279,7 +280,7 @@ describe("FleetDashboard add connection flow", () => {
     }));
 
     render(
-      <FleetDashboard
+      <FleetHostDashboard
         addingPeer={false}
         bootstrap={bootstrap}
         deployments={[deployment]}
@@ -289,7 +290,7 @@ describe("FleetDashboard add connection flow", () => {
         starting={false}
         onAddPeer={vi.fn()}
         onPairBearer={onPairBearer}
-        onFetchPeerStatus={vi.fn()}
+        onProbePeerAddress={vi.fn()}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -315,10 +316,10 @@ describe("FleetDashboard add connection flow", () => {
   });
 });
 
-describe("FleetDashboard fleet-level P2P repair", () => {
+describe("FleetHostDashboard fleet-level P2P repair", () => {
   function renderFleet(deployments: DeploymentView[], onRepairP2P = vi.fn()) {
     render(
-      <FleetDashboard
+      <FleetHostDashboard
         addingPeer={false}
         bootstrap={bootstrap}
         deployments={deployments}
@@ -328,7 +329,7 @@ describe("FleetDashboard fleet-level P2P repair", () => {
         starting={false}
         onAddPeer={vi.fn()}
         onPairBearer={vi.fn()}
-        onFetchPeerStatus={vi.fn()}
+        onProbePeerAddress={vi.fn()}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -352,10 +353,10 @@ describe("FleetDashboard fleet-level P2P repair", () => {
   });
 });
 
-describe("FleetDashboard guided inference callout", () => {
+describe("FleetHostDashboard guided inference callout", () => {
   function renderFleet(deployments: DeploymentView[]) {
     render(
-      <FleetDashboard
+      <FleetHostDashboard
         addingPeer={false}
         bootstrap={bootstrap}
         deployments={deployments}
@@ -364,7 +365,6 @@ describe("FleetDashboard guided inference callout", () => {
         repairingP2P={false}
         starting={false}
         onAddPeer={vi.fn()}
-        onFetchPeerStatus={vi.fn()}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}

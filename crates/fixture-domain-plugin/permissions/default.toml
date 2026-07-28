@@ -1,0 +1,10 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Fixture domain plugin default surface"
+permissions = [
+  "allow-domain-doc-put",
+  "allow-domain-doc-get",
+  "allow-domain-doc-list",
+  "allow-domain-home-path",
+]

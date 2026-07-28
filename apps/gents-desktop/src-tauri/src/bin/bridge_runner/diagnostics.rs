@@ -3,11 +3,13 @@ use std::time::Duration;
 use gents_desktop_core::client::ClientCore;
 use serde::Serialize;
 
-use crate::bridge::snapshot::{
+use crate::live_fixture::LiveBridgeFixture;
+use gents_desktop_bridge::snapshot::{
     build_runtime_snapshot, build_session_snapshot_from_store_for_agent,
 };
-use crate::bridge::types::{turn_state_label, DesktopClientSnapshot, DesktopSessionSnapshot};
-use crate::live_fixture::LiveBridgeFixture;
+use gents_desktop_bridge::types::{
+    turn_state_label, DesktopClientSnapshot, DesktopSessionSnapshot,
+};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

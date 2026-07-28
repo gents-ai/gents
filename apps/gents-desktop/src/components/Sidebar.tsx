@@ -1,4 +1,8 @@
-import type { BehaviorView, ConversationSummary, DeploymentView } from "../lib/types";
+import type {
+  BehaviorView,
+  ConversationSummary,
+  DeploymentView,
+} from "@source-inc/gents-desktop-client";
 import {
   BehaviorSelectorSection,
   ConnectedPeerSection,

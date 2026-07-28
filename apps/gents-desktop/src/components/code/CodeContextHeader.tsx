@@ -1,4 +1,7 @@
-import type { DeploymentView, ToolSelectionView } from "../../lib/types";
+import type {
+  DeploymentView,
+  ToolSelectionView,
+} from "@source-inc/gents-desktop-client";
 
 // The multi-agent crux: an agent codes in ITS OWN tool root on ITS host, within
 // its permission/sandbox boundary. This header makes that boundary explicit

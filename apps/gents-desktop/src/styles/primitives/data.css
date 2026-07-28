@@ -62,14 +62,6 @@
     overflow-wrap: anywhere;
   }
 
-  .eyebrow {
-    margin: 0 0 var(--space-2);
-    font-size: var(--text-xs);
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--color-accent-muted);
-  }
-
   .lede {
     margin-top: var(--space-4);
     max-width: 56rem;

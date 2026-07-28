@@ -1,31 +1,40 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import { createDesktopClient } from "@source-inc/gents-desktop-client";
 import { ChatWorkspace } from "./components/ChatWorkspace";
 import { CodeContextHeader } from "./components/code/CodeContextHeader";
 import { ConfigWorkspace } from "./components/ConfigWorkspace";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { FleetDashboard } from "./components/fleet/FleetDashboard";
+import { FleetHostDashboard } from "./components/fleet/FleetHostDashboard";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { applyTheme, loadTheme } from "./lib/theme";
 import { applyShellPlatform } from "./lib/shellPlatform";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
 import { useAppShortcuts } from "./hooks/useAppShortcuts";
 import { Sidebar } from "./components/Sidebar";
-import { useDesktopShell } from "./hooks/useDesktopShell";
+import { useDesktopShell, type DesktopShellBridge } from "./hooks/useDesktopShell";
 import { installExternalLinkGuard } from "./lib/externalLinks";
 import { startNativeSimulatorE2e } from "./lib/nativeSimulatorE2e";
 import "./App.css";
 
-function App() {
+function App({ bridge }: { bridge?: DesktopShellBridge } = {}) {
   return (
     <ErrorBoundary>
-      <AppShell />
+      <AppShell bridge={bridge} />
     </ErrorBoundary>
   );
 }
 
-function AppShell() {
-  const shell = useDesktopShell();
+function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
+  const defaultBridge = useMemo<DesktopShellBridge>(() => {
+    const client = createDesktopClient();
+    return {
+      api: client.api,
+      listenToUpdates: (handler) => client.transport.listenClientUpdated(handler),
+    };
+  }, []);
+  const bridge = explicitBridge ?? defaultBridge;
+  const shell = useDesktopShell(bridge);
 
   // Boot lives here, not in App: the boundary test inspects App() as a
   // plain hook-free function, and the e2e harness mounts App directly.
@@ -108,7 +117,8 @@ function AppShell() {
       <ShortcutsHelp open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
       {workspaceView === "fleet" ? (
-        <FleetDashboard
+        <FleetHostDashboard
+          api={bridge.api}
           addingPeer={shell.addingPeer}
           bootstrap={shell.snapshot?.bootstrap ?? null}
           deployments={shell.deployments}
@@ -118,7 +128,7 @@ function AppShell() {
           starting={shell.starting}
           onAddPeer={shell.onAddPeer}
           onPairBearer={shell.onPairBearer}
-          onFetchPeerStatus={shell.onFetchPeerStatus}
+          onProbePeerAddress={shell.onProbePeerAddress}
           onInitLocalRuntime={shell.onInitLocalRuntime}
           onOpenChat={openChat}
           onOpenCode={openCode}
@@ -173,6 +183,7 @@ function AppShell() {
               />
             ) : null}
             <ChatWorkspace
+              api={bridge.api}
               activeRequestId={
                 shell.activeRequestId ?? shell.session?.latestRequestId ?? null
               }
@@ -213,6 +224,7 @@ function AppShell() {
       ) : (
         <section className="config-page">
           <ConfigWorkspace
+            api={bridge.api}
             bootstrap={shell.snapshot?.bootstrap ?? null}
             onBack={() => setWorkspaceView("chat")}
             onDeleteSkillConfig={shell.onDeleteSkillConfig}

@@ -4,14 +4,8 @@ import { expect } from "vitest";
 
 import App from "../src/App";
 import { setDesktopShellTimingConfigForTests } from "../src/hooks/useDesktopShell";
-import {
-  setDesktopApiAdapterForTests,
-  type DesktopApiAdapter,
-} from "../src/lib/desktop-api";
-import {
-  setDesktopClientUpdatedListenerFactoryForTests,
-  type DesktopClientUpdatedListenerFactory,
-} from "../src/lib/desktop-events";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import { type DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desktop-client";
 
 export type TauriDriverChatRequest = {
   agentDid: string;
@@ -38,12 +32,17 @@ export function renderTauriAppDriverWithBridge(
   firstPeerId: string | null = null,
   timingConfig: TauriDriverTimingConfig | null = null,
 ) {
-  setDesktopApiAdapterForTests(bridge.adapter);
-  setDesktopClientUpdatedListenerFactoryForTests(bridge.listenerFactory);
   setDesktopShellTimingConfigForTests(timingConfig);
 
   const user = userEvent.setup();
-  const rendered = render(<App />);
+  const rendered = render(
+    <App
+      bridge={{
+        api: bridge.adapter,
+        listenToUpdates: bridge.listenerFactory,
+      }}
+    />,
+  );
 
   return {
     bridge,
@@ -201,8 +200,6 @@ export function renderTauriAppDriverWithBridge(
       try {
         rendered.unmount();
       } finally {
-        setDesktopApiAdapterForTests(null);
-        setDesktopClientUpdatedListenerFactoryForTests(null);
         setDesktopShellTimingConfigForTests(null);
       }
       await bridge.dispose?.();

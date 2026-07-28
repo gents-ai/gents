@@ -1,8 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { MessageList } from "../src/components/Transcript";
-import type { RenderedTimelineItem } from "../src/lib/types";
+import { MessageList } from "@source-inc/gents-desktop-chat";
+import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
 
 describe("transcript message times", () => {
   it("renders a dated time label with the raw timestamp on hover", () => {

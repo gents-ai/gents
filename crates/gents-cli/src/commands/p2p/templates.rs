@@ -196,8 +196,10 @@ mod tests {
         let rows = template_rows();
         let row = rows.iter().find(|r| r.id == "conversation").unwrap();
         assert_eq!(row.delivery, "push");
+        // #875 moved the conversation plane to explicit per-collection rules
+        // (transcript filtered by requester, readiness by claimant) and added
+        // BearerPairingReady to the replicated conversation collections.
         assert_eq!(row.scope, "per-collection");
-        // Transcript collections plus BearerPairingReady.
         assert_eq!(row.collections.split(',').count(), 9);
     }
 

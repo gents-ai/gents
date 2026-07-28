@@ -1,5 +1,5 @@
-import type { ChatWorkflowState } from "../lib/chat-shell";
-import type { P2PHealth } from "../lib/types";
+import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
+import type { P2PHealth } from "@source-inc/gents-desktop-client";
 
 export type DesktopShellTimingConfig = {
   p2pAutoRestartCooldownMs: number;

@@ -1,0 +1,36 @@
+export type { AgentPrincipalView } from "../generated/AgentPrincipalView.js";
+export type { BehaviorView } from "../generated/BehaviorView.js";
+export type { ConversationSummary } from "../generated/ConversationSummary.js";
+export type { DeploymentView } from "../generated/DeploymentView.js";
+export type { DesktopClientSnapshot } from "../generated/DesktopClientSnapshot.js";
+export type { DesktopRuntimeSnapshot as RuntimeSnapshot } from "../generated/DesktopRuntimeSnapshot.js";
+export type { EventTriggerView } from "../generated/EventTriggerView.js";
+export type { InferenceBackendView } from "../generated/InferenceBackendView.js";
+export type { InferenceProfileView } from "../generated/InferenceProfileView.js";
+export type { NetworkReplicatorView } from "../generated/NetworkReplicatorView.js";
+export type { NetworkSavedPeerView } from "../generated/NetworkSavedPeerView.js";
+export type { NetworkStatusView } from "../generated/NetworkStatusView.js";
+export type { RuntimeView } from "../generated/RuntimeView.js";
+export type { ScheduleView } from "../generated/ScheduleView.js";
+export type { SkillView } from "../generated/SkillView.js";
+export type { TaskRecentRunsView } from "../generated/TaskRecentRunsView.js";
+export type { TaskRunSummaryView } from "../generated/TaskRunSummaryView.js";
+export type { TaskView } from "../generated/TaskView.js";
+export type { ToolSelectionView } from "../generated/ToolSelectionView.js";
+export type { ToolServiceRegistryView } from "../generated/ToolServiceRegistryView.js";
+
+/**
+ * Raw runtime tool-surface explanation: camelCase envelope from the bridge,
+ * snake_case `surface` payload straight from the runtime serializer.
+ */
+export type ToolSurfaceExplanationView = {
+  behaviorId: string;
+  enabled: boolean;
+  toolSelectionId?: string | null;
+  toolSelectionSource: string;
+  toolPolicyVersion?: string | null;
+  toolPolicySemantics: string;
+  ceilingSource: string;
+  mcpServicesOnline: boolean;
+  surface: Record<string, unknown>;
+};

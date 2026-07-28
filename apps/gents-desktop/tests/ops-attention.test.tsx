@@ -1,16 +1,15 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/components/backgroundedTools/useOperationsSnapshot", () => ({
-  useOperationsSnapshot: vi.fn(),
-}));
+import { BackgroundedToolsPanel } from "@source-inc/gents-desktop-operations";
+import { useOperationsSnapshot } from "@source-inc/gents-desktop-operations";
+import {
+  OperationsRail,
+  OperationsRailProvider,
+} from "@source-inc/gents-desktop-operations";
+import type { DesktopOperationsSnapshot } from "@source-inc/gents-desktop-client";
 
-import { BackgroundedToolsPanel } from "../src/components/backgroundedTools";
-import { useOperationsSnapshot } from "../src/components/backgroundedTools/useOperationsSnapshot";
-import { OperationsRail, OperationsRailProvider } from "../src/components/operations";
-import type { DesktopOperationsSnapshot } from "../src/lib/types/operations";
-
-const mockedSnapshot = vi.mocked(useOperationsSnapshot);
+const mockedSnapshot = vi.fn<typeof useOperationsSnapshot>();
 
 const snapshot: DesktopOperationsSnapshot = {
   fetchedAt: new Date().toISOString(),
@@ -42,7 +41,12 @@ describe("stuck-work attention", () => {
   });
 
   it("renders diagnostics in operator language inside the panel", () => {
-    render(<BackgroundedToolsPanel agentDid="did:key:z6MkSelected" />);
+    render(
+      <BackgroundedToolsPanel
+        agentDid="did:key:z6MkSelected"
+        useSnapshot={mockedSnapshot}
+      />,
+    );
     expect(mockedSnapshot).toHaveBeenCalledWith({
       agentDid: "did:key:z6MkSelected",
       rootRequestId: null,

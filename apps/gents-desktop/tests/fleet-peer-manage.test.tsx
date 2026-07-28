@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { FleetRow } from "../src/components/fleet/FleetRow";
-import type { DeploymentView } from "../src/lib/types";
+import { FleetRow } from "@source-inc/gents-desktop-fleet";
+import type { DeploymentView } from "@source-inc/gents-desktop-client";
 
 function makeDeployment(overrides: Partial<DeploymentView> = {}): DeploymentView {
   return {

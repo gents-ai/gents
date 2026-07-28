@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-conversation-rename"
+description = "Enables the desktop_conversation_rename command without any pre-configured scope."
+commands.allow = ["desktop_conversation_rename"]
+
+[[permission]]
+identifier = "deny-desktop-conversation-rename"
+description = "Denies the desktop_conversation_rename command without any pre-configured scope."
+commands.deny = ["desktop_conversation_rename"]

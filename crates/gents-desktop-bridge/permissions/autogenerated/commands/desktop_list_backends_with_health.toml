@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-list-backends-with-health"
+description = "Enables the desktop_list_backends_with_health command without any pre-configured scope."
+commands.allow = ["desktop_list_backends_with_health"]
+
+[[permission]]
+identifier = "deny-desktop-list-backends-with-health"
+description = "Denies the desktop_list_backends_with_health command without any pre-configured scope."
+commands.deny = ["desktop_list_backends_with_health"]

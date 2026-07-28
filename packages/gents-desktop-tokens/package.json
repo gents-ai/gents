@@ -1,0 +1,15 @@
+{
+  "name": "@source-inc/gents-desktop-tokens",
+  "version": "0.9.0",
+  "license": "Apache-2.0",
+  "description": "Semantic design tokens for Gents desktop packages",
+  "type": "module",
+  "exports": {
+    "./semantic.css": "./semantic.css",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "semantic.css",
+    "README.md"
+  ]
+}

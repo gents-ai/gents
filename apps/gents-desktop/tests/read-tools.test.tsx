@@ -1,9 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CodeToolItem } from "../src/components/codeTools/CodeToolItem";
-import { toCodeToolView } from "../src/components/codeTools/codeTools";
-import type { RenderedToolCallView } from "../src/lib/types";
+import { CodeToolItem } from "@source-inc/gents-desktop-chat";
+import { toCodeToolView } from "@source-inc/gents-desktop-chat";
+import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 
 function readCall(
   toolName: string,

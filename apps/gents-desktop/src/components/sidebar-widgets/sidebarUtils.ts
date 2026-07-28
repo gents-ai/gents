@@ -1,4 +1,4 @@
-import type { ConversationSummary } from "../../lib/types";
+import type { ConversationSummary } from "@source-inc/gents-desktop-client";
 
 export function conversationStatusClass(conversation: ConversationSummary) {
   const state = (conversation.turnState ?? conversation.status ?? "").toLowerCase();

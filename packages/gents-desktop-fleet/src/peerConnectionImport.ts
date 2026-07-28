@@ -1,0 +1,174 @@
+import type { PeerAddRequest } from "@source-inc/gents-desktop-client";
+
+type JsonRecord = Record<string, unknown>;
+
+export function parsePeerConnectionJson(input: string): PeerAddRequest {
+  const value = parseJsonFromText(input);
+  const record = asRecord(value);
+
+  if (!record) {
+    throw new Error("Connection JSON must be an object");
+  }
+
+  const p2pTransport =
+    stringAt(record, "p2pTransport") ??
+    stringAt(record, "p2p_transport") ??
+    stringAt(record, "p2p.p2pTransport") ??
+    stringAt(record, "p2p.p2p_transport") ??
+    stringAt(record, "runtime_state.p2p_transport");
+  if (
+    p2pTransport?.toLowerCase() === "none" ||
+    valueAt(record, "p2p.enabled") === false
+  ) {
+    throw new Error(
+      "This runtime has P2P disabled. Restart it with --p2p-transport iroh and fetch again.",
+    );
+  }
+
+  const agentDid =
+    stringAt(record, "agentDid") ??
+    stringAt(record, "agent_did") ??
+    stringAt(record, "runtime_state.agentDid") ??
+    stringAt(record, "runtime_state.agent_did");
+  const addr =
+    stringAt(record, "addr") ??
+    stringAt(record, "address") ??
+    stringAt(record, "p2pAddress") ??
+    stringAt(record, "p2p_address") ??
+    stringAt(record, "p2pShareableAddress") ??
+    stringAt(record, "p2p_shareable_address") ??
+    stringAt(record, "p2p.p2pShareableAddress") ??
+    stringAt(record, "p2p.p2p_shareable_address") ??
+    firstStringAt(record, "p2pListenAddresses") ??
+    firstStringAt(record, "p2p_listen_addresses") ??
+    firstStringAt(record, "runtime_state.p2p_listen_addresses") ??
+    firstStringAt(record, "p2p.p2p_listen_addresses");
+
+  if (!agentDid || !addr) {
+    throw new Error("Connection JSON must include agent_did and a P2P address");
+  }
+  const validatedAgentDid = validateAgentDid(agentDid);
+  const graphql =
+    stringAt(record, "desktopGraphql") ??
+    stringAt(record, "desktop_graphql") ??
+    stringAt(record, "graphql") ??
+    stringAt(record, "checks.graphql.endpoint") ??
+    stringAt(record, "runtime_state.graphql");
+  const defaultBehaviorId =
+    stringAt(record, "defaultBehaviorId") ??
+    stringAt(record, "default_behavior_id") ??
+    stringAt(record, "runtime.defaultBehaviorId") ??
+    stringAt(record, "runtime.default_behavior_id") ??
+    stringAt(record, "runtime_state.defaultBehaviorId") ??
+    stringAt(record, "runtime_state.default_behavior_id") ??
+    defaultBehaviorIdFromStatus(record);
+
+  return {
+    label:
+      stringAt(record, "label") ??
+      stringAt(record, "agentLabel") ??
+      stringAt(record, "agent_label") ??
+      stringAt(record, "agentName") ??
+      stringAt(record, "agent_name") ??
+      stringAt(record, "runtime_state.agentName") ??
+      stringAt(record, "runtime_state.agent_name") ??
+      inferLabel(validatedAgentDid),
+    agentDid: validatedAgentDid,
+    addr,
+    ...(graphql ? { graphql } : {}),
+    ...(defaultBehaviorId ? { defaultBehaviorId } : {}),
+  };
+}
+
+export function validateAgentDid(agentDid: string) {
+  const trimmed = agentDid.trim();
+  if (!trimmed) {
+    throw new Error("Agent DID is required");
+  }
+  return trimmed;
+}
+
+function parseJsonFromText(input: string): unknown {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new Error("Connection JSON is empty");
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start === -1 || end <= start) {
+      throw new Error("Connection JSON is not valid JSON");
+    }
+    return JSON.parse(trimmed.slice(start, end + 1));
+  }
+}
+
+function stringAt(record: JsonRecord, path: string) {
+  const value = valueAt(record, path);
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function firstStringAt(record: JsonRecord, path: string) {
+  const value = valueAt(record, path);
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  return (
+    value.find(
+      (candidate): candidate is string =>
+        typeof candidate === "string" && candidate.trim().length > 0,
+    ) ?? null
+  );
+}
+
+function valueAt(record: JsonRecord, path: string): unknown {
+  let cursor: unknown = record;
+  for (const segment of path.split(".")) {
+    const current = asRecord(cursor);
+    if (!current) {
+      return undefined;
+    }
+    cursor = current[segment];
+  }
+  return cursor;
+}
+
+function defaultBehaviorIdFromStatus(record: JsonRecord) {
+  for (const path of [
+    "behaviors",
+    "runtime.behaviors",
+    "runtime_state.behaviors",
+  ]) {
+    const behaviors = valueAt(record, path);
+    if (!Array.isArray(behaviors)) {
+      continue;
+    }
+    for (const behavior of behaviors) {
+      const candidate = asRecord(behavior);
+      if (!candidate || candidate.enabled === false) {
+        continue;
+      }
+      const behaviorId =
+        stringAt(candidate, "behaviorId") ?? stringAt(candidate, "behavior_id");
+      if (behaviorId === "default") {
+        return behaviorId;
+      }
+    }
+  }
+  return null;
+}
+
+function asRecord(value: unknown): JsonRecord | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonRecord)
+    : null;
+}
+
+function inferLabel(agentDid: string) {
+  const parts = agentDid.split(":").filter(Boolean);
+  const tail = parts[parts.length - 1];
+  return tail || "Agent";
+}

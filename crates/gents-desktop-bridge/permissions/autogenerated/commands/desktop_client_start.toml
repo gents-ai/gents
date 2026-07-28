@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-client-start"
+description = "Enables the desktop_client_start command without any pre-configured scope."
+commands.allow = ["desktop_client_start"]
+
+[[permission]]
+identifier = "deny-desktop-client-start"
+description = "Denies the desktop_client_start command without any pre-configured scope."
+commands.deny = ["desktop_client_start"]

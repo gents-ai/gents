@@ -1,32 +1,11 @@
 import type { Dispatch, SetStateAction } from "react";
 
-import {
-  cancelCodexLogin,
-  codexLogin,
-  deleteSkillConfig,
-  probeInferenceEndpoint,
-  saveAgentConfig,
-  saveBackendConfig,
-  saveBehaviorConfig,
-  saveInferenceProfileConfig,
-  saveSkillConfig,
-  saveToolSelectionConfig,
-  saveToolServiceConfig,
-  testToolService,
-  deleteTaskConfig,
-  deleteScheduleConfig,
-  deleteEventTriggerConfig,
-  deleteBackendConfig,
-  deleteInferenceProfileConfig,
-  deleteToolSelectionConfig,
-  deleteToolServiceConfig,
-  deleteBehaviorConfig,
-} from "../lib/desktop-api";
 import type {
   AgentConfigSaveRequest,
   BackendSaveRequest,
   BehaviorSaveRequest,
   CodexLoginResult,
+  DesktopApiAdapter,
   DesktopClientSnapshot,
   InferenceProbeResult,
   InferenceProfileSaveRequest,
@@ -44,9 +23,10 @@ import type {
   ToolSelectionDeleteRequest,
   ToolServiceDeleteRequest,
   BehaviorDeleteRequest,
-} from "../lib/types";
+} from "@source-inc/gents-desktop-client";
 
 type ConfigActionParams = {
+  api: DesktopApiAdapter;
   setError: Dispatch<SetStateAction<string | null>>;
   setSavingBehaviorConfig: Dispatch<SetStateAction<boolean>>;
   setSavingConfig: Dispatch<SetStateAction<boolean>>;
@@ -56,6 +36,7 @@ type ConfigActionParams = {
 };
 
 export function createDesktopShellConfigActions({
+  api,
   setError,
   setSavingBehaviorConfig,
   setSavingConfig,
@@ -67,7 +48,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await saveAgentConfig(request);
+      const next = await api.saveAgentConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       setSelectedBehaviorId(request.defaultBehaviorId);
@@ -85,7 +66,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await saveBehaviorConfig(request);
+      const next = await api.saveBehaviorConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       setSelectedBehaviorId(request.behaviorId);
@@ -103,7 +84,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await saveSkillConfig(request);
+      const next = await api.saveSkillConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       return next;
@@ -119,7 +100,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await deleteSkillConfig(request);
+      const next = await api.deleteSkillConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       return next;
@@ -135,7 +116,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await deleteTaskConfig(request);
+      const next = await api.deleteTaskConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       return next;
@@ -151,7 +132,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await deleteScheduleConfig(request);
+      const next = await api.deleteScheduleConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       return next;
@@ -167,7 +148,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await deleteEventTriggerConfig(request);
+      const next = await api.deleteEventTriggerConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       return next;
@@ -183,7 +164,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await deleteBackendConfig(request);
+      const next = await api.deleteBackendConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       return next;
@@ -201,7 +182,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await deleteInferenceProfileConfig(request);
+      const next = await api.deleteInferenceProfileConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       return next;
@@ -217,7 +198,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await deleteToolSelectionConfig(request);
+      const next = await api.deleteToolSelectionConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       return next;
@@ -233,7 +214,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await deleteToolServiceConfig(request);
+      const next = await api.deleteToolServiceConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       return next;
@@ -249,7 +230,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await deleteBehaviorConfig(request);
+      const next = await api.deleteBehaviorConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       return next;
@@ -265,7 +246,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await saveBackendConfig(request);
+      const next = await api.saveBackendConfig(request);
       setSnapshot(next);
       return next;
     } catch (err) {
@@ -281,7 +262,7 @@ export function createDesktopShellConfigActions({
   ): Promise<InferenceProbeResult> {
     // A probe failing is the expected answer for an offline local server, not
     // an app-level error — let the wizard render "not detected" itself.
-    return probeInferenceEndpoint(endpoint);
+    return api.probeInferenceEndpoint(endpoint);
   }
 
   async function onCodexLogin(agentDid: string): Promise<CodexLoginResult> {
@@ -289,7 +270,7 @@ export function createDesktopShellConfigActions({
     try {
       // The credential upsert emits a client-updated event, so the shell's
       // listener refetches the snapshot (and backend health) on its own.
-      return await codexLogin(agentDid);
+      return await api.codexLogin(agentDid);
     } catch (err) {
       setError(String(err));
       throw err;
@@ -300,7 +281,7 @@ export function createDesktopShellConfigActions({
     // Best-effort abort of a sign-in whose browser was closed; a failure here
     // (e.g. nothing in flight) must never block closing the wizard.
     try {
-      await cancelCodexLogin();
+      await api.cancelCodexLogin();
     } catch {
       // Ignored.
     }
@@ -310,7 +291,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await saveInferenceProfileConfig(request);
+      const next = await api.saveInferenceProfileConfig(request);
       setSnapshot(next);
       return next;
     } catch (err) {
@@ -325,7 +306,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await saveToolSelectionConfig(request);
+      const next = await api.saveToolSelectionConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       return next;
@@ -341,7 +322,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await saveToolServiceConfig(request);
+      const next = await api.saveToolServiceConfig(request);
       setSnapshot(next);
       return next;
     } catch (err) {
@@ -357,7 +338,7 @@ export function createDesktopShellConfigActions({
   ): Promise<ToolServiceTestResult> {
     setError(null);
     try {
-      return await testToolService(request);
+      return await api.testToolService(request);
     } catch (err) {
       setError(String(err));
       throw err;
