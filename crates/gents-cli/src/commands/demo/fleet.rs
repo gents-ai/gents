@@ -201,8 +201,11 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
     upsert_data_plane(&graphql_b, &peer_a, &did_b, &addr_a, "conversation").await?;
 
     println!("  waiting for conversation data-plane replicators…");
-    wait_conversation_replicator(&graphql_b, &peer_a, &did_b).await?;
-    wait_conversation_replicator(&fleet.graphql_a, &peer_b, &fleet.did_a).await?;
+    // #875 scoped conversation rules by the *peer's* signed agent DID (each
+    // side pushes the peer the transcript rows that peer requested), so each
+    // wait expects the other node's DID in the applied filter.
+    wait_conversation_replicator(&graphql_b, &peer_a, &fleet.did_a).await?;
+    wait_conversation_replicator(&fleet.graphql_a, &peer_b, &did_b).await?;
 
     fleet.node_b = Some(NodeB {
         home: home_b,
@@ -282,7 +285,11 @@ fn data_plane_collections_literal(template: &str) -> Result<String> {
     Ok(format!("[{collections}]"))
 }
 
-async fn wait_conversation_replicator(graphql: &str, peer_id: &str, local_did: &str) -> Result<()> {
+async fn wait_conversation_replicator(
+    graphql: &str,
+    peer_id: &str,
+    peer_agent_did: &str,
+) -> Result<()> {
     let query = format!(
         r#"{{
             PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{}" }} }}, limit: 1) {{
@@ -313,7 +320,7 @@ async fn wait_conversation_replicator(graphql: &str, peer_id: &str, local_did: &
             let filtered = resp
                 .pointer("/data/PeerPairingApplied/0/replicator_filter")
                 .and_then(Value::as_str)
-                .is_some_and(|filter| filter_mentions_agent_request(filter, local_did));
+                .is_some_and(|filter| filter_mentions_agent_request(filter, peer_agent_did));
             if armed && filtered {
                 return Ok(());
             }
@@ -326,7 +333,7 @@ async fn wait_conversation_replicator(graphql: &str, peer_id: &str, local_did: &
     )
 }
 
-fn filter_mentions_agent_request(filter: &str, local_did: &str) -> bool {
+fn filter_mentions_agent_request(filter: &str, peer_agent_did: &str) -> bool {
     let Ok(value) = serde_json::from_str::<Value>(filter) else {
         return false;
     };
@@ -334,7 +341,7 @@ fn filter_mentions_agent_request(filter: &str, local_did: &str) -> bool {
         .get("AgentRequest")
         .and_then(|entry| entry.get("value"))
         .and_then(Value::as_str)
-        == Some(local_did)
+        == Some(peer_agent_did)
 }
 
 async fn wait_replicator_filter(graphql: &str, peer_id: &str, needles: &[String]) -> Result<()> {
