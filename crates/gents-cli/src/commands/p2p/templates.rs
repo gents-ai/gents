@@ -192,13 +192,13 @@ mod tests {
     }
 
     #[test]
-    fn conversation_row_is_push_agent_did() {
+    fn conversation_row_is_push_per_collection() {
         let rows = template_rows();
         let row = rows.iter().find(|r| r.id == "conversation").unwrap();
         assert_eq!(row.delivery, "push");
-        assert_eq!(row.scope, "agent_did");
-        // 8 collections comma-separated
-        assert_eq!(row.collections.split(',').count(), 8);
+        assert_eq!(row.scope, "per-collection");
+        // Transcript collections plus BearerPairingReady.
+        assert_eq!(row.collections.split(',').count(), 9);
     }
 
     #[test]
