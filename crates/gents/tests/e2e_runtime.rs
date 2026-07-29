@@ -7,8 +7,6 @@ mod support;
 
 #[path = "e2e_runtime/adapter_projection_external_fixtures.rs"]
 mod adapter_projection_external_fixtures;
-#[path = "e2e_runtime/agent_behavior_migration.rs"]
-mod agent_behavior_migration;
 #[path = "e2e_runtime/completion_retry_tape.rs"]
 mod completion_retry_tape;
 #[path = "e2e_runtime/defradb_time_travel.rs"]
@@ -35,8 +33,6 @@ mod runtime_observability;
 mod schedule_snapshot_reconcile;
 #[path = "e2e_runtime/self_config_tools.rs"]
 mod self_config_tools;
-#[path = "e2e_runtime/tool_call_migration.rs"]
-mod tool_call_migration;
 
 #[test]
 fn provider_wire_fixtures_do_not_contain_credentials() {

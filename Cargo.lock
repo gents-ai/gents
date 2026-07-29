@@ -309,22 +309,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "agent-subagent-v2-to-v3-lens"
-version = "0.1.0"
-dependencies = [
- "lens_sdk",
- "serde_json",
-]
-
-[[package]]
-name = "agent-tool-call-lifecycle-v1-to-v2-lens"
-version = "0.1.0"
-dependencies = [
- "lens_sdk",
- "serde_json",
-]
-
-[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8577,7 +8561,6 @@ name = "gents"
 version = "0.9.0"
 dependencies = [
  "acp",
- "agent-tool-call-lifecycle-v1-to-v2-lens",
  "anyhow",
  "async-stream",
  "async-trait",
@@ -8598,6 +8581,7 @@ dependencies = [
  "futures",
  "gents-fs-runner",
  "gents-lean-contract",
+ "gents-migration",
  "gents-protocol",
  "hostname",
  "identity",
@@ -8741,6 +8725,7 @@ dependencies = [
  "events",
  "gents",
  "gents-lean-contract",
+ "gents-migration",
  "gents-protocol",
  "identity",
  "p2p",
@@ -8810,6 +8795,21 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "gents-migration"
+version = "0.9.0"
+dependencies = [
+ "anyhow",
+ "defra-node",
+ "gents-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -12491,17 +12491,6 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "wasmtime",
-]
-
-[[package]]
-name = "lens_sdk"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "625120ee4d0acf03ce8cefd2b6223aae4907c113c3c9da96e7a91393c5578836"
-dependencies = [
- "byteorder",
- "serde",
- "serde_json",
 ]
 
 [[package]]

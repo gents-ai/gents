@@ -12,7 +12,6 @@ use crate::completion_factory::loop_config;
 use crate::config::AgentBehavior;
 use crate::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
-use crate::schema::ensure_schemas;
 use crate::tool_surface::{self, ToolRuntimeContext};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,16 +34,8 @@ pub async fn run_openai_oneshot_with_tools(
     extra_tools: Vec<Box<dyn ToolDyn>>,
     prompt: &str,
 ) -> Result<OneshotRunResult> {
-    ensure_schemas(node.as_ref()).await?;
-    // Single sanctioned migration entry point: run the FULL set so the oneshot
-    // path can never drift on which migrations have run (e.g. the `agent_did`
-    // scope key that `ToolCallLifecycle::load` selects on an upgraded DB).
+    // Single schema entry point: baseline + chain + lineage verification.
     crate::migration::ensure_all_runtime_migrations(node.clone()).await?;
-    crate::migration::backfill_agent_request_terminal_durability(
-        node.as_ref(),
-        behavior.agent_did(),
-    )
-    .await?;
 
     let api_key = behavior.completion_client_api_key()?;
     let tool_runtime =

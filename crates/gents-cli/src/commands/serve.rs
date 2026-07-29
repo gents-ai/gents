@@ -8,8 +8,8 @@ use anyhow::{Context, Result};
 use axum::http::Uri;
 use gents::defra_node::EmbeddedNode;
 use gents::{
-    ensure_runtime_schemas, load_macos_keychain_identity, load_macos_secure_enclave_identity,
-    AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, ProcessLifecycleObserver,
+    load_macos_keychain_identity, load_macos_secure_enclave_identity, AgentIdentity,
+    DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, ProcessLifecycleObserver,
     ProcessLifecycleState, ToolCeiling,
 };
 use serde_json::{json, Value};
@@ -393,10 +393,7 @@ pub(crate) async fn serve(mut args: ServeArgs) -> Result<()> {
             .await
             .context("building embedded DefraDB node")?,
     );
-    ensure_runtime_schemas(node.as_ref()).await?;
-    // Single sanctioned migration entry point: run the FULL set so the CLI
-    // `server` path can never drift from the daemon/desktop hosts on which
-    // migrations have run.
+    // Single schema entry point shared with daemon/desktop hosts.
     gents::migration::ensure_all_runtime_migrations(node.clone()).await?;
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
     // The host's window onto reconciliation: every published generation's

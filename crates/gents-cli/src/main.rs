@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::Parser;
 use gents::defra_node::{EmbeddedNode, NodeBuilder, StorageBackend};
-use gents::ensure_runtime_schemas;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -586,14 +585,12 @@ pub(crate) async fn resolve_config_access(
                     format!("building embedded DefraDB node from {}", data_dir.display())
                 })?,
         );
-        if ensure_local_schemas {
-            ensure_runtime_schemas(&node_arc).await?;
-        }
-        // Single sanctioned migration entry point: run the FULL set so offline
-        // config diff/apply/export/subagent paths against an upgraded DB never
-        // drift on which migrations have run (e.g. the `agent_did` scope key that
-        // `ToolCallLifecycle::load` selects, or description/summary from #377).
-        // Idempotent check-then-add, so the cost is bounded per invocation.
+        // Single schema entry point (baseline + chain + lineage verify). Always
+        // runs — including when ensure_local_schemas is false — so absent
+        // collections are bootstrapped rather than rejected as UnknownLineage.
+        // `ensure_local_schemas` is retained as a call-site flag for documentation
+        // only; both paths share one lineage.
+        let _ = ensure_local_schemas;
         gents::migration::ensure_all_runtime_migrations(node_arc.clone()).await?;
         // Unwrap the Arc: at this point the only live Arc is node_arc itself, so
         // try_unwrap always succeeds. The unwrap_or_else fallback is unreachable

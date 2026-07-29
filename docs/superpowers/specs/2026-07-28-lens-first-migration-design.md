@@ -1,7 +1,8 @@
 # Lens-first migration system
 
 **Date:** 2026-07-28 (revised 2026-07-29 after design review)
-**Status:** Approved design, pre-implementation
+**Status:** Phase A landing — `crates/gents-migration` ships baseline + zero steps;
+  legacy `migration.rs` / lens crates deleted. Phases B–D remain.
 **Replaces:** `crates/gents/src/migration.rs` (5,161 lines) and both legacy lens crates
 
 ## Problem
@@ -505,3 +506,110 @@ the rest are correctness hazards gents designs around:
 7. Minor: two coexisting transform-ID schemes (`set_migration`'s sha256
    pseudo-CID vs `add_lens`'s real IPLD CID); txn-path history cache keyed by
    collection ID only (stale after version switch).
+
+## 8. Design review amendments (2026-07-29, second pass)
+
+Amendments locked before Phase A implementation. They do not change the
+architecture; they close underspecified seams.
+
+### 8.1 Baseline pins live in the registry
+
+Post-baseline steps alone cannot police a zero-step cutover. The registry
+carries an explicit baseline table:
+
+```rust
+struct BaselineCollection {
+    name: &'static str,
+    sdl: &'static str,
+    /// Pinned root VersionID. `None` only during Phase A authoring, before
+    /// the chain-replay test has frozen the IDs; production registries ship
+    /// `Some`.
+    expected_version: Option<&'static str>,
+    expected_state: CollectionExpectation,
+}
+```
+
+With zero steps, the engine still verifies every managed collection against
+this table. Multi-version DAGs (legacy field-presence migrations) are
+`UnknownLineage` / `ForeignVersion`.
+
+### 8.2 Activate-before-next-step is a pin-stability invariant
+
+`patch_collection` updates in-memory `schema_heads` to the new version even
+when inactive; restart reconstruction uses the **active** version as head.
+Deriving the next step's destination CID over a complete-but-inactive
+intermediate therefore diverges across crash/resume.
+
+**Invariant:** every `PatchVersioned` step reaches `activate` before any later
+step is considered. Crash windows never include "next step's CID derived
+while a later complete-inactive version is the in-memory head." Lean encodes
+this; conformance injects a crash after inactive-patch, restarts, and applies
+the *next* step only after activation.
+
+### 8.3 `CollectionExpectation` normalization
+
+Verification compares a pure normalization of the persisted descriptor:
+
+**Include (sorted where order is not schema-significant):**
+- `Name`, `VersionID`, `CollectionID`, `IsActive`
+- fields sorted by name: `Name`, kind, CRDT, relation, default, size, immutable
+- indexes (all classes), policy, embeddings / downsample
+- branchable / materialized / embedded-only flags
+- `PreviousVersion.{source, transform}`
+
+**Exclude:** `root_id`, process caches, anything runtime-derived.
+
+Digest = stable hash of the normalized JSON. Field-name-only expectations are
+allowed as a Phase A subset when full digests are not yet frozen.
+
+### 8.4 Transform ID authoring rules
+
+Pins use the `set_migration` sha256-pseudo-CID over **bytes** modules
+(`LensModule::from_bytes`). Path-based and bytes-based configs hash
+differently. P2P may inject real IPLD CIDs via `add_with_id` — those are not
+registry pins. Authoring and production both use `from_bytes` only.
+
+### 8.5 Cache finding (accuracy)
+
+On pin `8eba3d5` the migration cache key is already
+`"{collection_id}:{target_version_id}"`; activation changes the key. The
+remaining poison is same-version transform attach after an early read
+(auto-activate → read → `set_migration`). Attach-first + inactive patch
+avoids that window. §7.3 still wants invalidation on `set_migration`.
+
+### 8.6 Inverse lenses and rolling upgrades
+
+Forward transforms are required on every lens step. Inverse is optional in
+Phase A–B. Until §7.2 (unknown-version pass-through) lands, rolling upgrades
+must promote older nodes promptly — documents stamped beyond a node's known
+chain hard-error on Rust reads.
+
+### 8.7 Cross-collection / relation ordering
+
+One collection per step. A step that adds a relation field requires the peer
+collection to already exist at its pinned version. The engine rejects relation
+targets that are missing or not yet at their pin; authors order the registry
+accordingly.
+
+### 8.8 Post-activation repair
+
+Activation commits before reindex. Repair phase on the next `ensure` pass:
+re-call `set_active_collection_version(pin)` (idempotent; re-triggers
+reindex) and/or `materialize_collection` once upstream. No gents-side reindex
+implementation.
+
+### 8.9 Ship matrix
+
+| Phase | Ships | Upstream gate |
+| --- | --- | --- |
+| **A** (this PR) | `gents-migration` crate; baseline registry (zero steps); unbypassable `ensure_migrations`; delete legacy `migration.rs` + lenses; Lean model + conformance; multi-version → hard error | none |
+| **B** | First real `PatchVersioned` / lens step; inactive+fields lock test | inactive field-add behavior locked |
+| **C** | Eager materialize driver | §7.1 materialize + identity restamp |
+| **D** | Safe mixed-version fleet reads | §7.2 unknown-version pass-through |
+
+### 8.10 Feature-invariant baseline
+
+`agent-memory` no longer filters schema registration. `AgentMemory` always
+registers; when the feature is off the collection is simply unused. Partial
+`CONFIG_BOOTSTRAP` registration is removed — `gents init` uses the full
+baseline via `ensure_migrations`.
