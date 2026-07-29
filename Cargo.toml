@@ -35,7 +35,6 @@ default-members = [
     "crates/gents-desktop-bridge",
     "crates/gents-desktop-core",
     "crates/gents-migration",
-    "crates/gents-lenses/fixture_add_label",
     "crates/gents-protocol",
     "crates/gents-schemas",
 ]
