@@ -28,7 +28,7 @@ use serde_json::{json, Value};
 
 #[path = "../src/admission/slot_accounting.rs"]
 mod admission_slot_accounting;
-#[path = "../src/lean_vocab_test.rs"]
+#[path = "../src/lean_vocab_test/support.rs"]
 mod lean_vocab_test;
 mod support;
 

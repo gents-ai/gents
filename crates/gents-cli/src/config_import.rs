@@ -22,7 +22,7 @@ use crate::{
 };
 
 #[cfg(test)]
-#[path = "../../gents/src/lean_vocab_test.rs"]
+#[path = "../../gents/src/lean_vocab_test/support.rs"]
 mod lean_vocab_test;
 
 const CONFIG_IMPORT_BATCH_SIZE: usize = 50;

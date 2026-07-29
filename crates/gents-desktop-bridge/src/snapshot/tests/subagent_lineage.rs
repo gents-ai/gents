@@ -1,4 +1,4 @@
-#[path = "../../../../../crates/gents/src/lean_vocab_test.rs"]
+#[path = "../../../../../crates/gents/src/lean_vocab_test/support.rs"]
 mod lean_vocab_test;
 
 use crate::types::{SubagentEdgeView, SubagentNodeView, SubagentTreeView};
