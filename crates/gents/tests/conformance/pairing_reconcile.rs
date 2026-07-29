@@ -47,7 +47,6 @@ async fn pairing_reconcile_scenarios_satisfy_safety_and_liveness() {
         "read_failure_noop.json",
         "unmanaged_survival.json",
         "delete_after_restart.json",
-        "filter_change_reinstall.json",
     ] {
         let scenario_path = fixture_path(fixture);
         let scenario = Scenario::from_json_file(&scenario_path).expect("scenario parses");

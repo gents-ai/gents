@@ -18,6 +18,6 @@
     { "op": "Reconcile", "node": "A" },
     { "op": "OperatorDelete", "node": "A", "peer": "B" },
     { "op": "Reconcile", "node": "A" },
-    { "op": "WaitForConvergence", "timeout_secs": 15 }
+    { "op": "WaitForConvergence" }
   ]
 }
