@@ -76,6 +76,14 @@ use uuid::Uuid;
 
 type FleetShimWebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+fn require_live_gate(gate: &str) -> Result<()> {
+    anyhow::ensure!(
+        std::env::var(gate).as_deref() == Ok("1"),
+        "set {gate}=1 and pass --ignored to run this fleet live qualification"
+    );
+    Ok(())
+}
+
 const P2P_LOOPBACK_ARGS: &[&str] = &[
     "--p2p-bind-addr",
     "127.0.0.1",
@@ -217,10 +225,7 @@ struct TranscriptToolExchange {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
 async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
-    if std::env::var("GENTS_LIVE_OPENAI").as_deref() != Ok("1") {
-        tracing::info!("GENTS_LIVE_OPENAI != 1; skipping fleet live e2e");
-        return Ok(());
-    }
+    require_live_gate("GENTS_LIVE_OPENAI")?;
 
     let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
         .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT"))
@@ -392,10 +397,7 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "known failing: fresh-store 19-node mesh storm tracked in #798"]
 async fn nineteen_process_release_acceptance_live() -> Result<()> {
-    if std::env::var("GENTS_RELEASE_ACCEPTANCE").as_deref() != Ok("1") {
-        tracing::info!("GENTS_RELEASE_ACCEPTANCE != 1; skipping 19-process release acceptance");
-        return Ok(());
-    }
+    require_live_gate("GENTS_RELEASE_ACCEPTANCE")?;
 
     let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
         .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT"))
@@ -1960,10 +1962,7 @@ fn is_workflow_terminal(state: Option<&str>) -> bool {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
 async fn five_process_workflow_orchestration_live() -> Result<()> {
-    if std::env::var("GENTS_LIVE_OPENAI").as_deref() != Ok("1") {
-        tracing::info!("GENTS_LIVE_OPENAI != 1; skipping fleet workflow e2e");
-        return Ok(());
-    }
+    require_live_gate("GENTS_LIVE_OPENAI")?;
     let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
         .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT"))
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
@@ -2708,10 +2707,7 @@ async fn assert_child_materialized_nowhere(
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
 async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
-    if std::env::var("GENTS_LIVE_OPENAI").as_deref() != Ok("1") {
-        tracing::info!("GENTS_LIVE_OPENAI != 1; skipping fleet workflow D10 e2e");
-        return Ok(());
-    }
+    require_live_gate("GENTS_LIVE_OPENAI")?;
     let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
         .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT"))
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
@@ -2940,10 +2936,7 @@ async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
 async fn five_process_workflow_d10_materialized_failure_live() -> Result<()> {
-    if std::env::var("GENTS_LIVE_OPENAI").as_deref() != Ok("1") {
-        tracing::info!("GENTS_LIVE_OPENAI != 1; skipping fleet workflow D10 materialized e2e");
-        return Ok(());
-    }
+    require_live_gate("GENTS_LIVE_OPENAI")?;
     let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
         .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT"))
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
@@ -3168,10 +3161,7 @@ async fn five_process_workflow_d10_materialized_failure_live() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
 async fn five_process_workflow_synthesizer_deleted_midrun_live() -> Result<()> {
-    if std::env::var("GENTS_LIVE_OPENAI").as_deref() != Ok("1") {
-        tracing::info!("GENTS_LIVE_OPENAI != 1; skipping fleet workflow mid-run-delete e2e");
-        return Ok(());
-    }
+    require_live_gate("GENTS_LIVE_OPENAI")?;
     let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
         .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT"))
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
