@@ -195,6 +195,16 @@ collection resolution, and the SelfConfig conformance fence. A conformance
 test asserts baseline + chain ≡ current SDL, field for field, so the two
 representations cannot drift.
 
+**Network join semantics.** Because every node — fresh or long-lived — arrives
+at the same version CIDs, new nodes join the P2P network with an identical
+version DAG: replicated documents' version stamps always resolve in the
+receiver's history, and lens edges migrate them in either direction. The only
+mixed-version caveat is a node running an *older binary* (shorter chain)
+receiving documents from a newer peer: the stamp is beyond its known chain,
+which Go passes through unchanged but the Rust port currently fails on
+(upstream issue 2, §7). Until that lands, rolling upgrades should promote
+older nodes promptly; this is an upgrade-window concern, not a join barrier.
+
 ### Pre-baseline databases fail loudly
 
 If a collection's versions include none of the known pins, `ensure_migrations`
