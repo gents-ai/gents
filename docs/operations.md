@@ -11,8 +11,8 @@ major/minor, and `latest` tags. Pin the published digest instead of a tag when
 the deployment must be byte-for-byte immutable.
 
 ```bash
-docker pull ghcr.io/source-inc/gents:v0.9.0
-docker run --rm ghcr.io/source-inc/gents:v0.9.0 version
+docker pull ghcr.io/source-inc/gents:v0.10.0
+docker run --rm ghcr.io/source-inc/gents:v0.10.0 version
 ```
 
 The image runs as the non-root `gents` user. Persist its default home across
@@ -22,13 +22,13 @@ container replacements with a named volume:
 docker volume create gents-home
 docker run --rm -it \
   -v gents-home:/home/gents/.gents \
-  ghcr.io/source-inc/gents:v0.9.0 \
+  ghcr.io/source-inc/gents:v0.10.0 \
   init --inference-url http://host.docker.internal:8000/v1 --model-name MODEL
 
 docker run --rm -it \
   -v gents-home:/home/gents/.gents \
   -p 9191:9191 \
-  ghcr.io/source-inc/gents:v0.9.0 \
+  ghcr.io/source-inc/gents:v0.10.0 \
   server --http-addr 0.0.0.0 --no-codex-shim
 ```
 

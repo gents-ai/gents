@@ -6,6 +6,8 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+## 0.10.0 - 2026-07-29
+
 ### Bridge contract
 
 - 0.5 (additive): merged #871 inference onboarding —
@@ -70,7 +72,7 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 | Tag        | Bridge crate | npm packages | contract_version | Notes                                         |
 | ---------- | ------------ | ------------ | ---------------- | --------------------------------------------- |
-| unreleased | 0.9.0        | 0.9.0        | 0.5              | Reusable desktop packages implemented in #878 |
+| v0.10.0    | 0.10.0       | 0.10.0       | 0.5              | Reusable desktop packages implemented in #878 |
 
 ## 0.8.0
 
