@@ -507,6 +507,12 @@ pub(crate) struct ServeArgs {
         help = "Operator safety cap that clamps document tool selection at runtime"
     )]
     pub(crate) tool_ceiling: Option<ToolCeilingArg>,
+    #[arg(
+        long,
+        default_value_t = 10,
+        help = "Maximum foreground Bash command duration in seconds"
+    )]
+    pub(crate) command_timeout_secs: u64,
     #[arg(long = "cli-tool")]
     pub(crate) cli_tools: Vec<String>,
     #[arg(
@@ -3146,6 +3152,15 @@ mod tests {
         assert_eq!(args.p2p_max_concurrent_dag_fetches, Some(12));
         assert_eq!(args.p2p_rate_limit_burst, Some(654));
         assert_eq!(args.p2p_rate_limit_rate, Some(98.5));
+    }
+
+    #[test]
+    fn server_command_timeout_defaults_and_parses() {
+        assert_eq!(parse_server(&[]).command_timeout_secs, 10);
+        assert_eq!(
+            parse_server(&["--command-timeout-secs", "120"]).command_timeout_secs,
+            120
+        );
     }
 
     #[test]

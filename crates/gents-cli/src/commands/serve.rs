@@ -323,6 +323,11 @@ pub(crate) async fn serve(mut args: ServeArgs) -> Result<()> {
                 .expect("readwrite root resolved"),
         ),
     };
+    tool_ceiling = tool_ceiling.with_command_timeout_secs(args.command_timeout_secs);
+    tracing::info!(
+        command_timeout_secs = args.command_timeout_secs.max(1),
+        "configured foreground command timeout ceiling"
+    );
     for cli_tool_arg in &args.cli_tools {
         tool_ceiling = tool_ceiling.with_cli_tool(parse_cli_tool_arg(cli_tool_arg)?);
     }

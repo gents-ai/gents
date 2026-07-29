@@ -352,27 +352,50 @@ impl ToolSetBuilder {
         self
     }
 
-    pub fn bash_read_only(mut self) -> Self {
+    pub fn bash_read_only(self) -> Self {
+        self.bash_read_only_with_timeout(Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS))
+    }
+
+    pub fn bash_read_only_with_timeout(mut self, timeout: Duration) -> Self {
         self.tools.push(NativeTool::BashReadOnly {
-            timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+            timeout,
             allowlist: default_read_only_commands(),
             policy: CommandExecutionPolicy::read_only(default_read_only_commands()),
         });
         self
     }
 
-    pub fn bash_read_only_with_policy(mut self, policy: CommandExecutionPolicy) -> Self {
+    pub fn bash_read_only_with_policy(self, policy: CommandExecutionPolicy) -> Self {
+        self.bash_read_only_with_policy_and_timeout(
+            policy,
+            Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+        )
+    }
+
+    pub fn bash_read_only_with_policy_and_timeout(
+        mut self,
+        policy: CommandExecutionPolicy,
+        timeout: Duration,
+    ) -> Self {
         self.tools.push(NativeTool::BashReadOnly {
-            timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+            timeout,
             allowlist: default_read_only_commands(),
             policy,
         });
         self
     }
 
-    pub fn bash_unrestricted(mut self, root: impl Into<PathBuf>) -> Self {
+    pub fn bash_unrestricted(self, root: impl Into<PathBuf>) -> Self {
+        self.bash_unrestricted_with_timeout(root, Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS))
+    }
+
+    pub fn bash_unrestricted_with_timeout(
+        mut self,
+        root: impl Into<PathBuf>,
+        timeout: Duration,
+    ) -> Self {
         self.tools.push(NativeTool::BashUnrestricted {
-            timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+            timeout,
             root: root.into(),
             policy: CommandExecutionPolicy::write_capable(),
         });
@@ -380,12 +403,25 @@ impl ToolSetBuilder {
     }
 
     pub fn bash_unrestricted_with_policy(
-        mut self,
+        self,
         root: impl Into<PathBuf>,
         policy: CommandExecutionPolicy,
     ) -> Self {
+        self.bash_unrestricted_with_policy_and_timeout(
+            root,
+            policy,
+            Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+        )
+    }
+
+    pub fn bash_unrestricted_with_policy_and_timeout(
+        mut self,
+        root: impl Into<PathBuf>,
+        policy: CommandExecutionPolicy,
+        timeout: Duration,
+    ) -> Self {
         self.tools.push(NativeTool::BashUnrestricted {
-            timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+            timeout,
             root: root.into(),
             policy,
         });
