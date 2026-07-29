@@ -335,37 +335,54 @@ pub async fn run_pairing_reconciler(
 
     let admin = EmbeddedRemoteP2pAdmin::new(node.clone());
     let store = GraphqlPairingStateStore::new(node.clone(), identity);
-    let mut subscription = node.subscribe(&[EventName::Update]);
+    let subscription = node.subscribe(&[EventName::Update]);
+
+    run_pairing_reconciler_loop(&admin, &store, subscription, &cancel).await;
+    Ok(())
+}
+
+async fn run_pairing_reconciler_loop(
+    admin: &dyn RemoteP2pAdmin,
+    store: &dyn PairingStateStore,
+    mut subscription: events::Subscription,
+    cancel: &CancellationToken,
+) {
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut replay_connections = BTreeMap::new();
     let mut failing_peers = BTreeSet::<String>::new();
 
-    if !sweep_pairings_until_cancelled(
-        &admin,
-        &store,
+    // A transient top-level read failure during the first sweep is no more
+    // terminal than one during a recurring sweep. The interval's first tick is
+    // immediately ready, so logging here preserves the prompt startup retry
+    // without introducing a separate backoff path. Unlike the registry and
+    // endpoint heartbeat daemons, do not consume that first tick before this
+    // sweep: it is the retry fence if startup hits a transient store error.
+    if !sweep_pairings_logged_until_cancelled(
+        admin,
+        store,
         &mut replay_connections,
         &mut failing_peers,
-        &cancel,
+        cancel,
     )
-    .await?
+    .await
     {
-        return Ok(());
+        return;
     }
 
     loop {
         tokio::select! {
             biased;
-            _ = cancel.cancelled() => return Ok(()),
+            _ = cancel.cancelled() => return,
             _ = interval.tick() => {
                 if !sweep_pairings_logged_until_cancelled(
-                    &admin,
-                    &store,
+                    admin,
+                    store,
                     &mut replay_connections,
                     &mut failing_peers,
-                    &cancel,
+                    cancel,
                 ).await {
-                    return Ok(());
+                    return;
                 }
             }
             message = subscription.recv() => {
@@ -378,13 +395,13 @@ pub async fn run_pairing_reconciler(
                     tracing::warn!(dropped, "pairing reconciler update subscription dropped messages");
                 }
                 if !sweep_pairings_logged_until_cancelled(
-                    &admin,
-                    &store,
+                    admin,
+                    store,
                     &mut replay_connections,
                     &mut failing_peers,
-                    &cancel,
+                    cancel,
                 ).await {
-                    return Ok(());
+                    return;
                 }
             }
         }
@@ -397,24 +414,8 @@ pub async fn run_pairing_reconciler(
 /// peers. Awaiting the sweep directly therefore multiplies shutdown latency by
 /// the number of peers. Dropping the sweep future on cancellation preempts the
 /// current admin wait and skips the remaining peer loop; the outer runtime can
-/// then join this task promptly.
-async fn sweep_pairings_until_cancelled(
-    admin: &dyn RemoteP2pAdmin,
-    store: &dyn PairingStateStore,
-    replay_connections: &mut BTreeMap<String, bool>,
-    failing_peers: &mut BTreeSet<String>,
-    cancel: &CancellationToken,
-) -> Result<bool> {
-    tokio::select! {
-        biased;
-        _ = cancel.cancelled() => Ok(false),
-        result = sweep_pairings(admin, store, replay_connections, failing_peers) => {
-            result?;
-            Ok(true)
-        }
-    }
-}
-
+/// then join this task promptly. Sweep errors are logged and remain nonterminal;
+/// `false` means only that cancellation won the biased boundary.
 async fn sweep_pairings_logged_until_cancelled(
     admin: &dyn RemoteP2pAdmin,
     store: &dyn PairingStateStore,

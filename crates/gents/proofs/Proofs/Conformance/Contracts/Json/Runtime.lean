@@ -56,6 +56,23 @@ def pairingReconcileShutdownBoundaryCaseJson
       ++ boolString witness.shutdownJoinBounded
     ++ "}"
 
+def pairingReconcileSweepRetryBoundaryCaseJson
+    (witness : PairingReconcileSweepRetryBoundaryCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"supervisor\":" ++ jsonString witness.supervisor ++ ","
+    ++ "\"work_class\":" ++ jsonString witness.workClass ++ ","
+    ++ "\"boundary\":" ++ jsonString witness.boundary ++ ","
+    ++ "\"failure_scope\":" ++ jsonString witness.failureScope ++ ","
+    ++ "\"failure_terminal\":"
+      ++ boolString witness.failureTerminal ++ ","
+    ++ "\"retry_trigger\":" ++ jsonString witness.retryTrigger ++ ","
+    ++ "\"cancellation_prioritized\":"
+      ++ boolString witness.cancellationPrioritized ++ ","
+    ++ "\"convergence_retried\":"
+      ++ boolString witness.convergenceRetried
+    ++ "}"
+
 def pairingReconcileSweepSchedulingCaseJson
     (witness : PairingReconcileSweepSchedulingCase) : String :=
   "{"

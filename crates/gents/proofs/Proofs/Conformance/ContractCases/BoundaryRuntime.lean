@@ -310,6 +310,28 @@ def pairingReconcileShutdownBoundaryCases :
     }
   ]
 
+/-- The single-peer `PairingReconcile` machine models read failure as a
+    phase-preserving transition, but the runtime also owns the daemon boundary
+    around whole-sweep enumeration. This witness fences that refinement: an
+    initial top-level enumeration failure must not terminate the reconciler,
+    the already-ready first interval tick retries convergence, and shutdown
+    remains the prioritized supervisor outcome. Rust exercises this witness in
+    `pairing_reconciler_retries_initial_enumeration_failure_then_cancels_cleanly`.
+    -/
+def pairingReconcileSweepRetryBoundaryCases :
+    List PairingReconcileSweepRetryBoundaryCase :=
+  [ { name := "initial_top_level_sweep_failure_retries_without_terminating_reconciler"
+    , supervisor := "pairingReconciler"
+    , workClass := "p2pReconcileSweep"
+    , boundary := "pairingReconcileSupervisorBoundary"
+    , failureScope := "topLevelSweepEnumeration"
+    , failureTerminal := false
+    , retryTrigger := "immediateFirstIntervalTick"
+    , cancellationPrioritized := true
+    , convergenceRetried := true
+    }
+  ]
+
 /-- The single-peer `PairingReconcile` machine does not model how a runtime
     sweep schedules several independent peers. This witness fences that
     refinement: slow discovery/dial preparation is bounded and concurrent, so

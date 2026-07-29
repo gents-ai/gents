@@ -338,6 +338,11 @@ fn pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep() {
 }
 
 #[test]
+fn pairing_reconcile_top_level_sweep_failure_is_nonterminal_and_retried() {
+    pairing_reconcile::pairing_reconcile_top_level_sweep_failure_is_nonterminal_and_retried();
+}
+
+#[test]
 fn pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer() {
     pairing_reconcile::pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer();
 }

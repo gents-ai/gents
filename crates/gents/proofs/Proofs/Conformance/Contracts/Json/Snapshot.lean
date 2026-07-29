@@ -96,6 +96,10 @@ def snapshotJson : String :=
       ++ jsonArray
         (pairingReconcileShutdownBoundaryCases.map
           pairingReconcileShutdownBoundaryCaseJson) ++ ","
+    ++ "\"pairing_reconcile_sweep_retry_boundary_cases\":"
+      ++ jsonArray
+        (pairingReconcileSweepRetryBoundaryCases.map
+          pairingReconcileSweepRetryBoundaryCaseJson) ++ ","
     ++ "\"pairing_reconcile_sweep_scheduling_cases\":"
       ++ jsonArray
         (pairingReconcileSweepSchedulingCases.map

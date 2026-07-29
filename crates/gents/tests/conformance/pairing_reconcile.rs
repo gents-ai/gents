@@ -9,7 +9,9 @@ use gents::agent::p2p_reconcile::{
 };
 
 use crate::lean_vocab_test::{
-    lean_pairing_reconcile_shutdown_boundary_cases, lean_pairing_reconcile_sweep_scheduling_cases,
+    lean_pairing_reconcile_shutdown_boundary_cases,
+    lean_pairing_reconcile_sweep_retry_boundary_cases,
+    lean_pairing_reconcile_sweep_scheduling_cases,
 };
 use crate::support::pairing_conformance::invariants::{
     check_liveness, check_safety, ObservedSnapshot,
@@ -291,6 +293,27 @@ pub(super) fn pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep() {
     assert!(case.current_admin_future_dropped);
     assert!(case.remaining_peers_skipped);
     assert!(case.shutdown_join_bounded);
+}
+
+pub(super) fn pairing_reconcile_top_level_sweep_failure_is_nonterminal_and_retried() {
+    // The generated row pins the Lean-owned boundary vocabulary. The production
+    // loop behavior is exercised by
+    // `agent::p2p_reconcile::engine::tests::pairing_reconciler_retries_initial_enumeration_failure_then_cancels_cleanly`.
+    let cases = lean_pairing_reconcile_sweep_retry_boundary_cases();
+    assert_eq!(cases.len(), 1);
+    let case = &cases[0];
+    assert_eq!(
+        case.name,
+        "initial_top_level_sweep_failure_retries_without_terminating_reconciler"
+    );
+    assert_eq!(case.supervisor, "pairingReconciler");
+    assert_eq!(case.work_class, "p2pReconcileSweep");
+    assert_eq!(case.boundary, "pairingReconcileSupervisorBoundary");
+    assert_eq!(case.failure_scope, "topLevelSweepEnumeration");
+    assert!(!case.failure_terminal);
+    assert_eq!(case.retry_trigger, "immediateFirstIntervalTick");
+    assert!(case.cancellation_prioritized);
+    assert!(case.convergence_retried);
 }
 
 pub(super) fn pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer() {

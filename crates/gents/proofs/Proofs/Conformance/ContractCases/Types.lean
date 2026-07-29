@@ -191,6 +191,18 @@ structure PairingReconcileShutdownBoundaryCase where
   shutdownJoinBounded : Bool
   deriving Repr
 
+structure PairingReconcileSweepRetryBoundaryCase where
+  name : String
+  supervisor : String
+  workClass : String
+  boundary : String
+  failureScope : String
+  failureTerminal : Bool
+  retryTrigger : String
+  cancellationPrioritized : Bool
+  convergenceRetried : Bool
+  deriving Repr
+
 structure PairingReconcileSweepSchedulingCase where
   name : String
   supervisor : String

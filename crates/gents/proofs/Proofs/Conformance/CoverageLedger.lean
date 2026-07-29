@@ -612,6 +612,11 @@ def caseCoverage : List CoverageEntry :=
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "pairing_reconcile_cases"
+      "PairingReconcileSweepRetryBoundaryCases"
+      "conformance::pairing_reconcile_top_level_sweep_failure_is_nonterminal_and_retried")
+      "pairing-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pairing_reconcile_cases"
       "PairingReconcileSweepSchedulingCases"
       "conformance::pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer")
       "pairing-reconcile" [Surface.runtimeInternal]
