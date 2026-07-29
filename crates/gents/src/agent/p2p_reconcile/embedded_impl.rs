@@ -302,7 +302,7 @@ mod tests {
     use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
 
     use super::*;
-    use crate::agent::p2p_reconcile::templates::SUBAGENT_HOST_TEMPLATE;
+    use crate::agent::p2p_reconcile::templates::{Scope, SUBAGENT_HOST_TEMPLATE};
     use crate::agent::p2p_reconcile::{resolve_template, scope_filter, FilterPredicate};
     use crate::defra_node::P2PConfig;
     use crate::ensure_runtime_schemas;
@@ -609,6 +609,8 @@ mod tests {
             .connect(&remote_addresses)
             .await
             .expect("connect remote");
+        wait_for_active_peer(&local_admin).await;
+        wait_for_active_peer(&remote_admin).await;
 
         for template in super::super::templates::builtin_templates() {
             if template.collections.is_empty() {
@@ -620,6 +622,28 @@ mod tests {
                 "did:key:z6MkPeerForFilterValidation",
                 "did:key:z6MkSelfForFilterValidation",
             );
+            match &template.scope {
+                Scope::Unscoped => assert!(
+                    filters.is_empty(),
+                    "unscoped template '{}' unexpectedly has filters",
+                    template.id
+                ),
+                Scope::PerCollection(_) => {
+                    let filter_collections =
+                        filters.keys().map(String::as_str).collect::<BTreeSet<_>>();
+                    let template_collections = template
+                        .collections
+                        .iter()
+                        .copied()
+                        .collect::<BTreeSet<_>>();
+                    assert_eq!(
+                        filter_collections, template_collections,
+                        "per-collection template '{}' must filter every collection",
+                        template.id
+                    );
+                }
+                Scope::PeerDid { .. } => {}
+            }
             local_admin
                 .add_replicator(
                     &remote_addresses,

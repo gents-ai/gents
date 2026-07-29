@@ -182,8 +182,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_contains_every_agent_schema() {
-        assert_eq!(ALL.len(), 33);
+    fn all_contains_every_agent_schema_file() {
+        let schema_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/agent");
+        let schema_file_count = std::fs::read_dir(schema_dir)
+            .expect("read agent schema directory")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry.path().extension().and_then(|ext| ext.to_str()) == Some("graphql")
+            })
+            .count();
+
+        assert_eq!(ALL.len(), schema_file_count);
     }
 
     #[test]

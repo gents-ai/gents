@@ -258,6 +258,12 @@ Clients render an agent picker from it and address
 `AgentRequest`s to the picked `agent_did`. Existing `conversation` pairings
 are unchanged; re-pair with a machine QR to opt in.
 
+> **Upgrade note:** A home initialized with the pre-fix `AgentDirectoryEntry`
+> schema retains mutable `source_did`; DefraDB cannot safely change an existing
+> field to immutable. Upgrading the binary alone does not repair that home.
+> Recreate the home (or manually recreate this derived collection) before using
+> a `machine` pairing. Fresh homes are unaffected.
+
 ## Admin filtered replication
 
 The low-level `p2p admin replicators add` command accepts `--filter` to express
