@@ -7,7 +7,6 @@
 //! cycle back to desktop-core.
 
 use std::collections::BTreeSet;
-use std::time::Duration;
 
 use anyhow::{bail, Result};
 use gents::agent::p2p_reconcile::templates::{FilterPredicate, PairingFilters};
@@ -150,12 +149,6 @@ impl Harness {
                 self.record_observation_with_read_failed(read_failed)
                     .await?;
             }
-            Action::ReadFailure { node } => {
-                self.node_mut(node)?.drop_next_reconcile = true;
-                let read_failed = self.reconcile_node(node).await?.read_failed();
-                self.record_observation_with_read_failed(read_failed)
-                    .await?;
-            }
             Action::PreseedActual {
                 node,
                 collections,
@@ -169,10 +162,6 @@ impl Harness {
                 node.actual_connected = *connected;
                 self.record_observation().await?;
             }
-            Action::PeerDisconnected { node } => {
-                self.node_mut(node)?.actual_connected = false;
-                self.record_observation().await?;
-            }
             Action::Drop { node } => {
                 self.node_mut(node)?.drop_next_reconcile = true;
             }
@@ -180,9 +169,8 @@ impl Harness {
                 self.crash_node(node).await?;
                 self.record_observation().await?;
             }
-            Action::WaitForConvergence { timeout_secs } => {
-                self.wait_for_convergence(Duration::from_secs(*timeout_secs))
-                    .await?;
+            Action::WaitForConvergence => {
+                self.wait_for_convergence().await?;
             }
         }
         Ok(())
@@ -213,7 +201,7 @@ impl Harness {
         Ok(ReconcileOutcome::Applied)
     }
 
-    async fn wait_for_convergence(&mut self, _timeout: Duration) -> Result<()> {
+    async fn wait_for_convergence(&mut self) -> Result<()> {
         let snapshot = self.current_snapshot().await?;
         if crate::support::pairing_conformance::invariants::check_liveness(&snapshot) {
             self.history.push(snapshot);
