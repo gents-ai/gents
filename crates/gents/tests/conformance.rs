@@ -466,6 +466,8 @@ mod identity_proptest;
 mod live_overlay;
 #[path = "conformance/manual_run.rs"]
 mod manual_run;
+#[path = "conformance/pairing_invariant_tests.rs"]
+mod pairing_invariant_tests;
 #[path = "conformance/pairing_reconcile.rs"]
 mod pairing_reconcile;
 #[path = "conformance/peer_registry_discovery.rs"]
