@@ -111,41 +111,71 @@ Migration state lives where DefraDB already keeps it: each collection's chain
 of content-addressed version IDs, with lens transforms attached as edges
 (`PreviousVersion.transform`). No gents-side ledger, no field-presence checks.
 
-A migration is authored as data — one **step** in a static registry:
+A migration is authored as data — one **step** in a static registry. Not every
+schema change produces a new version CID (DefraDB applies index, embedding,
+and similar metadata changes in place), and freezing the baseline must not
+make new collections unaddable — so a step is an operation enum, each variant
+with its own pre/post-state expectations:
 
 ```rust
-MigrationStep {
-    id: "2026-07-add-request-priority",   // human identifier, stable
-    collection: "AgentRequest",           // exactly one collection per step
-    patch: r#"[{"op":"add", ...}]"#,      // RFC 6902 collection patch;
-                                          // always includes {"op":"replace",
-                                          // "path":"/IsActive","value":false}
-    lens: Option<LensSpec>,               // embedded wasm + args; None for purely additive changes
-    expected_version: "bafy…",            // pinned CID of the resulting CollectionVersion
-    expected_transform: Option<"…">,      // pinned TransformId when lens is Some
-    expected_fields: &[FieldExpectation], // full post-state: names, kinds, CRDTs
+enum MigrationStep {
+    // Register a collection that did not exist at the baseline. Starts a new
+    // lineage root for that collection (depth 1, no heads).
+    AddCollection {
+        id: &'static str,
+        sdl: &'static str,
+        expected_version: &'static str,        // pinned CID of the created version
+        expected_state: CollectionExpectation, // full post-state (below)
+    },
+    // A versioned change: field additions/renames — anything that mints a
+    // new version CID.
+    PatchVersioned {
+        id: &'static str,                      // e.g. "2026-07-add-request-priority"
+        collection: &'static str,              // exactly one collection per step
+        patch: &'static str,                   // RFC 6902; always includes
+                                               // {"op":"replace","path":"/IsActive","value":false}
+        lens: Option<LensSpec>,                // embedded wasm + args; None if purely additive
+        expected_version: &'static str,        // pinned CID of the resulting version
+        expected_transform: Option<&'static str>, // pinned TransformId when lens is Some
+        expected_state: CollectionExpectation,
+    },
+    // An in-place change: indexes, embeddings, other metadata DefraDB applies
+    // without a new version CID. Must be idempotent; "applied" is decided by
+    // the expectation predicate alone, since no CID moves.
+    PatchInPlace {
+        id: &'static str,
+        collection: &'static str,
+        patch: &'static str,
+        expected_state: CollectionExpectation,
+    },
 }
 ```
 
-### Pins verify lineage; verification covers the rest
+(View support — `AddView` — is added when gents first needs a view; the enum
+makes that a new variant, not a redesign.)
+
+### Pins verify lineage; verification covers everything else
 
 `expected_version` is content-derived, so the engine can locate any database's
 position in the chain by its version IDs and detect drift at the exact step.
-But the CID hashes only added-field lineage — so every step application ends
-with a **state verification** phase that checks what the CID cannot:
+But the CID hashes only added-field lineage — so every step carries a
+`CollectionExpectation`: a **normalized digest of the complete persisted
+collection descriptor** — fields with kinds, CRDTs, relations, defaults,
+sizes, and immutability flags; indexes (all classes); policy; embeddings and
+downsample settings; branchable/materialized/embedded-only flags; and the
+`PreviousVersion` edge including its transform ID — excluding only documented
+runtime-derived values. The SDL-parity test compares this same normalized
+representation, not a bare field list.
 
-- the produced version ID equals `expected_version`;
-- the stored version's fields match `expected_fields` exactly;
-- when the step declares a lens, `PreviousVersion.transform` equals
-  `expected_transform` (transform IDs are content-derived from the lens
-  modules, so this pin is also stable);
-- the intended activation state holds.
+Verification checks the stored descriptor against the expectation and, for
+lens steps, that `PreviousVersion.transform` equals `expected_transform`
+(transform IDs are content-derived from the lens modules, so this pin is also
+stable). Verification failure is a hard, step-attributed error — never a
+warning.
 
-Verification failure is a hard, step-attributed error — never a warning.
+### The safe step sequence, with derived crash position
 
-### The safe step sequence
-
-Each pending step applies as:
+Each pending `PatchVersioned` step applies as:
 
 1. **Attach first** (lens steps only): `set_migration(src=prev pin,
    dst=this pin, lens)`. This creates a placeholder at the pinned destination
@@ -154,19 +184,44 @@ Each pending step applies as:
    The new version is stored, addressable, and *inactive*; the old version
    keeps serving readers. No reader ever observes a version whose lens is
    missing, and the migration cache cannot be poisoned for the new version.
-3. **Verify**: the full state verification above, against the stored (still
+3. **Verify**: the state verification above, against the stored (still
    inactive) version.
 4. **Activate**: `set_active_collection_version(pin)` — a single-transaction
    flip that also changes the read path's cache key and triggers reindexing.
 
-Crash resume is positional: on every run the engine looks for each pinned
-version among **all** stored versions (active or not) — a version stored but
-unverified resumes at step 3; verified but inactive resumes at step 4; a
-missing transform on an applied step is re-attached (`set_migration` is an
-in-place update). This subsumes the legacy system's worst hazard (lens
-registration silently skipped forever) and never re-derives a CID over a
-half-applied state — which also sidesteps the known head-reconstruction
+**Crash position is derived from observable database state, never stored** —
+there is no gents ledger, so the engine cannot know what a previous run
+verified; it re-verifies. A CID being present is also not proof the patch
+ran: `set_migration` creates a *placeholder* at that same pinned CID. The
+observable phases per step:
+
+- destination CID absent → attach (lens steps), then patch;
+- destination present but a **placeholder** → patch inactive;
+- destination **complete and inactive** → verify, then activate;
+- destination **complete and active** → verify, and repair its edge
+  (`set_migration` is an in-place update) if the transform is missing.
+
+Verification is a predicate over *current* state and runs on every pass
+through a step, including for steps applied long ago (cheap descriptor
+comparisons). This subsumes the legacy system's worst hazard — lens
+registration silently skipped forever — and the engine never re-derives a CID
+over a half-applied state, which also sidesteps the known head-reconstruction
 divergence after restarts (§7).
+
+`PatchInPlace` steps have no CID to observe: they are required idempotent,
+and "applied" is exactly "the expectation predicate holds"; the engine
+re-applies the patch when it does not.
+
+**Post-activation repair state.** Activation commits before reindexing
+(`set_active_collection_version` commits its transaction, then reindexes), so
+a reindex failure means "activation durable, post-activation work pending."
+The engine treats this as a distinct recoverable phase: on the next pass the
+step verifies as complete-and-active and the engine re-runs reindex /
+materialization rather than treating the failure as a step failure.
+
+**Serialization.** `ensure_migrations` is serialized per node: a process-wide
+lock guards re-entry (desktop and runtime paths can race within one process),
+and cross-process exclusion rides on the store's single-open lock.
 
 Note: `IsActive: false` combined with field additions is exercised in Go's
 integration suite but not in defradb.rs's; a conformance test locking this
@@ -205,12 +260,21 @@ which Go passes through unchanged but the Rust port currently fails on
 (upstream issue 2, §7). Until that lands, rolling upgrades should promote
 older nodes promptly; this is an upgrade-window concern, not a join barrier.
 
-### Pre-baseline databases fail loudly
+### Unknown state fails loudly — and completely
 
-If a collection's versions include none of the known pins, `ensure_migrations`
-returns `Error::UnknownLineage` with a diagnostic: the database predates the
-migration baseline (or was produced by foreign patches) and requires
-export/import. No silent limping, no partial application over unknown state.
+The engine polices the **entire version DAG** of every managed collection,
+not just the presence of pins. Two rejection classes:
+
+- `Error::UnknownLineage` — none of a collection's versions match a known pin:
+  the database predates the migration baseline (or was produced by foreign
+  patches) and requires export/import.
+- `Error::ForeignVersion` — the lineage is recognized but the DAG contains a
+  version or edge that is neither a pin nor an expected placeholder. A foreign
+  version — even inactive — is not harmless: head/priority reconstruction
+  counts stored versions, so it can change the CIDs derived for every
+  subsequent patch. Rejected before any step applies.
+
+No silent limping, no partial application over unknown state.
 
 ## 2. Crate layout and bootstrap restructure
 
@@ -285,6 +349,14 @@ Upstream work (small, reference implementation exists in Go):
    materialize instead of waiting for organic reads. This also fixes the
    Rust-only bug where reindex leaves index entries and datastore values
    disagreeing.
+3. **Identity materialization for transform-less paths.** Both Go and the
+   Rust pin skip the lensed path entirely when the targeted history contains
+   no transforms (`hasMigrations == false`), so a purely additive chain
+   (`lens: None`) never advances any document's stored version key by
+   iteration alone. `materialize_collection` must therefore also re-stamp the
+   version key for documents whose stored version differs from the active one
+   even when no transform exists on the path — otherwise "all documents at
+   the active version" is unreachable for additive migrations.
 
 Gents' `materialize.rs` is then a thin driver: call the API per collection
 after the chain is current, time-box and resume, and surface progress in
@@ -312,27 +384,35 @@ the driver activates when the API is present. No GraphQL fallback sweep ships.
 ## 5. Lean model
 
 A small `Migration` model in `crates/gents/proofs/`, house style, zero
-`sorry`s. State: per-collection version set with active flag, per-document
-versions, edge set with optional transforms, per-step verification status.
-Transitions: `attach_transform`, `patch_inactive`, `verify`, `activate`,
-`materialize_step`. Theorems:
+`sorry`s. State: per-collection version set (each version complete or
+placeholder, with active flag and descriptor), per-document versions, edge
+set with optional transforms. **Verification is a predicate over current
+state, not a stored fact** — the model has no persisted verification status,
+mirroring the ledger-free engine. Transitions: `attach_transform`,
+`patch_inactive`, `activate` (guarded by the verification predicate),
+`materialize_step`, `patch_in_place`. Theorems:
 
 - **Idempotence** — `ensure` on an ensured state is a no-op.
 - **Convergence** — from any reachable state, including every crash window
-  (placeholder attached but unpatched; version stored but unverified;
-  verified but inactive; transform missing on an applied edge), repeated
-  `ensure` reaches the target: pinned version active, transform attached,
-  verification passed. This theorem forces positional resume and edge repair
-  into existence.
-- **No unverified activation** — `activate` is enabled only after `verify`
-  succeeds for that version; readers therefore never observe an active
-  version whose declared lens is unattached. (This is the ordering blocker,
-  stated as an invariant.)
+  (placeholder attached but unpatched; version stored but not yet
+  activatable; complete but inactive; transform missing on an applied edge;
+  activation durable but post-activation work pending), repeated `ensure`
+  reaches the target: pinned version active, transform attached, expectation
+  predicate holding. This theorem forces derived-position resume and edge
+  repair into existence.
+- **No unverified activation** — `activate` is enabled only in states where
+  the verification predicate holds for that version; readers therefore never
+  observe an active version whose declared lens is unattached. (This is the
+  ordering blocker, stated as an invariant.)
 - **Pin soundness** — a step applies only when the prior state matches its
-  expected predecessor; unknown versions are rejected, never patched over.
-- **Materialization termination** — the count of documents not at the active
-  version strictly decreases per materialization step; interrupt + resume
-  still terminates at "all documents at active version."
+  expected predecessor; unknown or foreign versions are rejected, never
+  patched over.
+- **Materialization termination** — over a **quiescent document snapshot**
+  (no arrivals during the run), the count of documents not at the active
+  version strictly decreases per materialization step, including for
+  transform-less (identity) steps; interrupt + resume still terminates at
+  "all snapshot documents at active version." Later P2P arrivals legitimately
+  create new work and are outside the theorem's scope by construction.
 
 Conformance tests in `crates/gents-migration/tests` mirror these
 theorem-by-theorem, per the foundation flow (Lean → conformance tests →
@@ -364,14 +444,23 @@ Kept and re-pointed:
 New coverage:
 
 - Chain-replay test: fresh node, baseline + all steps, assert every pinned
-  version ID and transform ID (this is also the authoring tool for new pins).
-- SDL-parity test: baseline + chain ≡ current `gents-protocol` SDL.
+  version ID, transform ID, and `CollectionExpectation` digest (this is also
+  the authoring tool for new pins).
+- SDL-parity test: baseline + chain ≡ current `gents-protocol` SDL, compared
+  over the same normalized descriptor representation the expectations use.
 - Inactive-patch behavior lock: field additions + `IsActive: false` stores an
   inactive version while the old stays active (the upstream-untested
   combination §1 relies on).
 - Conformance tests mirroring the five theorems, including crash-injection at
-  each window boundary (post-attach, post-patch, post-verify) to exercise
-  positional resume, edge repair, and the no-unverified-activation invariant.
+  each window boundary (post-attach, post-patch, post-activate-pre-reindex)
+  to exercise derived-position resume, edge repair, the post-activation
+  repair state, and the no-unverified-activation invariant.
+- Foreign-state rejection: a hand-injected extra version (inactive included)
+  in a managed collection's DAG yields `ForeignVersion` before any step
+  applies.
+- Lensless additive migration test: a `lens: None` step followed by
+  materialization leaves every document re-stamped at the active version
+  (exercises upstream identity materialization).
 - Fixture-lens e2e: seed docs at baseline, apply a lens step through the full
   sequence, assert transformed reads; materialize when the upstream API is
   present; re-open and re-run for idempotence; P2P-arrival backstop test.
@@ -385,7 +474,9 @@ the rest are correctness hazards gents designs around:
 
 1. **Lens write-back / materialization parity with Go** (§3): port
    `updateDataStore` (datastore-only persistence of migrated values + doc
-   version key) and expose `materialize_collection`. Includes fixing reindex
+   version key) and expose `materialize_collection`, including identity
+   (version-key-only) materialization for transform-less paths, which neither
+   implementation performs today. Includes fixing reindex
    leaving datastore and index values disagreeing, and removing the stub that
    writes malformed keys under the real `/v/` prefix
    (`lensed_fetcher/migration.rs:437-445`).
