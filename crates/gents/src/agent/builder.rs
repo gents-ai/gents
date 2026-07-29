@@ -540,50 +540,6 @@ impl PendingAgentBehavior {
         }))
     }
 
-    #[allow(dead_code)]
-    async fn build(
-        self,
-        node: &EmbeddedNode,
-        principal: Arc<AgentPrincipal>,
-        tool_ceiling: &ToolCeiling,
-    ) -> Result<AgentBehavior> {
-        let backend_id = self
-            .backend_id
-            .clone()
-            .ok_or_else(|| anyhow!("behavior '{}' is missing backend_id", self.name))?;
-        let backend = lookup_backend(node, &backend_id).await?.ok_or_else(|| {
-            anyhow!(
-                "behavior '{}' references missing backend {}",
-                self.name,
-                backend_id
-            )
-        })?;
-        if !backend.is_available() {
-            anyhow::bail!(
-                "behavior '{}' backend {} is unavailable (enabled={} probe_status={})",
-                self.name,
-                backend_id,
-                backend.enabled,
-                backend.probe_status
-            );
-        }
-        BackendAdmissionConfig::from_backend(&backend)?;
-        self.build_with_resolved_backend(
-            principal,
-            Some(backend.backend_id),
-            backend.provider_kind,
-            crate::OpenAiWireApi::effective_for_provider(
-                backend.provider_kind,
-                backend.openai_wire_api,
-                &backend_id,
-            ),
-            backend.endpoint,
-            backend.api_key,
-            backend.api_key_env_var,
-            tool_ceiling,
-        )
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn build_with_resolved_backend(
         self,
