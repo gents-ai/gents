@@ -65,6 +65,7 @@ pub struct ToolCeiling {
     file_tools: FileToolMode,
     bash: BashMode,
     cli_tools: Vec<CliToolConfig>,
+    command_timeout: std::time::Duration,
     root: Option<PathBuf>,
     policy: ToolPolicySurface,
 }
@@ -75,6 +76,7 @@ impl ToolCeiling {
             file_tools: FileToolMode::Off,
             bash: BashMode::Off,
             cli_tools: Vec::new(),
+            command_timeout: std::time::Duration::from_secs(10),
             root: None,
             policy: ToolPolicySurface::legacy_non_host_wide(FileToolMode::Off, BashMode::Off),
         }
@@ -85,6 +87,7 @@ impl ToolCeiling {
             file_tools: FileToolMode::ReadOnly,
             bash: BashMode::ReadOnly,
             cli_tools: Vec::new(),
+            command_timeout: std::time::Duration::from_secs(10),
             root: None,
             policy: ToolPolicySurface::legacy_non_host_wide(
                 FileToolMode::ReadOnly,
@@ -98,6 +101,7 @@ impl ToolCeiling {
             file_tools: FileToolMode::ReadOnly,
             bash: BashMode::ReadOnly,
             cli_tools: Vec::new(),
+            command_timeout: std::time::Duration::from_secs(10),
             root: Some(root.into()),
             policy: ToolPolicySurface::legacy_non_host_wide(
                 FileToolMode::ReadOnly,
@@ -111,6 +115,7 @@ impl ToolCeiling {
             file_tools: FileToolMode::ReadWrite,
             bash: BashMode::Unrestricted,
             cli_tools: Vec::new(),
+            command_timeout: std::time::Duration::from_secs(10),
             root: Some(root.into()),
             policy: ToolPolicySurface::legacy_non_host_wide(
                 FileToolMode::ReadWrite,
@@ -134,6 +139,11 @@ impl ToolCeiling {
         self
     }
 
+    pub fn with_command_timeout_secs(mut self, timeout_secs: u64) -> Self {
+        self.command_timeout = std::time::Duration::from_secs(timeout_secs.max(1));
+        self
+    }
+
     pub fn with_policy(mut self, policy: ToolPolicySurface) -> Self {
         self.file_tools = policy.file;
         self.bash = policy.bash.tool;
@@ -152,6 +162,10 @@ impl ToolCeiling {
 
     pub fn cli_tools(&self) -> &[CliToolConfig] {
         &self.cli_tools
+    }
+
+    pub(crate) fn command_timeout(&self) -> std::time::Duration {
+        self.command_timeout
     }
 
     pub fn root(&self) -> Option<&Path> {
