@@ -1,7 +1,9 @@
 use std::fs::{File, OpenOptions, TryLockError};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Mutex, OnceLock};
+use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -96,10 +98,14 @@ fn run_lake_build_unlocked(proofs_dir: &Path) -> Result<()> {
     let mut failures = Vec::new();
 
     for attempt in 1..=LAKE_BUILD_ATTEMPTS {
-        let output = Command::new("lake")
+        let mut command = Command::new("lake");
+        command
             .args(["build", CONTRACT_TARGET])
             .current_dir(proofs_dir)
-            .output()
+            // Match `Command::output`: Lake must never inherit an interactive
+            // stdin while this process holds the proofs-directory lock.
+            .stdin(Stdio::null());
+        let output = run_with_visible_output(&mut command, io::stdout(), io::stderr())
             .with_context(|| {
                 format!(
                     "failed to build Lean conformance contract target in {}",
@@ -131,6 +137,136 @@ fn run_lake_build_unlocked(proofs_dir: &Path) -> Result<()> {
     }
 
     unreachable!("lake build retry loop should return or bail")
+}
+
+/// Run a command while forwarding its output to the parent process and
+/// retaining the same bytes for retry classification and failure diagnostics.
+///
+/// `Command::output` makes a legitimate cold Lake build look hung because it
+/// buffers several minutes of dependency-build progress. Direct writes to the
+/// parent streams also remain visible when this loader runs inside libtest,
+/// whose print capture does not intercept direct writes to those handles.
+///
+/// Each output drainer forwards synchronously. A slow live destination can
+/// therefore backpressure that stream and eventually the child after its OS
+/// pipe fills. This accepted observability tradeoff keeps progress live without
+/// adding an asynchronous sink queue; callers that configure stdin retain that
+/// configuration.
+type OutputTask = thread::JoinHandle<io::Result<Vec<u8>>>;
+
+fn run_with_visible_output(
+    command: &mut Command,
+    stdout_destination: impl Write + Send + 'static,
+    stderr_destination: impl Write + Send + 'static,
+) -> Result<Output> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            terminate_and_reap_child(&mut child, Vec::new());
+            return Err(anyhow!("visible command stdout pipe was unavailable"));
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            drop(stdout);
+            terminate_and_reap_child(&mut child, Vec::new());
+            return Err(anyhow!("visible command stderr pipe was unavailable"));
+        }
+    };
+
+    let stdout_task = match spawn_output_task("stdout", stdout, stdout_destination) {
+        Ok(task) => task,
+        Err(error) => {
+            drop(stderr);
+            terminate_and_reap_child(&mut child, Vec::new());
+            return Err(error).context("failed to spawn command stdout forwarding thread");
+        }
+    };
+    let stderr_task = match spawn_output_task("stderr", stderr, stderr_destination) {
+        Ok(task) => task,
+        Err(error) => {
+            terminate_and_reap_child(&mut child, vec![stdout_task]);
+            return Err(error).context("failed to spawn command stderr forwarding thread");
+        }
+    };
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            terminate_and_reap_child(&mut child, vec![stdout_task, stderr_task]);
+            return Err(error.into());
+        }
+    };
+    // Join both drainers even if one reports an error so no task is detached.
+    let stdout = join_output_task(stdout_task, "stdout");
+    let stderr = join_output_task(stderr_task, "stderr");
+    let stdout = stdout?;
+    let stderr = stderr?;
+
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn spawn_output_task(
+    stream: &'static str,
+    source: impl Read + Send + 'static,
+    destination: impl Write + Send + 'static,
+) -> io::Result<OutputTask> {
+    thread::Builder::new()
+        .name(format!("lean-contract-{stream}"))
+        .spawn(move || forward_and_capture(source, destination))
+}
+
+/// Best-effort termination followed by an unconditional reap and task joins.
+///
+/// The original setup/wait error remains the reported error; cleanup failures
+/// must not replace it or make a Lake invocation eligible for different retry
+/// behavior.
+fn terminate_and_reap_child(child: &mut Child, tasks: Vec<OutputTask>) {
+    let _ = child.kill();
+    let _ = child.wait();
+    for task in tasks {
+        let _ = task.join();
+    }
+}
+
+fn forward_and_capture(mut source: impl Read, mut destination: impl Write) -> io::Result<Vec<u8>> {
+    let mut captured = Vec::new();
+    let mut buffer = [0_u8; 8 * 1024];
+    loop {
+        let read = match source.read(&mut buffer) {
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        if read == 0 {
+            break;
+        }
+        let chunk = &buffer[..read];
+        captured.extend_from_slice(chunk);
+        // Observability must not change command success semantics if a caller
+        // closes its output stream early (for example, a piped test command).
+        let _ = destination.write_all(chunk);
+        let _ = destination.flush();
+    }
+    Ok(captured)
+}
+
+fn join_output_task(
+    task: thread::JoinHandle<io::Result<Vec<u8>>>,
+    stream: &str,
+) -> Result<Vec<u8>> {
+    match task.join() {
+        Ok(result) => result.map_err(Into::into),
+        Err(_) => Err(anyhow!("{stream} forwarding thread panicked")),
+    }
 }
 
 fn is_retryable_lake_build_failure(stdout: &str, stderr: &str) -> bool {
@@ -367,6 +503,204 @@ mod tests {
             "",
             "error: Proofs/Foo.lean:12:4: unknown identifier 'bar'"
         ));
+    }
+
+    #[test]
+    fn forwarding_command_output_retains_exact_diagnostics() {
+        let input = b"cold Lean build progress\n";
+        let mut forwarded = Vec::new();
+
+        let captured = forward_and_capture(input.as_slice(), &mut forwarded).unwrap();
+
+        assert_eq!(captured, input);
+        assert_eq!(forwarded, input);
+    }
+
+    #[test]
+    fn forwarding_command_output_retries_interrupted_reads() {
+        struct InterruptedOnce<'a> {
+            input: &'a [u8],
+            interrupted: bool,
+        }
+
+        impl Read for InterruptedOnce<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                if !self.interrupted {
+                    self.interrupted = true;
+                    return Err(io::Error::from(io::ErrorKind::Interrupted));
+                }
+                self.input.read(buffer)
+            }
+        }
+
+        let input = b"resumed output\n";
+        let mut forwarded = Vec::new();
+        let captured = forward_and_capture(
+            InterruptedOnce {
+                input,
+                interrupted: false,
+            },
+            &mut forwarded,
+        )
+        .unwrap();
+
+        assert_eq!(captured, input);
+        assert_eq!(forwarded, input);
+    }
+
+    #[test]
+    fn forwarding_command_output_preserves_raw_read_error() {
+        struct FailingReader;
+
+        impl Read for FailingReader {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("sentinel pipe read failure"))
+            }
+        }
+
+        let task = thread::spawn(|| forward_and_capture(FailingReader, io::sink()));
+        let error = join_output_task(task, "stdout").unwrap_err();
+        let chain = error.chain().map(ToString::to_string).collect::<Vec<_>>();
+
+        assert_eq!(error.to_string(), "sentinel pipe read failure");
+        assert_eq!(format!("{error:#}"), "sentinel pipe read failure");
+        assert_eq!(chain, vec!["sentinel pipe read failure"]);
+        assert_eq!(
+            error.downcast_ref::<io::Error>().map(io::Error::kind),
+            Some(io::ErrorKind::Other)
+        );
+    }
+
+    #[cfg(unix)]
+    #[derive(Clone, Default)]
+    struct CapturingWriter(Arc<Mutex<Vec<u8>>>);
+
+    #[cfg(unix)]
+    impl CapturingWriter {
+        fn bytes(&self) -> Vec<u8> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    #[cfg(unix)]
+    impl Write for CapturingWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn visible_command_honors_configured_stdin_and_preserves_separate_nonzero_output() {
+        let fixture = unique_temp_dir("visible-command-stdin");
+        let stdin_path = fixture.join("stdin");
+        std::fs::write(&stdin_path, b"configured stdin\n").unwrap();
+
+        let forwarded_stdout = CapturingWriter::default();
+        let forwarded_stderr = CapturingWriter::default();
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "IFS= read -r line || exit 91\n\
+                 printf 'stdin=%s\\n' \"$line\"\n\
+                 printf 'stdout-only\\n'\n\
+                 printf 'stderr-only\\n' >&2\n\
+                 exit 23",
+            ])
+            .stdin(File::open(&stdin_path).unwrap());
+
+        let output = run_with_visible_output(
+            &mut command,
+            forwarded_stdout.clone(),
+            forwarded_stderr.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(output.status.code(), Some(23));
+        assert_eq!(output.stdout, b"stdin=configured stdin\nstdout-only\n");
+        assert_eq!(output.stderr, b"stderr-only\n");
+        assert_eq!(forwarded_stdout.bytes(), output.stdout);
+        assert_eq!(forwarded_stderr.bytes(), output.stderr);
+
+        let _ = std::fs::remove_dir_all(fixture);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn visible_command_drains_both_streams_beyond_pipe_capacity() {
+        const REPETITIONS: usize = 4_096;
+        const STDOUT_CHUNK: &str = "stdout-0123456789abcdef-0123456789abcdef-0123456789abcdef\n";
+        const STDERR_CHUNK: &str = "stderr-fedcba9876543210-fedcba9876543210-fedcba9876543210\n";
+
+        let script = format!(
+            "i=0\n\
+             while [ \"$i\" -lt {REPETITIONS} ]; do\n\
+               printf '%s' '{STDOUT_CHUNK}'\n\
+               i=$((i + 1))\n\
+             done &\n\
+             stdout_pid=$!\n\
+             i=0\n\
+             while [ \"$i\" -lt {REPETITIONS} ]; do\n\
+               printf '%s' '{STDERR_CHUNK}' >&2\n\
+               i=$((i + 1))\n\
+             done &\n\
+             stderr_pid=$!\n\
+             wait \"$stdout_pid\"\n\
+             wait \"$stderr_pid\"\n"
+        );
+        let forwarded_stdout = CapturingWriter::default();
+        let forwarded_stderr = CapturingWriter::default();
+        let mut command = Command::new("sh");
+        command.args(["-c", &script]);
+
+        let output = run_with_visible_output(
+            &mut command,
+            forwarded_stdout.clone(),
+            forwarded_stderr.clone(),
+        )
+        .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, STDOUT_CHUNK.as_bytes().repeat(REPETITIONS));
+        assert_eq!(output.stderr, STDERR_CHUNK.as_bytes().repeat(REPETITIONS));
+        assert_eq!(forwarded_stdout.bytes(), output.stdout);
+        assert_eq!(forwarded_stderr.bytes(), output.stderr);
+    }
+
+    #[cfg(unix)]
+    struct FailingWriter;
+
+    #[cfg(unix)]
+    impl Write for FailingWriter {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::BrokenPipe))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::from(io::ErrorKind::BrokenPipe))
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn visible_command_ignores_forwarding_destination_failures() {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "printf 'captured stdout\\n'; printf 'captured stderr\\n' >&2",
+        ]);
+
+        let output = run_with_visible_output(&mut command, FailingWriter, FailingWriter).unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"captured stdout\n");
+        assert_eq!(output.stderr, b"captured stderr\n");
     }
 
     fn unique_temp_dir(label: &str) -> PathBuf {
