@@ -87,7 +87,7 @@ const liveTestSuites = {
   "sad-path": "tests/tauri-driver.live.sad-path.test.tsx",
   // cascade is intentionally excluded from the default sweep because it
   // requires live inference and can take several minutes. Run it explicitly:
-  //   bun run test:live:cascade -- --inference-url <url> --model-name <model>
+  //   npm run test:live:cascade -- --inference-url <url> --model-name <model>
   cascade: "tests/tauri-driver.live.cascade.test.tsx",
 };
 

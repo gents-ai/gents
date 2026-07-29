@@ -19,7 +19,7 @@ import { describeLive, logTurn } from "./tauri-driver-live/helpers";
  * This suite is intentionally excluded from the default live sweep because it
  * requires live inference and can take several minutes per run. Run it explicitly:
  *
- *   bun run test:live:cascade -- --inference-url <url> --model-name <model>
+ *   npm run test:live:cascade -- --inference-url <url> --model-name <model>
  */
 describeLive("Tauri app live cascade interrupt (B3 + C2 witnesses)", () => {
   // Witness: cascade_cancels_child (B3) + interrupted_request_cancels_live_linked_tools (C2).

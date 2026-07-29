@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { delimiter, dirname, resolve } from "node:path";
@@ -23,7 +24,12 @@ let bombadilProcess = null;
 const vite = spawn(
   process.execPath,
   [
-    resolve(rootDir, "node_modules/vite/bin/vite.js"),
+    // Vite may be hoisted to the workspace root; resolve its package root
+    // through Node (its exports map hides bin/).
+    resolve(
+      dirname(createRequire(import.meta.url).resolve("vite/package.json")),
+      "bin/vite.js",
+    ),
     "--host",
     "127.0.0.1",
     "--port",
@@ -178,7 +184,13 @@ function shellQuote(value) {
 
 function resolveBin(name) {
   const suffix = process.platform === "win32" ? ".cmd" : "";
-  return resolve(rootDir, "node_modules", ".bin", `${name}${suffix}`);
+  // npm workspaces may hoist the bin shim to the workspace root; probe the
+  // app-local .bin first, then walk up.
+  const candidates = [
+    resolve(rootDir, "node_modules", ".bin", `${name}${suffix}`),
+    resolve(rootDir, "../..", "node_modules", ".bin", `${name}${suffix}`),
+  ];
+  return candidates.find((path) => existsSync(path)) ?? candidates[0];
 }
 
 function consumeFlag(values, flag) {

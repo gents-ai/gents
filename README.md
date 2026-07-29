@@ -29,6 +29,9 @@ REPL. Desktop app, fleet bring-up, and P2P pairing:
 [docs/operations.md](docs/operations.md).
 Operators performing the breaking product cutover should use the single
 [Gents cutover runbook](docs/gents-cutover.md).
+The plan for packaging the desktop chat, fleet, and Tauri bridge surfaces for
+downstream apps (#877) is specified in
+[docs/reusable-desktop-packages.md](docs/reusable-desktop-packages.md).
 
 For the interactive fleet demo, run `gents demo` — it ships in the binary,
 no checkout, `make`, or mock required. It boots a single curated agent (read-only

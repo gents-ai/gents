@@ -7,13 +7,14 @@ import type {
   BehaviorSaveRequest,
   BehaviorView,
   DeploymentView,
+  DesktopApiAdapter,
   InferenceBackendView,
   InferenceProfileView,
   SkillView,
   ToolSelectionView,
-} from "../../lib/types";
+} from "@source-inc/gents-desktop-client";
 import { BehaviorToolSurface } from "./BehaviorToolSurface";
-import { ConfirmDialog } from "../ConfirmDialog";
+import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import { isDirty } from "./configDirty";
 import {
   ConfigDocumentList,
@@ -32,6 +33,7 @@ const DEFAULT_COMPACTION_STRATEGY = "StripThenSummarize";
 const DEFAULT_COMPACTION_THRESHOLD = "0.75";
 
 export type BehaviorConfigPanelProps = {
+  api?: DesktopApiAdapter;
   deployment: DeploymentView;
   selectedBehavior: BehaviorView | null;
   saving: boolean;
@@ -49,6 +51,7 @@ export type BehaviorConfigPanelProps = {
 };
 
 export function BehaviorConfigPanel({
+  api,
   deployment,
   selectedBehavior,
   saving,
@@ -81,6 +84,7 @@ export function BehaviorConfigPanel({
       />
 
       <BehaviorConfigEditor
+        api={api}
         agentDisplayName={
           deployment.agentPrincipal.displayName ?? deployment.label ?? "Agent"
         }
@@ -117,6 +121,7 @@ export function BehaviorConfigPanel({
 }
 
 export type BehaviorConfigEditorProps = {
+  api?: DesktopApiAdapter;
   agentDisplayName: string;
   agentDid: string;
   agentEnabled: boolean;
@@ -139,6 +144,7 @@ export type BehaviorConfigEditorProps = {
 };
 
 export function BehaviorConfigEditor({
+  api,
   agentDisplayName,
   agentDid,
   agentEnabled,
@@ -495,6 +501,7 @@ export function BehaviorConfigEditor({
 
       <BehaviorToolSurface
         agentDid={agentDid}
+        api={api}
         behaviorId={behavior?.behaviorId ?? null}
       />
 

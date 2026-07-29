@@ -1,9 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { CodeToolItem } from "../src/components/codeTools/CodeToolItem";
-import { toCodeToolView } from "../src/components/codeTools/codeTools";
-import type { RenderedToolCallView } from "../src/lib/types";
+import { CodeToolItem } from "@source-inc/gents-desktop-chat";
+import { toCodeToolView } from "@source-inc/gents-desktop-chat";
+import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 
 function toolCall(overrides: Partial<RenderedToolCallView>): RenderedToolCallView {
   return {

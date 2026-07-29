@@ -1,9 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ChatTranscriptPanel } from "../src/components/chat";
-import { MessageList } from "../src/components/Transcript";
-import type { DesktopSessionSnapshot, RenderedTimelineItem } from "../src/lib/types";
+import { ChatTranscriptPanel } from "@source-inc/gents-desktop-chat";
+import { MessageList } from "@source-inc/gents-desktop-chat";
+import type {
+  DesktopSessionSnapshot,
+  RenderedTimelineItem,
+} from "@source-inc/gents-desktop-client";
 
 function makeSession(
   overrides: Partial<DesktopSessionSnapshot> = {},

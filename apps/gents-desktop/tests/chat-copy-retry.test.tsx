@@ -1,16 +1,17 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ChatTranscriptPanel } from "../src/components/chat";
-import { MessageList } from "../src/components/Transcript";
+import { ChatTranscriptPanel } from "@source-inc/gents-desktop-chat";
+import { MessageList } from "@source-inc/gents-desktop-chat";
 import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
 import {
+  getDesktopApiAdapter,
   setDesktopApiAdapterForTests,
   type DesktopApiAdapter,
-} from "../src/lib/desktop-api";
-import { projectChatShell } from "../src/lib/chat-shell";
-import { copyText } from "../src/lib/clipboard";
-import type { DesktopSessionSnapshot } from "../src/lib/types";
+} from "@source-inc/gents-desktop-client";
+import { projectChatShell } from "@source-inc/gents-desktop-chat";
+import { copyText } from "@source-inc/gents-desktop-ui";
+import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 afterEach(() => setDesktopApiAdapterForTests(null));
@@ -222,6 +223,7 @@ describe("error card retry", () => {
     expect(shellProjection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
 
     const actions = createDesktopShellChatActions({
+      api: getDesktopApiAdapter(),
       draft: "",
       newConversationAgentRef: { current: null },
       refreshSession: vi.fn(),

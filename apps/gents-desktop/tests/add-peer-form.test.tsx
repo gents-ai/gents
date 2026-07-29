@@ -1,11 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  AddPeerForm,
-  type AddPeerFormProps,
-} from "../src/components/fleet/AddPeerForm";
-import type { BearerPairingResponse, PeerAddRequest } from "../src/lib/types";
+import { AddPeerForm, type AddPeerFormProps } from "@source-inc/gents-desktop-fleet";
+import type {
+  BearerPairingResponse,
+  PeerAddRequest,
+} from "@source-inc/gents-desktop-client";
 
 function renderForm(overrides: Partial<AddPeerFormProps> = {}) {
   const peerForm: PeerAddRequest = {
@@ -20,7 +20,7 @@ function renderForm(overrides: Partial<AddPeerFormProps> = {}) {
     localError: null,
     peerForm,
     onPeerFormChange: vi.fn(),
-    onFetchPeerStatus: vi.fn(async () => ({})),
+    onProbePeerAddress: vi.fn(async () => ({})),
     onPairBearer: vi.fn(async () => ({
       bootstrap: {} as BearerPairingResponse["bootstrap"],
       client: null,
@@ -78,7 +78,7 @@ describe("AddPeerForm", () => {
         graphql: "http://127.0.0.1:9181/api/v0/graphql",
       });
     });
-    expect(props.onFetchPeerStatus).not.toHaveBeenCalled();
+    expect(props.onProbePeerAddress).not.toHaveBeenCalled();
   });
 
   it("fetches /status then submits the discovered peer when the manual triple is incomplete", async () => {
@@ -91,7 +91,7 @@ describe("AddPeerForm", () => {
     };
     const props = renderForm({
       peerForm: { label: "", agentDid: "", addr: "", graphql: null },
-      onFetchPeerStatus: vi.fn(async () => discovered),
+      onProbePeerAddress: vi.fn(async () => discovered),
     });
     fireEvent.change(screen.getByTestId("fleet-add-server-address"), {
       target: { value: "http://127.0.0.1:9181" },
@@ -99,7 +99,7 @@ describe("AddPeerForm", () => {
     fireEvent.click(screen.getByTestId("fleet-add-submit"));
 
     await waitFor(() => {
-      expect(props.onFetchPeerStatus).toHaveBeenCalledWith("http://127.0.0.1:9181");
+      expect(props.onProbePeerAddress).toHaveBeenCalledWith("http://127.0.0.1:9181");
     });
     await waitFor(() => {
       expect(props.onSubmit).toHaveBeenCalledWith({

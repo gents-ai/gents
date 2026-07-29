@@ -35,8 +35,7 @@
     cursor: pointer;
   }
 
-  code,
-  .mono {
+  code {
     font-family: var(--font-mono);
   }
 

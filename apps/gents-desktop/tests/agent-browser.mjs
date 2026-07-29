@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { dirname, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -474,7 +475,13 @@ async function pageState(page) {
 }
 
 function spawnVite({ baseUrl, port }) {
-  const vitePath = resolve(APP_DIR, "node_modules/vite/bin/vite.js");
+  // Vite may be hoisted to the workspace root; resolve its package root
+  // through Node (its exports map hides bin/) instead of assuming a nested
+  // node_modules layout.
+  const vitePath = resolve(
+    dirname(createRequire(import.meta.url).resolve("vite/package.json")),
+    "bin/vite.js",
+  );
   const child = spawn(
     process.execPath,
     [

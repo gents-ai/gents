@@ -1,4 +1,4 @@
-import type { DesktopClientUpdatedListenerFactory } from "../../src/lib/desktop-events";
+import type { DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desktop-client";
 import type { RunnerExitStatus } from "./logs";
 
 export const VERSION_POLL_MS = 250;

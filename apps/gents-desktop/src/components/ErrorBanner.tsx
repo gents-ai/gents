@@ -1,4 +1,4 @@
-import { CopyButton } from "./CopyButton";
+import { CopyButton } from "@source-inc/gents-desktop-ui";
 
 /// The one global failure surface: shell-level errors (bridge, snapshot,
 /// action fallbacks) land here. Editor-local failures render next to their

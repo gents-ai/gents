@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-chat-send"
+description = "Enables the desktop_chat_send command without any pre-configured scope."
+commands.allow = ["desktop_chat_send"]
+
+[[permission]]
+identifier = "deny-desktop-chat-send"
+description = "Denies the desktop_chat_send command without any pre-configured scope."
+commands.deny = ["desktop_chat_send"]

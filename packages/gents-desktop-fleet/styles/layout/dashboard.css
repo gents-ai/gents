@@ -1,0 +1,143 @@
+@layer fleet {
+  .fleet-dashboard {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    gap: var(--space-6);
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .fleet-header,
+  .fleet-brand,
+  .fleet-header-actions,
+  .fleet-row-actions,
+  .fleet-tool-icons,
+  .fleet-add-actions {
+    display: flex;
+    align-items: center;
+  }
+
+  .fleet-header {
+    justify-content: space-between;
+    gap: var(--space-7);
+  }
+
+  .fleet-brand {
+    min-width: 0;
+    gap: var(--space-5);
+  }
+
+  .fleet-brand h1 {
+    margin: 0;
+    font-size: var(--text-3xl);
+    line-height: 1.15;
+  }
+
+  .fleet-brand p {
+    margin: var(--space-1) 0 0;
+  }
+
+  .fleet-brand .eyebrow {
+    margin: 0 0 var(--space-1);
+  }
+
+  .fleet-brand-logo {
+    width: 40px;
+    height: 48px;
+    flex: 0 0 auto;
+    border: 1px solid rgb(var(--color-accent-rgb) / 0.2);
+    border-radius: var(--radius-sm);
+    /* Theme-stable dark tile: the brand glyph is white and must stay
+       visible on the light theme. */
+    background: var(--color-surface);
+    object-fit: contain;
+    padding: var(--space-2);
+  }
+
+  .fleet-header-actions,
+  .fleet-add-actions {
+    justify-content: flex-end;
+    gap: var(--space-4);
+  }
+
+  .fleet-inference-callout {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-7);
+    padding: var(--space-7) var(--space-9);
+    border: 1px solid var(--border-strong);
+    background: rgb(var(--color-accent-strong-rgb) / 0.06);
+  }
+
+  .fleet-inference-callout-copy {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .fleet-inference-callout-copy strong {
+    font-size: var(--text-base);
+  }
+
+  .fleet-inference-callout .primary-button {
+    flex: none;
+  }
+
+  .fleet-local-runtime {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-5);
+    align-items: center;
+    padding: var(--space-5);
+    border: 1px solid rgb(var(--color-accent-rgb) / 0.18);
+    background: rgb(var(--color-surface-deep-rgb) / 0.72);
+  }
+
+  .fleet-local-runtime-copy {
+    display: grid;
+    min-width: 0;
+    gap: var(--space-1);
+  }
+
+  .fleet-local-runtime-copy strong,
+  .fleet-local-runtime-copy .mono {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .fleet-local-runtime-copy strong {
+    color: var(--color-text);
+    font-size: var(--text-lg);
+  }
+
+  .fleet-local-runtime-error {
+    grid-column: 1 / -1;
+    margin: 0;
+    color: var(--color-error);
+    font-size: var(--text-sm);
+  }
+
+  .fleet-remote-disclosure > summary {
+    cursor: pointer;
+    color: var(--color-text-muted);
+    font-size: var(--text-md);
+    padding: var(--space-2) 0;
+    width: fit-content;
+  }
+
+  .fleet-remote-disclosure > summary:hover {
+    color: var(--color-accent);
+  }
+
+  .fleet-remote-disclosure[open] > summary {
+    margin-bottom: var(--space-4);
+  }
+
+  .fleet-add-panel {
+    display: grid;
+    gap: var(--space-5);
+  }
+}

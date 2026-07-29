@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parsePeerConnectionJson } from "../src/components/fleet/peerConnectionImport";
+import { parsePeerConnectionJson } from "@source-inc/gents-desktop-fleet";
 
 describe("parsePeerConnectionJson", () => {
   it("accepts the desktop connection shape", () => {

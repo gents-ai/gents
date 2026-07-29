@@ -1,10 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { HoldsPanel } from "../src/components/operations/HoldsPanel";
-import { setDesktopApiAdapterForTests } from "../src/lib/desktop-api";
-import type { DesktopApiAdapter } from "../src/lib/desktop-api";
-import type { HeldToolCallView } from "../src/lib/types/operations";
+import { HoldsPanel } from "@source-inc/gents-desktop-operations";
+import { setDesktopApiAdapterForTests } from "@source-inc/gents-desktop-client";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import type { HeldToolCallView } from "@source-inc/gents-desktop-client";
 
 const AGENT_DID = "did:key:z6MkHoldsAgent";
 

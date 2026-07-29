@@ -10,10 +10,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use defra_node::{EmbeddedNode, EventName, QueryResponse};
+use defra_node::{EmbeddedNode, EventName};
 use gents_protocol::network_token::{EndpointRecord, MembershipRecord, NetworkRecord};
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
@@ -21,6 +21,7 @@ use tokio_util::sync::CancellationToken;
 use crate::graphql::escape_graphql_string;
 use crate::identity::AgentIdentity;
 
+use super::graphql_helpers::{ensure_no_errors, graphql_string_list_literal, rows};
 use super::templates::{resolve_template, NETWORK_CONTROL_TEMPLATE};
 
 pub const SOURCE_NETWORK: &str = "network";
@@ -789,35 +790,6 @@ fn decode_sig(sig: String) -> Result<Vec<u8>> {
     bs58::decode(sig)
         .into_vec()
         .context("decoding base58 signature")
-}
-
-fn graphql_string_list_literal<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
-    let items = values
-        .into_iter()
-        .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
-        .collect::<Vec<_>>();
-    if items.is_empty() {
-        "null".to_string()
-    } else {
-        format!("[{}]", items.join(", "))
-    }
-}
-
-fn ensure_no_errors(response: &QueryResponse, label: &str) -> Result<()> {
-    if response.has_errors() {
-        bail!("{label} failed: {:?}", response.errors);
-    }
-    Ok(())
-}
-
-fn rows<T>(response: &QueryResponse, field: &str) -> Result<Vec<T>>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
-        return Ok(Vec::new());
-    };
-    serde_json::from_value(value.clone()).with_context(|| format!("decode {field} rows"))
 }
 
 #[derive(Deserialize)]

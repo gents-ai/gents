@@ -31,13 +31,14 @@
 //!
 //! ## Running
 //!
-//! Gated on `GENTS_D4F_LIVE=1`. Without it every test early-returns and
-//! passes as a no-op, so offline/CI runs skip cleanly.
+//! Ignored by default and gated on `GENTS_D4F_LIVE=1`, so offline/CI runs
+//! skip cleanly. Explicit runs fail if the live gate is missing.
 //!
 //! ```bash
-//! GENTS_D4F_LIVE=1 cargo test --test steward_loop_live \
+//! GENTS_D4F_LIVE=1 cargo test --test e2e_live \
 //!   --features defra-node/http,defra-node/p2p,rocksdb \
-//!   -- --test-threads=1 d4f_backend_probes_healthy_and_completes --nocapture
+//!   d4f_backend_probes_healthy_and_completes \
+//!   -- --ignored --test-threads=1 --nocapture
 //! ```
 
 use std::sync::Arc;
@@ -61,8 +62,8 @@ use crate::support::{first_optional_row, test_db, TestDb};
 // Gate + d4f connection constants
 // ---------------------------------------------------------------------------
 
-/// Every test in this file early-returns unless this is set, so offline/CI runs
-/// skip cleanly.
+/// Returns whether the explicit live prerequisite is enabled. Ignored tests
+/// assert this before starting local or remote setup.
 fn d4f_enabled() -> bool {
     std::env::var("GENTS_D4F_LIVE").as_deref() == Ok("1")
 }
@@ -328,11 +329,12 @@ pub async fn wait_for_assistant_answer(
 /// non-empty assistant answer lands. This is the foundation 2a-2 / 2a-3 build on
 /// (it exercises bind + boot + full-run-and-wait against d4f end to end).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "live: set GENTS_D4F_LIVE=1 and pass --ignored"]
 async fn d4f_backend_probes_healthy_and_completes() {
-    if !d4f_enabled() {
-        eprintln!("GENTS_D4F_LIVE is not 1; skipping d4f live smoke test");
-        return;
-    }
+    assert!(
+        d4f_enabled(),
+        "set GENTS_D4F_LIVE=1 and pass --ignored to run the d4f live smoke test"
+    );
 
     assert_d4f_reachable().await;
 

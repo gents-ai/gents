@@ -1,9 +1,12 @@
 import { screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { DesktopApiAdapter } from "../src/lib/desktop-api";
-import type { DesktopClientUpdatedListenerFactory } from "../src/lib/desktop-events";
-import type { DesktopClientSnapshot, TaskRunResult } from "../src/lib/types";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import type { DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desktop-client";
+import type {
+  DesktopClientSnapshot,
+  TaskRunResult,
+} from "@source-inc/gents-desktop-client";
 
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 import { renderTauriAppDriverWithBridge, type TauriDriverBridge } from "./tauri-driver";

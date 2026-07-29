@@ -1,18 +1,24 @@
 import { useCallback, useRef, useState } from "react";
 
-import { explainToolSurface } from "../../lib/desktop-api";
-import type { ToolSurfaceExplanationView } from "../../lib/types";
+import type {
+  DesktopApiAdapter,
+  ToolSurfaceExplanationView,
+} from "@source-inc/gents-desktop-client";
+import { getDesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
 /// The behavior's RESOLVED tool surface, computed by the runtime's explain
 /// machinery over the live documents — what the model actually gets, not
 /// what the raw ToolSelection says. Fetched on expand/refresh only.
 export function BehaviorToolSurface({
   agentDid,
+  api,
   behaviorId,
 }: {
   agentDid: string;
+  api?: DesktopApiAdapter;
   behaviorId: string | null;
 }) {
+  const resolvedApi = getDesktopApiAdapter(api);
   const [open, setOpen] = useState(false);
   const [explanation, setExplanation] = useState<ToolSurfaceExplanationView | null>(
     null,
@@ -29,7 +35,7 @@ export function BehaviorToolSurface({
     setLoading(true);
     setError(null);
     try {
-      const next = await explainToolSurface(agentDid, behaviorId);
+      const next = await resolvedApi.explainToolSurface(agentDid, behaviorId);
       if (generationRef.current === generation) {
         setExplanation(next);
       }
@@ -42,7 +48,7 @@ export function BehaviorToolSurface({
         setLoading(false);
       }
     }
-  }, [agentDid, behaviorId]);
+  }, [agentDid, behaviorId, resolvedApi]);
 
   if (!behaviorId) {
     return null;

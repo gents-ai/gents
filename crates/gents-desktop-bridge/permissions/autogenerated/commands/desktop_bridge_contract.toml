@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-bridge-contract"
+description = "Enables the desktop_bridge_contract command without any pre-configured scope."
+commands.allow = ["desktop_bridge_contract"]
+
+[[permission]]
+identifier = "deny-desktop-bridge-contract"
+description = "Denies the desktop_bridge_contract command without any pre-configured scope."
+commands.deny = ["desktop_bridge_contract"]

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-domain-home-path"
+description = "Enables the domain_home_path command without any pre-configured scope."
+commands.allow = ["domain_home_path"]
+
+[[permission]]
+identifier = "deny-domain-home-path"
+description = "Denies the domain_home_path command without any pre-configured scope."
+commands.deny = ["domain_home_path"]

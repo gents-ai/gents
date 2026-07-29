@@ -1,19 +1,15 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/components/backgroundedTools/useOperationsSnapshot", () => ({
-  useOperationsSnapshot: vi.fn(),
-}));
-
-import { BackgroundedToolsPanel } from "../src/components/backgroundedTools";
-import { useOperationsSnapshot } from "../src/components/backgroundedTools/useOperationsSnapshot";
+import { BackgroundedToolsPanel } from "@source-inc/gents-desktop-operations";
+import { useOperationsSnapshot } from "@source-inc/gents-desktop-operations";
 import {
   OperationsRailProvider,
   useOperationsRail,
-} from "../src/components/operations";
-import type { DesktopOperationsSnapshot } from "../src/lib/types/operations";
+} from "@source-inc/gents-desktop-operations";
+import type { DesktopOperationsSnapshot } from "@source-inc/gents-desktop-client";
 
-const mockedSnapshot = vi.mocked(useOperationsSnapshot);
+const mockedSnapshot = vi.fn<typeof useOperationsSnapshot>();
 
 const snapshot: DesktopOperationsSnapshot = {
   fetchedAt: new Date().toISOString(),
@@ -58,6 +54,7 @@ describe("BackgroundedToolsPanel row actions", () => {
         <BackgroundedToolsPanel
           onOpenLineage={vi.fn()}
           onInterruptParent={onInterruptParent}
+          useSnapshot={mockedSnapshot}
         />
       </OperationsRailProvider>,
     );
@@ -74,6 +71,7 @@ describe("BackgroundedToolsPanel row actions", () => {
         <BackgroundedToolsPanel
           onOpenLineage={onOpenLineage}
           onInterruptParent={vi.fn()}
+          useSnapshot={mockedSnapshot}
         />
       </OperationsRailProvider>,
     );
@@ -85,7 +83,7 @@ describe("BackgroundedToolsPanel row actions", () => {
   });
 
   it("actions are disabled when rendered without handlers or a rail", () => {
-    render(<BackgroundedToolsPanel />);
+    render(<BackgroundedToolsPanel useSnapshot={mockedSnapshot} />);
 
     expect(screen.getByTestId("bg-tool-lineage-tc_1")).toBeDisabled();
     expect(screen.getByTestId("bg-tool-interrupt-tc_1")).toBeDisabled();

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-interrupt-request"
+description = "Enables the desktop_interrupt_request command without any pre-configured scope."
+commands.allow = ["desktop_interrupt_request"]
+
+[[permission]]
+identifier = "deny-desktop-interrupt-request"
+description = "Denies the desktop_interrupt_request command without any pre-configured scope."
+commands.deny = ["desktop_interrupt_request"]

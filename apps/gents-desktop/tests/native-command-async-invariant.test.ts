@@ -2,7 +2,10 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const COMMANDS_DIR = resolve(process.cwd(), "src-tauri/src/bridge/tauri_commands");
+const COMMANDS_DIR = resolve(
+  process.cwd(),
+  "../../crates/gents-desktop-bridge/src/tauri_commands",
+);
 
 describe("native command async invariants", () => {
   it("never blocks async work on a Tauri command thread", () => {
@@ -23,7 +26,7 @@ describe("native command async invariants", () => {
 
     expect(occurrences).toHaveLength(1);
     expect(source).toContain(
-      ".spawn(|| tauri::async_runtime::block_on(ClientCore::start()))",
+      ".spawn(move || tauri::async_runtime::block_on(ClientCore::start_with_paths(paths)))",
     );
   });
 });

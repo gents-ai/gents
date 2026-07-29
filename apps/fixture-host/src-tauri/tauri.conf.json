@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Gents Fixture Host",
+  "version": "0.9.0",
+  "identifier": "com.source-inc.gents-fixture-host",
+  "build": {
+    "beforeDevCommand": "npm run dev --workspace=@source-inc/fixture-host-ui",
+    "devUrl": "http://localhost:1421",
+    "beforeBuildCommand": "npm run build --workspace=@source-inc/fixture-host-ui",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Gents Fixture Host",
+        "width": 960,
+        "height": 720
+      }
+    ],
+    "security": {
+      "csp": null,
+      "capabilities": ["default"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

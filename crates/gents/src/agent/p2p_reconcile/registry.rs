@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
 
+use super::graphql_helpers::{graphql_nullable_string_literal, graphql_string_list_literal};
 use super::templates::resolve_template;
 
 /// How often the node refreshes its `updated_at` heartbeat in `PeerRegistry`.
@@ -133,8 +134,8 @@ pub enum UpsertKind {
 pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKind) -> String {
     let peer_id = escape_graphql_string(&entry.peer_id);
     let agent_did = escape_graphql_string(&entry.agent_did);
-    let addresses = graphql_nullable_string_list_literal(&entry.addresses);
-    let templates = graphql_nullable_string_list_literal(&entry.templates);
+    let addresses = graphql_string_list_literal(entry.addresses.iter().map(String::as_str));
+    let templates = graphql_string_list_literal(entry.templates.iter().map(String::as_str));
     let display_name = graphql_nullable_string_literal(entry.display_name.as_deref());
     let status = escape_graphql_string(&entry.status);
     let network_id = escape_graphql_string(&entry.network_id);
@@ -323,28 +324,6 @@ async fn tick_registry(
     );
 
     Ok(())
-}
-
-fn graphql_nullable_string_list_literal(values: &[String]) -> String {
-    if values.is_empty() {
-        return "null".to_string();
-    }
-    format!(
-        "[{}]",
-        values
-            .iter()
-            .map(|v| format!(r#""{}""#, escape_graphql_string(v)))
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
-}
-
-fn graphql_nullable_string_literal(value: Option<&str>) -> String {
-    value
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(|v| format!(r#""{}""#, escape_graphql_string(v)))
-        .unwrap_or_else(|| "null".to_string())
 }
 
 #[cfg(test)]

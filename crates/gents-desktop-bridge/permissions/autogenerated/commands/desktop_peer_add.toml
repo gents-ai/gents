@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-peer-add"
+description = "Enables the desktop_peer_add command without any pre-configured scope."
+commands.allow = ["desktop_peer_add"]
+
+[[permission]]
+identifier = "deny-desktop-peer-add"
+description = "Denies the desktop_peer_add command without any pre-configured scope."
+commands.deny = ["desktop_peer_add"]

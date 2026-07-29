@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { ChatComposer } from "../src/components/chat";
+import { ChatComposer } from "@source-inc/gents-desktop-chat";
 
 function renderComposer(
   overrides: {

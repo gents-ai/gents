@@ -38,8 +38,8 @@ additionally needs:
   key with access to `sourcenetwork/defradb.rs` is needed to fetch dependencies.
 - **Lean toolchain** (proofs only) — [`elan`](https://github.com/leanprover/elan)
   provides `lake`/`lean` for `crates/gents/proofs`.
-- **Desktop app** (`apps/gents-desktop`, optional) — Node.js with `bun` or
-  `npm`, and the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/).
+- **Desktop app** (`apps/gents-desktop`, optional) — Node.js with `npm`, and
+  the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/).
   On Debian/Ubuntu that means the GTK/WebKit development libraries:
   `sudo apt-get install libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev`.
   A plain `cargo build` includes this crate (it is a workspace default member);

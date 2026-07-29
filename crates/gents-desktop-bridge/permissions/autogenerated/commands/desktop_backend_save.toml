@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-backend-save"
+description = "Enables the desktop_backend_save command without any pre-configured scope."
+commands.allow = ["desktop_backend_save"]
+
+[[permission]]
+identifier = "deny-desktop-backend-save"
+description = "Denies the desktop_backend_save command without any pre-configured scope."
+commands.deny = ["desktop_backend_save"]

@@ -29,7 +29,7 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
-use defra_node::{EmbeddedNode, EventName, QueryResponse};
+use defra_node::{EmbeddedNode, EventName};
 use gents_protocol::bearer_token::{
     bearer_signing_payload, check_bearer_freshness, decode_bearer, BearerClaimRecord,
 };
@@ -39,6 +39,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
 use crate::identity::AgentIdentity;
+
+use super::graphql_helpers::{ensure_no_errors, first_row, rows};
+
+pub const BEARER_CONVERSATION_TEMPLATE: &str = "conversation";
 
 /// Signature/freshness verdicts for one claim, computed at the store seam and
 /// consumed by the pure admission decision. Mirrors the Lean booleans on
@@ -614,30 +618,6 @@ async fn verify_sig(identity: &dyn AgentIdentity, did: &str, payload: &[u8], sig
             false
         }
     }
-}
-
-fn ensure_no_errors(response: &QueryResponse, label: &str) -> Result<()> {
-    if response.has_errors() {
-        bail!("{label} failed: {:?}", response.errors);
-    }
-    Ok(())
-}
-
-fn rows<T>(response: &QueryResponse, field: &str) -> Result<Vec<T>>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
-        return Ok(Vec::new());
-    };
-    serde_json::from_value(value.clone()).with_context(|| format!("decode {field} rows"))
-}
-
-fn first_row<T>(response: &QueryResponse, field: &str) -> Result<Option<T>>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    Ok(rows::<T>(response, field)?.into_iter().next())
 }
 
 #[derive(Deserialize)]

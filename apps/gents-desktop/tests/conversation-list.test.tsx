@@ -2,7 +2,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ConversationListSection } from "../src/components/sidebar-widgets/ConversationListSection";
-import type { ConversationSummary, DeploymentView } from "../src/lib/types";
+import type {
+  ConversationSummary,
+  DeploymentView,
+} from "@source-inc/gents-desktop-client";
 
 const AGENT = "did:key:z6MkAgent";
 

@@ -1,3 +1,10 @@
+/*
+ * Phase 6 token contract (docs/reusable-desktop-packages.md):
+ * - Semantic slots (--color-bg/surface/text/accent, spacing, radii) are the
+ *   theming API for packaged CSS. See @source-inc/gents-desktop-tokens.
+ * - Brand values (--source-*) stay host-private and map into semantic slots.
+ * Packaged components must not reference --source-* vars.
+ */
 @layer tokens {
   :root {
     color-scheme: dark;
@@ -19,6 +26,7 @@
     --font-body: "Inter Variable", "Inter", "SF Pro Text", system-ui, sans-serif;
     --font-mono:
       ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+    /* --- Brand (host-private) --- */
     --source-black: #000000;
     --source-green: #06b250;
     --source-dark-green: #1c2724;
@@ -33,6 +41,10 @@
     --source-dark-green-rgb: 28 39 36;
     --source-blue-rgb: 16 203 255;
     --source-orange-rgb: 255 160 17;
+    --color-bg-rgb: 0 0 0;
+    --color-surface-rgb: var(--source-dark-green-rgb);
+    --color-surface-strong-rgb: 7 17 14;
+    --color-surface-deep-rgb: 2 5 4;
     --color-bg: var(--source-black);
     --color-surface: rgb(var(--source-dark-green-rgb) / 0.86);
     --color-surface-strong: #07110e;
@@ -43,19 +55,23 @@
     --source-ink-rgb: 1 8 6;
     --source-ink-2-rgb: 2 8 6;
     --source-ink-3-rgb: 9 17 14;
+    --color-surface-row-rgb: var(--source-ink-3-rgb);
     --color-surface-row: rgb(var(--source-ink-3-rgb) / 0.86);
     --color-text: var(--source-white);
     --color-text-muted: #95a49d;
     --color-text-soft: #d6ddda;
     --color-text-warm: #dff8e8;
     --color-accent: var(--source-green);
+    --color-accent-rgb: var(--source-green-rgb);
     --color-accent-strong: #39e27a;
     --color-accent-muted: #58c779;
     --color-success: #8df2b4;
     --color-success-strong: var(--source-green);
     --color-warning: var(--source-orange);
+    --color-warning-rgb: var(--source-orange-rgb);
     --color-warning-soft: #ffd089;
     --color-info: var(--source-blue);
+    --color-info-rgb: var(--source-blue-rgb);
     --color-error: #ffad9d;
     --color-error-strong: #ff6f5f;
     --color-error-strong-rgb: 255 111 95;
@@ -69,37 +85,6 @@
     --border-default: rgb(var(--source-green-rgb) / 0.18);
     --border-strong: rgb(var(--source-green-rgb) / 0.28);
     --border-selected: rgb(var(--source-green-rgb) / 0.48);
-    --radius-sm: 8px;
-    --radius-md: 8px;
-    --radius-lg: 8px;
-    --radius-pill: 999px;
-    --space-1: 4px;
-    --space-2: 6px;
-    --space-3: 8px;
-    --space-4: 10px;
-    --space-5: 12px;
-    --space-6: 14px;
-    --space-7: 16px;
-    --space-8: 18px;
-    --space-9: 20px;
-    --space-10: 24px;
-    /* Type scale. Steps mirror real usage (dense operator UI lives at
-       10-13px); the conformance fence forbids raw font-size values. */
-    --text-2xs: 10px;
-    --text-xs: 11px;
-    --text-sm: 12px;
-    --text-md: 13px;
-    --text-base: 14px;
-    --text-lg: 16px;
-    --text-xl: 18px;
-    --text-2xl: 22px;
-    --text-3xl: 28px;
-    --text-4xl: 32px;
-    /* Motion. One shared timing vocabulary; the global reduced-motion
-       override lives in base.css. */
-    --motion-fast: 120ms;
-    --motion-medium: 150ms;
-    --motion-pulse: 1.4s;
     /* macOS overlay titlebar geometry (traffic-light clearance). */
     --titlebar-height: 34px;
     --titlebar-clearance: 44px;
@@ -108,6 +93,7 @@
   :root[data-theme="light"] {
     color-scheme: light;
     --color-bg: #f4f7f5;
+    --color-bg-rgb: 244 247 245;
     --color-surface: #ffffff;
     --color-surface-strong: #eef3f0;
     --color-surface-deep: #e7ede9;
@@ -115,6 +101,10 @@
     --source-ink-rgb: 248 250 249;
     --source-ink-2-rgb: 244 247 245;
     --source-ink-3-rgb: 238 243 240;
+    --color-surface-rgb: 255 255 255;
+    --color-surface-strong-rgb: 238 243 240;
+    --color-surface-deep-rgb: 231 237 233;
+    --color-surface-row-rgb: var(--source-ink-3-rgb);
     --overlay-rgb: 2 8 6;
     --scrim-rgb: 255 255 255;
     --color-text: #0d1612;

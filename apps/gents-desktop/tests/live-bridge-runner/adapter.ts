@@ -1,5 +1,5 @@
-import type { DesktopApiAdapter } from "../../src/lib/desktop-api";
-import type { BackendHealth } from "../../src/components/backendHealth/types";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import type { BackendHealth } from "@source-inc/gents-desktop-client";
 import type {
   BearerPairingResponse,
   BehaviorSaveRequest,
@@ -14,7 +14,7 @@ import type {
   McpServiceProbeResult,
   SubagentTreeView,
   TaskRunResult,
-} from "../../src/lib/types";
+} from "@source-inc/gents-desktop-client";
 import type { TauriDriverChatRequest } from "../tauri-driver";
 import type { LiveBridgeRunner } from "../live-bridge-runner";
 
@@ -57,7 +57,9 @@ export function createBridgeHttpAdapter(
       client.postJson<DesktopClientSnapshot>("/desktop/peer/add", request),
     pairBearer: async (request) =>
       client.postJson<BearerPairingResponse>("/desktop/peer/pair-bearer", request),
-    fetchPeerStatus: async (serverAddress) =>
+    fetchPeerStatus: async (peerId) =>
+      client.postJson("/desktop/peer/status", { peerId }),
+    probePeerAddress: async (serverAddress) =>
       client.postJson("/desktop/peer/status", { serverAddress }),
     repairP2P: async () =>
       client.postJson<DesktopClientSnapshot>("/desktop/p2p/repair", {}),

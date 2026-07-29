@@ -1,9 +1,9 @@
-import type { DesktopApiAdapter } from "../../src/lib/desktop-api";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type {
   ChatSendResult,
   DesktopSessionSnapshot,
   TaskRunResult,
-} from "../../src/lib/types";
+} from "@source-inc/gents-desktop-client";
 import {
   isTerminalTurnState,
   observeRemoteAheadDesktopLag,

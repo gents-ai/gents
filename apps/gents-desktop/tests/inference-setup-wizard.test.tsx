@@ -7,7 +7,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async () => () => {}),
 }));
 
-import { InferenceSetupWizard } from "../src/components/fleet/InferenceSetupWizard";
+import { InferenceSetupWizard } from "@source-inc/gents-desktop-fleet/local-runtime";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 function renderWizard(

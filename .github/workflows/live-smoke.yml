@@ -126,7 +126,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: apps/gents-desktop/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install protobuf compiler
         run: |
@@ -159,7 +159,6 @@ jobs:
         run: .github/scripts/setup-rust-build-cache.sh
 
       - name: Install frontend dependencies
-        working-directory: apps/gents-desktop
         run: npm ci
 
       - name: Run live desktop chat smoke
@@ -225,7 +224,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: apps/gents-desktop/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install protobuf compiler
         run: |
@@ -258,7 +257,6 @@ jobs:
         run: .github/scripts/setup-rust-build-cache.sh
 
       - name: Install frontend dependencies
-        working-directory: apps/gents-desktop
         run: npm ci
 
       - name: Install Playwright browser

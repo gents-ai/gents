@@ -28,7 +28,7 @@ use serde_json::{json, Value};
 
 #[path = "../src/admission/slot_accounting.rs"]
 mod admission_slot_accounting;
-#[path = "../src/lean_vocab_test.rs"]
+#[path = "../src/lean_vocab_test/support.rs"]
 mod lean_vocab_test;
 mod support;
 
@@ -468,6 +468,8 @@ mod identity_proptest;
 mod live_overlay;
 #[path = "conformance/manual_run.rs"]
 mod manual_run;
+#[path = "conformance/pairing_invariant_tests.rs"]
+mod pairing_invariant_tests;
 #[path = "conformance/pairing_reconcile.rs"]
 mod pairing_reconcile;
 #[path = "conformance/peer_registry_discovery.rs"]

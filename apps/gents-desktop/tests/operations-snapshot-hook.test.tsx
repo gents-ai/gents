@@ -1,15 +1,30 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/lib/desktop-api", () => ({
-  fetchOperationsSnapshot: vi.fn(),
-}));
+import { useOperationsSnapshot } from "@source-inc/gents-desktop-operations";
+import {
+  createDesktopApiAdapter,
+  type DesktopOperationsSnapshot,
+  type DesktopOperationsSnapshotRequest,
+} from "@source-inc/gents-desktop-client";
+import { createMemoryTransport } from "@source-inc/gents-desktop-client/testing";
 
-import { useOperationsSnapshot } from "../src/components/backgroundedTools/useOperationsSnapshot";
-import { fetchOperationsSnapshot } from "../src/lib/desktop-api";
-import type { DesktopOperationsSnapshot } from "../src/lib/types/operations";
-
-const mockedFetch = vi.mocked(fetchOperationsSnapshot);
+const mockedFetch =
+  vi.fn<
+    (request: DesktopOperationsSnapshotRequest) => Promise<DesktopOperationsSnapshot>
+  >();
+const api = createDesktopApiAdapter(
+  createMemoryTransport({
+    handlers: {
+      desktop_operations_snapshot: (args) => {
+        const { request } = args as {
+          request: DesktopOperationsSnapshotRequest;
+        };
+        return mockedFetch(request);
+      },
+    },
+  }),
+);
 
 function snapshot(agentDid: string): DesktopOperationsSnapshot {
   return {
@@ -27,7 +42,7 @@ describe("useOperationsSnapshot", () => {
 
   it("does not poll while disabled", async () => {
     const { result } = renderHook(() =>
-      useOperationsSnapshot({ agentDid: "did:key:z6MkA" }, { enabled: false }),
+      useOperationsSnapshot({ agentDid: "did:key:z6MkA" }, { enabled: false, api }),
     );
 
     await act(async () => Promise.resolve());
@@ -45,7 +60,7 @@ describe("useOperationsSnapshot", () => {
     });
 
     const { result, rerender } = renderHook(
-      ({ agentDid }) => useOperationsSnapshot({ agentDid }),
+      ({ agentDid }) => useOperationsSnapshot({ agentDid }, { api }),
       { initialProps: { agentDid: "did:key:z6MkA" } },
     );
     await waitFor(() =>

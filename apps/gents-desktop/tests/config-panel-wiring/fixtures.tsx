@@ -15,7 +15,7 @@ import type {
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
-} from "../../src/lib/types";
+} from "@source-inc/gents-desktop-client";
 
 export const runResult: TaskRunResult = {
   requestDocId: "bae-run",

@@ -4,7 +4,7 @@ import type {
   ChatSendResult,
   DeploymentView,
   DesktopClientSnapshot,
-} from "../../src/lib/types";
+} from "@source-inc/gents-desktop-client";
 import { LiveBridgeRunner, type LiveBridgeRunnerOptions } from "../live-bridge-runner";
 import { renderTauriAppDriverWithBridge } from "../tauri-driver";
 

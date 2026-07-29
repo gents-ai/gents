@@ -1,8 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { ChatTranscriptPanel } from "../src/components/chat/ChatTranscriptPanel";
-import type { DesktopSessionSnapshot } from "../src/lib/types";
+import { ChatTranscriptPanel } from "@source-inc/gents-desktop-chat";
+import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 
 describe("durable goal transcript card", () => {
   it("renders persisted goal status, objective, token usage, and active time", () => {

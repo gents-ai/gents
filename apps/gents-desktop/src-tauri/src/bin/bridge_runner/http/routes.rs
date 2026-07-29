@@ -12,35 +12,37 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 use super::protocol::{HttpRequestData, HttpResponse};
-use crate::bridge::cascade::{build_cascade_preview, interrupt_request};
-use crate::bridge::commands::mcp_health::{load_mcp_services_with_health, probe_mcp_service};
-use crate::bridge::commands::{
+use crate::diagnostics::{
+    build_desktop_client_snapshot, build_desktop_session_snapshot, build_request_diagnostics_bundle,
+};
+use crate::live_fixture::LiveBridgeFixture;
+use gents_desktop_bridge::cascade::{build_cascade_preview, interrupt_request};
+use gents_desktop_bridge::commands::mcp_health::{
+    load_mcp_services_with_health, probe_mcp_service,
+};
+use gents_desktop_bridge::commands::{
     add_peer, pair_bearer, rename_conversation, repair_p2p, run_schedule_config, run_task_config,
     save_agent_config, save_backend_config, save_behavior_config, save_event_trigger_config,
     save_inference_profile_config, save_schedule_config, save_task_config,
     save_tool_selection_config, save_tool_service_config, send_chat_message,
     test_tool_service_config,
 };
-use crate::bridge::snapshot::operations_snapshot::{
+use gents_desktop_bridge::snapshot::operations_snapshot::{
     project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
 };
-use crate::bridge::snapshot::subagent_tree::{
+use gents_desktop_bridge::snapshot::subagent_tree::{
     build_local_subagent_tree, effective_subagent_tree_max_depth,
 };
-use crate::bridge::types::{
+use gents_desktop_bridge::types::{
     AgentConfigSaveRequest, BackendHealthView, BackendSaveRequest, BearerPairingRequest,
     BehaviorSaveRequest, ChatSendRequest, ConversationRenameRequest, DesktopInterruptRequest,
     DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
     DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest, EventTriggerSaveRequest,
     InferenceCallSummaryView, InferenceProfileSaveRequest, NativeExecutorStatusView,
-    PeerAddRequest, PeerStatusFetchRequest, RuntimeLivenessView, ScheduleRunRequest,
-    ScheduleSaveRequest, SubagentTreeView, TaskRunRequest, TaskSaveRequest,
-    ToolSelectionSaveRequest, ToolServiceSaveRequest, ToolServiceTestRequest,
+    PeerAddRequest, PeerProbeRequest, RuntimeLivenessView, ScheduleRunRequest, ScheduleSaveRequest,
+    SubagentTreeView, TaskRunRequest, TaskSaveRequest, ToolSelectionSaveRequest,
+    ToolServiceSaveRequest, ToolServiceTestRequest,
 };
-use crate::diagnostics::{
-    build_desktop_client_snapshot, build_desktop_session_snapshot, build_request_diagnostics_bundle,
-};
-use crate::live_fixture::LiveBridgeFixture;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -183,8 +185,9 @@ pub(super) fn handle_request(
             ))
         }
         ("POST", "/desktop/peer/status") => {
+            // Live harness probes by address (fleet-admin probe path).
             let request =
-                decode::<PeerStatusFetchRequest>(&request.body, "decoding peer status request")?;
+                decode::<PeerProbeRequest>(&request.body, "decoding peer status request")?;
             let payload =
                 runtime.block_on(fetch_runtime_connection_payload(&request.server_address))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&payload)?))

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-peer-probe-address"
+description = "Enables the desktop_peer_probe_address command without any pre-configured scope."
+commands.allow = ["desktop_peer_probe_address"]
+
+[[permission]]
+identifier = "deny-desktop-peer-probe-address"
+description = "Denies the desktop_peer_probe_address command without any pre-configured scope."
+commands.deny = ["desktop_peer_probe_address"]

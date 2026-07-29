@@ -549,7 +549,6 @@ mod tests {
     use flate2::read::GzDecoder;
     use gents_protocol::bearer_token::{encode_bearer, BearerInviteToken, BEARER_TOKEN_VERSION};
     use gents_protocol::network_token::{MembershipRecord, NetworkRecord};
-    use gents_protocol::pairing_token::{decode, encode, TOKEN_PREFIX};
 
     use super::*;
 
@@ -620,65 +619,6 @@ mod tests {
         let decoded: BearerInviteToken =
             ciborium::de::from_reader(cbor.as_slice()).expect("decode compact QR CBOR");
         assert_eq!(decoded, token);
-    }
-
-    fn v5_token() -> InviteToken {
-        InviteToken {
-            v: 5,
-            issuer_did: "did:key:agent-a".to_string(),
-            peer_id: "peer-a".to_string(),
-            ticket: "/ip4/127.0.0.1/tcp/4001/p2p/peer-a".to_string(),
-            nonce: "nonce-a".to_string(),
-            network_id: "default".to_string(),
-            issued_at: "2026-06-13T00:00:00Z".to_string(),
-            template: "conversation".to_string(),
-            grant: grant_record(),
-            network: network_record(),
-            sig: vec![0xAB, 0xCD],
-        }
-    }
-
-    #[test]
-    fn invite_token_v5_round_trips_with_template_nonce_and_grant() {
-        let original = v5_token();
-        let encoded = encode(&original).expect("encode");
-        assert!(encoded.starts_with(TOKEN_PREFIX));
-        let decoded = decode(&encoded).expect("decode");
-        assert_eq!(decoded, original);
-        assert_eq!(decoded.template, "conversation");
-        assert_eq!(decoded.nonce, "nonce-a");
-        assert_eq!(decoded.grant.member_did, "did:key:agent-b");
-        assert_eq!(decoded.network.admin_did, "did:key:agent-a");
-    }
-
-    #[test]
-    fn invite_token_rejects_wrong_prefix() {
-        let err = decode("wrong-prefix").unwrap_err().to_string();
-        assert!(err.contains("invalid pairing invite token prefix"));
-    }
-
-    #[test]
-    fn invite_token_rejects_v4_token() {
-        let mut old = v5_token();
-        old.v = 4;
-        let encoded = encode(&old).expect("encode v4");
-        let err = decode(&encoded).unwrap_err().to_string();
-        assert!(
-            err.contains("re-issue") || err.contains("newer"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn invite_token_rejects_truncated_base58() {
-        let encoded = encode(&v5_token()).expect("encode");
-        let truncated = &encoded[..encoded.len() - 4];
-        let err = decode(truncated).unwrap_err().to_string();
-        assert!(
-            err.contains("decoding pairing invite token")
-                || err.contains("parsing pairing invite token"),
-            "unexpected error: {err}"
-        );
     }
 
     #[test]

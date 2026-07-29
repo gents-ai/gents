@@ -1,40 +1,6 @@
 #[path = "../runner/live_fixture.rs"]
 mod live_fixture;
 
-mod bridge {
-    #[allow(dead_code)]
-    pub mod types {
-        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bridge/types.rs"));
-    }
-    pub mod commands {
-        #![allow(dead_code, unused_imports)]
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/bridge/commands.rs"
-        ));
-    }
-    #[allow(dead_code)]
-    pub mod cause_derivation {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/bridge/cause_derivation.rs"
-        ));
-    }
-    #[allow(dead_code)]
-    pub mod snapshot {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/bridge/snapshot.rs"
-        ));
-    }
-    pub mod cascade {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/bridge/cascade.rs"
-        ));
-    }
-}
-
 #[path = "bridge_runner/diagnostics.rs"]
 mod diagnostics;
 #[path = "bridge_runner/http.rs"]

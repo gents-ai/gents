@@ -1,29 +1,32 @@
 import { useEffect, type MutableRefObject } from "react";
 
-import type { ChatWorkflowState } from "../lib/chat-shell";
-import { conversationBelongsToBehavior } from "../lib/conversation-selection";
+import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
+import { conversationBelongsToBehavior } from "@source-inc/gents-desktop-chat";
 import type {
   DeploymentView,
+  DesktopApiAdapter,
+  DesktopClientUpdatedListenerFactory,
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
   P2PHealth,
-} from "../lib/types";
+} from "@source-inc/gents-desktop-client";
 import {
   createTrailingRefreshQueue,
   logShellEvent,
   shouldAutoRestartP2P,
   timingConfig,
 } from "./desktopShellRuntime";
-import { setSelectedAgent } from "../lib/desktop-api";
-import { listenToDesktopClientUpdates } from "../lib/desktop-events";
+import { listenToDesktopClientUpdates } from "@source-inc/gents-desktop-client";
 
 type DesktopShellEffectsArgs = {
+  api: DesktopApiAdapter;
   autoRestartInFlight: MutableRefObject<boolean>;
   autostartAttempted: MutableRefObject<boolean>;
   deployments: DeploymentView[];
   lastObservedP2PHealth: MutableRefObject<P2PHealth | null>;
   lastP2PAutoRestartAt: MutableRefObject<number | null>;
   localWorkflow: ChatWorkflowState;
+  listenToUpdates: DesktopClientUpdatedListenerFactory;
   newConversationAgentRef: MutableRefObject<string | null>;
   refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
   refreshSnapshot: () => Promise<void>;
@@ -48,12 +51,14 @@ type DesktopShellEffectsArgs = {
 };
 
 export function useDesktopShellEffects({
+  api,
   autoRestartInFlight,
   autostartAttempted,
   deployments,
   lastObservedP2PHealth,
   lastP2PAutoRestartAt,
   localWorkflow,
+  listenToUpdates,
   newConversationAgentRef,
   refreshSession,
   refreshSnapshot,
@@ -159,25 +164,47 @@ export function useDesktopShellEffects({
       }
     });
 
-    void listenToDesktopClientUpdates(async () => {
+    const reportListenerError = (listenerError: unknown) => {
       if (disposed) {
         return;
       }
-      await refreshQueue.request();
-    }).then((cleanup) => {
-      if (disposed) {
-        cleanup();
-        return;
-      }
-      unlisten = cleanup;
-    });
+      const message =
+        listenerError instanceof Error ? listenerError.message : String(listenerError);
+      logShellEvent(`desktop update listener failed: ${message}`);
+      setError(message);
+    };
+
+    void listenToDesktopClientUpdates(
+      async () => {
+        if (disposed) {
+          return;
+        }
+        await refreshQueue.request();
+      },
+      reportListenerError,
+      listenToUpdates,
+    )
+      .then((cleanup) => {
+        if (disposed) {
+          cleanup();
+          return;
+        }
+        unlisten = cleanup;
+      })
+      .catch(reportListenerError);
 
     return () => {
       disposed = true;
       refreshQueue.dispose();
       unlisten?.();
     };
-  }, [selectedAgentDid, selectedSessionId, selectedTrackedRequestId]);
+  }, [
+    listenToUpdates,
+    selectedAgentDid,
+    selectedSessionId,
+    selectedTrackedRequestId,
+    setError,
+  ]);
 
   useEffect(() => {
     if (!deployments.length) {
@@ -201,7 +228,7 @@ export function useDesktopShellEffects({
     }
 
     let disposed = false;
-    void setSelectedAgent(selectedAgentDid).catch((err) => {
+    void api.setSelectedAgent(selectedAgentDid).catch((err) => {
       if (disposed) {
         return;
       }
@@ -211,7 +238,7 @@ export function useDesktopShellEffects({
     return () => {
       disposed = true;
     };
-  }, [clientAvailable, selectedAgentDid, setError]);
+  }, [api, clientAvailable, selectedAgentDid, setError]);
 
   useEffect(() => {
     if (!selectedDeployment) {

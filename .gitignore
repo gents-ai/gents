@@ -15,3 +15,8 @@
 # Standalone third_party package builds
 /third_party/*/target/
 /third_party/*/Cargo.lock
+
+# npm workspace package builds
+packages/*/dist/
+node_modules/
+target/npm-pack/

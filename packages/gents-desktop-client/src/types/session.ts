@@ -1,0 +1,28 @@
+export type { ChatSendResult } from "../generated/ChatSendResult.js";
+export type { DesktopSessionSnapshot } from "../generated/DesktopSessionSnapshot.js";
+export type { GoalView } from "../generated/GoalView.js";
+export type { MessageView } from "../generated/MessageView.js";
+export type { PendingTurnView } from "../generated/PendingTurnView.js";
+export type { RenderedTimelineItem } from "../generated/RenderedTimelineItem.js";
+export type { RenderedToolCallView } from "../generated/RenderedToolCallView.js";
+export type { ResponseView } from "../generated/ResponseView.js";
+export type { ToolCallView } from "../generated/ToolCallView.js";
+export type { ToolDetailFieldView } from "../generated/ToolDetailFieldView.js";
+export type { ToolDetailValueView } from "../generated/ToolDetailValueView.js";
+export type { ToolResultView } from "../generated/ToolResultView.js";
+
+/** Direct runtime responses that do not pass through a bridge view struct. */
+export type { SessionForkResultView as SessionForkResult } from "../generated/SessionForkResultView.js";
+export type { RequestResendResultView as RequestResendResult } from "../generated/RequestResendResultView.js";
+
+/** Raw runtime RunTimeline JSON remains snake_case. */
+export type RunTimelineEventView = { kind: string } & Record<string, unknown>;
+
+export type RequestTimelineView = {
+  request_id: string;
+  session_id?: string | null;
+  agent_did?: string | null;
+  behavior_id?: string | null;
+  child_request_ids?: string[];
+  events: RunTimelineEventView[];
+};

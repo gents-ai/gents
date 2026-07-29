@@ -96,6 +96,15 @@ describeLive("Tauri app live bridge runner chat", () => {
       expect(finalSession.latestRequestId).toBe(thirdResult.requestId);
       expect(finalSession.timelineItems.length).toBeGreaterThanOrEqual(6);
 
+      // Wire-format fence (#877): timeline variant fields must arrive
+      // camelCase over the real bridge boundary. Deterministic suites inject
+      // TS-shaped objects and bypass serde entirely, so only a live run can
+      // catch a snake_case regression (itemKey would arrive undefined).
+      for (const item of finalSession.timelineItems) {
+        expect(typeof item.itemKey).toBe("string");
+        expect(item.itemKey.length).toBeGreaterThan(0);
+      }
+
       // Multi-turn coverage assertions:
       // (1) at least one read_file tool call landed (FIRST_PROMPT + SECOND_PROMPT both ask for one).
       // (2) every user turn produced non-empty assistant content (no silent failures).

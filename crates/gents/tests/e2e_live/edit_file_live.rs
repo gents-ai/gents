@@ -16,7 +16,8 @@
 //!
 //! ```bash
 //! GENTS_D4F_LIVE=1 cargo test --test e2e_live \
-//!   -- --test-threads=1 edit_file_live --nocapture
+//!   edit_file_live_model_lands_drifted_edit_without_write_file \
+//!   -- --ignored --test-threads=1 --nocapture
 //! ```
 
 use std::sync::Arc;
@@ -84,11 +85,12 @@ async fn fetch_tool_calls(node: &EmbeddedNode, request_id: &str) -> Vec<ToolCall
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: set GENTS_D4F_LIVE=1 and pass --ignored"]
 async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
-    if !d4f_enabled() {
-        eprintln!("GENTS_D4F_LIVE is not 1; skipping edit_file live qualification");
-        return;
-    }
+    assert!(
+        d4f_enabled(),
+        "set GENTS_D4F_LIVE=1 and pass --ignored to run the edit_file live qualification"
+    );
 
     let db = test_db("edit-file-live").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("edit-file-live"));

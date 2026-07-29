@@ -154,6 +154,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
+      - name: Assert native-e2e excluded from production capabilities
+        run: ./scripts/check-native-e2e-capabilities.sh
+
       # Compile the FULL target surface — examples, every test target, and the
       # desktop crates — which the test steps below do not cover. A PR that adds
       # a required field to a widely-constructed struct breaks literal
@@ -181,7 +184,10 @@ jobs:
           cargo test -p gents-cli --test cli_reconciliation reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
           cargo test -p gents-desktop-core
           cargo test -p gents-desktop
+          cargo test -p gents-desktop-bridge
           cargo test -p gents-desktop-tauri --lib
+          cargo test -p fixture-domain-plugin --lib
+          cargo test -p gents-fixture-host
 
       - name: Run full library and integration tests
         if: github.event_name != 'pull_request'
@@ -192,7 +198,10 @@ jobs:
         run: |
           cargo test -p gents-desktop-core
           cargo test -p gents-desktop
+          cargo test -p gents-desktop-bridge
           cargo test -p gents-desktop-tauri --lib
+          cargo test -p fixture-domain-plugin --lib
+          cargo test -p gents-fixture-host
 
       - name: Run full CLI test suite
         if: github.event_name != 'pull_request'
@@ -301,7 +310,7 @@ jobs:
 
   desktop-ui:
     runs-on: [self-hosted, macOS, ARM64, studio]
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -311,7 +320,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: apps/gents-desktop/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install elan
         run: |
@@ -319,9 +328,17 @@ jobs:
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
           "$HOME/.elan/bin/elan" --version
 
-      - name: Install frontend dependencies
-        working-directory: apps/gents-desktop
+      - name: Install workspace frontend dependencies
         run: npm ci
+
+      - name: Build and test desktop packages
+        run: |
+          npm run check:package-boundaries
+          npm run build:packages
+          npm run test:packages
+          npm run build --workspace @source-inc/fixture-host-ui
+          # Exercise the same relative output path used by the release workflow.
+          ./scripts/pack-desktop-packages.sh target/desktop-npm-ci
 
       - name: Install Playwright browser
         working-directory: apps/gents-desktop

@@ -1,15 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 
-import { BackendHealthPanel } from "../src/components/backendHealth";
-import {
-  deriveDisplayState,
-  STATE_LABEL,
-} from "../src/components/backendHealth/displayState";
+import { BackendHealthPanel } from "@source-inc/gents-desktop-operations";
+import { deriveDisplayState, STATE_LABEL } from "@source-inc/gents-desktop-operations";
 import type {
   BackendDisplayState,
   BackendHealth,
-} from "../src/components/backendHealth/types";
+} from "@source-inc/gents-desktop-client";
 
 /**
  * One row per Lean BackendHealthAdmissionCase

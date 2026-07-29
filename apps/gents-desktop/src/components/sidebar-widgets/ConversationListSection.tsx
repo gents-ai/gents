@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { conversationBelongsToBehavior } from "../../lib/conversation-selection";
-import type { ConversationSummary, DeploymentView, TaskView } from "../../lib/types";
-import { displayConversationTitle } from "../../lib/types";
-import { formatRelativeTime } from "../fleet/fleetMetrics";
-import { PencilIcon } from "../fleet/FleetIcons";
+import { conversationBelongsToBehavior } from "@source-inc/gents-desktop-chat";
+import type {
+  ConversationSummary,
+  DeploymentView,
+  TaskView,
+} from "@source-inc/gents-desktop-client";
+import { displayConversationTitle } from "@source-inc/gents-desktop-client";
+import { formatRelativeTime, PencilIcon } from "@source-inc/gents-desktop-fleet";
 import { conversationStatusClass } from "./sidebarUtils";
 
 const ALL_TASKS_FILTER = "__all__";

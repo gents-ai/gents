@@ -11,7 +11,7 @@
       }
     },
     { "op": "Reconcile", "node": "A" },
-    { "op": "WaitForConvergence", "timeout_secs": 15 },
+    { "op": "WaitForConvergence" },
     {
       "op": "OperatorWrite",
       "node": "A",
@@ -22,8 +22,8 @@
       }
     },
     { "op": "Reconcile", "node": "A" },
-    { "op": "WaitForConvergence", "timeout_secs": 15 },
+    { "op": "WaitForConvergence" },
     { "op": "Reconcile", "node": "A" },
-    { "op": "WaitForConvergence", "timeout_secs": 15 }
+    { "op": "WaitForConvergence" }
   ]
 }

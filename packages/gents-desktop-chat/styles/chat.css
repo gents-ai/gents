@@ -1,0 +1,302 @@
+@layer chat {
+  .chat-workspace {
+    position: relative;
+    display: block;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .chat-main {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: var(--space-5);
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .chat-header {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-6);
+    min-width: 0;
+    padding: 2px 2px 0;
+  }
+
+  .chat-header h2 {
+    font-size: var(--text-3xl);
+    line-height: 1.15;
+  }
+
+  .chat-status,
+  .composer-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-5);
+  }
+
+  .chat-status {
+    flex-wrap: wrap;
+  }
+
+  .transcript-panel,
+  .composer-panel {
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .transcript-panel {
+    max-width: 100%;
+    height: 100%;
+    overflow: auto;
+    display: grid;
+    align-content: start;
+    scroll-behavior: smooth;
+    scroll-padding-bottom: var(--space-10);
+    background:
+      linear-gradient(
+        180deg,
+        rgb(var(--color-accent-rgb) / 0.035),
+        transparent 42%
+      ),
+      var(--color-surface-strong);
+    border-color: rgb(var(--color-accent-rgb) / 0.16);
+    box-shadow: inset 0 1px 0 rgb(var(--overlay-rgb) / 0.025);
+  }
+
+  .composer-actions {
+    display: flex;
+    gap: var(--space-3);
+  }
+
+  .composer-panel {
+    display: grid;
+    gap: var(--space-5);
+    padding-top: var(--space-6);
+    background: var(--color-surface-strong);
+    border-color: rgb(var(--color-accent-rgb) / 0.16);
+    box-shadow: inset 0 1px 0 rgb(var(--overlay-rgb) / 0.025);
+  }
+
+  .composer-input-wrap {
+    position: relative;
+  }
+
+  .slash-skill-menu {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    z-index: 6;
+    margin: 0 0 var(--space-2);
+    padding: var(--space-2);
+    list-style: none;
+    min-width: min(44ch, 100%);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-deep);
+  }
+
+  .slash-skill-menu button {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+    width: 100%;
+    padding: var(--space-2) var(--space-4);
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-soft);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .slash-skill-menu button.is-active,
+  .slash-skill-menu button:hover {
+    background: var(--color-surface-muted);
+    color: var(--color-text);
+  }
+
+  .slash-skill-id {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+  }
+
+  .slash-skill-name {
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .composer-input {
+    width: 100%;
+    max-width: 100%;
+    min-height: 44px;
+    max-height: 320px;
+    overflow-y: auto;
+    resize: none;
+    padding: var(--space-6);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-default);
+    background: var(--color-surface-strong);
+    color: var(--color-text);
+  }
+
+  .composer-input:focus {
+    outline: 2px solid rgb(var(--color-accent-rgb) / 0.3);
+    outline-offset: 1px;
+    border-color: var(--border-selected);
+  }
+
+  .chat-toast {
+    position: absolute;
+    z-index: 4;
+    left: 50%;
+    bottom: var(--space-10);
+    transform: translateX(-50%);
+    max-width: min(60ch, 90%);
+    padding: var(--space-3) var(--space-7);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-pill);
+    background: var(--color-surface-deep);
+    color: var(--color-text-soft);
+    font-size: var(--text-sm);
+    animation: chat-toast-fade-in var(--motion-fast) ease-out;
+  }
+
+  @keyframes chat-toast-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  .chat-toast.is-error {
+    border-color: var(--color-error-strong);
+    color: var(--color-error);
+  }
+
+  .chat-title-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+
+  .chat-title-row h2 {
+    min-width: 0;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+
+  .mobile-chat-navigation-button {
+    display: none;
+  }
+
+  .title-rename-form {
+    max-width: min(560px, 100%);
+  }
+
+  .title-rename-input {
+    width: 100%;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-strong);
+    background: var(--color-surface-strong);
+    color: var(--color-text);
+    padding: var(--space-4) var(--space-5);
+    font-size: var(--text-3xl);
+    font-weight: 600;
+    line-height: 1.1;
+  }
+
+  .message-list {
+    align-content: start;
+    padding-bottom: var(--space-2);
+  }
+
+  .compact-empty {
+    min-height: 180px;
+  }
+
+  .empty-transcript {
+    min-height: 260px;
+    display: grid;
+    gap: var(--space-4);
+    place-content: center;
+    text-align: center;
+  }
+
+  @media (max-width: 760px) {
+    .chat-header {
+      align-items: center;
+      gap: var(--space-3);
+      padding: 0;
+    }
+
+    .chat-header h2 {
+      font-size: var(--text-xl);
+      -webkit-line-clamp: 1;
+    }
+
+    .chat-status {
+      flex: 0 0 auto;
+      justify-content: flex-end;
+      gap: var(--space-2);
+    }
+
+    .chat-status .chip:last-child {
+      display: none;
+    }
+
+    .chat-title-block {
+      display: flex;
+      flex: 1 1 auto;
+      align-items: center;
+      gap: var(--space-3);
+    }
+
+    .chat-title-row {
+      flex: 1 1 auto;
+      gap: var(--space-2);
+    }
+
+    .mobile-chat-navigation-button {
+      display: inline-flex;
+      flex: 0 0 auto;
+      min-height: 40px;
+      align-items: center;
+      gap: var(--space-2);
+      padding: 0 var(--space-3);
+    }
+
+    .chat-main {
+      gap: var(--space-3);
+    }
+
+    .transcript-panel {
+      padding: var(--space-4);
+    }
+
+    .composer-panel {
+      gap: var(--space-3);
+      padding: var(--space-3);
+    }
+
+    .composer-input {
+      max-height: 160px;
+      padding: var(--space-4);
+    }
+  }
+}

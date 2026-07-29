@@ -1,0 +1,133 @@
+/* Guided inference setup wizard modal. The dashboard callout is base fleet UI. */
+
+@layer fleet {
+  .inference-wizard {
+    width: min(520px, 100%);
+  }
+
+  .inference-wizard-header {
+    padding: var(--space-9) var(--space-9) var(--space-5);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .inference-wizard-header h3 {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-xl);
+  }
+
+  .inference-wizard-header p {
+    margin: 0;
+    font-size: var(--text-sm);
+  }
+
+  .inference-wizard-body {
+    padding: var(--space-7) var(--space-9);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+  }
+
+  .inference-wizard-options {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .inference-wizard-option {
+    width: 100%;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-5) var(--space-6);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-muted);
+    cursor: pointer;
+    transition:
+      border-color var(--motion-fast) ease,
+      background var(--motion-fast) ease;
+  }
+
+  .inference-wizard-option:hover,
+  .inference-wizard-option:focus-visible {
+    border-color: var(--border-strong);
+    background: rgb(var(--color-accent-strong-rgb) / 0.08);
+  }
+
+  .inference-wizard-option-title {
+    font-size: var(--text-base);
+    color: var(--color-text);
+  }
+
+  .inference-wizard-option-meta {
+    font-size: var(--text-sm);
+  }
+
+  .inference-wizard-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+
+  .inference-wizard-inline {
+    display: flex;
+    gap: var(--space-3);
+    align-items: stretch;
+  }
+
+  .inference-wizard-inline input {
+    flex: 1;
+  }
+
+  .inference-wizard-actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .inference-wizard-back {
+    align-self: flex-start;
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+    cursor: pointer;
+  }
+
+  .inference-wizard-back:hover:not(:disabled) {
+    color: var(--color-text);
+  }
+
+  .inference-wizard-error {
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--color-error);
+  }
+
+  .inference-wizard-success {
+    margin: 0;
+    font-size: var(--text-base);
+    color: var(--color-accent-strong);
+  }
+
+  .inference-wizard-done {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .inference-wizard-authurl {
+    word-break: break-all;
+  }
+
+  .inference-wizard-footer {
+    padding: var(--space-5) var(--space-9);
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    justify-content: flex-end;
+  }
+}

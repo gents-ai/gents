@@ -8,9 +8,9 @@
       "replicator_addresses": ["/ip4/127.0.0.1/tcp/4102/p2p/peer-b"]
     },
     { "op": "Reconcile", "node": "A" },
-    { "op": "WaitForConvergence", "timeout_secs": 15 },
+    { "op": "WaitForConvergence" },
     { "op": "OperatorDelete", "node": "A", "peer": "B" },
     { "op": "Reconcile", "node": "A" },
-    { "op": "WaitForConvergence", "timeout_secs": 15 }
+    { "op": "WaitForConvergence" }
   ]
 }

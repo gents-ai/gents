@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { MessageList } from "../src/components/Transcript";
+import { MessageList } from "@source-inc/gents-desktop-chat";
 
 describe("fenced code highlighting", () => {
   it("highlights fenced code and labels the language", () => {

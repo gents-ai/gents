@@ -6,8 +6,8 @@ import type {
   SkillDeleteRequest,
   SkillSaveRequest,
   SkillView,
-} from "../../lib/types";
-import { ConfirmDialog } from "../ConfirmDialog";
+} from "@source-inc/gents-desktop-client";
+import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
 import { ignoreHandledActionError, linesToArray, optionalString } from "./formUtils";

@@ -1,4 +1,4 @@
-#[path = "../src/lean_vocab_test.rs"]
+#[path = "../src/lean_vocab_test/support.rs"]
 mod lean_vocab_test;
 
 #[test]

@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "native-e2e",
+  "description": "E2E-only overlay: full surface plus native-e2e permission set",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "gents-desktop-bridge:default",
+    "gents-desktop-bridge:full",
+    "gents-desktop-bridge:native-e2e"
+  ]
+}

@@ -1,6 +1,5 @@
 use super::shared::{
-    escape_graphql, extract_text, lookup_service_query, mcp_service_allowed, MetaToolError,
-    StructuredToolError,
+    extract_text, lookup_service_query, mcp_service_allowed, MetaToolError, StructuredToolError,
 };
 
 fn make_call_result(texts: &[&str]) -> rmcp::model::CallToolResult {
@@ -12,31 +11,6 @@ fn make_call_result(texts: &[&str]) -> rmcp::model::CallToolResult {
         .collect();
 
     CallToolResult::success(content)
-}
-
-#[test]
-fn escape_graphql_handles_quotes() {
-    assert_eq!(escape_graphql(r#"say "hello""#), r#"say \"hello\""#);
-}
-
-#[test]
-fn escape_graphql_handles_backslashes() {
-    assert_eq!(escape_graphql(r"path\to\file"), r"path\\to\\file");
-}
-
-#[test]
-fn escape_graphql_handles_newlines_and_tabs() {
-    assert_eq!(escape_graphql("line1\nline2\ttab"), r"line1\nline2\ttab");
-}
-
-#[test]
-fn escape_graphql_handles_carriage_return() {
-    assert_eq!(escape_graphql("cr\r"), r"cr\r");
-}
-
-#[test]
-fn escape_graphql_combined() {
-    assert_eq!(escape_graphql("a\\b\"c\nd"), r#"a\\b\"c\nd"#);
 }
 
 #[test]

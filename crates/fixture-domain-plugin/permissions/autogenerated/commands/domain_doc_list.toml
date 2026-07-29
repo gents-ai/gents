@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-domain-doc-list"
+description = "Enables the domain_doc_list command without any pre-configured scope."
+commands.allow = ["domain_doc_list"]
+
+[[permission]]
+identifier = "deny-domain-doc-list"
+description = "Denies the domain_doc_list command without any pre-configured scope."
+commands.deny = ["domain_doc_list"]

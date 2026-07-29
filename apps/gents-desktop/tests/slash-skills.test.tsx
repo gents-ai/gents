@@ -1,13 +1,13 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { ChatComposer } from "../src/components/chat";
+import { ChatComposer } from "@source-inc/gents-desktop-chat";
 import {
   applySkillSelection,
   effectiveBehaviorSkills,
   slashSkillSuggestion,
-} from "../src/components/chat/slashSkills";
-import type { BehaviorView, SkillView } from "../src/lib/types";
+} from "@source-inc/gents-desktop-chat";
+import type { BehaviorView, SkillView } from "@source-inc/gents-desktop-client";
 
 const skills: SkillView[] = [
   { skillId: "review-skill", name: "Review", toolRefs: [], enabled: true },

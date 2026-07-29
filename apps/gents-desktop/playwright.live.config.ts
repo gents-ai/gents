@@ -1,4 +1,13 @@
 import { defineConfig, devices } from "@playwright/test";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+
+// Vite may be hoisted to the workspace root; resolve it instead of assuming
+// a nested node_modules layout.
+const viteBin = join(
+  dirname(createRequire(import.meta.url).resolve("vite/package.json")),
+  "bin/vite.js",
+);
 
 const port = Number(process.env.DESKTOP_UI_LIVE_E2E_PORT ?? 1424);
 const baseURL = process.env.DESKTOP_UI_LIVE_E2E_BASE_URL ?? `http://127.0.0.1:${port}`;
@@ -26,7 +35,7 @@ export default defineConfig({
     video: "retain-on-failure",
   },
   webServer: {
-    command: `node ./node_modules/vite/bin/vite.js --host 127.0.0.1 --port ${port} --strictPort --clearScreen false`,
+    command: `node ${viteBin} --host 127.0.0.1 --port ${port} --strictPort --clearScreen false`,
     url: `${baseURL}/tests/ui-harness/harness.html`,
     reuseExistingServer: !process.env.CI,
     timeout: 30_000,

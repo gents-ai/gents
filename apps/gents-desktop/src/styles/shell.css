@@ -166,23 +166,6 @@
     color: var(--color-text);
   }
 
-  .chat-header {
-    position: relative;
-    z-index: 2;
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: var(--space-6);
-    min-width: 0;
-    padding: 2px 2px 0;
-  }
-
-  .chat-header h2 {
-    font-size: var(--text-3xl);
-    line-height: 1.15;
-  }
-
-  .chat-status,
   .behavior-chips {
     flex-wrap: wrap;
   }
@@ -293,27 +276,6 @@
     .workspace-tabs {
       max-width: 100%;
       overflow-x: auto;
-    }
-
-    .chat-header {
-      align-items: center;
-      gap: var(--space-3);
-      padding: 0;
-    }
-
-    .chat-header h2 {
-      font-size: var(--text-xl);
-      -webkit-line-clamp: 1;
-    }
-
-    .chat-status {
-      flex: 0 0 auto;
-      justify-content: flex-end;
-      gap: var(--space-2);
-    }
-
-    .chat-status .chip:last-child {
-      display: none;
     }
   }
 }

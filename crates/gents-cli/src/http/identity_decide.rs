@@ -12,7 +12,7 @@ use serde_json::json;
 use crate::http::router::RuntimeHttpState;
 
 #[cfg(test)]
-#[path = "../../../gents/src/lean_vocab_test.rs"]
+#[path = "../../../gents/src/lean_vocab_test/support.rs"]
 mod lean_vocab_test;
 
 #[derive(Debug, Deserialize)]
