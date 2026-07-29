@@ -1,67 +1,65 @@
 //! Baseline table and declarative step chain.
 //!
-//! The default registry freezes the cutover baseline: every gents-protocol
-//! schema, feature-invariant, with zero post-baseline steps. Version ID pins
-//! are filled by the chain-replay authoring test (Phase A ships `None` pins
-//! and enforces the single-version DAG shape instead).
+//! Types are lifetime-parameterized so tests can inject discovered pins
+//! (`DynamicRegistry`) while production keeps `'static` constants.
 
 use crate::expectation::CollectionExpectation;
 
 /// One collection registered at the migration baseline (lineage root).
 #[derive(Debug, Clone, Copy)]
-pub struct BaselineCollection {
+pub struct BaselineCollection<'a> {
     /// Collection name (must match the SDL type name).
-    pub name: &'static str,
+    pub name: &'a str,
     /// GraphQL SDL for `add_schema`.
-    pub sdl: &'static str,
-    /// Pinned root VersionID. `None` during Phase A authoring.
-    pub expected_version: Option<&'static str>,
+    pub sdl: &'a str,
+    /// Pinned root VersionID. `None` until chain-replay freezes pins.
+    pub expected_version: Option<&'a str>,
     /// Full post-state expectation for the active baseline version.
     pub expected_state: CollectionExpectation,
 }
 
 /// Embedded wasm + args for a lens edge.
 #[derive(Debug, Clone, Copy)]
-pub struct LensSpec {
+pub struct LensSpec<'a> {
     /// Raw wasm module bytes (always `from_bytes` — never path).
-    pub wasm: &'static [u8],
+    pub wasm: &'a [u8],
     /// Optional JSON args string for the module.
-    pub args_json: Option<&'static str>,
+    pub args_json: Option<&'a str>,
 }
 
 /// One declarative migration step.
 #[derive(Debug, Clone, Copy)]
-pub enum MigrationStep {
+pub enum MigrationStep<'a> {
     /// Register a collection that did not exist at the baseline.
     AddCollection {
-        id: &'static str,
-        sdl: &'static str,
-        expected_version: Option<&'static str>,
+        id: &'a str,
+        sdl: &'a str,
+        expected_version: Option<&'a str>,
         expected_state: CollectionExpectation,
     },
     /// Versioned change (field add/rename) with optional lens.
     PatchVersioned {
-        id: &'static str,
-        collection: &'static str,
+        id: &'a str,
+        collection: &'a str,
         /// RFC 6902 patch; must include IsActive:false for the safe sequence.
-        patch: &'static str,
-        lens: Option<LensSpec>,
-        expected_version: Option<&'static str>,
-        expected_transform: Option<&'static str>,
+        patch: &'a str,
+        lens: Option<LensSpec<'a>>,
+        expected_version: Option<&'a str>,
+        expected_transform: Option<&'a str>,
         expected_state: CollectionExpectation,
     },
     /// In-place metadata change (indexes, embeddings) — no new version CID.
     PatchInPlace {
-        id: &'static str,
-        collection: &'static str,
-        patch: &'static str,
+        id: &'a str,
+        collection: &'a str,
+        patch: &'a str,
         expected_state: CollectionExpectation,
     },
 }
 
-impl MigrationStep {
+impl<'a> MigrationStep<'a> {
     /// Stable step id for errors and reports.
-    pub fn id(&self) -> &'static str {
+    pub fn id(&self) -> &'a str {
         match self {
             Self::AddCollection { id, .. }
             | Self::PatchVersioned { id, .. }
@@ -70,7 +68,7 @@ impl MigrationStep {
     }
 
     /// Primary collection this step touches, when applicable.
-    pub fn collection(&self) -> Option<&'static str> {
+    pub fn collection(&self) -> Option<&'a str> {
         match self {
             Self::AddCollection { .. } => None,
             Self::PatchVersioned { collection, .. } | Self::PatchInPlace { collection, .. } => {
@@ -82,16 +80,135 @@ impl MigrationStep {
 
 /// Full migration registry: baseline + ordered step chain.
 #[derive(Debug, Clone, Copy)]
-pub struct Registry {
-    pub baseline: &'static [BaselineCollection],
-    pub steps: &'static [MigrationStep],
+pub struct Registry<'a> {
+    pub baseline: &'a [BaselineCollection<'a>],
+    pub steps: &'a [MigrationStep<'a>],
 }
 
-impl Registry {
-    /// Names of every collection managed by this registry (baseline only for
-    /// Phase A; AddCollection steps extend this at apply time).
-    pub fn managed_names(&self) -> impl Iterator<Item = &'static str> + '_ {
+impl<'a> Registry<'a> {
+    /// Names of every collection managed by this registry (baseline only;
+    /// AddCollection steps extend the managed set at apply time).
+    pub fn managed_names(&self) -> impl Iterator<Item = &'a str> + '_ {
         self.baseline.iter().map(|b| b.name)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Owned / dynamic registry (tests + pin authoring)
+// ---------------------------------------------------------------------------
+
+/// Owned baseline entry for dynamic registries.
+#[derive(Debug, Clone)]
+pub struct BaselineCollectionOwned {
+    pub name: String,
+    pub sdl: String,
+    pub expected_version: Option<String>,
+    pub expected_state: CollectionExpectation,
+}
+
+/// Owned lens spec (wasm held by the owner).
+#[derive(Debug, Clone)]
+pub struct LensSpecOwned {
+    pub wasm: Vec<u8>,
+    pub args_json: Option<String>,
+}
+
+/// Owned step for dynamic registries.
+#[derive(Debug, Clone)]
+pub enum MigrationStepOwned {
+    AddCollection {
+        id: String,
+        sdl: String,
+        expected_version: Option<String>,
+        expected_state: CollectionExpectation,
+    },
+    PatchVersioned {
+        id: String,
+        collection: String,
+        patch: String,
+        lens: Option<LensSpecOwned>,
+        expected_version: Option<String>,
+        expected_transform: Option<String>,
+        expected_state: CollectionExpectation,
+    },
+    PatchInPlace {
+        id: String,
+        collection: String,
+        patch: String,
+        expected_state: CollectionExpectation,
+    },
+}
+
+/// Heap-owned registry used by conformance tests that discover pins at runtime.
+#[derive(Debug, Clone, Default)]
+pub struct DynamicRegistry {
+    pub baseline: Vec<BaselineCollectionOwned>,
+    pub steps: Vec<MigrationStepOwned>,
+}
+
+impl DynamicRegistry {
+    /// Borrow as a [`Registry`] for the engine. The returned views are valid
+    /// for the lifetime of `self`.
+    pub fn as_registry(&self) -> (Vec<BaselineCollection<'_>>, Vec<MigrationStep<'_>>) {
+        let baseline = self
+            .baseline
+            .iter()
+            .map(|b| BaselineCollection {
+                name: b.name.as_str(),
+                sdl: b.sdl.as_str(),
+                expected_version: b.expected_version.as_deref(),
+                expected_state: b.expected_state,
+            })
+            .collect();
+        let steps = self
+            .steps
+            .iter()
+            .map(|s| match s {
+                MigrationStepOwned::AddCollection {
+                    id,
+                    sdl,
+                    expected_version,
+                    expected_state,
+                } => MigrationStep::AddCollection {
+                    id: id.as_str(),
+                    sdl: sdl.as_str(),
+                    expected_version: expected_version.as_deref(),
+                    expected_state: *expected_state,
+                },
+                MigrationStepOwned::PatchVersioned {
+                    id,
+                    collection,
+                    patch,
+                    lens,
+                    expected_version,
+                    expected_transform,
+                    expected_state,
+                } => MigrationStep::PatchVersioned {
+                    id: id.as_str(),
+                    collection: collection.as_str(),
+                    patch: patch.as_str(),
+                    lens: lens.as_ref().map(|l| LensSpec {
+                        wasm: l.wasm.as_slice(),
+                        args_json: l.args_json.as_deref(),
+                    }),
+                    expected_version: expected_version.as_deref(),
+                    expected_transform: expected_transform.as_deref(),
+                    expected_state: *expected_state,
+                },
+                MigrationStepOwned::PatchInPlace {
+                    id,
+                    collection,
+                    patch,
+                    expected_state,
+                } => MigrationStep::PatchInPlace {
+                    id: id.as_str(),
+                    collection: collection.as_str(),
+                    patch: patch.as_str(),
+                    expected_state: *expected_state,
+                },
+            })
+            .collect();
+        (baseline, steps)
     }
 }
 
@@ -112,15 +229,11 @@ macro_rules! baseline_entry {
 
 /// Baseline SDL set: every schema in `gents_protocol::schemas::{RUNTIME_ALL, ALL}`,
 /// feature-invariant (includes AgentMemory).
-///
-/// Order matches historical registration so relation resolution stays stable.
-pub static DEFAULT_BASELINE: &[BaselineCollection] = &[
-    // RUNTIME_ALL first (InferenceBackend)
+pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_BACKEND_NAME,
         gents_protocol::schemas::INFERENCE_BACKEND
     ),
-    // ALL — same order as gents_protocol::schemas::ALL
     baseline_entry!(
         gents_protocol::schemas::AGENT_PRINCIPAL_NAME,
         gents_protocol::schemas::AGENT_PRINCIPAL
@@ -271,11 +384,16 @@ pub static DEFAULT_BASELINE: &[BaselineCollection] = &[
     ),
 ];
 
-/// Empty post-baseline chain at cutover.
-pub static DEFAULT_STEPS: &[MigrationStep] = &[];
+/// Empty post-baseline chain at cutover. Real steps land when schema changes.
+pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[];
 
 /// Production registry: full baseline, zero steps.
-pub static DEFAULT_REGISTRY: Registry = Registry {
+pub static DEFAULT_REGISTRY: Registry<'static> = Registry {
     baseline: DEFAULT_BASELINE,
     steps: DEFAULT_STEPS,
 };
+
+/// Embedded fixture lens wasm (built by `build.rs`).
+pub fn fixture_lens_wasm() -> &'static [u8] {
+    include_bytes!(env!("GENTS_LENS_FIXTURE_ADD_LABEL_WASM_PATH"))
+}

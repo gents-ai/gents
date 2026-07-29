@@ -11,8 +11,10 @@ members = [
     "crates/gents-desktop-core",
     "crates/gents-lean-contract",
     "crates/gents-migration",
+    "crates/gents-lenses/fixture_add_label",
     "crates/gents-fs-runner",
     "crates/gents-migration",
+    "crates/gents-lenses/fixture_add_label",
     "crates/gents-protocol",
     "crates/gents-schemas",
 ]
@@ -33,6 +35,7 @@ default-members = [
     "crates/gents-desktop-bridge",
     "crates/gents-desktop-core",
     "crates/gents-migration",
+    "crates/gents-lenses/fixture_add_label",
     "crates/gents-protocol",
     "crates/gents-schemas",
 ]

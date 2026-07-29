@@ -14,7 +14,9 @@ use tracing::{debug, info, warn};
 use crate::error::{Error, Result};
 use crate::lens;
 use crate::materialize;
-use crate::registry::{BaselineCollection, MigrationStep, Registry, DEFAULT_REGISTRY};
+use crate::registry::{
+    BaselineCollection, DynamicRegistry, MigrationStep, Registry, DEFAULT_REGISTRY,
+};
 use crate::report::MigrationReport;
 
 /// Process-wide lock: desktop and runtime paths can race within one process.
@@ -31,7 +33,7 @@ pub async fn ensure_migrations(node: &EmbeddedNode) -> Result<MigrationReport> {
 /// Testable entry: inject a custom registry.
 pub async fn ensure_migrations_with_registry(
     node: &EmbeddedNode,
-    registry: &Registry,
+    registry: &Registry<'_>,
 ) -> Result<MigrationReport> {
     let _guard = ENSURE_LOCK.lock().await;
     let mut report = MigrationReport::default();
@@ -60,13 +62,26 @@ pub async fn ensure_migrations_arc(node: Arc<EmbeddedNode>) -> Result<MigrationR
     ensure_migrations(node.as_ref()).await
 }
 
+/// Ensure against a heap-owned registry (pin authoring / conformance tests).
+pub async fn ensure_migrations_dynamic(
+    node: &EmbeddedNode,
+    registry: &DynamicRegistry,
+) -> Result<MigrationReport> {
+    let (baseline, steps) = registry.as_registry();
+    let view = Registry {
+        baseline: &baseline,
+        steps: &steps,
+    };
+    ensure_migrations_with_registry(node, &view).await
+}
+
 // ---------------------------------------------------------------------------
 // Baseline
 // ---------------------------------------------------------------------------
 
 async fn register_baseline(
     node: &EmbeddedNode,
-    registry: &Registry,
+    registry: &Registry<'_>,
     report: &mut MigrationReport,
 ) -> Result<()> {
     for entry in registry.baseline {
@@ -97,7 +112,7 @@ async fn register_baseline(
 
 async fn apply_steps(
     node: &EmbeddedNode,
-    registry: &Registry,
+    registry: &Registry<'_>,
     report: &mut MigrationReport,
 ) -> Result<()> {
     for step in registry.steps {
@@ -199,7 +214,7 @@ async fn apply_patch_versioned(
     id: &str,
     collection: &str,
     patch: &str,
-    lens_spec: Option<crate::registry::LensSpec>,
+    lens_spec: Option<crate::registry::LensSpec<'_>>,
     expected_version: Option<&str>,
     expected_transform: Option<&str>,
     expected_state: &crate::expectation::CollectionExpectation,
@@ -224,8 +239,17 @@ async fn apply_patch_versioned(
 
     // Already at pin and active → verify + optional edge repair.
     if active.version_id == pin && active.is_active && !active.is_placeholder {
-        verify_active_step(node, id, collection, pin, expected_transform, expected_state, report)
-            .await?;
+        verify_active_step(
+            node,
+            id,
+            collection,
+            pin,
+            expected_transform,
+            lens_spec,
+            expected_state,
+            report,
+        )
+        .await?;
         report.steps_already_current += 1;
         return Ok(());
     }
@@ -343,8 +367,17 @@ async fn apply_patch_versioned(
         }
         Some(v) => {
             // complete active (active version_id may differ if name pointer lag)
-            verify_active_step(node, id, collection, pin, expected_transform, expected_state, report)
-                .await?;
+            verify_active_step(
+                node,
+                id,
+                collection,
+                pin,
+                expected_transform,
+                lens_spec,
+                expected_state,
+                report,
+            )
+            .await?;
             if v.version_id == pin {
                 // Post-activation repair: re-call set_active to re-trigger reindex.
                 if let Err(e) = node.set_active_collection_version(pin).await {
@@ -372,6 +405,7 @@ async fn verify_active_step(
     collection: &str,
     pin: &str,
     expected_transform: Option<&str>,
+    lens_spec: Option<crate::registry::LensSpec<'_>>,
     expected_state: &crate::expectation::CollectionExpectation,
     report: &mut MigrationReport,
 ) -> Result<()> {
@@ -406,14 +440,13 @@ async fn verify_active_step(
                 collection,
                 &source,
                 pin,
-                None, // lens bytes unknown at verify-only path without lens_spec
+                lens_spec,
                 expected_tx,
                 &active,
                 report,
             )
             .await?;
             let _ = prev;
-            let _ = source;
         }
     }
     Ok(())
@@ -425,7 +458,7 @@ async fn repair_transform_if_needed(
     collection: &str,
     source: &str,
     dest: &str,
-    lens_spec: Option<crate::registry::LensSpec>,
+    lens_spec: Option<crate::registry::LensSpec<'_>>,
     expected_tx: &str,
     version: &CollectionVersion,
     report: &mut MigrationReport,
@@ -509,7 +542,7 @@ async fn apply_patch_in_place(
 
 async fn verify_managed_lineages(
     node: &EmbeddedNode,
-    registry: &Registry,
+    registry: &Registry<'_>,
     _report: &mut MigrationReport,
 ) -> Result<()> {
     let all_versions = node.get_all_collection_versions().await.map_err(Error::Node)?;
@@ -524,12 +557,13 @@ async fn verify_managed_lineages(
     }
 
     let known_pins = known_pin_set(registry);
+    let target_active = target_active_pins(registry);
 
     for entry in registry.baseline {
-        verify_one_collection(entry, &by_name, &known_pins)?;
+        verify_one_collection(entry, &by_name, &known_pins, &target_active)?;
     }
 
-    // AddCollection steps also manage collections.
+    // AddCollection steps also manage collections that may not be in baseline.
     for step in registry.steps {
         if let MigrationStep::AddCollection {
             id: _,
@@ -538,7 +572,6 @@ async fn verify_managed_lineages(
             expected_state,
         } = step
         {
-            // Name is not stored separately; when pins land, verify via pin lookup.
             if let Some(pin) = expected_version {
                 let Some(v) = all_versions.iter().find(|v| v.version_id == *pin) else {
                     return Err(Error::VersionPinMismatch {
@@ -561,7 +594,7 @@ async fn verify_managed_lineages(
     Ok(())
 }
 
-fn known_pin_set(registry: &Registry) -> HashSet<String> {
+fn known_pin_set(registry: &Registry<'_>) -> HashSet<String> {
     let mut pins = HashSet::new();
     for b in registry.baseline {
         if let Some(v) = b.expected_version {
@@ -586,10 +619,32 @@ fn known_pin_set(registry: &Registry) -> HashSet<String> {
     pins
 }
 
+/// Final active pin per collection: last PatchVersioned pin, else baseline root.
+fn target_active_pins(registry: &Registry<'_>) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for b in registry.baseline {
+        if let Some(v) = b.expected_version {
+            map.insert(b.name.to_string(), v.to_string());
+        }
+    }
+    for step in registry.steps {
+        if let MigrationStep::PatchVersioned {
+            collection,
+            expected_version: Some(v),
+            ..
+        } = step
+        {
+            map.insert(collection.to_string(), (*v).to_string());
+        }
+    }
+    map
+}
+
 fn verify_one_collection(
-    entry: &BaselineCollection,
+    entry: &BaselineCollection<'_>,
     by_name: &HashMap<String, Vec<&CollectionVersion>>,
     known_pins: &HashSet<String>,
+    target_active: &HashMap<String, String>,
 ) -> Result<()> {
     let versions = by_name.get(entry.name).ok_or_else(|| Error::CollectionMissing {
         collection: entry.name.to_string(),
@@ -606,18 +661,15 @@ fn verify_one_collection(
         });
     }
 
-    // Phase A cutover: only a single non-placeholder version is legal when
-    // the step chain is empty (or when no multi-hop pins exist yet).
+    // Multi-version DAGs are legal only when every non-placeholder version is a
+    // known pin (baseline root + step destinations).
     if non_ph.len() > 1 {
-        // If every version is a known pin, multi-hop is intentional (Phase B+).
         let all_known = !known_pins.is_empty()
             && non_ph
                 .iter()
                 .all(|v| known_pins.contains(v.version_id.as_str()));
         if !all_known {
             let ids: Vec<&str> = non_ph.iter().map(|v| v.version_id.as_str()).collect();
-            // Any version outside the pin set (or pin set empty with multi-version)
-            // is foreign / pre-baseline lineage.
             for v in &non_ph {
                 if !known_pins.is_empty() && !known_pins.contains(v.version_id.as_str()) {
                     return Err(Error::ForeignVersion {
@@ -642,11 +694,26 @@ fn verify_one_collection(
             collection: entry.name.to_string(),
         })?;
 
-    if let Some(pin) = entry.expected_version {
-        if active.version_id != pin {
+    // Root pin (if set) must appear in the DAG — it is not necessarily active
+    // after later PatchVersioned steps.
+    if let Some(root) = entry.expected_version {
+        let has_root = non_ph.iter().any(|v| v.version_id == root);
+        if !has_root {
             return Err(Error::VersionPinMismatch {
                 collection: entry.name.to_string(),
-                expected: pin.to_string(),
+                expected: root.to_string(),
+                actual: format!("root missing; versions={:?}",
+                    non_ph.iter().map(|v| v.version_id.as_str()).collect::<Vec<_>>()),
+            });
+        }
+    }
+
+    // Active version must match the final target pin when one is known.
+    if let Some(target) = target_active.get(entry.name) {
+        if active.version_id != *target {
+            return Err(Error::VersionPinMismatch {
+                collection: entry.name.to_string(),
+                expected: target.clone(),
                 actual: active.version_id.clone(),
             });
         }

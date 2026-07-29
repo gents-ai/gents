@@ -2247,7 +2247,7 @@ dependencies = [
  "bitflags 2.11.0",
  "cexpr",
  "clang-sys",
- "itertools 0.11.0",
+ "itertools 0.13.0",
  "log",
  "prettyplease 0.2.37",
  "proc-macro2",
@@ -8798,14 +8798,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "gents-lens-fixture-add-label"
+version = "0.1.0"
+dependencies = [
+ "lens_sdk",
+ "serde_json",
+]
+
+[[package]]
 name = "gents-migration"
 version = "0.9.0"
 dependencies = [
  "anyhow",
  "defra-node",
+ "gents-lens-fixture-add-label",
  "gents-protocol",
+ "hex",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -10869,7 +10880,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.58.0",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -11653,7 +11664,7 @@ dependencies = [
  "bytes",
  "cfg_aliases 0.2.1",
  "chrono",
- "constant_time_eq 0.1.5",
+ "constant_time_eq 0.4.2",
  "data-encoding",
  "derive_more 2.1.1",
  "genawaiter",
@@ -12491,6 +12502,17 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "wasmtime",
+]
+
+[[package]]
+name = "lens_sdk"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "625120ee4d0acf03ce8cefd2b6223aae4907c113c3c9da96e7a91393c5578836"
+dependencies = [
+ "byteorder",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -14523,7 +14545,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 2.0.2",
+ "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -16486,7 +16508,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.11.0",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -16499,7 +16521,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.11.0",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",

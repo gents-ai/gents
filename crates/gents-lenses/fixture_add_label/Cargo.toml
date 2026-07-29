@@ -1,0 +1,20 @@
+[package]
+name = "gents-lens-fixture-add-label"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fixture lens: copies name -> label (uppercased). Authoring template for gents-migration."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# `lens-entry` gates lens_sdk::define! (extern "C" next() only resolvable under
+# the lens host). Default-on for wasm builds; disable when testing as rlib.
+[features]
+default = ["lens-entry"]
+lens-entry = []
+
+[dependencies]
+serde_json = "1.0"
+lens_sdk = "^0.8"

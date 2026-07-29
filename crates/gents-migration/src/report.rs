@@ -1,14 +1,19 @@
 //! Outcome of a single `ensure_migrations` pass.
 
-/// Stats from eager materialization (zero until upstream API is present).
+/// Stats from eager materialization.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MaterializationStats {
     /// Collections for which materialization was attempted.
     pub collections_attempted: usize,
-    /// Documents restamped / rewritten.
+    /// Documents seen / restamped.
+    ///
+    /// Until upstream write-back lands this is the count of documents
+    /// observed by the read-through scan (not durable restamps).
     pub documents_materialized: usize,
-    /// True when the upstream materialize API was unavailable (Phase A–B).
+    /// True when the upstream `materialize_collection` API was unavailable.
     pub skipped_upstream_missing: bool,
+    /// Collections successfully scanned via GraphQL read-through.
+    pub read_through_scans: usize,
 }
 
 /// Summary returned by [`crate::ensure_migrations`].

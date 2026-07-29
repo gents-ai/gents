@@ -24,12 +24,19 @@ mod lens;
 mod materialize;
 mod registry;
 mod report;
+mod upgrade;
 
-pub use engine::{ensure_migrations, ensure_migrations_arc, ensure_migrations_with_registry};
+pub use engine::{
+    ensure_migrations, ensure_migrations_arc, ensure_migrations_dynamic,
+    ensure_migrations_with_registry,
+};
 pub use error::{Error, Result};
 pub use expectation::{descriptor_digest, normalize_descriptor, CollectionExpectation};
+pub use lens::{lens_config, predict_transform_id};
 pub use registry::{
-    BaselineCollection, LensSpec, MigrationStep, Registry, DEFAULT_BASELINE, DEFAULT_REGISTRY,
+    fixture_lens_wasm, BaselineCollection, BaselineCollectionOwned, DynamicRegistry, LensSpec,
+    LensSpecOwned, MigrationStep, MigrationStepOwned, Registry, DEFAULT_BASELINE, DEFAULT_REGISTRY,
     DEFAULT_STEPS,
 };
 pub use report::{MaterializationStats, MigrationReport};
+pub use upgrade::{is_unknown_version_read_error, ROLLING_UPGRADE_GUIDANCE};

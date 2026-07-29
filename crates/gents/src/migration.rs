@@ -10,9 +10,12 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
 pub use gents_migration::{
-    ensure_migrations, ensure_migrations_arc, ensure_migrations_with_registry, BaselineCollection,
-    CollectionExpectation, Error as MigrationError, LensSpec, MaterializationStats, MigrationReport,
-    MigrationStep, Registry, DEFAULT_BASELINE, DEFAULT_REGISTRY, DEFAULT_STEPS,
+    ensure_migrations, ensure_migrations_arc, ensure_migrations_dynamic,
+    ensure_migrations_with_registry, fixture_lens_wasm, is_unknown_version_read_error,
+    predict_transform_id, BaselineCollection, BaselineCollectionOwned, CollectionExpectation,
+    DynamicRegistry, Error as MigrationError, LensSpec, LensSpecOwned, MaterializationStats,
+    MigrationReport, MigrationStep, MigrationStepOwned, Registry, DEFAULT_BASELINE,
+    DEFAULT_REGISTRY, DEFAULT_STEPS, ROLLING_UPGRADE_GUIDANCE,
 };
 
 /// Production bootstrap entry used by CLI, desktop, and runtime startup.

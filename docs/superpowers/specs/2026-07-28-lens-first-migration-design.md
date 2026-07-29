@@ -1,8 +1,14 @@
 # Lens-first migration system
 
 **Date:** 2026-07-28 (revised 2026-07-29 after design review)
-**Status:** Phase A landing — `crates/gents-migration` ships baseline + zero steps;
-  legacy `migration.rs` / lens crates deleted. Phases B–D remain.
+**Status:** Phases A–D scaffolding landed on the cutover branch.
+  - **A:** engine + baseline + zero production steps + legacy deleted
+  - **B:** fixture lens, dynamic registry, inactive+fields lock, PatchVersioned e2e,
+    crash-resume, chain-replay pin authoring helper
+  - **C:** materialize driver with upstream probe + GraphQL read-through scan
+    (durable write-back still gated on defradb.rs §7.1)
+  - **D:** rolling-upgrade guidance + unknown-version error classifier
+    (pass-through still gated on defradb.rs §7.2)
 **Replaces:** `crates/gents/src/migration.rs` (5,161 lines) and both legacy lens crates
 
 ## Problem
@@ -600,12 +606,12 @@ implementation.
 
 ### 8.9 Ship matrix
 
-| Phase | Ships | Upstream gate |
-| --- | --- | --- |
-| **A** (this PR) | `gents-migration` crate; baseline registry (zero steps); unbypassable `ensure_migrations`; delete legacy `migration.rs` + lenses; Lean model + conformance; multi-version → hard error | none |
-| **B** | First real `PatchVersioned` / lens step; inactive+fields lock test | inactive field-add behavior locked |
-| **C** | Eager materialize driver | §7.1 materialize + identity restamp |
-| **D** | Safe mixed-version fleet reads | §7.2 unknown-version pass-through |
+| Phase | Ships | Upstream gate | Status |
+| --- | --- | --- | --- |
+| **A** | `gents-migration` crate; baseline registry (zero production steps); unbypassable `ensure_migrations`; delete legacy; Lean model + conformance; multi-version → hard error | none | **done** |
+| **B** | Fixture lens crate + build embedding; `DynamicRegistry`; inactive+fields lock; lensless + fixture-lens `PatchVersioned` e2e; crash-resume; chain-replay pin printer | inactive field-add locked in-tree | **done** (production step chain still empty until a real schema change) |
+| **C** | Materialize driver: probe for `materialize_collection`, else GraphQL read-through scan + stats | §7.1 durable write-back / identity restamp | **driver done; durable restamp blocked upstream** |
+| **D** | `ROLLING_UPGRADE_GUIDANCE` + `is_unknown_version_read_error` classifier | §7.2 unknown-version pass-through in defradb.rs | **policy done; pass-through blocked upstream** |
 
 ### 8.10 Feature-invariant baseline
 
