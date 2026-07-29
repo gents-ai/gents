@@ -36,10 +36,11 @@ fi
 if [[ "$target" == "desktop" || "$target" == "all" ]]; then
   cargo install --profile dev-install --locked --force --path crates/gents-desktop "$@"
 
+  npm ci
+  npm run build:packages
   (
     cd apps/gents-desktop
-    bun install
-    bun run tauri build --debug --no-bundle
+    npm run tauri -- build --debug --no-bundle
   )
 
   install -m 755 \

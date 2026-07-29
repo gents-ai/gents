@@ -1,6 +1,4 @@
 dist
 node_modules
 src-tauri/target
-bun.lock
 package-lock.json
-
