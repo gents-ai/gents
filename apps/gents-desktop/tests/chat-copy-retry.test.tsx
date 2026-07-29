@@ -109,6 +109,7 @@ describe("error card retry", () => {
     sessionId: "s1",
     latestRequestId: "req-failed",
     turnState: "failed",
+    retryEligibility: { eligible: true, denialReason: null },
     latestResponse: { status: "failed", errorMessage: "provider exploded" },
     timelineItems: [
       {
@@ -140,6 +141,50 @@ describe("error card retry", () => {
   it("omits Retry when no handler is wired", () => {
     render(<ChatTranscriptPanel selectedSessionId="s1" session={session} />);
     expect(screen.queryByTestId("retry-turn")).not.toBeInTheDocument();
+  });
+
+  it("omits Retry when the persisted predecessor is ineligible", () => {
+    render(
+      <ChatTranscriptPanel
+        selectedSessionId="s1"
+        session={{
+          ...session,
+          retryEligibility: {
+            eligible: false,
+            denialReason: "nonInteractiveOrigin",
+          },
+        }}
+        onRetryMessage={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("retry-turn")).not.toBeInTheDocument();
+  });
+
+  it("disables Retry while the authoritative retry intent is pending", async () => {
+    let resolveRetry: (() => void) | undefined;
+    const onRetryMessage = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRetry = resolve;
+        }),
+    );
+    render(
+      <ChatTranscriptPanel
+        selectedSessionId="s1"
+        session={session}
+        onRetryMessage={onRetryMessage}
+      />,
+    );
+
+    const retry = screen.getByTestId("retry-turn");
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+    expect(onRetryMessage).toHaveBeenCalledTimes(1);
+    expect(retry).toBeDisabled();
+    expect(retry).toHaveTextContent("Retrying");
+
+    resolveRetry?.();
+    await waitFor(() => expect(retry).not.toBeDisabled());
   });
 
   it("does not present an interrupted turn as a retryable failure", () => {
@@ -248,9 +293,7 @@ describe("error card retry", () => {
 
     actions.onRetryMessage("req-failed");
 
-    await waitFor(() =>
-      expect(retryRequest).toHaveBeenCalledWith("req-failed"),
-    );
+    await waitFor(() => expect(retryRequest).toHaveBeenCalledWith("req-failed"));
     expect(sendChatMessage).not.toHaveBeenCalled();
   });
 });

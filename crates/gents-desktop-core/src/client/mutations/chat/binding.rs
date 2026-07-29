@@ -19,13 +19,22 @@ pub(super) fn resolve_agent_binding(
         store
             .conversations
             .iter()
-            .find(|row| row.session_id == session_id)
+            .find(|row| row.session_id == session_id && row.agent_did.as_deref() == Some(agent_did))
     });
     let existing_session = session_id.and_then(|session_id| {
         store
             .sessions
             .iter()
-            .find(|row| row.session_id == session_id)
+            .enumerate()
+            .find(|(index, row)| {
+                row.session_id == session_id
+                    && store
+                        .session_source_agent_dids
+                        .get(*index)
+                        .and_then(|source| source.as_deref())
+                        .is_none_or(|source| source == agent_did)
+            })
+            .map(|(_index, row)| row)
     });
 
     let behavior_id = resolve_behavior_id(

@@ -8,6 +8,7 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// `MAJOR.MINOR` contract version. MINOR = additive; MAJOR = breaking.
+// 0.7: additive — retry eligibility projection and agent-scoped conversation rename.
 // 0.6: additive — predecessor-aware desktop_request_retry command.
 // 0.5: additive — inference onboarding (probe endpoint, Codex login/cancel in
 // config-write) merged from main (#871); desktop://codex-login-url event.
@@ -15,7 +16,7 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "0.6";
+pub const CONTRACT_VERSION: &str = "0.7";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");

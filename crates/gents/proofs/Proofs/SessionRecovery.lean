@@ -400,4 +400,47 @@ theorem reissue_preserves_latestFlagInvariant
             have h_rid_ne_failed : rid ≠ failedId := h_rid_failed
             simp [Function.update_of_ne h_rid_new, Function.update_of_ne h_rid_ne_failed, h_old_flag]
 
+/-!
+## Durable retry intent
+
+`Transition.reissue_failed` is one atomic state transition. A distributed
+client implementation additionally needs an idempotency fence so two callers
+cannot choose different successors for the same failed predecessor before
+either observes the other's transition. `RetryIntentState` models the unique
+per-parent key persisted beside the successor request.
+-/
+
+structure RetryIntentState where
+  successor : RequestId → Option RequestId
+
+/-- Claim the one durable successor slot for `parent`. The first candidate
+    wins; later callers observe and return that same winner. -/
+def claimRetry
+    (state : RetryIntentState)
+    (parent candidate : RequestId) : RetryIntentState × RequestId :=
+  match state.successor parent with
+  | some winner => (state, winner)
+  | none =>
+      ({ successor := Function.update state.successor parent (some candidate) }, candidate)
+
+theorem claimRetry_records_winner
+    (state : RetryIntentState)
+    (parent candidate : RequestId) :
+    (claimRetry state parent candidate).1.successor parent =
+      some (claimRetry state parent candidate).2 := by
+  simp [claimRetry]
+  split <;> simp_all
+
+/-- Retrying a claimed intent with any other candidate is idempotent: it
+    returns the original successor and leaves the ledger unchanged. -/
+theorem claimRetry_idempotent
+    (state : RetryIntentState)
+    (parent firstCandidate laterCandidate : RequestId) :
+    claimRetry (claimRetry state parent firstCandidate).1 parent laterCandidate =
+      ((claimRetry state parent firstCandidate).1,
+        (claimRetry state parent firstCandidate).2) := by
+  cases h_existing : state.successor parent with
+  | none => simp [claimRetry, h_existing]
+  | some winner => simp [claimRetry, h_existing]
+
 end SessionState

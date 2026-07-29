@@ -7,7 +7,7 @@ import { MessageList } from "../Transcript.js";
 export type ChatTranscriptPanelProps = {
   selectedSessionId: string | null;
   session: DesktopSessionSnapshot | null;
-  onRetryMessage?: (requestId: string) => void;
+  onRetryMessage?: (requestId: string) => void | Promise<void>;
 };
 
 export function ChatTranscriptPanel({
@@ -18,6 +18,9 @@ export function ChatTranscriptPanel({
   const transcriptPanelRef = useRef<HTMLElement | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const [autoFollowTranscript, setAutoFollowTranscript] = useState(true);
+  const [retryingRequestId, setRetryingRequestId] = useState<string | null>(
+    null,
+  );
 
   const transcriptSignature = useMemo(
     () =>
@@ -117,6 +120,18 @@ export function ChatTranscriptPanel({
     setAutoFollowTranscript(remaining < 64);
   }
 
+  async function handleRetry(requestId: string) {
+    if (!onRetryMessage || retryingRequestId) {
+      return;
+    }
+    setRetryingRequestId(requestId);
+    try {
+      await onRetryMessage(requestId);
+    } finally {
+      setRetryingRequestId(null);
+    }
+  }
+
   const latestResponse = session?.latestResponse;
   const responseError = latestResponse?.errorMessage?.trim() ?? "";
   const responseWasInterrupted =
@@ -204,15 +219,20 @@ export function ChatTranscriptPanel({
                   <summary>Error details</summary>
                   <pre className="response-error-content">{responseError}</pre>
                 </details>
-                {onRetryMessage && session.latestRequestId ? (
+                {onRetryMessage &&
+                session.latestRequestId &&
+                session.retryEligibility.eligible ? (
                   <div>
                     <button
                       className="ghost-button"
                       data-testid="retry-turn"
                       type="button"
-                      onClick={() => onRetryMessage(session.latestRequestId!)}
+                      disabled={retryingRequestId === session.latestRequestId}
+                      onClick={() => void handleRetry(session.latestRequestId!)}
                     >
-                      Retry
+                      {retryingRequestId === session.latestRequestId
+                        ? "Retrying…"
+                        : "Retry"}
                     </button>
                   </div>
                 ) : null}

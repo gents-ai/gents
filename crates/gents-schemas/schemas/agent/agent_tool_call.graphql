@@ -39,4 +39,5 @@ type AgentToolCall @branchable {
     stuck_since: DateTime
     partial_output_tail: String
     partial_output_seq: Int
+    completion_notification_delivered_at: DateTime
 }

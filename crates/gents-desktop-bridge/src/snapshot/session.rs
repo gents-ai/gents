@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use gents_protocol::row::{AgentMessageRow, AgentRequestRow, AgentToolCallRow};
 use gents_protocol::transcript::{normalize_markdown_text, present_persisted_message};
 
@@ -9,8 +10,8 @@ use super::super::cause_derivation::{
 };
 use super::super::types::{
     normalize_optional, turn_state_label, CommandDenialView, DerivedCancelCauseView,
-    DesktopSessionSnapshot, GoalView, MessageView, PendingTurnView, ResponseView, ToolCallView,
-    ToolResultView,
+    DesktopSessionSnapshot, GoalView, MessageView, PendingTurnView, ResponseView,
+    RetryEligibilityView, ToolCallView, ToolResultView,
 };
 use super::timeline::{build_rendered_timeline, materialized_user_turn_count};
 use super::{request_matches_agent, source_matches_agent};
@@ -198,15 +199,26 @@ pub fn build_session_snapshot_from_store_for_agent(
                 .copied()
         })
         .or_else(|| {
-            requests
-                .iter()
-                .rev()
-                .find(|request| !request_is_deprecated_background_completion(request))
-                .copied()
+            latest_request_id
+                .is_none()
+                .then(|| {
+                    requests
+                        .iter()
+                        .rev()
+                        .find(|request| !request_is_deprecated_background_completion(request))
+                        .copied()
+                })
+                .flatten()
         });
+    let retry_eligibility = project_retry_eligibility(latest_request);
     let turn_state = latest_request_id
         .as_deref()
-        .and_then(|request_id| store.derive_turn_for_request(request_id))
+        .and_then(|request_id| {
+            agent_did.map_or_else(
+                || store.derive_turn_for_request(request_id),
+                |agent_did| store.derive_turn_for_request_for_agent(request_id, agent_did),
+            )
+        })
         .or_else(|| {
             if agent_did.is_none() {
                 store.derive_turn(session_id)
@@ -438,6 +450,7 @@ pub fn build_session_snapshot_from_store_for_agent(
         goal,
         turn_state: turn_state_label,
         latest_request_id,
+        retry_eligibility,
         latest_response,
         active_response_overlay,
         pending_turn,
@@ -446,6 +459,53 @@ pub fn build_session_snapshot_from_store_for_agent(
         tool_calls,
         tool_results,
     })
+}
+
+fn project_retry_eligibility(request: Option<&AgentRequestRow>) -> RetryEligibilityView {
+    let Some(request) = request else {
+        return RetryEligibilityView {
+            eligible: false,
+            denial_reason: Some("requestNotObserved".to_string()),
+        };
+    };
+    if request.lifecycle_state.as_deref() != Some("failed")
+        || request.status.as_deref() != Some("error")
+    {
+        return RetryEligibilityView {
+            eligible: false,
+            denial_reason: Some("notFailed".to_string()),
+        };
+    }
+    if request.execution_origin.as_deref() != Some("interactive") {
+        return RetryEligibilityView {
+            eligible: false,
+            denial_reason: Some("nonInteractiveOrigin".to_string()),
+        };
+    }
+    if request.retry_count.unwrap_or_default() >= request.max_retries.unwrap_or(3) {
+        return RetryEligibilityView {
+            eligible: false,
+            denial_reason: Some("retryBudgetExhausted".to_string()),
+        };
+    }
+    if let Some(deadline) = normalize_optional(request.deadline.as_deref()) {
+        let Ok(deadline) = DateTime::parse_from_rfc3339(&deadline) else {
+            return RetryEligibilityView {
+                eligible: false,
+                denial_reason: Some("invalidDeadline".to_string()),
+            };
+        };
+        if Utc::now() > deadline.with_timezone(&Utc) {
+            return RetryEligibilityView {
+                eligible: false,
+                denial_reason: Some("deadlineClosed".to_string()),
+            };
+        }
+    }
+    RetryEligibilityView {
+        eligible: true,
+        denial_reason: None,
+    }
 }
 
 fn request_turn_root_id(request: &gents_protocol::row::AgentRequestRow) -> String {
@@ -585,4 +645,47 @@ fn build_pending_turn(
         lifecycle_state,
         created_at: normalize_optional(request.created_at.as_deref()),
     })
+}
+
+#[cfg(test)]
+mod retry_eligibility_tests {
+    use super::*;
+
+    fn request(origin: &str, retry_count: i64, max_retries: i64) -> AgentRequestRow {
+        serde_json::from_value(serde_json::json!({
+            "request_id": "request-1",
+            "agent_did": "did:test:agent",
+            "requester_did": "did:test:requester",
+            "session_id": "session-1",
+            "content": "try this",
+            "status": "error",
+            "lifecycle_state": "failed",
+            "execution_origin": origin,
+            "retry_count": retry_count,
+            "max_retries": max_retries
+        }))
+        .expect("request")
+    }
+
+    #[test]
+    fn projects_only_authoritatively_eligible_interactive_retry() {
+        let interactive = request("interactive", 0, 3);
+        assert!(project_retry_eligibility(Some(&interactive)).eligible);
+
+        let scheduled = request("scheduled", 0, 3);
+        let scheduled = project_retry_eligibility(Some(&scheduled));
+        assert!(!scheduled.eligible);
+        assert_eq!(
+            scheduled.denial_reason.as_deref(),
+            Some("nonInteractiveOrigin")
+        );
+
+        let exhausted = request("interactive", 3, 3);
+        let exhausted = project_retry_eligibility(Some(&exhausted));
+        assert!(!exhausted.eligible);
+        assert_eq!(
+            exhausted.denial_reason.as_deref(),
+            Some("retryBudgetExhausted")
+        );
+    }
 }

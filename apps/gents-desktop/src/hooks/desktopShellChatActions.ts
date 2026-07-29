@@ -79,6 +79,7 @@ export function createDesktopShellChatActions({
       setSelectedSessionId(result.sessionId);
       setLocalWorkflow({
         kind: "awaitingObservation",
+        agentDid: selectedDeployment.agentDid,
         sessionId: result.sessionId,
         requestId: result.requestId,
       });
@@ -116,6 +117,7 @@ export function createDesktopShellChatActions({
       setSelectedSessionId(result.sessionId);
       setLocalWorkflow({
         kind: "awaitingObservation",
+        agentDid: selectedDeployment.agentDid,
         sessionId: result.sessionId,
         requestId: result.requestId,
       });
@@ -128,13 +130,20 @@ export function createDesktopShellChatActions({
   }
 
   function onRetryMessage(requestId: string) {
-    void retryRequest(requestId);
+    return retryRequest(requestId);
   }
 
   async function onRenameConversationTitle(sessionId: string, title: string) {
+    if (!selectedDeployment) {
+      return;
+    }
     setError(null);
     try {
-      await api.renameConversation({ sessionId, title });
+      await api.renameConversation({
+        agentDid: selectedDeployment.agentDid,
+        sessionId,
+        title,
+      });
       await refreshSnapshot();
       await refreshSession(sessionId);
     } catch (err) {

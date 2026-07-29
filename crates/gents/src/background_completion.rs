@@ -695,6 +695,13 @@ pub(crate) async fn append_background_tool_completion(
         .await?
         .is_some()
     {
+        mark_background_tool_notification_delivered(
+            node,
+            &parent_request.agent_did,
+            parent_request_id,
+            tool_call_id,
+        )
+        .await?;
         return Ok(());
     }
     let notification = render_tool_completion(tool_call_id, tool_name, status, result, reason);
@@ -720,6 +727,47 @@ pub(crate) async fn append_background_tool_completion(
             "appended background tool completion notification without starting a turn"
         );
     }
+    mark_background_tool_notification_delivered(
+        node,
+        &parent_request.agent_did,
+        parent_request_id,
+        tool_call_id,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn mark_background_tool_notification_delivered(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    parent_request_id: &str,
+    tool_call_id: &str,
+) -> Result<()> {
+    let agent_did = escape_graphql_string(agent_did);
+    let parent_request_id = escape_graphql_string(parent_request_id);
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let delivered_at = escape_graphql_string(&Utc::now().to_rfc3339());
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentToolCall(
+                filter: {{
+                    agent_did: {{ _eq: "{agent_did}" }},
+                    request_id: {{ _eq: "{parent_request_id}" }},
+                    tool_call_id: {{ _eq: "{tool_call_id}" }},
+                    completion_notification_delivered_at: {{ _eq: null }}
+                }},
+                input: {{
+                    completion_notification_delivered_at: "{delivered_at}"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    crate::session::execute_mutation_with_retry(
+        node,
+        &mutation,
+        "mark_background_tool_notification_delivered",
+    )
+    .await?;
     Ok(())
 }
 

@@ -276,6 +276,7 @@ export function useDesktopShellEffects({
           ),
       ) ||
         (localWorkflow.kind === "awaitingObservation" &&
+          localWorkflow.agentDid === selectedDeployment.agentDid &&
           localWorkflow.sessionId === selectedSessionId))
     ) {
       newConversationAgentRef.current = null;
@@ -310,7 +311,7 @@ export function useDesktopShellEffects({
 
   useEffect(() => {
     void refreshSession(selectedSessionId);
-  }, [selectedSessionId, selectedTrackedRequestId]);
+  }, [selectedAgentDid, selectedSessionId, selectedTrackedRequestId]);
 
   useEffect(() => {
     if (!clientAvailable || !selectedSessionId || !selectedTrackedRequestId) {
@@ -331,7 +332,7 @@ export function useDesktopShellEffects({
       disposed = true;
       if (timer) clearTimeout(timer);
     };
-  }, [clientAvailable, selectedSessionId, selectedTrackedRequestId]);
+  }, [clientAvailable, selectedAgentDid, selectedSessionId, selectedTrackedRequestId]);
 
   useEffect(() => {
     if (!clientAvailable) {

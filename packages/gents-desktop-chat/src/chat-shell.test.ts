@@ -102,6 +102,7 @@ function session(
     status: "active",
     turnState: "completed",
     latestRequestId: "req-1",
+    retryEligibility: { eligible: false, denialReason: "notFailed" },
     latestResponse: null,
     activeResponseOverlay: null,
     pendingTurn: null,
@@ -266,6 +267,9 @@ function localWorkflowFromContract(
     case "awaitingObservation":
       return {
         kind: "awaitingObservation",
+        agentDid:
+          agentDid(contractCase.frontend_selected_agent_did) ??
+          "did:test:agent-missing",
         sessionId:
           sessionId(contractCase.frontend_local_workflow_session) ??
           "session-missing",
@@ -418,6 +422,7 @@ describe("projectChatShell", () => {
       }),
       localWorkflow: {
         kind: "awaitingObservation",
+        agentDid: "did:test:amy",
         sessionId: "session-1",
         requestId: "req-new",
       },
@@ -431,6 +436,7 @@ describe("projectChatShell", () => {
   test("commits terminal projection before observing an automated follow-up", () => {
     const trackedWorkflow: ChatWorkflowState = {
       kind: "turnInProgress",
+      agentDid: "did:test:amy",
       sessionId: "session-1",
       requestId: "req-user",
       turnState: "streaming",
@@ -479,6 +485,7 @@ describe("projectChatShell", () => {
     expect(wakeProjection.activeRequestId).toBe("req-wake");
     expect(wakeProjection.workflow).toEqual({
       kind: "turnInProgress",
+      agentDid: "did:test:amy",
       sessionId: "session-1",
       requestId: "req-wake",
       turnState: "streaming",
@@ -499,6 +506,7 @@ describe("projectChatShell", () => {
       session: session({ latestRequestId: "req-old", turnState: "completed" }),
       localWorkflow: {
         kind: "awaitingObservation",
+        agentDid: "did:test:amy",
         sessionId: "session-1",
         requestId: "req-new",
       },
@@ -506,6 +514,7 @@ describe("projectChatShell", () => {
 
     expect(projection.workflow).toEqual({
       kind: "awaitingObservation",
+      agentDid: "did:test:amy",
       sessionId: "session-1",
       requestId: "req-new",
     });
@@ -535,6 +544,7 @@ describe("projectChatShell", () => {
       }),
       localWorkflow: {
         kind: "turnInProgress",
+        agentDid: "did:test:amy",
         sessionId: "session-1",
         requestId: "req-1",
         turnState: "streaming",

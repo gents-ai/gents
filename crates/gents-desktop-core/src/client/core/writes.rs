@@ -675,18 +675,42 @@ impl ClientCore {
         Ok(Some(version))
     }
 
-    pub async fn rename_conversation(&self, session_id: &str, title: &str) -> Result<()> {
+    pub async fn rename_conversation(
+        &self,
+        agent_did: &str,
+        session_id: &str,
+        title: &str,
+    ) -> Result<()> {
         let snapshot = self.store.snapshot();
-        match mutations::rename_conversation(
-            self.node.as_ref(),
-            snapshot.as_ref(),
-            session_id,
-            title,
-        )
-        .await
-        {
+        let result = match self.graphql_for_agent(agent_did).await {
+            Some(graphql) => {
+                mutations::rename_conversation_to_graphql(
+                    &graphql,
+                    snapshot.as_ref(),
+                    agent_did,
+                    self.principal.did(),
+                    session_id,
+                    title,
+                )
+                .await
+            }
+            None => {
+                mutations::rename_conversation(
+                    self.node.as_ref(),
+                    snapshot.as_ref(),
+                    agent_did,
+                    self.principal.did(),
+                    session_id,
+                    title,
+                )
+                .await
+            }
+        };
+        match result {
             Ok(()) => {
-                self.refresh_store().await?;
+                if self.refresh_remote_agent(agent_did).await?.is_none() {
+                    self.refresh_store().await?;
+                }
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1382,18 +1406,58 @@ impl ClientCore {
 
     pub async fn resend_request(&self, stale_request_id: &str) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
-        match mutations::resend_request(
-            self.node.as_ref(),
-            snapshot.as_ref(),
-            stale_request_id,
-            self.principal.did(),
-        )
-        .await
-        {
+        let selected_agent_did = self.selected_agent_did();
+        let mut candidates = snapshot
+            .requests
+            .iter()
+            .filter(|row| row.request_id == stale_request_id)
+            .filter(|row| {
+                selected_agent_did
+                    .as_deref()
+                    .is_none_or(|did| row.agent_did.as_deref() == Some(did))
+            });
+        let stale = candidates
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("request {stale_request_id} not found"))?;
+        if candidates.next().is_some() {
+            bail!("request {stale_request_id} is ambiguous across the selected agent scope");
+        }
+        let agent_did = stale
+            .agent_did
+            .as_deref()
+            .context("stale request has no agent_did")?;
+        let remote_graphql = self.graphql_for_agent(agent_did).await;
+        let result = match remote_graphql.as_deref() {
+            Some(graphql) => {
+                mutations::resend_request_to_graphql(
+                    graphql,
+                    snapshot.as_ref(),
+                    stale_request_id,
+                    agent_did,
+                    self.principal.did(),
+                )
+                .await
+            }
+            None => {
+                mutations::resend_request(
+                    self.node.as_ref(),
+                    snapshot.as_ref(),
+                    stale_request_id,
+                    agent_did,
+                    self.principal.did(),
+                )
+                .await
+            }
+        };
+        match result {
             Ok(result) => {
                 self.store
                     .set_focused_request_id(Some(result.request_id.clone()));
-                self.refresh_store().await?;
+                if remote_graphql.is_some() {
+                    self.refresh_remote_agent(agent_did).await?;
+                } else {
+                    self.refresh_store().await?;
+                }
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1426,18 +1490,40 @@ impl ClientCore {
 
     pub async fn retry_request(&self, parent: &AgentRequestRow) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
-        match mutations::retry_request(
-            self.node.as_ref(),
-            snapshot.as_ref(),
-            parent,
-            self.principal.did(),
-        )
-        .await
-        {
+        let agent_did = parent
+            .agent_did
+            .as_deref()
+            .context("retry parent has no agent_did")?;
+        let remote_graphql = self.graphql_for_agent(agent_did).await;
+        let result = match remote_graphql.as_deref() {
+            Some(graphql) => {
+                mutations::retry_request_to_graphql(
+                    graphql,
+                    snapshot.as_ref(),
+                    parent,
+                    self.principal.did(),
+                )
+                .await
+            }
+            None => {
+                mutations::retry_request(
+                    self.node.as_ref(),
+                    snapshot.as_ref(),
+                    parent,
+                    self.principal.did(),
+                )
+                .await
+            }
+        };
+        match result {
             Ok(result) => {
                 self.store
                     .set_focused_request_id(Some(result.request_id.clone()));
-                self.refresh_store().await?;
+                if remote_graphql.is_some() {
+                    self.refresh_remote_agent(agent_did).await?;
+                } else {
+                    self.refresh_store().await?;
+                }
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",

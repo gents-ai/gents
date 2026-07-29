@@ -95,6 +95,7 @@ export type DesktopApiAdapter = {
     content: string;
   }) => Promise<ChatSendResult>;
   renameConversation: (request: {
+    agentDid: string;
     sessionId: string;
     title: string;
   }) => Promise<void>;

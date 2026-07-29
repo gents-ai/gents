@@ -81,6 +81,7 @@ impl ClientCore {
             Arc::clone(&node),
             Arc::clone(&store),
             Arc::clone(&peer_directory),
+            principal.did().to_string(),
             observer_subscription,
             selected_agent_did.subscribe(),
         );
@@ -118,6 +119,8 @@ impl ClientCore {
             Arc::clone(&node),
             Arc::clone(&p2p),
             Arc::clone(&store),
+            Arc::clone(&peer_directory),
+            principal.did().to_string(),
         );
 
         Ok(Self {

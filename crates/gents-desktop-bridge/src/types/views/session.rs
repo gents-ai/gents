@@ -208,6 +208,13 @@ pub struct GoalView {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct RetryEligibilityView {
+    pub eligible: bool,
+    pub denial_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct DesktopSessionSnapshot {
     pub session_id: String,
     pub agent_did: Option<String>,
@@ -218,6 +225,7 @@ pub struct DesktopSessionSnapshot {
     pub goal: Option<GoalView>,
     pub turn_state: Option<String>,
     pub latest_request_id: Option<String>,
+    pub retry_eligibility: RetryEligibilityView,
     pub latest_response: Option<ResponseView>,
     pub active_response_overlay: Option<ResponseView>,
     pub pending_turn: Option<PendingTurnView>,
