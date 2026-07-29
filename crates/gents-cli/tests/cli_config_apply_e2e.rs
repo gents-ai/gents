@@ -124,6 +124,7 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let planned = run_cli_json(&home_dir, &["config", "diff", "--root", root_str])?;
     assert_eq!(
@@ -672,6 +673,7 @@ async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Res
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let applied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
     assert_eq!(
@@ -869,6 +871,7 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let planned = run_cli_json(&home_dir, &["config", "diff", "--root", root_str])?;
     assert_eq!(
@@ -1274,6 +1277,7 @@ async fn prepare_live_validation_fixture(suffix: &str) -> Result<LiveValidationF
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     Ok(LiveValidationFixture {
         home_dir,
@@ -1468,6 +1472,7 @@ async fn config_apply_round_trips_write_tools_without_drift() -> Result<()> {
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let applied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
     assert_eq!(

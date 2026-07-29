@@ -6007,6 +6007,7 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     // The runtime is up and healthy, but the shim has nothing to serve yet.
     assert!(
