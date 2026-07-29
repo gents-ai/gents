@@ -4,10 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
-use defra_node::{EmbeddedNode, EventName, QueryResponse};
+use defra_node::{EmbeddedNode, EventName};
 use futures::{stream, StreamExt};
 use gents_protocol::bearer_token::{derive_bearer_readiness_key, BearerPairingReadyRecord};
 use p2p::iroh::parse_public_peer_addr;
@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use crate::graphql::escape_graphql_string;
 use crate::identity::AgentIdentity;
 
+use super::graphql_helpers::{ensure_no_errors, first_row, graphql_string_list_literal, rows};
 use super::network::{GraphqlNetworkStore, NetworkEndpointEntry, NetworkStore};
 use super::reciprocal::GraphqlReciprocalStore;
 use super::templates::{
@@ -1643,30 +1644,6 @@ pub fn bearer_pairing_ready_upsert_mutation(
     )
 }
 
-fn ensure_no_errors(response: &QueryResponse, label: &str) -> Result<()> {
-    if response.has_errors() {
-        bail!("{label} failed: {:?}", response.errors);
-    }
-    Ok(())
-}
-
-fn first_row<T>(response: &QueryResponse, field: &str) -> Result<Option<T>>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    Ok(rows::<T>(response, field)?.into_iter().next())
-}
-
-fn rows<T>(response: &QueryResponse, field: &str) -> Result<Vec<T>>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
-        return Ok(Vec::new());
-    };
-    serde_json::from_value(value.clone()).with_context(|| format!("decode {field} rows"))
-}
-
 /// Serialize the per-pairing scope filter to a GraphQL String literal (JSON),
 /// emitting `null` for the unfiltered (empty) case so the column is never an
 /// empty-list literal. The JSON round-trips through `decode_replicator_filter`.
@@ -1694,17 +1671,7 @@ fn decode_replicator_filter(value: Option<&str>) -> PairingFilters {
 }
 
 fn graphql_nullable_string_array(values: &BTreeSet<String>) -> String {
-    if values.is_empty() {
-        return "null".to_string();
-    }
-    format!(
-        "[{}]",
-        values
-            .iter()
-            .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
+    graphql_string_list_literal(values.iter().map(String::as_str))
 }
 
 #[cfg(test)]
