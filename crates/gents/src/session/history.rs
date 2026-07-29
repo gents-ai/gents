@@ -90,31 +90,6 @@ pub(crate) async fn save_message_with_requester_did(
     .await
 }
 
-#[allow(dead_code)]
-pub(crate) async fn save_message_with_key(
-    node: &EmbeddedNode,
-    session_id: &str,
-    agent_did: &str,
-    sequence: u32,
-    role: &str,
-    content: &str,
-    reasoning: Option<&str>,
-    message_key: &str,
-) -> Result<()> {
-    save_message_with_key_and_requester_did(
-        node,
-        session_id,
-        agent_did,
-        None,
-        sequence,
-        role,
-        content,
-        reasoning,
-        message_key,
-    )
-    .await
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn save_message_with_key_and_requester_did(
     node: &EmbeddedNode,
@@ -192,22 +167,6 @@ async fn save_message_inner(
 
     super::retry::execute_mutation_with_retry(node, &mutation, "save_message").await?;
     Ok(())
-}
-
-#[allow(dead_code)]
-pub(crate) async fn append_message(
-    node: &EmbeddedNode,
-    session_id: &str,
-    agent_did: &str,
-    role: &str,
-    content: &str,
-    reasoning: Option<&str>,
-    request_id: Option<&str>,
-) -> Result<u32> {
-    append_message_with_requester_did(
-        node, session_id, agent_did, None, role, content, reasoning, request_id,
-    )
-    .await
 }
 
 #[allow(clippy::too_many_arguments)]
