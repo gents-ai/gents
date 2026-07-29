@@ -484,6 +484,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_recovery_outcome_cases_fence_duplicate_tolerant_counting",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::generated_restart_disposition_cases_drive_recover_all",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_restart_disposition_cases_drive_recover_all",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract",
             package: "gents",
             source_path: "crates/gents/tests/conformance.rs",

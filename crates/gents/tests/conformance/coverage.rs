@@ -707,6 +707,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "RecoveryEquivalenceCases".to_string(),
         ));
     }
+    if !lean_restart_disposition_cases().is_empty() {
+        emitted.insert((
+            "restart_disposition_cases".to_string(),
+            "RestartDispositionCases".to_string(),
+        ));
+    }
     if !lean_transcript_cases().is_empty() {
         emitted.insert((
             "transcript_cases".to_string(),
@@ -964,6 +970,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "recovery_sweep_cases",
         "recovery_outcome_cases",
         "recovery_equivalence_cases",
+        "restart_disposition_cases",
         "transcript_cases",
         "compaction_reducer_cases",
         "streaming_response_cases",

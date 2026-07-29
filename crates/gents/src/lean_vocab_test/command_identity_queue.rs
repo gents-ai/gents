@@ -170,6 +170,31 @@ pub(crate) struct LeanRecoverySweepCase {
     pub(crate) deadline_audit_ref: String,
 }
 
+/// Startup restart-disposition witness (#937): the shape of one running
+/// `AgentToolCall` row and what `ToolCallLifecycle::recover_all` must do with
+/// it — terminalize with a pinned cause/terminal state (plus, for the native
+/// background interrupt, a durable notification and coalesced wake), or leave
+/// the row running.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanRestartDispositionCase {
+    pub(crate) name: String,
+    pub(crate) rust_function: String,
+    pub(crate) await_mode: String,
+    pub(crate) cancel_policy: String,
+    pub(crate) child_linked: bool,
+    pub(crate) parent_observation: String,
+    pub(crate) deadline_expired: bool,
+    pub(crate) unclaimed_expired: bool,
+    pub(crate) disposition: String,
+    pub(crate) cause: Option<String>,
+    pub(crate) terminal_state: Option<String>,
+    pub(crate) notification_reason: Option<String>,
+    pub(crate) queue_source: Option<String>,
+    pub(crate) queue_key_prefix: Option<String>,
+    #[allow(dead_code)]
+    pub(crate) theorem: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanRecoveryOutcomeCase {
     pub(crate) name: String,

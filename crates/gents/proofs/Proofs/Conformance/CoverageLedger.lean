@@ -686,6 +686,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_recovery_outcome_cases_fence_duplicate_tolerant_counting")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "restart_disposition_cases"
+      "RestartDispositionCases"
+      "conformance::generated_restart_disposition_cases_drive_recover_all")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "r6_background_cases"
       "R6BackgroundingCases"
       "conformance::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract")

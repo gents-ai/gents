@@ -337,6 +337,142 @@ def recoveryEquivalenceCase
 def recoveryEquivalenceCases : List RecoveryEquivalenceCase :=
   recoverySweepCases.map recoveryEquivalenceCase
 
+/-! ## Restart disposition witnesses (#937)
+
+Finite rows for the startup classifier in
+`recover_stuck_running_tool_calls`. Unlike `recoverySweepCases`, the
+`disposition`/`cause`/`terminalState`/notification fields are **computed from
+`Recovery.restartDisposition`**, so these rows cannot drift from the model:
+changing a classifier branch changes the emitted JSON and fails the Rust
+consumer. The leave-running rows are the previously inexpressible outcomes —
+background subagent bridges and detached/clean-complete bridges that startup
+recovery must preserve. -/
+
+def restartDispositionCase
+    (name : String)
+    (awaitMode : Subagent.AwaitMode)
+    (cancelPolicy : Subagent.CancelPolicy)
+    (childLinked : Bool)
+    (parent : ParentObservation)
+    (theoremName : String)
+    (deadlineExpired : Bool := false)
+    (unclaimedExpired : Bool := false) : RestartDispositionCase :=
+  let row : RestartRow :=
+    { awaitMode := awaitMode
+    , cancelPolicy := cancelPolicy
+    , childLinked := childLinked
+    , parent := parent
+    , deadlineExpired := deadlineExpired
+    , unclaimedExpired := unclaimedExpired
+    }
+  let disposition := restartDisposition row
+  { name := name
+  , rustFunction := "ToolCallLifecycle::recover_all"
+  , awaitMode := awaitMode.toDefraDB
+  , cancelPolicy := cancelPolicy.toDefraDB
+  , childLinked := childLinked
+  , parentObservation := parent.toContract
+  , deadlineExpired := deadlineExpired
+  , unclaimedExpired := unclaimedExpired
+  , disposition := disposition.toContract
+  , cause := disposition.causeContract
+  , terminalState := disposition.terminalStateContract
+  , notificationReason :=
+      disposition.notification.map RestartNotificationObligation.notificationReason
+  , queueSource :=
+      disposition.notification.map RestartNotificationObligation.queueSource
+  , queueKeyPrefix :=
+      disposition.notification.map RestartNotificationObligation.queueKeyPrefix
+  , theoremName := theoremName
+  }
+
+def restartDispositionCases : List RestartDispositionCase :=
+  [ restartDispositionCase
+      "restart_native_background_live_parent_interrupted"
+      .background .cascade false .live
+      "Recovery.native_background_tool_live_parent_interrupted_on_restart"
+  , restartDispositionCase
+      "restart_background_subagent_live_parent_left_running"
+      .background .cascade true .live
+      "Recovery.background_subagent_bridge_live_parent_left_running"
+  , restartDispositionCase
+      "restart_detached_bridge_interrupted_parent_left_running"
+      .background .detach true .interrupted
+      "Recovery.detached_bridge_interrupted_parent_left_running"
+  , restartDispositionCase
+      "restart_clean_complete_child_linked_left_running"
+      .background .cascade true .cleanlyCompleted
+      "Recovery.clean_completion_child_linked_left_running"
+  , restartDispositionCase
+      "restart_native_background_deadline_expired_times_out"
+      .background .cascade false .live
+      "Recovery.deadline_precedes_restart_interrupt"
+      (deadlineExpired := true)
+  , restartDispositionCase
+      "restart_native_background_interrupted_parent_cancelled"
+      .background .cascade false .interrupted
+      "Recovery.restart_interrupt_iff_native_background_live_parent"
+  , restartDispositionCase
+      "restart_native_background_terminal_parent_failed"
+      .background .cascade false .otherTerminal
+      "Recovery.restart_interrupt_iff_native_background_live_parent"
+  , restartDispositionCase
+      "restart_foreground_live_parent_left_running"
+      .foreground .cascade false .live
+      "Recovery.leave_running_iff_preserved_shapes"
+  , restartDispositionCase
+      "restart_subagent_missing_parent_left_running"
+      .background .cascade true .missing
+      "Recovery.leave_running_iff_preserved_shapes"
+  , -- Unclaimed cross-deployment spawn expiry outranks every leave-running
+    -- exemption: an unclaimed bridge under a live parent still fails.
+    restartDispositionCase
+      "restart_unclaimed_spawn_expired_fails"
+      .background .cascade true .live
+      "Recovery.unclaimed_precedes_leave_running_exemptions"
+      (unclaimedExpired := true)
+  ]
+
+/-- The witness family covers both dispositions and pins the expected split:
+    five leave-running rows (background subagent + live parent, detached +
+    interrupted parent, clean-complete + child-linked, foreground + live
+    parent, missing parent), five terminalize rows. -/
+theorem restartDispositionCases_cover_both_dispositions :
+    (restartDispositionCases.filter
+        (fun witness => witness.disposition = "leave_running")).length = 5 ∧
+      (restartDispositionCases.filter
+        (fun witness => witness.disposition = "terminalize")).length = 5 := by
+  native_decide
+
+/-- Exactly one row owes the restart notification, and it is the native
+    background live-parent interrupt with the pinned reason and queue
+    vocabulary. -/
+theorem restartDispositionCases_notification_unique :
+    (restartDispositionCases.filter
+        (fun witness => witness.notificationReason.isSome)).map
+        (fun witness =>
+          (witness.name, witness.notificationReason, witness.queueSource,
+            witness.queueKeyPrefix)) =
+      [ ("restart_native_background_live_parent_interrupted"
+        , some "interrupted_on_restart"
+        , some "background_completion"
+        , some "background_completion:"
+        ) ] := by
+  native_decide
+
+/-- Leave-running rows carry no cause and no terminal state — the row is
+    preserved verbatim. -/
+theorem restartDispositionCases_leave_running_rows_carry_no_terminal :
+    ∀ witness ∈ restartDispositionCases,
+      witness.disposition = "leave_running" →
+        witness.cause = none ∧ witness.terminalState = none := by
+  native_decide
+
+theorem restartDispositionCases_all_recover_all :
+    ∀ witness ∈ restartDispositionCases,
+      witness.rustFunction = "ToolCallLifecycle::recover_all" := by
+  native_decide
+
 theorem recoverySweepCases_registered_sweeps :
     ∀ witness : RecoverySweepCase,
       witness ∈ recoverySweepCases →

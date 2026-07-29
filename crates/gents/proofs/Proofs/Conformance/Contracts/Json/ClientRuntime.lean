@@ -141,6 +141,28 @@ def recoveryOutcomeCaseJson (witness : RecoveryOutcomeCase) : String :=
     ++ "\"theorem\":" ++ jsonString witness.theoremName
     ++ "}"
 
+def restartDispositionCaseJson (witness : RestartDispositionCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"rust_function\":" ++ jsonString witness.rustFunction ++ ","
+    ++ "\"await_mode\":" ++ jsonString witness.awaitMode ++ ","
+    ++ "\"cancel_policy\":" ++ jsonString witness.cancelPolicy ++ ","
+    ++ "\"child_linked\":" ++ boolString witness.childLinked ++ ","
+    ++ "\"parent_observation\":"
+      ++ jsonString witness.parentObservation ++ ","
+    ++ "\"deadline_expired\":" ++ boolString witness.deadlineExpired ++ ","
+    ++ "\"unclaimed_expired\":" ++ boolString witness.unclaimedExpired ++ ","
+    ++ "\"disposition\":" ++ jsonString witness.disposition ++ ","
+    ++ "\"cause\":" ++ jsonOptionalString witness.cause ++ ","
+    ++ "\"terminal_state\":" ++ jsonOptionalString witness.terminalState ++ ","
+    ++ "\"notification_reason\":"
+      ++ jsonOptionalString witness.notificationReason ++ ","
+    ++ "\"queue_source\":" ++ jsonOptionalString witness.queueSource ++ ","
+    ++ "\"queue_key_prefix\":"
+      ++ jsonOptionalString witness.queueKeyPrefix ++ ","
+    ++ "\"theorem\":" ++ jsonString witness.theoremName
+    ++ "}"
+
 def recoveryEquivalenceCaseJson (witness : RecoveryEquivalenceCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","

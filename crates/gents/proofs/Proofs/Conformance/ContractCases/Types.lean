@@ -304,6 +304,29 @@ structure RecoveryEquivalenceCase where
   aggregateTheoremName : String
   deriving DecidableEq, Repr
 
+/-- Startup restart-disposition witness (#937): one running `AgentToolCall`
+    row shape and what `ToolCallLifecycle::recover_all` must do with it —
+    terminalize with a pinned cause/terminal state, or leave it running.
+    `disposition`, `cause`, `terminalState`, and the notification/wake fields
+    are computed from `Recovery.restartDisposition`, never hand-written. -/
+structure RestartDispositionCase where
+  name : String
+  rustFunction : String
+  awaitMode : String
+  cancelPolicy : String
+  childLinked : Bool
+  parentObservation : String
+  deadlineExpired : Bool
+  unclaimedExpired : Bool
+  disposition : String
+  cause : Option String
+  terminalState : Option String
+  notificationReason : Option String
+  queueSource : Option String
+  queueKeyPrefix : Option String
+  theoremName : String
+  deriving DecidableEq, Repr
+
 structure R6BackgroundingCase where
   name : String
   group : String

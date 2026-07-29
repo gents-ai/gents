@@ -59,8 +59,8 @@ use lean_vocab_test::{
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_equivalence_cases,
     lean_recovery_outcome_cases, lean_recovery_sweep_cases, lean_request_transition_cases,
     lean_response_interrupt_flow_cases, lean_response_transition_cases,
-    lean_runtime_reconcile_case, lean_runtime_reconcile_cases, lean_session_recovery_case,
-    lean_startup_readiness_cases, lean_state_machine_contract,
+    lean_restart_disposition_cases, lean_runtime_reconcile_case, lean_runtime_reconcile_cases,
+    lean_session_recovery_case, lean_startup_readiness_cases, lean_state_machine_contract,
     lean_subagent_delegation_graph_cases, lean_transcript_case, lean_transcript_cases,
     lean_vocabulary_values, LeanEventDeliveryAction, LeanLifecycleTransitionCase,
     LeanR4cBackgroundWorkCase,
@@ -165,6 +165,11 @@ fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract()
 #[tokio::test]
 async fn generated_recovery_outcome_cases_fence_duplicate_tolerant_counting() {
     recovery_sweeps::generated_recovery_outcome_cases_fence_duplicate_tolerant_counting().await;
+}
+
+#[tokio::test]
+async fn generated_restart_disposition_cases_drive_recover_all() {
+    recovery_sweeps::generated_restart_disposition_cases_drive_recover_all().await;
 }
 
 #[tokio::test]

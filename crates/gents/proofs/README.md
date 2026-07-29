@@ -166,6 +166,9 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/ManagedExec.lean` | Barrel for managed native executor state, executable transitions, liveness properties, and tool composition |
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |
+| `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (parent/child composed pair, `SecondLeg` subagent-vs-tool vocabulary), six bridge transitions, and property modules (B1/B2 projection, B3/B3′ cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
+| `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`, outcome accounting #693, equivalence-to-uninterrupted), the registered sweep registry, and per-collection sweeps including subagent liveness (#465) and the startup restart-disposition classifier (#937) |
+| `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
 | `Proofs/Properties/Liveness.lean` | Request/process liveness properties L1-L3 |
 | `Proofs/Properties/SchedulingSafety.lean` | Scheduler/fleet safety properties S7-S9 |
@@ -645,6 +648,55 @@ scheduling conformance tests (`serial_gate_is_scoped_by_agent_did`,
 `serial_gate_ignores_expired_claims`,
 `supersede_only_touches_own_agent_requests`); see the docstrings on
 `Proofs/Triggers/Types.lean`'s `AgentRequest.isTerminal` and `SystemState`.
+
+### Backgrounding: subagent bridges and native background tools
+
+Background work comes in two kinds that share the `AgentToolCall` bridge row
+vocabulary (`await_mode`, `cancel_policy`) but have deliberately different
+durable state and restart outcomes. The models keep them distinct; do not
+generalize one lane's fixtures to the other.
+
+| | Background **subagent** (R5) | Native background **tool** (R6) |
+|---|---|---|
+| Row shape | `await_mode="background"`, `child_request_id` set | `await_mode="background"`, `child_request_id` empty |
+| Durable state | Bridge row + child `AgentRequest` (lineage, depth, interrupt flag) + notification message + coalesced wake row | Tool row (result, cancel_cause) + notification message + coalesced wake row |
+| Volatile state | Foreground waiter state in the owned loop | Execution registries and the live output ring buffer |
+| Restart, live parent | **Leave bridge running**; project when the child terminal is durable | **Interrupt**: terminalize `cancelled`, notification reason `interrupted_on_restart`, one coalesced wake |
+| Completion path | `project_background_subagent_completion` / recovery child-precedence | Native tool completion / `recover_all` interrupt path |
+
+Model → conformance → Rust bindings:
+
+- **Bridge lifecycle and properties** — `Proofs/Background/*` (B1–B7,
+  INV-LINK/UNIQUE/DEPTH, delegation graph) → `r6_backgrounding_cases`,
+  `r6_background_theorem_witnesses`, `subagent_delegation_graph_cases`, and
+  `r4c_background_work_cases` in the contract JSON → driven by
+  `tests/conformance/background.rs` against the real hook and
+  `ToolCallLifecycle`.
+- **Startup restart disposition (#937)** —
+  `Proofs/Recovery/Sweeps/BackgroundRestart.lean` models the classifier in
+  `recover_stuck_running_tool_calls` as a total function
+  (`restartDisposition`) with exhaustive characterizations
+  (`restart_interrupt_iff_native_background_live_parent`,
+  `leave_running_iff_preserved_shapes`,
+  `notification_iff_restart_interrupt`,
+  `deadline_precedes_restart_interrupt`). The `restart_disposition_cases`
+  rows are **computed from the model** and driven through the real
+  `ToolCallLifecycle::recover_all` by
+  `conformance::generated_restart_disposition_cases_drive_recover_all`,
+  including the leave-running rows (background subagent bridge under a live
+  parent, detached bridge under an interrupted parent, child-linked bridge
+  under a cleanly completed parent) and the notification + coalesced-wake
+  side effects with idempotence under a second pass.
+- **Recovery sweeps** — `Proofs/Recovery/Sweeps/*` (tool calls, detached
+  bridges, subagent liveness #465, terminal-parent owned tools #837) →
+  `recovery_sweep_cases` → `tests/conformance/recovery_sweeps.rs`.
+- **Wake coalescing** — `Proofs/Session/*` queue model
+  (`background_completion` source, coalesce keys, automated drain) →
+  queue-source rows in `r6_backgrounding_cases` and the R4c steering
+  witnesses.
+- **Cross-node subagent completion/cancel** — `tla/SubagentCompletion.tla`
+  and `tla/SubagentCancelPropagation.tla` (subagent lane only; native tool
+  backgrounding is single-node and carried by Lean).
 
 ### Client Turn Projection
 
