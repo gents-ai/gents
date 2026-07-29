@@ -52,9 +52,13 @@ async fn wait_subagent_waits_on_existing_bridge_without_lifecycle_row() {
             .await
     });
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let foregrounded_bridge =
-        fetch_tool_call(db.node.as_ref(), &session_id, "internal-wait-spawn").await;
+    let foregrounded_bridge = wait_for_tool_call_await_mode(
+        db.node.as_ref(),
+        &session_id,
+        "internal-wait-spawn",
+        "foreground",
+    )
+    .await;
     assert_eq!(
         foregrounded_bridge.await_mode.as_deref(),
         Some("foreground")
@@ -507,9 +511,13 @@ async fn wait_subagent_from_resumed_hook_cascades_parent_interrupt() {
             .await
     });
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let foregrounded_bridge =
-        fetch_tool_call(db.node.as_ref(), &session_id, "internal-wait-resume-spawn").await;
+    let foregrounded_bridge = wait_for_tool_call_await_mode(
+        db.node.as_ref(),
+        &session_id,
+        "internal-wait-resume-spawn",
+        "foreground",
+    )
+    .await;
     assert_eq!(
         foregrounded_bridge.await_mode.as_deref(),
         Some("foreground")
@@ -595,7 +603,13 @@ async fn wait_subagent_returns_background_receipt_when_bridge_is_backgrounded() 
             .await
     });
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    wait_for_tool_call_await_mode(
+        db.node.as_ref(),
+        &session_id,
+        "internal-wait-bg-spawn",
+        "foreground",
+    )
+    .await;
     let mut lifecycle =
         ToolCallLifecycle::load(db.node.clone(), &session_id, "internal-wait-bg-spawn")
             .await
