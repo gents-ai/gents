@@ -408,6 +408,10 @@ pub struct AgentToolCallRow {
     #[serde(default)]
     pub lifecycle_state: Option<String>,
     #[serde(default)]
+    pub child_request_id: Option<String>,
+    #[serde(default)]
+    pub await_mode: Option<String>,
+    #[serde(default)]
     pub cancel_policy: Option<String>,
     #[serde(default)]
     pub workflow_group_id: Option<String>,

@@ -136,6 +136,20 @@ impl Watcher for DefraWatcher {
 
             match self.pending_requests().await {
                 Ok(requests) => {
+                    let mut requests_without_deprecated_wakes = Vec::with_capacity(requests.len());
+                    for request in requests {
+                        match crate::lifecycle::queue::retire_deprecated_background_completion_wakeup(
+                            self.node.as_ref(),
+                            &request,
+                        )
+                        .await
+                        {
+                            Ok(true) => continue,
+                            Ok(false) => requests_without_deprecated_wakes.push(request),
+                            Err(error) => return Some(Err(error)),
+                        }
+                    }
+                    let requests = requests_without_deprecated_wakes;
                     let pending_count = requests.len();
                     if let Some(request) = take_next_eligible_pending_request(
                         &mut self.processed_request_ids,
@@ -183,6 +197,16 @@ impl Watcher for DefraWatcher {
 
             match self.try_fetch_request(doc_id).await {
                 Ok(Some(request)) => {
+                    match crate::lifecycle::queue::retire_deprecated_background_completion_wakeup(
+                        self.node.as_ref(),
+                        &request,
+                    )
+                    .await
+                    {
+                        Ok(true) => continue,
+                        Ok(false) => {}
+                        Err(error) => return Some(Err(error)),
+                    }
                     let now = Instant::now();
                     if request_is_cooling_down(
                         &mut self.processed_request_ids,

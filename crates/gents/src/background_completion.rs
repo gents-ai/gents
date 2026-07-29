@@ -3,8 +3,9 @@
 //! R4b keeps background spawns non-blocking by leaving the parent bridge row
 //! running until the child request reaches a terminal state. This module owns
 //! the observer path that projects that terminal state into the parent
-//! `AgentToolCall`, appends a compact transcript notification, and enqueues the
-//! coalesced same-session wake-up request.
+//! `AgentToolCall` and appends a compact transcript notification. The
+//! notification is durable context for the next user-authored turn; projection
+//! never creates an `AgentRequest`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -22,10 +23,6 @@ use crate::background_tools::{
     project_child_terminal, subagent_tool_not_allowed_payload, ChildEdge,
 };
 use crate::graphql::escape_graphql_string;
-use crate::lifecycle::queue::{
-    enqueue_session_request, parse_queue_hints, QueueHints, QueuePolicy, QueueSource,
-};
-use crate::lifecycle::ExecutionOrigin;
 use crate::session;
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass, ToolCallLifecycle};
 use crate::watcher::{validate_agent_request_subagent_coherence, AgentRequest};
@@ -54,7 +51,6 @@ pub enum BackgroundCompletionOutcome {
         parent_tool_call_id: String,
         parent_session_id: String,
         notification_sequence: u32,
-        wake_request_id: String,
     },
     NotTerminal,
     NotBackground,
@@ -631,15 +627,13 @@ async fn project_background_subagent_completion_inner(
     )
     .await?;
 
-    let outcome = if transitioned || side_effects.created_notification || side_effects.created_wake
-    {
+    let outcome = if transitioned || side_effects.created_notification {
         BackgroundCompletionOutcome::Projected {
             child_request_id: edge.child_request_id,
             parent_request_id: parent_context.request_id,
             parent_tool_call_id: edge.parent_tool_call_id,
             parent_session_id: parent_context.session_id,
             notification_sequence: side_effects.notification_sequence,
-            wake_request_id: side_effects.wake_request_id,
         }
     } else {
         BackgroundCompletionOutcome::AlreadyProjected
@@ -673,9 +667,7 @@ async fn load_projected_final_response(
 
 struct SideEffects {
     notification_sequence: u32,
-    wake_request_id: String,
     created_notification: bool,
-    created_wake: bool,
 }
 
 pub(crate) async fn append_background_tool_completion(
@@ -694,61 +686,33 @@ pub(crate) async fn append_background_tool_completion(
         .await?
         .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
 
-    let (notification_timestamp, created_notification) =
-        match existing_tool_completion_notification(node, parent_session_id, tool_call_id).await? {
-            Some(existing) => (existing.timestamp, false),
-            None => {
-                let notification =
-                    render_tool_completion(tool_call_id, tool_name, status, result, reason);
-                let notification_request_id =
-                    background_completion_notification_request_id(tool_call_id);
-                let sequence = session::append_message_with_requester_did(
-                    node,
-                    parent_session_id,
-                    &parent_request.agent_did,
-                    parent_request.requester_did.as_deref(),
-                    "user",
-                    &notification,
-                    None,
-                    Some(&notification_request_id),
-                )
-                .await?;
-                let timestamp = load_message_timestamp(node, parent_session_id, sequence).await?;
-                (timestamp, true)
-            }
-        };
-
-    let queue_key = format!("background_completion:{parent_session_id}");
-    if existing_wakeup_after(node, parent_session_id, &queue_key, &notification_timestamp)
+    if existing_tool_completion_notification(node, parent_session_id, tool_call_id)
         .await?
         .is_some()
     {
         return Ok(());
     }
 
-    let _wake = enqueue_session_request(
+    let notification = render_tool_completion(tool_call_id, tool_name, status, result, reason);
+    let notification_request_id = background_completion_notification_request_id(tool_call_id);
+    session::append_message_with_requester_did(
         node,
-        &parent_request,
-        BACKGROUND_COMPLETION_WAKE_PROMPT,
-        ExecutionOrigin::Scheduled,
-        QueueHints {
-            source: QueueSource::BackgroundCompletion,
-            policy: QueuePolicy::Coalesce,
-            key: Some(queue_key),
-            queued_after_request_id: Some(parent_request_id.to_string()),
-            interrupted_request_id: None,
-        },
+        parent_session_id,
+        &parent_request.agent_did,
+        parent_request.requester_did.as_deref(),
+        "user",
+        &notification,
+        None,
+        Some(&notification_request_id),
     )
     .await?;
 
-    if created_notification {
-        tracing::debug!(
-            parent_session_id,
-            parent_request_id,
-            tool_call_id,
-            "appended background tool completion notification"
-        );
-    }
+    tracing::debug!(
+        parent_session_id,
+        parent_request_id,
+        tool_call_id,
+        "appended background tool completion notification without starting a turn"
+    );
     Ok(())
 }
 
@@ -766,9 +730,9 @@ async fn ensure_projection_side_effects(
         .await?
         .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
 
-    let (notification_sequence, notification_timestamp, created_notification) =
+    let (notification_sequence, created_notification) =
         match existing_notification(node, parent_session_id, &edge.child_request_id).await? {
-            Some(existing) => (existing.sequence, existing.timestamp, false),
+            Some(existing) => (existing.sequence, false),
             None => {
                 let notification = render_notification(edge, status, summary);
                 let notification_request_id =
@@ -784,43 +748,22 @@ async fn ensure_projection_side_effects(
                     Some(&notification_request_id),
                 )
                 .await?;
-                let timestamp = load_message_timestamp(node, parent_session_id, sequence).await?;
-                (sequence, timestamp, true)
+                (sequence, true)
             }
         };
 
-    let queue_key = format!("background_completion:{parent_session_id}");
-    if let Some(wake_request_id) =
-        existing_wakeup_after(node, parent_session_id, &queue_key, &notification_timestamp).await?
-    {
-        return Ok(SideEffects {
-            notification_sequence,
-            wake_request_id,
-            created_notification,
-            created_wake: false,
-        });
+    if created_notification {
+        tracing::debug!(
+            parent_session_id,
+            parent_request_id,
+            child_request_id = edge.child_request_id,
+            "appended subagent completion notification without starting a turn"
+        );
     }
-
-    let wake = enqueue_session_request(
-        node,
-        &parent_request,
-        BACKGROUND_COMPLETION_WAKE_PROMPT,
-        ExecutionOrigin::Scheduled,
-        QueueHints {
-            source: QueueSource::BackgroundCompletion,
-            policy: QueuePolicy::Coalesce,
-            key: Some(queue_key),
-            queued_after_request_id: Some(parent_request_id.to_string()),
-            interrupted_request_id: None,
-        },
-    )
-    .await?;
 
     Ok(SideEffects {
         notification_sequence,
-        wake_request_id: wake.request_id,
         created_notification,
-        created_wake: true,
     })
 }
 
@@ -830,14 +773,12 @@ fn bridge_state_is_terminal(state: &str) -> bool {
 
 struct ExistingNotification {
     sequence: u32,
-    timestamp: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
 struct NotificationMessageRow {
     sequence: u32,
     content: String,
-    timestamp: String,
 }
 
 async fn existing_notification(
@@ -854,7 +795,6 @@ async fn existing_notification(
             ) {{
                 sequence
                 content
-                timestamp
             }}
         }}"#
     );
@@ -880,7 +820,6 @@ async fn existing_notification(
         if row.content.contains("<subagent-notification") && row.content.contains(&marker) {
             return Ok(Some(ExistingNotification {
                 sequence: row.sequence,
-                timestamp: parse_utc_timestamp(&row.timestamp, "AgentMessage.timestamp")?,
             }));
         }
     }
@@ -902,7 +841,6 @@ async fn existing_tool_completion_notification(
             ) {{
                 sequence
                 content
-                timestamp
             }}
         }}"#
     );
@@ -927,112 +865,10 @@ async fn existing_tool_completion_notification(
         if row.content.contains(&needle) {
             return Ok(Some(ExistingNotification {
                 sequence: row.sequence,
-                timestamp: parse_utc_timestamp(&row.timestamp, "AgentMessage.timestamp")?,
             }));
         }
     }
     Ok(None)
-}
-
-#[derive(Debug, Deserialize)]
-struct MessageTimestampRow {
-    timestamp: String,
-}
-
-async fn load_message_timestamp(
-    node: &EmbeddedNode,
-    parent_session_id: &str,
-    sequence: u32,
-) -> Result<DateTime<Utc>> {
-    let escaped_session_id = escape_graphql_string(parent_session_id);
-    let query = format!(
-        r#"{{
-            AgentMessage(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
-                    sequence: {{ _eq: {sequence} }}
-                }},
-                limit: 1
-            ) {{ timestamp }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query AgentMessage timestamp session={parent_session_id} sequence={sequence} failed: {:?}",
-            response.errors
-        );
-    }
-    let row: MessageTimestampRow = first_row(response.data.as_ref(), "AgentMessage")
-        .ok_or_else(|| anyhow!("AgentMessage session={parent_session_id} sequence={sequence} not found after append"))?;
-    parse_utc_timestamp(&row.timestamp, "AgentMessage.timestamp")
-}
-
-#[derive(Debug, Deserialize)]
-struct WakeupRow {
-    request_id: String,
-    metadata: Option<String>,
-    created_at: String,
-}
-
-async fn existing_wakeup_after(
-    node: &EmbeddedNode,
-    parent_session_id: &str,
-    queue_key: &str,
-    notification_timestamp: &DateTime<Utc>,
-) -> Result<Option<String>> {
-    let escaped_session_id = escape_graphql_string(parent_session_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
-                    execution_origin: {{ _eq: "scheduled" }}
-                }},
-                order: {{ created_at: ASC }}
-            ) {{
-                request_id
-                metadata
-                created_at
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query scheduled wake-ups for session {parent_session_id} failed: {:?}",
-            response.errors
-        );
-    }
-
-    let rows: Vec<WakeupRow> = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
-    for row in rows {
-        let matches_key = parse_queue_hints(row.metadata.as_deref()).is_some_and(|hints| {
-            hints.source == QueueSource::BackgroundCompletion
-                && hints.policy == QueuePolicy::Coalesce
-                && hints.key.as_deref() == Some(queue_key)
-        });
-        if !matches_key {
-            continue;
-        }
-
-        let created_at = parse_utc_timestamp(&row.created_at, "AgentRequest.created_at")?;
-        if created_at >= *notification_timestamp {
-            return Ok(Some(row.request_id));
-        }
-    }
-    Ok(None)
-}
-
-fn parse_utc_timestamp(value: &str, field: &str) -> Result<DateTime<Utc>> {
-    Ok(DateTime::parse_from_rfc3339(value)
-        .map_err(|error| anyhow!("{field} is not RFC3339: {error}"))?
-        .with_timezone(&Utc))
 }
 
 pub(crate) async fn run_background_completion_observer(

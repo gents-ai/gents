@@ -100,8 +100,8 @@ async fn r5_partition_during_cancel() {
 }
 
 #[tokio::test]
-async fn r5_multi_completion_coalesce() {
-    let history = run_scenario("multi_completion_coalesce.json").await;
+async fn r5_multi_completion_delivery_creates_no_agent_request() {
+    let history = run_scenario("multi_completion_delivery.json").await;
     let last = history.last().expect("non-empty history");
     assert_eq!(
         last.subagent_notifications.len(),
@@ -110,7 +110,7 @@ async fn r5_multi_completion_coalesce() {
     );
     assert_eq!(
         last.background_wakeup_keys.len(),
-        1,
-        "multi-completion scenario should coalesce wakeups under one queue key"
+        0,
+        "multi-completion delivery must not create a background wake request"
     );
 }

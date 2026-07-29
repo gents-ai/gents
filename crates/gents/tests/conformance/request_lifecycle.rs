@@ -1258,7 +1258,7 @@ pub(super) async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
         [
             "active_request_blocks_later_same_session_claim",
             "terminal_active_allows_next_pending_same_session_claim",
-            "background_completion_session_coalesces_one_pending_wakeup",
+            "background_completion_notification_creates_no_agent_request",
             "cancel_drains_automated_wakeups_preserves_user_pending",
             "claim_preserves_explicit_deadline",
         ]
@@ -1300,19 +1300,16 @@ pub(super) async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
     assert!(terminal.post_pending_request_ids.is_empty());
     assert_eq!(terminal.post_terminal_request_ids, vec![100]);
 
-    let coalesced =
-        lean_queue_deadline_case("background_completion_session_coalesces_one_pending_wakeup");
-    assert_eq!(coalesced.group, "queue_coalesce");
-    assert_eq!(coalesced.action, "coalescePending_twice");
-    assert!(coalesced.legal);
-    assert_eq!(
-        coalesced.queue_key.as_deref(),
-        Some("background_completion:900")
-    );
-    assert!(coalesced.pre_pending_request_ids.is_empty());
-    assert_eq!(coalesced.post_pending_request_ids, vec![201]);
-    assert_eq!(coalesced.post_coalesced_pending_count, 1);
-    assert!(coalesced.post_terminal_request_ids.is_empty());
+    let completion =
+        lean_queue_deadline_case("background_completion_notification_creates_no_agent_request");
+    assert_eq!(completion.group, "completion_delivery");
+    assert_eq!(completion.action, "appendNotification");
+    assert!(completion.legal);
+    assert_eq!(completion.queue_key, None);
+    assert!(completion.pre_pending_request_ids.is_empty());
+    assert!(completion.post_pending_request_ids.is_empty());
+    assert_eq!(completion.post_coalesced_pending_count, 0);
+    assert!(completion.post_terminal_request_ids.is_empty());
 
     let cancel = lean_queue_deadline_case("cancel_drains_automated_wakeups_preserves_user_pending");
     assert_eq!(cancel.group, "queue_cancel");
@@ -1356,8 +1353,8 @@ async fn drive_queue_deadline_case(case: &lean_vocab_test::LeanQueueDeadlineConf
         "terminal_active_allows_next_pending_same_session_claim" => {
             drive_terminal_active_allows_next_pending_same_session_claim(case).await;
         }
-        "background_completion_session_coalesces_one_pending_wakeup" => {
-            drive_background_completion_session_coalesces_one_pending_wakeup(case).await;
+        "background_completion_notification_creates_no_agent_request" => {
+            drive_background_completion_notification_creates_no_agent_request(case).await;
         }
         "cancel_drains_automated_wakeups_preserves_user_pending" => {
             drive_cancel_drains_automated_wakeups_preserves_user_pending(case).await;
@@ -1718,7 +1715,7 @@ async fn drive_terminal_active_allows_next_pending_same_session_claim(
     assert_post_queue_snapshot(case, &post);
 }
 
-async fn drive_background_completion_session_coalesces_one_pending_wakeup(
+async fn drive_background_completion_notification_creates_no_agent_request(
     case: &lean_vocab_test::LeanQueueDeadlineConformanceCase,
 ) {
     let db = test_db("queue-deadline-coalesce").await;
@@ -1778,30 +1775,22 @@ async fn drive_background_completion_session_coalesces_one_pending_wakeup(
     )
     .await;
 
-    let wake_a = projected_wake_request_id(
-        project_background_subagent_completion(db.node.clone(), &child_a, AGENT_DID)
-            .await
-            .unwrap(),
-    );
-    let wake_b = projected_wake_request_id(
-        project_background_subagent_completion(db.node.clone(), &child_b, AGENT_DID)
-            .await
-            .unwrap(),
-    );
-    assert_eq!(
-        wake_a, wake_b,
-        "{} should coalesce both completions into one wake-up",
-        case.name
-    );
+    let first = project_background_subagent_completion(db.node.clone(), &child_a, AGENT_DID)
+        .await
+        .unwrap();
+    let second = project_background_subagent_completion(db.node.clone(), &child_b, AGENT_DID)
+        .await
+        .unwrap();
+    assert!(matches!(
+        first,
+        BackgroundCompletionOutcome::Projected { .. }
+    ));
+    assert!(matches!(
+        second,
+        BackgroundCompletionOutcome::Projected { .. }
+    ));
 
-    let mut generated_ids = std::collections::BTreeMap::new();
-    generated_ids.insert(
-        wake_a,
-        *case
-            .post_pending_request_ids
-            .first()
-            .expect("coalesced pending id"),
-    );
+    let generated_ids = std::collections::BTreeMap::new();
     let post = fetch_queue_runtime_snapshot(
         &db.node,
         &session_id,
@@ -2254,16 +2243,6 @@ async fn persist_child_completion(
         "create child AgentResponse failed: {:?}",
         response.errors
     );
-}
-
-fn projected_wake_request_id(outcome: BackgroundCompletionOutcome) -> String {
-    let BackgroundCompletionOutcome::Projected {
-        wake_request_id, ..
-    } = outcome
-    else {
-        panic!("expected background completion projection, got {outcome:?}");
-    };
-    wake_request_id
 }
 
 async fn fetch_deadline_runtime_row(node: &EmbeddedNode, request_id: usize) -> DeadlineRuntimeRow {

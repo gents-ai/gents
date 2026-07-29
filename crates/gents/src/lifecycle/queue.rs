@@ -93,6 +93,64 @@ pub(crate) fn is_goal_queue(metadata: Option<&str>) -> bool {
     parse_queue_hints(metadata).is_some_and(|hints| matches!(hints.source, QueueSource::Goal))
 }
 
+/// Prevent a background-completion wake written by an older runtime (or
+/// received later through replication) from ever reaching the agent loop.
+///
+/// Returning `true` means the request was recognized as a deprecated wake and
+/// must be skipped even if the terminalizing update lost a race.
+pub(crate) async fn retire_deprecated_background_completion_wakeup(
+    node: &EmbeddedNode,
+    request: &AgentRequest,
+) -> Result<bool> {
+    if request.execution_origin.as_deref() != Some("scheduled")
+        || !is_automated_wakeup(request.metadata.as_deref())
+    {
+        return Ok(false);
+    }
+
+    let escaped_doc_id = escape_graphql_string(&request.doc_id);
+    let escaped_agent_did = escape_graphql_string(&request.agent_did);
+    let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{
+                    _docID: {{ _eq: "{escaped_doc_id}" }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    status: {{ _eq: "pending" }},
+                    lifecycle_state: {{ _eq: "pending" }}
+                }},
+                input: {{
+                    status: "interrupted",
+                    lifecycle_state: "interrupted",
+                    failure_reason: "deprecated_background_completion_wakeup",
+                    terminalized_at: "{terminalized_at}",
+                    terminal_redrive_attempts: 0
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = crate::retry::execute_graphql_with_terminal_persistence_retry(
+        node,
+        &mutation,
+        "retire_deprecated_background_completion_wakeup",
+    )
+    .await?;
+    if response.has_errors() {
+        anyhow::bail!(
+            "retire deprecated background completion wake failed for request {}: {:?}",
+            request.request_id,
+            response.errors
+        );
+    }
+    tracing::warn!(
+        request_id = %request.request_id,
+        session_id = %request.session_id,
+        "retired deprecated background completion wake without executing it"
+    );
+    Ok(true)
+}
+
 #[derive(Debug, Deserialize)]
 struct PendingQueueRow {
     #[serde(rename = "_docID")]

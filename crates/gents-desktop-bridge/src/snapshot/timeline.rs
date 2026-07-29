@@ -57,6 +57,8 @@ fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
         tool_name: tool.tool_name.clone().unwrap_or_else(|| "tool".to_string()),
         status_kind: tool_status_kind(tool.lifecycle_state.as_deref().or(tool.status.as_deref())),
         status: tool.status.clone(),
+        child_request_id: tool.child_request_id.clone(),
+        await_mode: tool.await_mode.clone(),
         args: parse_tool_detail_value(tool.args.as_deref()),
         partial_output_tail: tool.partial_output_tail.clone(),
         partial_output_seq: tool.partial_output_seq,
@@ -325,8 +327,8 @@ pub(super) fn build_rendered_timeline(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_rendered_timeline, materialized_user_turn_count, tool_status_kind, MessageView,
-        RenderedTimelineItem,
+        build_rendered_timeline, materialized_user_turn_count, render_tool_call, tool_status_kind,
+        MessageView, RenderedTimelineItem, ToolCallView,
     };
 
     fn user_message(key: &str, sequence: i64, content: &str) -> MessageView {
@@ -357,6 +359,40 @@ mod tests {
         assert_eq!(tool_status_kind(Some("timedOut")), "error");
         assert_eq!(tool_status_kind(Some("running")), "running");
         assert_eq!(tool_status_kind(None), "running");
+    }
+
+    #[test]
+    fn subagent_identity_and_await_mode_reach_rendered_tool() {
+        let rendered = render_tool_call(ToolCallView {
+            tool_call_key: "spawn-1".to_string(),
+            request_id: Some("parent-1".to_string()),
+            message_sequence: Some(2),
+            tool_name: Some("spawn_subagent".to_string()),
+            tool_call_id: Some("spawn-1".to_string()),
+            args: Some(
+                r#"{"name":"researcher","prompt":"trace the request flow","await_mode":"background"}"#
+                    .to_string(),
+            ),
+            partial_output_tail: Some("reading watcher.rs".to_string()),
+            partial_output_seq: Some(18),
+            result: None,
+            status: Some("running".to_string()),
+            lifecycle_state: Some("running".to_string()),
+            child_request_id: Some("child-request-1".to_string()),
+            await_mode: Some("background".to_string()),
+            started_at: None,
+            completed_at: None,
+            denial: None,
+            cancel_cause: None,
+        });
+
+        assert_eq!(rendered.tool_name, "spawn_subagent");
+        assert_eq!(
+            rendered.child_request_id.as_deref(),
+            Some("child-request-1")
+        );
+        assert_eq!(rendered.await_mode.as_deref(), Some("background"));
+        assert_eq!(rendered.status_kind, "running");
     }
 
     #[test]

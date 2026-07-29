@@ -33,6 +33,8 @@ pub struct ToolCallView {
     pub result: Option<String>,
     pub status: Option<String>,
     pub lifecycle_state: Option<String>,
+    pub child_request_id: Option<String>,
+    pub await_mode: Option<String>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -83,6 +85,12 @@ pub struct RenderedToolCallView {
     pub tool_name: String,
     pub status: Option<String>,
     pub status_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub child_request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub await_mode: Option<String>,
     pub args: Option<ToolDetailValueView>,
     pub result: Option<ToolDetailValueView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
