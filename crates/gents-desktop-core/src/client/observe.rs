@@ -665,7 +665,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_event_leaves_stale_row() {
+    async fn delete_event_reloads_authoritative_scope_and_removes_stale_row() {
         let (node, store, handle) = build_observer_fixture().await;
 
         seed_message(node.as_ref(), "sess-1", 1, "before-delete").await;
@@ -685,13 +685,13 @@ mod tests {
         .await;
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-        // Soft-delete-by-omission posture: the row stays in the store. This
-        // is the behavior documented in design §3.3.2; tightening requires a
-        // delete signal from DefraDB.
+        // An empty document patch is ambiguous, so the observer reloads the
+        // authoritative scope. The deleted row must disappear from the local
+        // projection instead of remaining visible until restart.
         let snap = store.snapshot();
         assert!(
-            snap.messages.iter().any(|m| m.message_key == "sess-1:1"),
-            "expected stale row to remain after delete (soft-delete-by-omission)"
+            !snap.messages.iter().any(|m| m.message_key == "sess-1:1"),
+            "expected authoritative reload to remove the deleted row"
         );
         handle.shutdown().await;
     }
