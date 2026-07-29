@@ -150,6 +150,6 @@
     },
     { "op": "RunBackgroundCompletionObserverOnA" },
     { "op": "RunBackgroundCompletionObserverOnA" },
-    { "op": "WaitForConvergence", "timeout_secs": 10 }
+    { "op": "WaitForConvergence" }
   ]
 }

@@ -90,6 +90,6 @@
       "doc_id": "child-req-cancel"
     },
     { "op": "RunCancelAckObserverOnA" },
-    { "op": "WaitForConvergence", "timeout_secs": 10 }
+    { "op": "WaitForConvergence" }
   ]
 }

@@ -6,15 +6,8 @@ pub fn assert_all_safety(o: &Observation) {
     completion::projection_matches_bridge_mapping(o);
     completion::notification_idempotent(o);
     completion::wakeup_coalesced(o);
-    completion::wakeup_causal(o);
-    completion::cancel_drain_preserves_user_pending(o);
-    completion::parent_cancel_absorbs_late_terminal(o);
     cancel_propagation::cancel_intent_durable(o);
-    cancel_propagation::cancel_handled_idempotent(o);
-    cancel_propagation::interrupt_exactly_once(o);
     cancel_propagation::cascade_interrupts_only_running(o);
-    cancel_propagation::natural_terminal_stable_after_cancel(o);
-    cancel_propagation::interrupted_only_by_cascade(o);
 }
 
 pub fn assert_liveness_after_convergence(history: &[Observation]) {
@@ -101,10 +94,6 @@ pub mod completion {
             assert!(seen.insert(key.clone()), "duplicate wakeup key {key}");
         }
     }
-
-    pub fn wakeup_causal(_: &Observation) {}
-    pub fn cancel_drain_preserves_user_pending(_: &Observation) {}
-    pub fn parent_cancel_absorbs_late_terminal(_: &Observation) {}
 }
 
 pub mod cancel_propagation {
@@ -121,9 +110,6 @@ pub mod cancel_propagation {
         }
     }
 
-    pub fn cancel_handled_idempotent(_: &Observation) {}
-    pub fn interrupt_exactly_once(_: &Observation) {}
-
     pub fn cascade_interrupts_only_running(o: &Observation) {
         for child in &o.b_child_requests {
             if child.interrupt_requested_at.is_some() {
@@ -138,7 +124,4 @@ pub mod cancel_propagation {
             }
         }
     }
-
-    pub fn natural_terminal_stable_after_cancel(_: &Observation) {}
-    pub fn interrupted_only_by_cascade(_: &Observation) {}
 }
