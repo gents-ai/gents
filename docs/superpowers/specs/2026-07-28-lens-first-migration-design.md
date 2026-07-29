@@ -1,6 +1,6 @@
 # Lens-first migration system
 
-**Date:** 2026-07-28
+**Date:** 2026-07-28 (revised 2026-07-29 after design review)
 **Status:** Approved design, pre-implementation
 **Replaces:** `crates/gents/src/migration.rs` (5,161 lines) and both legacy lens crates
 
@@ -40,15 +40,70 @@ across restarts, and P2P lens sync. `LensConfig` accepts inline wasm bytes
 
 1. **Full lens-first redesign.** The database's native version DAG is the only
    source of truth. Gents adds minimal scaffolding around it — a declarative
-   step registry, an engine, and a sweep — not a parallel versioning system.
-2. **Eager sweep after upgrade**, with read-time lens migration as the
-   correctness backstop.
+   step registry, an engine, and a materialization driver — not a parallel
+   versioning system.
+2. **Eager materialization after upgrade**, with read-time lens migration as
+   the correctness backstop. (Revised 2026-07-29: materialization is an
+   upstream defradb.rs primitive, not a gents GraphQL sweep — see §3.)
 3. **No legacy support.** The 26 legacy migrations, the field-presence
    machinery, and both existing lens crates are deleted. Databases predating
    the new baseline are rejected with a clear diagnostic (consistent with
    `docs/gents-cutover.md`: no compatibility shims).
 4. **New workspace crate `crates/gents-migration`.**
 5. **Lean core model included** in this PR, per the foundation flow.
+
+## Design-review findings (2026-07-29)
+
+Four blockers were raised against the first draft; all were verified against
+the defradb.rs pin (`8eba3d5`) and cross-checked against Go DefraDB
+(`8b961abe`). Verdicts, which drive the revisions below:
+
+1. **Fresh bootstrap bypasses the chain — confirmed.** Every gents bootstrap
+   path registers the *current* SDL via `add_schema` before migrations run
+   (`crates/gents/src/schema.rs:40-82` and the desktop's byte-identical copy).
+   Version CIDs incorporate parent heads and chain depth
+   (`defradb.rs crates/db/src/patch/version_id.rs`,
+   `crates/schema/src/cid.rs`), so a fresh database registered at the current
+   SDL and a migrated database end at **different CIDs for the same logical
+   schema** — the lineages can never converge. §2 restructures bootstrap.
+2. **`expected_version` does not verify complete state — confirmed.** The
+   version CID hashes only new-field lineage (name/kind/CRDT of *added*
+   fields, plus priority/heads). Transform attachment, `IsActive`, indexes,
+   per-field defaults/immutability, and metadata are all invisible to it —
+   transforms are attached as an in-place update that keeps the version ID
+   (`patch/mod.rs:163-168`). §1 adds full post-apply state verification and a
+   pinned transform ID per lens step.
+3. **Default patch/activation sequence is unsafe — confirmed; the remedy
+   exists in public API.** `patch_collection` auto-activates
+   (`patch/store.rs:268-280`), and any read served in the
+   patch→`set_migration` window additionally **poisons a per-process
+   migration cache that is never invalidated**
+   (`lensed_auto_commit_fetcher/migration.rs:34-51`), leaving reads
+   unmigrated even after the lens registers. But an `IsActive: false` entry in
+   the patch stores a fully addressable *inactive* version while the old one
+   stays active (`patch/apply.rs:68-71`, `store.rs:271-280,336-341`), and
+   registering the migration *first* creates a placeholder at the pinned
+   destination CID whose transform is adopted atomically when the patch lands
+   (`patch/store.rs:192-243`). §1's step sequence uses both; activation
+   changes the cache key, which defuses the poisoning hazard.
+4. **Eager sweep lacks the required API — confirmed; Go shows the correct
+   fix.** No public surface can select documents by stored version (the `/v/`
+   datastore key has no reverse index; `_commits.collectionVersionId` requires
+   a full DAG walk). A GraphQL-update sweep *would* materialize (updates read
+   through the lens fetcher) but emits one ordinary CRDT commit per document
+   and gossips each to peers — rejected. Go's lens fetcher instead writes
+   migrated values back as **datastore-only writes with no new commits and no
+   P2P traffic** (`defradb internal/lens/fetcher.go:296-386`), and Go's
+   reindex thereby physically materializes whole collections. The Rust port
+   stubbed this out. Materialization is therefore an **upstream defradb.rs
+   port of existing Go behavior**, not gents scaffolding — see §3.
+
+The Rust/Go cross-check also found: Rust errors on documents whose stored
+version is unknown to the history where Go passes them through unchanged; the
+Rust reindex leaves index entries and datastore values disagreeing; and Rust's
+head/priority reconstruction after restart diverges from Go when the active
+version is not the latest. All are tracked in §7 and shape the engine's
+crash-resume discipline.
 
 ## 1. Model: the version DAG is the only source of truth
 
@@ -62,48 +117,92 @@ A migration is authored as data — one **step** in a static registry:
 MigrationStep {
     id: "2026-07-add-request-priority",   // human identifier, stable
     collection: "AgentRequest",           // exactly one collection per step
-    patch: r#"[{"op":"add", ...}]"#,      // RFC 6902 collection patch
+    patch: r#"[{"op":"add", ...}]"#,      // RFC 6902 collection patch;
+                                          // always includes {"op":"replace",
+                                          // "path":"/IsActive","value":false}
     lens: Option<LensSpec>,               // embedded wasm + args; None for purely additive changes
     expected_version: "bafy…",            // pinned CID of the resulting CollectionVersion
+    expected_transform: Option<"…">,      // pinned TransformId when lens is Some
+    expected_fields: &[FieldExpectation], // full post-state: names, kinds, CRDTs
 }
 ```
 
-### The version pin
+### Pins verify lineage; verification covers the rest
 
-`expected_version` is the linchpin. Version IDs are content-derived, so:
+`expected_version` is content-derived, so the engine can locate any database's
+position in the chain by its version IDs and detect drift at the exact step.
+But the CID hashes only added-field lineage — so every step application ends
+with a **state verification** phase that checks what the CID cannot:
 
-- The engine locates any database's position in the chain by looking up its
-  active version ID, and applies only the remaining steps.
-- After each `patch_collection`, the engine asserts the produced version ID
-  equals the pin. Registry/reality drift is a hard error at the exact step,
-  never a silent divergence.
-- A conformance test replays the full chain from baseline on a fresh node and
-  asserts every pinned ID, so a wrong pin cannot merge.
+- the produced version ID equals `expected_version`;
+- the stored version's fields match `expected_fields` exactly;
+- when the step declares a lens, `PreviousVersion.transform` equals
+  `expected_transform` (transform IDs are content-derived from the lens
+  modules, so this pin is also stable);
+- the intended activation state holds.
 
-Authoring workflow for a new migration: write the patch (and lens if the change
-is not purely additive), run the chain-replay test, copy the printed version ID
-into `expected_version`, commit. The test failure message includes the computed
-ID to make this a paste, not a hunt.
+Verification failure is a hard, step-attributed error — never a warning.
+
+### The safe step sequence
+
+Each pending step applies as:
+
+1. **Attach first** (lens steps only): `set_migration(src=prev pin,
+   dst=this pin, lens)`. This creates a placeholder at the pinned destination
+   CID; the transform is adopted atomically when the patch stores the version.
+2. **Patch inactive**: `patch_collection` with `IsActive: false` in the patch.
+   The new version is stored, addressable, and *inactive*; the old version
+   keeps serving readers. No reader ever observes a version whose lens is
+   missing, and the migration cache cannot be poisoned for the new version.
+3. **Verify**: the full state verification above, against the stored (still
+   inactive) version.
+4. **Activate**: `set_active_collection_version(pin)` — a single-transaction
+   flip that also changes the read path's cache key and triggers reindexing.
+
+Crash resume is positional: on every run the engine looks for each pinned
+version among **all** stored versions (active or not) — a version stored but
+unverified resumes at step 3; verified but inactive resumes at step 4; a
+missing transform on an applied step is re-attached (`set_migration` is an
+in-place update). This subsumes the legacy system's worst hazard (lens
+registration silently skipped forever) and never re-derives a CID over a
+half-applied state — which also sidesteps the known head-reconstruction
+divergence after restarts (§7).
+
+Note: `IsActive: false` combined with field additions is exercised in Go's
+integration suite but not in defradb.rs's; a conformance test locking this
+behavior lands upstream (or in gents e2e) before the engine relies on it.
+
+### Authoring workflow
+
+Write the patch (and lens if the change is not purely additive), run the
+chain-replay test, copy the printed version ID and transform ID into the pins,
+commit. The test failure message includes the computed IDs to make this a
+paste, not a hunt.
 
 ### One lineage for every database
 
 Fresh installs register the **baseline SDL** (the `gents-protocol` schemas
 frozen at cutover) and then replay the chain — schema-only patches on an empty
 database, so it is fast, and every database in the fleet shares one version
-lineage. This is what makes the pins universal.
+lineage. This is what makes the pins universal. The baseline is
+**feature-invariant**: all collections register regardless of feature flags
+(the agent-memory flag currently filters the registered set in
+`schema.rs:74-82`; under pinned chains that filter must move out of schema
+registration, or pins would become feature-dependent).
 
-The current-SDL constants in `gents-protocol` remain for docs and tooling. A
-conformance test asserts baseline + chain ≡ current SDL, field for field, so
-the two representations cannot drift.
+The current-SDL constants in `gents-protocol` remain for docs, desktop
+collection resolution, and the SelfConfig conformance fence. A conformance
+test asserts baseline + chain ≡ current SDL, field for field, so the two
+representations cannot drift.
 
 ### Pre-baseline databases fail loudly
 
-If the active version ID is not in the known chain, `ensure_migrations` returns
-`Error::UnknownLineage` with a diagnostic: the database predates the migration
-baseline (or was produced by foreign patches) and requires export/import. No
-silent limping, no partial application over unknown state.
+If a collection's versions include none of the known pins, `ensure_migrations`
+returns `Error::UnknownLineage` with a diagnostic: the database predates the
+migration baseline (or was produced by foreign patches) and requires
+export/import. No silent limping, no partial application over unknown state.
 
-## 2. Crate layout
+## 2. Crate layout and bootstrap restructure
 
 ```
 crates/gents-migration/
@@ -112,58 +211,79 @@ crates/gents-migration/
 │                     # becomes a hard error, not a cargo:warning)
 ├── src/
 │   ├── lib.rs        # pub fn ensure_migrations(node) -> Result<MigrationReport>
+│   │                 # — THE single schema entry point: baseline + chain + verify
 │   ├── registry.rs   # baseline SDL reference + the static step chain
 │   │                 # (ships with zero steps at cutover); the engine takes a
 │   │                 # registry as input, so tests inject their own chains
-│   ├── engine.rs     # locate-in-chain → patch → verify pin → set_migration
-│   │                 # → set_active_collection_version; edge repair
+│   ├── engine.rs     # locate-in-chain → attach → patch-inactive → verify →
+│   │                 # activate; positional crash resume; edge repair
 │   ├── lens.rs       # embedded wasm via LensModule::from_bytes — no temp
 │   │                 # files, no OnceLock, no startup panics
-│   ├── sweep.rs      # eager materialization (§3)
+│   ├── materialize.rs# thin driver over the upstream materialization API (§3)
 │   ├── report.rs     # MigrationReport: steps applied, edges repaired,
-│   │                 # sweep stats, warnings
+│   │                 # materialization stats, warnings
 │   └── error.rs      # typed thiserror enum; anyhow only at the caller boundary
 └── tests/            # conformance tests derived from the Lean model,
                       # chain-replay/pin test, SDL-parity test, fixture-lens e2e
 ```
 
-### Edge repair is a first-class check
+### Bootstrap becomes unbypassable
 
-On every run, for each already-applied step, the engine verifies the version
-edge actually carries its transform (`PreviousVersion.transform` is `Some`
-whenever the step declares a lens) and re-runs `set_migration` if not. A crash
-between patch and lens registration heals on the next boot. This directly
-eliminates the worst legacy hazard and is forced into existence by the
-convergence theorem (§5).
+Registering schemas and replaying the chain are one operation. There is no
+public "register schemas" function left to call on its own — the review showed
+that any bypass creates a divergent lineage:
 
-### Wiring
+- `ensure_migrations(node)` registers the frozen baseline SDL (swallowing
+  "already exists" exactly as today), replays pending steps, verifies, and
+  materializes. It is idempotent, resumable, and cheap when current, because
+  every host calls it on every start — six production call sites replace
+  `ensure_all_runtime_migrations`.
+- `crates/gents/src/schema.rs` shrinks to a thin re-export of the baseline
+  used by `gents-migration`; the byte-identical desktop copy
+  (`gents-desktop-core/src/client/schema.rs`) is **deleted** and desktop
+  bootstrap calls the same entry point.
+- The two existing bypasses are converted: `gents session fork`
+  (`session.rs:116`, registers schemas with no migrations at all) and the
+  out-of-band `ensure_agent_behavior_migrations` inside
+  `Gents::from_default_behavior_documents` (`agent.rs:163`).
+- The entry point tolerates databases where target collections don't yet
+  exist (the CLI runs migrations even when `ensure_local_schemas` is false) —
+  absent collections are bootstrapped, never `UnknownLineage`.
+- Test helpers (~246 `ensure_*schemas` call sites, mostly `#[cfg(test)]`)
+  route through the same entry point via one shared test-support function.
+- `gents init`'s six-collection `CONFIG_BOOTSTRAP` subset is replaced by the
+  full baseline — partial registration would fork the lineage per subset.
 
-`gents` depends on `gents-migration`. The six current call sites of
-`ensure_all_runtime_migrations` (daemon startup, oneshot, `gents init`,
-`gents server`, CLI config access, desktop bootstrap) become one call to
-`gents_migration::ensure_migrations(node)`. The out-of-band
-`ensure_agent_behavior_migrations` call inside
-`Gents::from_default_behavior_documents` (`agent.rs:163`) is deleted — the
-single-entry-point policy the old file stated in a comment becomes structural.
+## 3. Eager materialization, lazy backstop
 
-## 3. Eager sweep, lazy backstop
+**The materialization primitive lives upstream in defradb.rs**, as a port of
+behavior Go already has — not as gents scaffolding. Rationale from review: no
+public API can enumerate documents by stored version; a GraphQL-update sweep
+would emit one ordinary CRDT commit per document and gossip each to peers,
+rewriting history fleet-wide; and Go's reference implementation already solves
+this with datastore-only write-back (migrated field values + the `/v/` doc
+version key, no new commits, nothing replicated —
+`internal/lens/fetcher.go:296-386`), which the Rust port stubbed out.
 
-After the engine brings the schema chain current, `sweep.rs` materializes
-documents:
+Upstream work (small, reference implementation exists in Go):
 
-- Paged scan (bounded page size, resumable) per collection for documents whose
-  stored version differs from the active version.
-- Reading them through the normal query path forces the lens transform; the
-  sweep writes the migrated values back via standard update mutations, which
-  persists the document at the active version. This works around the write-back
-  cache stub in the pinned `defradb.rs` (see Known limitations).
-- Progress is `tracing`-instrumented and summarized in `MigrationReport`.
-  Interruption is safe: a re-run resumes from whatever the scan still finds
-  unmigrated. All GraphQL built by the sweep goes through
-  `graphql::escape_graphql_string()`.
+1. Port the lens fetcher write-back: migrated values and the doc version key
+   are persisted datastore-only on first lensed read.
+2. Expose `materialize_collection(collection)` on `EmbeddedNode`: iterate the
+   collection through the lensed fetcher in a write transaction (exactly what
+   Go's reindex-after-migration already does), so a caller can eagerly
+   materialize instead of waiting for organic reads. This also fixes the
+   Rust-only bug where reindex leaves index entries and datastore values
+   disagreeing.
 
-Read-time lens migration remains the correctness backstop for documents that
-arrive after the sweep via P2P from older peers.
+Gents' `materialize.rs` is then a thin driver: call the API per collection
+after the chain is current, time-box and resume, and surface progress in
+`MigrationReport` via `tracing`. Read-time lens migration remains the
+correctness backstop for documents arriving later via P2P from older peers.
+
+Until the pin advances to include the upstream API, `ensure_migrations` runs
+chain + verification only, and reads pay the (correct) lazy-transform cost;
+the driver activates when the API is present. No GraphQL fallback sweep ships.
 
 ## 4. Lens authoring convention
 
@@ -182,19 +302,27 @@ arrive after the sweep via P2P from older peers.
 ## 5. Lean model
 
 A small `Migration` model in `crates/gents/proofs/`, house style, zero
-`sorry`s. State: active version per collection, per-document versions, edge set
-with optional transforms. Transitions: `patch`, `attach_transform`, `activate`,
-`sweep_step`. Theorems:
+`sorry`s. State: per-collection version set with active flag, per-document
+versions, edge set with optional transforms, per-step verification status.
+Transitions: `attach_transform`, `patch_inactive`, `verify`, `activate`,
+`materialize_step`. Theorems:
 
 - **Idempotence** — `ensure` on an ensured state is a no-op.
-- **Convergence** — from any reachable state, including crash-interrupted ones
-  (patched but transform unattached, activated but unswept), repeated `ensure`
-  reaches the target version with all declared transforms attached.
+- **Convergence** — from any reachable state, including every crash window
+  (placeholder attached but unpatched; version stored but unverified;
+  verified but inactive; transform missing on an applied edge), repeated
+  `ensure` reaches the target: pinned version active, transform attached,
+  verification passed. This theorem forces positional resume and edge repair
+  into existence.
+- **No unverified activation** — `activate` is enabled only after `verify`
+  succeeds for that version; readers therefore never observe an active
+  version whose declared lens is unattached. (This is the ordering blocker,
+  stated as an invariant.)
 - **Pin soundness** — a step applies only when the prior state matches its
   expected predecessor; unknown versions are rejected, never patched over.
-- **Sweep termination** — the count of documents not at the active version
-  strictly decreases per sweep step; interrupt + resume still terminates at
-  "all documents at active version."
+- **Materialization termination** — the count of documents not at the active
+  version strictly decreases per materialization step; interrupt + resume
+  still terminates at "all documents at active version."
 
 Conformance tests in `crates/gents-migration/tests` mirror these
 theorem-by-theorem, per the foundation flow (Lean → conformance tests →
@@ -209,6 +337,7 @@ Deleted:
   `crates/gents-lenses/agent_subagent_v2_to_v3`.
 - The lens-build portion of `crates/gents/build.rs` (moves to
   `gents-migration/build.rs`).
+- `crates/gents-desktop-core/src/client/schema.rs` (duplicate bootstrap).
 - Legacy migration e2e tests (`agent_behavior_migration.rs`,
   `tool_call_migration.rs`; the unrelated `SubagentTarget::parse` regression
   test parked in the former moves to an appropriate home).
@@ -225,34 +354,53 @@ Kept and re-pointed:
 New coverage:
 
 - Chain-replay test: fresh node, baseline + all steps, assert every pinned
-  version ID (this is also the authoring tool for new pins).
+  version ID and transform ID (this is also the authoring tool for new pins).
 - SDL-parity test: baseline + chain ≡ current `gents-protocol` SDL.
-- Conformance tests mirroring the four theorems, including crash-injection
-  between patch / set_migration / activate to exercise edge repair and
-  convergence.
-- Fixture-lens e2e: seed docs at baseline, apply a step with a lens, sweep,
-  assert transformed data and version; re-open and re-run for idempotence;
-  P2P-arrival backstop test (old-version doc lands post-sweep, reads migrated).
+- Inactive-patch behavior lock: field additions + `IsActive: false` stores an
+  inactive version while the old stays active (the upstream-untested
+  combination §1 relies on).
+- Conformance tests mirroring the five theorems, including crash-injection at
+  each window boundary (post-attach, post-patch, post-verify) to exercise
+  positional resume, edge repair, and the no-unverified-activation invariant.
+- Fixture-lens e2e: seed docs at baseline, apply a lens step through the full
+  sequence, assert transformed reads; materialize when the upstream API is
+  present; re-open and re-run for idempotence; P2P-arrival backstop test.
 - Gate with `cargo test -p gents -p gents-migration` and
   `cargo check --workspace --all-targets` per CLAUDE.md.
 
-## Known limitations and upstream issues to file
+## 7. Upstream defradb.rs issues to file
 
-Both worked around here, neither fixed here — file against `defradb.rs`:
+Grounded by the 2026-07-29 verification; first two block full functionality,
+the rest are correctness hazards gents designs around:
 
-1. **Write-back cache is a stub** (`lensed_fetcher/migration.rs:371-457` logs
-   "Would cache migrated field value"; the live non-txn fetcher has no
-   write-back at all), so lazy reads recompute the wasm transform on every
-   fetch. The eager sweep makes this cost a one-time upgrade cost for local
-   documents; P2P-arriving old documents pay it per read until swept again.
-2. **Non-wasmtime builds silently skip migration**: `MemoryTransformStore` is a
-   pass-through, substituted on wasm32 (and any build without the
-   `wasmtime-runtime` feature, plausibly including future iOS targets where JIT
-   is restricted). Such a node receiving old-version documents over P2P would
-   read them unmigrated with no error. Gents does not currently ship such a
-   node, but this must be resolved upstream before one exists.
-
-Also noted upstream (no action needed from gents): two coexisting transform-ID
-schemes (`set_migration`'s sha256 pseudo-CID vs `add_lens`'s real IPLD CID),
-and the txn-path history cache keyed by collection ID only (stale after a
-version switch).
+1. **Lens write-back / materialization parity with Go** (§3): port
+   `updateDataStore` (datastore-only persistence of migrated values + doc
+   version key) and expose `materialize_collection`. Includes fixing reindex
+   leaving datastore and index values disagreeing, and removing the stub that
+   writes malformed keys under the real `/v/` prefix
+   (`lensed_fetcher/migration.rs:437-445`).
+2. **Unknown-version reads error instead of passing through**: Go emits docs
+   of unknown versions unchanged (`internal/lens/lens.go:139-149`); Rust
+   fails the whole query (`lensed_auto_commit_fetcher/migration.rs:287-292`).
+   P2P docs from newer peers can brick reads on older nodes.
+3. **Migration cache never invalidated on `set_migration`**
+   (`lensed_auto_commit_fetcher/migration.rs:34-51`): a read in the
+   patch→set_migration window poisons `(false, None)` for the process
+   lifetime. Gents' ordering avoids the window; the cache still needs
+   invalidation upstream.
+4. **Head/priority reconstruction after restart diverges from Go** when the
+   active version is not the latest (`collection_ops/mod.rs:206-240`),
+   changing CIDs computed for subsequent patches. Gents' engine never
+   re-patches over a half-applied state, but cross-implementation ID parity
+   needs the persistent-headstore semantics.
+5. **`patch_collection` lacks Go's inline `migration` parameter**
+   (`client/db.go:201-205`): the placeholder pre-attach path works but
+   requires predicting the destination CID; the inline parameter would remove
+   that coupling.
+6. **Non-wasmtime builds silently skip migration**: `MemoryTransformStore` is
+   a pass-through substituted on wasm32 (and any build without
+   `wasmtime-runtime`, plausibly including future iOS targets). Such a node
+   reads old-version documents unmigrated with no error.
+7. Minor: two coexisting transform-ID schemes (`set_migration`'s sha256
+   pseudo-CID vs `add_lens`'s real IPLD CID); txn-path history cache keyed by
+   collection ID only (stale after version switch).
