@@ -809,8 +809,6 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     cancel.cancel();
 }
 
-/// Build a `ResolvedTask` for unit tests that exercise the manual-fire path.
-
 // ---------------------------------------------------------------------------
 // Regression tests for the duplicate-on-update / fan-out correctness fixes.
 // The DefraDB event bus emits a single `EventName::Update` variant for

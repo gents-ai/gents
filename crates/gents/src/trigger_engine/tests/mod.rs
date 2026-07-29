@@ -42,6 +42,8 @@ type MaterializeCall = (Option<String>, TriggerKind, String);
 /// Recorded `supersede` invocation: `(trigger_id, trigger_kind)`.
 type SupersedeCall = (String, TriggerKind);
 
+type NonterminalRequests = Arc<Mutex<HashMap<(String, TriggerKind), Vec<String>>>>;
+
 /// Build a minimal `Arc<AgentPrincipal>` for tests that need to satisfy the
 /// principal invariant enforced by `ResolvedRuntimeSnapshot::activate`'s
 /// `debug_assert!`. Does not exercise signing.
@@ -106,7 +108,7 @@ struct MaterializeGate {
 struct SpyMaterializer {
     materialize_calls: Arc<Mutex<Vec<MaterializeCall>>>,
     next_request_id: AtomicUsize,
-    nonterminal_for: Arc<Mutex<HashMap<(String, TriggerKind), Vec<String>>>>,
+    nonterminal_for: NonterminalRequests,
     /// DIDs the engine passed to the concurrency gate / supersede, in call
     /// order. The gate's DID scope is the subject of #605.
     gate_dids: Arc<Mutex<Vec<String>>>,
