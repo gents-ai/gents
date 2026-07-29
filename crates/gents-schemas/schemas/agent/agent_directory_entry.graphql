@@ -18,7 +18,11 @@ type AgentDirectoryEntry @branchable {
     agent_did: String @index
     # DID of the runtime that derived this row. Machine replication filters
     # on this field, and each projector reconciles only its own partition.
-    source_did: String @index
+    # @immutable is REQUIRED: defradb rejects any replication-filter field
+    # that is not immutable at add_replicator time (see migration.rs's
+    # requester_did precedent) - and it is semantically immutable anyway,
+    # being half of the directory_key identity hash.
+    source_did: String @index @immutable
     display_name: String
     # Behavior display names for the picker. Emitted as null (never []) when
     # the principal has no behaviors - empty list literals corrupt nillable
