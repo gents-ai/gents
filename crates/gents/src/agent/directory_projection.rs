@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
 use defra_node::{EmbeddedNode, EventName, QueryResponse};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
@@ -25,6 +26,8 @@ use crate::graphql::escape_graphql_string;
 /// available behaviors, and last-known runtime state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DirectoryEntry {
+    /// Durable DefraDB identity for the `(source_did, agent_did)` partition.
+    pub directory_key: String,
     pub agent_did: String,
     pub source_did: String,
     pub display_name: String,
@@ -59,6 +62,23 @@ pub trait DirectoryStore: Send + Sync {
     ) -> Result<BTreeMap<String, DirectoryEntry>>;
     async fn upsert_directory_entry(&self, entry: &DirectoryEntry) -> Result<()>;
     async fn delete_directory_entry(&self, source_did: &str, agent_did: &str) -> Result<()>;
+}
+
+/// Deterministic persisted identity for one source-owned directory row.
+///
+/// DefraDB supports unique indexes only on one field, so `agent_did` alone
+/// cannot identify a row: replicated homes may legitimately advertise the
+/// same agent DID. Hashing length-delimited inputs keeps the durable key
+/// unambiguous without exposing a delimiter convention to storage queries.
+pub fn directory_entry_key(source_did: &str, agent_did: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(source_did.as_bytes());
+    digest.update(b"\x1f");
+    digest.update(agent_did.as_bytes());
+    format!(
+        "dir-{}",
+        bs58::encode(&digest.finalize()[..16]).into_string()
+    )
 }
 
 /// Canonicalize a runtime `updated_at` into the exact lexical form DefraDB's
@@ -119,6 +139,7 @@ pub fn derive_directory_entries(
             (
                 did.clone(),
                 DirectoryEntry {
+                    directory_key: directory_entry_key(source_did, did),
                     agent_did: did.clone(),
                     source_did: source_did.to_string(),
                     display_name: display_name.clone(),
@@ -400,6 +421,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
         let query = format!(
             r#"{{
             AgentDirectoryEntry(filter: {{ source_did: {{ _eq: "{source_did}" }} }}) {{
+                directory_key
                 agent_did
                 source_did
                 display_name
@@ -414,11 +436,16 @@ impl DirectoryStore for GraphqlDirectoryStore {
         Ok(rows::<DirectoryRow>(&response, "AgentDirectoryEntry")?
             .into_iter()
             .filter_map(|row| {
+                let directory_key = row.directory_key?.trim().to_string();
+                if directory_key.is_empty() {
+                    return None;
+                }
                 let did = row.agent_did?.trim().to_string();
                 if did.is_empty() {
                     return None;
                 }
                 let entry = DirectoryEntry {
+                    directory_key,
                     agent_did: did.clone(),
                     source_did: row.source_did.unwrap_or_default(),
                     display_name: row.display_name.unwrap_or_default(),
@@ -447,6 +474,8 @@ impl DirectoryStore for GraphqlDirectoryStore {
 
 fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String {
     let agent_did = escape_graphql_string(&entry.agent_did);
+    let directory_key =
+        escape_graphql_string(&directory_entry_key(&entry.source_did, &entry.agent_did));
     let source_did = escape_graphql_string(&entry.source_did);
     let display_name = escape_graphql_string(&entry.display_name);
     let behaviors = graphql_string_list_literal(entry.behaviors.iter().map(String::as_str));
@@ -456,8 +485,9 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
     format!(
         r#"mutation {{
             upsert_AgentDirectoryEntry(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                filter: {{ directory_key: {{ _eq: "{directory_key}" }} }},
                 add: {{
+                    directory_key: "{directory_key}",
                     agent_did: "{agent_did}",
                     source_did: "{source_did}",
                     display_name: "{display_name}",
@@ -480,13 +510,11 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
 }
 
 fn delete_directory_entry_mutation(source_did: &str, agent_did: &str) -> String {
-    let source_did = escape_graphql_string(source_did);
-    let agent_did = escape_graphql_string(agent_did);
+    let directory_key = escape_graphql_string(&directory_entry_key(source_did, agent_did));
     format!(
         r#"mutation {{
             delete_AgentDirectoryEntry(filter: {{
-                source_did: {{ _eq: "{source_did}" }},
-                agent_did: {{ _eq: "{agent_did}" }}
+                directory_key: {{ _eq: "{directory_key}" }}
             }}) {{ _docID }}
         }}"#
     )
@@ -575,6 +603,8 @@ struct RuntimeRow {
 
 #[derive(Deserialize)]
 struct DirectoryRow {
+    #[serde(default)]
+    directory_key: Option<String>,
     agent_did: Option<String>,
     #[serde(default)]
     source_did: Option<String>,
@@ -594,6 +624,7 @@ mod tests {
 
     fn entry(agent_did: &str, last_seen: &str) -> DirectoryEntry {
         DirectoryEntry {
+            directory_key: directory_entry_key("did:key:home", agent_did),
             agent_did: agent_did.to_string(),
             source_did: "did:key:home".to_string(),
             display_name: "Display".to_string(),
@@ -607,6 +638,14 @@ mod tests {
     /// `last_seen`; the mutation must render `null`, never `""` — DefraDB
     /// rejects a non-RFC3339 `DateTime` string on create AND upsert, and an
     /// unconditional quoted render poisoned the whole directory sweep.
+    #[test]
+    fn directory_entry_key_partitions_same_agent_did_by_source() {
+        assert_ne!(
+            directory_entry_key("did:key:local-home", "did:key:shared-agent"),
+            directory_entry_key("did:key:foreign-home", "did:key:shared-agent"),
+        );
+    }
+
     #[test]
     fn upsert_mutation_renders_null_for_blank_last_seen() {
         for blank in ["", "   "] {
@@ -846,6 +885,79 @@ mod tests {
         assert!(!entries.contains_key("did:key:no-runtime"));
         assert!(entries.contains_key("did:key:with-runtime"));
 
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod source_partition_regression_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn graphql_tick_preserves_foreign_row_with_same_agent_did() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(tempdir.path().join("data"))
+                .build()
+                .await?,
+        );
+        crate::ensure_runtime_schemas(&node).await?;
+
+        let foreign_source = "did:key:foreign-home";
+        let local_source = "did:key:local-home";
+        let agent_did = "did:key:shared-agent";
+        let foreign_key = directory_entry_key(foreign_source, agent_did);
+        let seed = format!(
+            r#"mutation {{
+                create_AgentDirectoryEntry(input: {{
+                    directory_key: "{foreign_key}",
+                    agent_did: "{agent_did}",
+                    source_did: "{foreign_source}",
+                    display_name: "Foreign",
+                    runtime_state: "running",
+                    updated_at: "2026-07-23T00:00:00Z"
+                }}) {{ _docID }}
+                create_AgentPrincipal(input: {{
+                    agent_did: "{agent_did}",
+                    display_name: "Local",
+                    enabled: true,
+                    created_at: "2026-07-23T00:00:00Z"
+                }}) {{ _docID }}
+            }}"#
+        );
+        ensure_no_errors(
+            &node.execute(&seed).await,
+            "seed same-DID source partitions",
+        )?;
+
+        let store = GraphqlDirectoryStore::new(node.clone());
+        let first = reconcile_directory_tick(&store, local_source).await?;
+        assert_eq!(first.upserted, BTreeSet::from([agent_did.to_string()]));
+        assert_eq!(
+            store.list_directory_entries(foreign_source).await?[agent_did].display_name,
+            "Foreign",
+            "local projection must not overwrite the foreign same-DID row"
+        );
+        assert_eq!(
+            store.list_directory_entries(local_source).await?[agent_did].display_name,
+            "Local"
+        );
+
+        let delete = format!(
+            r#"mutation {{ delete_AgentPrincipal(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ _docID }} }}"#
+        );
+        ensure_no_errors(
+            &node.execute(&delete).await,
+            "delete local same-DID principal",
+        )?;
+        let retracted = reconcile_directory_tick(&store, local_source).await?;
+        assert_eq!(retracted.retracted, BTreeSet::from([agent_did.to_string()]));
+        assert!(store.list_directory_entries(local_source).await?.is_empty());
+        assert_eq!(
+            store.list_directory_entries(foreign_source).await?[agent_did].display_name,
+            "Foreign"
+        );
         Ok(())
     }
 }

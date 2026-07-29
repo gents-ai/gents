@@ -12,8 +12,8 @@ use std::sync::Mutex;
 use anyhow::Result;
 use async_trait::async_trait;
 use gents::agent::directory_projection::{
-    derive_directory_entries, reconcile_directory_tick, DirectoryEntry, DirectoryStore,
-    DirectoryTickOutcome,
+    derive_directory_entries, directory_entry_key, reconcile_directory_tick, DirectoryEntry,
+    DirectoryStore, DirectoryTickOutcome,
 };
 
 #[derive(Default)]
@@ -21,7 +21,7 @@ struct DirectoryFixtureStore {
     principals: Vec<(String, String)>,
     behaviors: BTreeMap<String, Vec<String>>,
     runtimes: BTreeMap<String, (String, String)>,
-    entries: Mutex<BTreeMap<String, DirectoryEntry>>,
+    entries: Mutex<BTreeMap<(String, String), DirectoryEntry>>,
     upserts: Mutex<Vec<String>>,
     deletes: Mutex<Vec<String>>,
 }
@@ -47,25 +47,22 @@ impl DirectoryStore for DirectoryFixtureStore {
             .unwrap()
             .iter()
             .filter(|(_, entry)| entry.source_did == source_did)
-            .map(|(did, entry)| (did.clone(), entry.clone()))
+            .map(|((_, did), entry)| (did.clone(), entry.clone()))
             .collect())
     }
     async fn upsert_directory_entry(&self, entry: &DirectoryEntry) -> Result<()> {
         self.upserts.lock().unwrap().push(entry.agent_did.clone());
-        self.entries
-            .lock()
-            .unwrap()
-            .insert(entry.agent_did.clone(), entry.clone());
+        self.entries.lock().unwrap().insert(
+            (entry.source_did.clone(), entry.agent_did.clone()),
+            entry.clone(),
+        );
         Ok(())
     }
     async fn delete_directory_entry(&self, source_did: &str, agent_did: &str) -> Result<()> {
         self.deletes.lock().unwrap().push(agent_did.to_string());
         let mut entries = self.entries.lock().unwrap();
-        if entries
-            .get(agent_did)
-            .is_some_and(|entry| entry.source_did == source_did)
-        {
-            entries.remove(agent_did);
+        if entries.contains_key(&(source_did.to_string(), agent_did.to_string())) {
+            entries.remove(&(source_did.to_string(), agent_did.to_string()));
         }
         Ok(())
     }
@@ -113,8 +110,9 @@ async fn tick_converges_then_quiesces() {
             ("running".to_string(), "2026-07-23T00:00:00Z".to_string()),
         )]),
         entries: Mutex::new(BTreeMap::from([(
-            "did:key:a".to_string(),
+            ("did:key:home".to_string(), "did:key:a".to_string()),
             DirectoryEntry {
+                directory_key: directory_entry_key("did:key:home", "did:key:a"),
                 agent_did: "did:key:a".to_string(),
                 source_did: "did:key:home".to_string(),
                 display_name: "Amy".to_string(),
@@ -154,8 +152,9 @@ async fn tick_retracts_only_removed_principals() {
         principals: vec![principal("did:key:b", "Bob")],
         entries: Mutex::new(BTreeMap::from([
             (
-                "did:key:a".to_string(),
+                ("did:key:home".to_string(), "did:key:a".to_string()),
                 DirectoryEntry {
+                    directory_key: directory_entry_key("did:key:home", "did:key:a"),
                     agent_did: "did:key:a".to_string(),
                     source_did: "did:key:home".to_string(),
                     display_name: "Amy".to_string(),
@@ -165,8 +164,9 @@ async fn tick_retracts_only_removed_principals() {
                 },
             ),
             (
-                "did:key:b".to_string(),
+                ("did:key:home".to_string(), "did:key:b".to_string()),
                 DirectoryEntry {
+                    directory_key: directory_entry_key("did:key:home", "did:key:b"),
                     agent_did: "did:key:b".to_string(),
                     source_did: "did:key:home".to_string(),
                     display_name: "Bob".to_string(),
@@ -191,11 +191,13 @@ async fn tick_retracts_only_removed_principals() {
 }
 
 /// Mirrors `projectStep_preserves_foreign`: a projector owns only rows whose
-/// source is its home DID and must not retract a replicated foreign partition.
+/// source is its home DID. Same agent DIDs in foreign and local partitions must
+/// remain independently addressable.
 #[tokio::test]
-async fn tick_preserves_foreign_directory_rows() {
+async fn tick_preserves_foreign_same_agent_did_and_converges_local_row() {
     let foreign = DirectoryEntry {
-        agent_did: "did:key:foreign-agent".to_string(),
+        directory_key: directory_entry_key("did:key:foreign-home", "did:key:shared-agent"),
+        agent_did: "did:key:shared-agent".to_string(),
         source_did: "did:key:foreign-home".to_string(),
         display_name: "Foreign".to_string(),
         behaviors: Vec::new(),
@@ -203,21 +205,41 @@ async fn tick_preserves_foreign_directory_rows() {
         last_seen: String::new(),
     };
     let store = DirectoryFixtureStore {
+        principals: vec![principal("did:key:shared-agent", "Local")],
         entries: Mutex::new(BTreeMap::from([(
-            foreign.agent_did.clone(),
+            (foreign.source_did.clone(), foreign.agent_did.clone()),
             foreign.clone(),
         )])),
         ..Default::default()
     };
 
-    let outcome = reconcile_directory_tick(&store, "did:key:local-home")
+    let first = reconcile_directory_tick(&store, "did:key:local-home")
         .await
-        .expect("tick");
-
-    assert_eq!(outcome, DirectoryTickOutcome::default());
+        .expect("first tick");
     assert_eq!(
-        store.entries.lock().unwrap().get("did:key:foreign-agent"),
-        Some(&foreign)
+        first.upserted,
+        BTreeSet::from(["did:key:shared-agent".to_string()])
     );
+    let entries = store.entries.lock().unwrap();
+    assert_eq!(
+        entries.get(&(foreign.source_did.clone(), foreign.agent_did.clone())),
+        Some(&foreign),
+        "local projection must not overwrite the foreign same-DID row"
+    );
+    assert_eq!(
+        entries
+            .get(&(
+                "did:key:local-home".to_string(),
+                "did:key:shared-agent".to_string()
+            ))
+            .map(|entry| entry.display_name.as_str()),
+        Some("Local")
+    );
+    drop(entries);
+
+    let second = reconcile_directory_tick(&store, "did:key:local-home")
+        .await
+        .expect("second tick");
+    assert_eq!(second, DirectoryTickOutcome::default());
     assert!(store.deletes.lock().unwrap().is_empty());
 }

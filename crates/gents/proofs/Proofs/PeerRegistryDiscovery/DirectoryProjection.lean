@@ -27,7 +27,13 @@ structure Principal where
   payload : String
   deriving DecidableEq, Repr
 
+/-- Persisted identity for one source-owned directory row. The implementation
+uses a domain-prefixed digest; this model treats the source-and-DID pair as the
+identity rather than agent DID alone. -/
+def directoryKey (source did : String) : String := source ++ "\x1f" ++ did
+
 structure Entry where
+  key : String
   source : String
   did : String
   payload : String
@@ -35,7 +41,8 @@ structure Entry where
 
 /-- The projection: one entry per principal, contents a function of it. -/
 def project (source : String) (principals : Finset Principal) : Finset Entry :=
-  principals.image (fun p => { source, did := p.did, payload := p.payload })
+  principals.image (fun p => {
+    key := directoryKey source p.did, source, did := p.did, payload := p.payload })
 
 structure DirectoryState where
   source : String
@@ -69,7 +76,7 @@ with exactly that did/payload exists. -/
 theorem mem_project {source : String} {principals : Finset Principal} {e : Entry} :
     e ∈ project source principals ↔
       ∃ p ∈ principals,
-        e = { source, did := p.did, payload := p.payload } := by
+        e = { key := directoryKey source p.did, source, did := p.did, payload := p.payload } := by
   unfold project
   simp [Finset.mem_image, eq_comm]
 
@@ -89,6 +96,12 @@ theorem projectStep_preserves_foreign (s : DirectoryState) :
     (projectStep s).foreignEntries = s.foreignEntries := by
   rfl
 
+/-- Foreign rows remain preserved even when their agent DID matches an owned
+projection row: its persisted key includes source and agent DID. -/
+theorem projectStep_preserves_foreign_same_did (s : DirectoryState) {foreign : Entry}
+    (h : foreign ∈ s.foreignEntries) : foreign ∈ (projectStep s).foreignEntries := by
+  simpa [projectStep] using h
+
 /-- A settled state is a write-free fixpoint: the event-driven sweep must
 not emit another update once converged. -/
 theorem settled_fixpoint {s : DirectoryState} (h : s.settled) :
@@ -103,7 +116,7 @@ any entry still projected comes from a surviving principal. -/
 theorem mem_project_erase {source : String} {principals : Finset Principal} {p : Principal}
     {e : Entry} (h : e ∈ project source (principals.erase p)) :
     ∃ q ∈ principals, q ≠ p ∧
-      e = { source, did := q.did, payload := q.payload } := by
+      e = { key := directoryKey source q.did, source, did := q.did, payload := q.payload } := by
   rw [mem_project] at h
   obtain ⟨q, hq, he⟩ := h
   exact ⟨q, Finset.mem_of_mem_erase hq, Finset.ne_of_mem_erase hq, he⟩

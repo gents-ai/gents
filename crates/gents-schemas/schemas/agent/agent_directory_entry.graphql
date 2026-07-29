@@ -1,4 +1,4 @@
-# Fleet-discovery directory: one row per agent principal on this home,
+# Fleet-discovery directory: one row per (source DID, agent DID) on this home,
 # maintained by the directory projection reconciler (issue #714, modeled in
 # Proofs/PeerRegistryDiscovery/DirectoryProjection.lean).
 #
@@ -12,7 +12,10 @@
 # `@branchable` is REQUIRED: the machine template replicates this collection
 # to attached clients — DefraDB only P2P-syncs branchable collections.
 type AgentDirectoryEntry @branchable {
-    agent_did: String @index(unique: true)
+    # Deterministic hash of (source_did, agent_did). DefraDB unique indexes
+    # are per-field, so this is the persisted source-partitioned identity.
+    directory_key: String @index(unique: true) @immutable
+    agent_did: String @index
     # DID of the runtime that derived this row. Machine replication filters
     # on this field, and each projector reconciles only its own partition.
     source_did: String @index
