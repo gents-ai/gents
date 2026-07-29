@@ -3,7 +3,8 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 use gents_protocol::timeline::{
-    build_timeline_order, OverlayInput, TimelineMessageInput, TimelineRole, TimelineSlot,
+    build_timeline_order, OverlayInput, OverlayPlacement, TimelineMessageInput, TimelineRole,
+    TimelineSlot,
 };
 
 use super::super::types::{
@@ -299,19 +300,25 @@ pub(super) fn build_rendered_timeline(
     // until its owning assistant message is persisted. Keep the live reasoning
     // immediately before that running tool instead of letting it jump upward
     // only after materialization.
-    let before_orphans = active_response_request_id.is_some_and(|request_id| {
-        tool_calls.iter().any(|tool| {
-            tool.request_id.as_deref() == Some(request_id)
-                && tool_is_nonterminal(tool)
-                && !inputs
-                    .iter()
-                    .any(|message| message.sequence == tool.message_sequence)
-        })
+    let target_orphan = active_response_request_id.and_then(|request_id| {
+        tool_calls
+            .iter()
+            .filter(|tool| {
+                tool.request_id.as_deref() == Some(request_id)
+                    && tool_is_nonterminal(tool)
+                    && !inputs
+                        .iter()
+                        .any(|message| message.sequence == tool.message_sequence)
+            })
+            .map(|tool| tool.message_sequence)
+            .max()
     });
     let overlay =
         (overlay_content.is_some() || overlay_reasoning.is_some()).then_some(OverlayInput {
             matches_trailing_assistant,
-            before_orphans,
+            placement: target_orphan.map_or(OverlayPlacement::Tail, |message_sequence| {
+                OverlayPlacement::BeforeOrphan { message_sequence }
+            }),
         });
     let order = build_timeline_order(&inputs, &group_sequences, pending_turn.is_some(), overlay);
     render_timeline_order(

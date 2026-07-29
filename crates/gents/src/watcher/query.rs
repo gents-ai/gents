@@ -172,6 +172,7 @@ fn claimable_pending_rows(
     let rows = active_runtime_rows(data)?;
     let blocked_sessions = rows
         .iter()
+        .filter(|row| !row.is_deprecated_background_completion_wakeup())
         .filter(|row| row.is_active_non_pending())
         .map(|row| row.session_id.clone())
         .collect::<HashSet<_>>();
@@ -310,5 +311,56 @@ impl AgentRequestRow {
         };
         validate_agent_request_subagent_coherence(&req)?;
         Ok(req)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::claimable_pending_rows;
+
+    #[test]
+    fn processing_legacy_wake_does_not_block_interactive_request() {
+        let wake_metadata = serde_json::json!({
+            "queue": {
+                "source": "background_completion",
+                "policy": "coalesce",
+                "key": "child-1",
+                "queued_after_request_id": null
+            }
+        })
+        .to_string();
+        let data = serde_json::json!({
+            "AgentRequest": [
+                {
+                    "_docID": "wake-doc",
+                    "request_id": "legacy-wake",
+                    "agent_did": "did:agent:1",
+                    "behavior_id": "default",
+                    "session_id": "session-1",
+                    "content": "legacy wake",
+                    "metadata": wake_metadata,
+                    "execution_origin": "scheduled",
+                    "created_at": "2026-07-01T00:00:00Z",
+                    "status": "processing",
+                    "lifecycle_state": "processing"
+                },
+                {
+                    "_docID": "user-doc",
+                    "request_id": "interactive",
+                    "agent_did": "did:agent:1",
+                    "behavior_id": "default",
+                    "session_id": "session-1",
+                    "content": "hello",
+                    "execution_origin": "interactive",
+                    "created_at": "2026-07-01T00:00:01Z",
+                    "status": "pending",
+                    "lifecycle_state": "pending"
+                }
+            ]
+        });
+
+        let claimable = claimable_pending_rows(Some(&data)).expect("claimable rows");
+        assert_eq!(claimable.len(), 1);
+        assert_eq!(claimable[0].request_id, "interactive");
     }
 }

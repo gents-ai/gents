@@ -66,5 +66,57 @@ theorem no_synthetic_agent_request
   rw [trace_preserves_agent_request_count h_trace]
   exact h_initial.2
 
+/-!
+The tool/subagent bridge is terminalized with a compare-and-set. A concurrent
+recovery or cancellation may win that CAS first. The losing executor must not
+publish the outcome it observed locally, because that outcome can contradict
+the durable winner. Publication itself is keyed and idempotent so retrying the
+winning delivery cannot duplicate the notification.
+-/
+
+inductive TerminalizationResult where
+  | won
+  | lost
+  deriving DecidableEq
+
+structure NotificationState where
+  terminal : Bool
+  notificationPresent : Bool
+  deriving DecidableEq
+
+/-- A stable notification key makes publication an insert-once operation. -/
+def publishOnce (state : NotificationState) : NotificationState :=
+  { state with notificationPresent := true }
+
+/--
+Only a caller that won the durable terminal compare-and-set may publish its
+candidate outcome. A loser leaves notification state untouched; a reconciler
+may separately project the already-durable winner.
+-/
+def publishCandidate
+    (result : TerminalizationResult)
+    (state : NotificationState) : NotificationState :=
+  match result with
+  | .won => publishOnce { state with terminal := true }
+  | .lost => state
+
+theorem losing_terminalizer_does_not_publish
+    (state : NotificationState) :
+    publishCandidate .lost state = state := by
+  rfl
+
+theorem publish_once_idempotent
+    (state : NotificationState) :
+    publishOnce (publishOnce state) = publishOnce state := by
+  cases state
+  rfl
+
+theorem winning_publication_is_idempotent
+    (state : NotificationState) :
+    publishCandidate .won (publishCandidate .won state) =
+      publishCandidate .won state := by
+  cases state
+  rfl
+
 end CompletionDelivery
 end Subagent

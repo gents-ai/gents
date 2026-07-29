@@ -37,7 +37,7 @@ const AGENT_MESSAGE_FIELDS: &str =
 const AGENT_SESSION_FIELDS: &str =
     "session_id agent_name requester_did behavior_id started ended status";
 const GOAL_FIELDS: &str = "goal_id session_id agent_did objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence created_at updated_at";
-const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id requester_did message_sequence tool_name tool_call_id args result status lifecycle_state cancel_policy workflow_group_id workflow_role deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms partial_output_tail partial_output_seq";
+const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id requester_did message_sequence tool_name tool_call_id args result status lifecycle_state child_request_id await_mode cancel_policy workflow_group_id workflow_role deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms partial_output_tail partial_output_seq";
 const AGENT_TOOL_RESULT_FIELDS: &str = "agent_did requester_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted";
 const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id requester_did sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at";
 const TASK_FIELDS: &str = "task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at";
@@ -1514,6 +1514,47 @@ mod tests {
             .expect("created runtime");
         assert_eq!(runtime.behavior_executor_capacity, Some(7));
         assert_eq!(runtime.behavior_executor_queue_depth, Some(3));
+    }
+
+    #[tokio::test]
+    async fn load_agent_tool_calls_hydrates_subagent_projection_fields() {
+        let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
+
+        let response = node
+            .execute(
+                r#"mutation {
+                    create_AgentToolCall(input: {
+                        tool_call_key: "session-1:spawn-1",
+                        request_id: "parent-1",
+                        session_id: "session-1",
+                        message_sequence: 1,
+                        tool_name: "spawn_subagent",
+                        tool_call_id: "spawn-1",
+                        args: "{}",
+                        result: "",
+                        status: "called",
+                        lifecycle_state: "running",
+                        child_request_id: "child-1",
+                        await_mode: "background",
+                        started_at: "2026-07-29T00:00:00Z"
+                    }) { tool_call_key }
+                }"#,
+            )
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+
+        let tool_calls = load_agent_tool_calls(node.as_ref())
+            .await
+            .expect("load agent tool calls");
+        let tool_call = tool_calls
+            .iter()
+            .find(|row| row.tool_call_key == "session-1:spawn-1")
+            .expect("created tool call");
+        assert_eq!(tool_call.child_request_id.as_deref(), Some("child-1"));
+        assert_eq!(tool_call.await_mode.as_deref(), Some("background"));
     }
 
     #[tokio::test]

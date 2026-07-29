@@ -105,6 +105,7 @@ export type DesktopApiAdapter = {
     behaviorId?: string | null;
   }) => Promise<SessionForkResult>;
   resendRequest: (requestId: string) => Promise<RequestResendResult>;
+  retryRequest: (requestId: string) => Promise<ChatSendResult>;
   saveAgentConfig: (
     request: AgentConfigSaveRequest,
   ) => Promise<DesktopClientSnapshot>;

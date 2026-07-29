@@ -48,3 +48,7 @@ export function forkSession(
 export function resendRequest(requestId: string, api?: DesktopApiAdapter) {
   return getDesktopApiAdapter(api).resendRequest(requestId);
 }
+
+export function retryRequest(requestId: string, api?: DesktopApiAdapter) {
+  return getDesktopApiAdapter(api).retryRequest(requestId);
+}

@@ -7,7 +7,7 @@ import { MessageList } from "../Transcript.js";
 export type ChatTranscriptPanelProps = {
   selectedSessionId: string | null;
   session: DesktopSessionSnapshot | null;
-  onRetryMessage?: (content: string) => void;
+  onRetryMessage?: (requestId: string) => void;
 };
 
 export function ChatTranscriptPanel({
@@ -60,6 +60,9 @@ export function ChatTranscriptPanel({
   }, [selectedSessionId]);
 
   const lastItem = session?.timelineItems[session.timelineItems.length - 1];
+  // A send may be observed as pending or already materialized. Prefer the
+  // request identity so that pending -> materialized does not look like a
+  // second send; fall back to the user row identity for partial snapshots.
   const latestUserTurn = useMemo(() => {
     const items = session?.timelineItems ?? [];
     for (let index = items.length - 1; index >= 0; index -= 1) {
@@ -94,6 +97,10 @@ export function ChatTranscriptPanel({
     }
 
     const frame = window.requestAnimationFrame(() => {
+      // Instant, not smooth: the panel's CSS smooth-scroll animates
+      // scrollIntoView, and a chunk landing mid-animation left the scroll
+      // short of the bottom — which the scroll handler then misread as the
+      // user scrolling away, silently disengaging follow.
       scrollTarget.scrollIntoView({ block: "end", behavior: "instant" });
     });
 
@@ -119,6 +126,8 @@ export function ChatTranscriptPanel({
     latestResponse?.cancelCause?.cause === "userCancelled";
   const showResponseError = Boolean(responseError) && !responseWasInterrupted;
 
+  // Animated placeholder between send and the assistant's first visible
+  // output — without it the transcript sits inert while the turn runs.
   const turnActive = Boolean(
     session?.turnState && !isTerminalTurnState(session.turnState),
   );
@@ -129,17 +138,6 @@ export function ChatTranscriptPanel({
     (lastItem.kind === "liveAssistant" &&
       !(lastItem.content?.length || lastItem.reasoning?.length));
   const showThinking = turnActive && assistantSilent && !showResponseError;
-
-  const lastUserContent = useMemo(() => {
-    const items = session?.timelineItems ?? [];
-    for (let index = items.length - 1; index >= 0; index -= 1) {
-      const item = items[index];
-      if (item.kind === "userMessage" || item.kind === "pendingUserTurn") {
-        return item.content;
-      }
-    }
-    return null;
-  }, [session?.timelineItems]);
 
   return (
     <section
@@ -206,13 +204,13 @@ export function ChatTranscriptPanel({
                   <summary>Error details</summary>
                   <pre className="response-error-content">{responseError}</pre>
                 </details>
-                {onRetryMessage && lastUserContent ? (
+                {onRetryMessage && session.latestRequestId ? (
                   <div>
                     <button
                       className="ghost-button"
                       data-testid="retry-turn"
                       type="button"
-                      onClick={() => onRetryMessage(lastUserContent)}
+                      onClick={() => onRetryMessage(session.latestRequestId!)}
                     >
                       Retry
                     </button>

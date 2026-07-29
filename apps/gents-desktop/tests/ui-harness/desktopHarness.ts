@@ -520,6 +520,14 @@ export function createDesktopUiHarness(
     async resendRequest(requestId) {
       return { requestId: `${requestId}-resend`, sessionId: "session-intro" };
     },
+    async retryRequest(requestId) {
+      return {
+        requestId: `${requestId}-retry`,
+        sessionId: "session-intro",
+        agentDid: AGENT_DID,
+        behaviorId: DEFAULT_BEHAVIOR_ID,
+      };
+    },
     async fetchRequestTimeline(agentDid, requestId) {
       if (agentDid !== AGENT_DID) {
         throw new Error(`no deployment for ${agentDid}`);

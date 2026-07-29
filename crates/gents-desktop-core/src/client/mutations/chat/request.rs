@@ -491,13 +491,97 @@ async fn ensure_latest_retry_parent(
         bail!("retry parent conversation for session {session_id} has no latest_request_id");
     };
 
-    if latest_request_id != parent_request_id {
+    let effective_latest_request_id = if latest_request_id == parent_request_id
+        || !request_is_deprecated_background_completion_wake(node, &latest_request_id).await?
+    {
+        latest_request_id.to_string()
+    } else {
+        latest_nonlegacy_request_id(node, session_id)
+            .await?
+            .context("retry parent session has no non-legacy request")?
+    };
+
+    if effective_latest_request_id != parent_request_id {
         bail!(
-            "retry parent request must be latest for session {session_id}, got latest_request_id={latest_request_id}"
+            "retry parent request must be latest for session {session_id}, got latest_request_id={effective_latest_request_id}"
         );
     }
 
     Ok(())
+}
+
+async fn request_is_deprecated_background_completion_wake(
+    node: &EmbeddedNode,
+    request_id: &str,
+) -> Result<bool> {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                limit: 1
+            ) {{ execution_origin metadata }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        bail!(
+            "querying latest retry request failed: {:?}",
+            response.errors
+        );
+    }
+    let row = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first());
+    Ok(row.is_some_and(|row| {
+        gents::lifecycle::is_deprecated_background_completion_request(
+            row.get("execution_origin")
+                .and_then(serde_json::Value::as_str),
+            row.get("metadata").and_then(serde_json::Value::as_str),
+        )
+    }))
+}
+
+async fn latest_nonlegacy_request_id(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Result<Option<String>> {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                order: {{ created_at: DESC }}
+            ) {{ request_id execution_origin metadata }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        bail!(
+            "querying effective latest retry request failed: {:?}",
+            response.errors
+        );
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|rows| rows.as_array())
+        .into_iter()
+        .flatten()
+        .find(|row| {
+            !gents::lifecycle::is_deprecated_background_completion_request(
+                row.get("execution_origin")
+                    .and_then(serde_json::Value::as_str),
+                row.get("metadata").and_then(serde_json::Value::as_str),
+            )
+        })
+        .and_then(|row| row.get("request_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string))
 }
 
 async fn ensure_new_retry_request_id_available(
@@ -1861,6 +1945,79 @@ mod tests {
         assert_eq!(retried.top_k, Some(32));
         assert_eq!(retried.max_tokens, Some(2048));
         assert_eq!(retried.metadata.as_deref(), Some(metadata.as_str()));
+
+        core.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn retry_uses_effective_latest_when_conversation_points_at_legacy_wake() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let core = ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(tempdir.path()),
+            ClientCoreOptions::local_only(),
+        )
+        .await?;
+
+        let created = core
+            .create_conversation("did:test:amy", Some("amy-code"))
+            .await?;
+        let original = core
+            .submit_request(
+                &created.session_id,
+                "did:test:amy",
+                "retry after legacy wake",
+                None,
+            )
+            .await?;
+        let deadline = Utc::now() + chrono::Duration::minutes(5);
+        force_retry_parent_eligible_for_test(
+            core.node(),
+            &original.request_id,
+            0,
+            i64::from(DEFAULT_REQUEST_MAX_RETRIES),
+            &deadline.to_rfc3339(),
+        )
+        .await?;
+
+        let session_id = escape_graphql_string(&created.session_id);
+        let now = Utc::now().to_rfc3339();
+        let metadata = escape_graphql_string(
+            r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"child-1","queued_after_request_id":null}}"#,
+        );
+        let mutation = format!(
+            r#"mutation {{
+                wake: create_AgentRequest(input: {{
+                    request_id: "legacy-wake",
+                    agent_did: "did:test:amy",
+                    behavior_id: "amy-code",
+                    session_id: "{session_id}",
+                    content: "legacy wake",
+                    metadata: "{metadata}",
+                    status: "pending",
+                    lifecycle_state: "pending",
+                    execution_origin: "scheduled",
+                    created_at: "{now}",
+                    retry_count: 0,
+                    max_retries: 3
+                }}) {{ _docID }}
+                conversation: update_AgentConversation(
+                    filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                    input: {{
+                        latest_request_id: "legacy-wake",
+                        updated_at: "{now}"
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+        execute_mutation(core.node(), &mutation, "seed_legacy_wake_for_retry").await?;
+        core.refresh_store().await?;
+
+        let parent = request_from_store_for_test(&core, &original.request_id)?;
+        let submitted = core.retry_request(&parent).await?;
+        let retried = fetch_request_row_for_test(core.node(), &submitted.request_id).await?;
+        assert_eq!(retried.retry_parent_request, original.request_id);
+        assert_eq!(retried.execution_origin, "interactive");
 
         core.shutdown().await?;
         Ok(())

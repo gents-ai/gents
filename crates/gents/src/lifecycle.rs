@@ -28,6 +28,16 @@ pub fn is_background_completion_request(metadata: Option<&str>) -> bool {
     queue::is_automated_wakeup(metadata)
 }
 
+/// Legacy runtimes persisted background-completion wakeups as scheduled
+/// requests. They remain durable audit rows, but are never authoritative user
+/// turns and must be ignored by readers.
+pub fn is_deprecated_background_completion_request(
+    execution_origin: Option<&str>,
+    metadata: Option<&str>,
+) -> bool {
+    queue::is_deprecated_background_completion_wakeup(execution_origin, metadata)
+}
+
 fn graphql_retry_root_request(retry_root_request: Option<&str>, request_id: &str) -> String {
     escape_graphql_string(retry_root_request.unwrap_or(request_id))
 }

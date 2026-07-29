@@ -41,15 +41,23 @@ pub struct TimelineMessageInput {
     pub dedup_token: Option<String>,
 }
 
+/// Where the live-assistant overlay belongs relative to orphan tool groups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayPlacement {
+    /// Append the overlay after every orphan tool group.
+    Tail,
+    /// Insert the overlay immediately before the orphan group belonging to the
+    /// active, still-unmaterialized assistant turn.
+    BeforeOrphan { message_sequence: Option<i64> },
+}
+
 /// The live-assistant overlay's ordering-relevant state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OverlayInput {
     /// True when the overlay's content equals the trailing assistant message
     /// already in the timeline — in which case it must NOT be re-emitted.
     pub matches_trailing_assistant: bool,
-    /// Place live reasoning before orphan tool groups while a foreground tool
-    /// from that same unmaterialized assistant turn is still running.
-    pub before_orphans: bool,
+    pub placement: OverlayPlacement,
 }
 
 /// One ordered slot. A shell maps each to its rich, platform-specific item;
@@ -93,10 +101,9 @@ fn sequence_lt(left: Option<i64>, right: Option<i64>) -> bool {
 /// 3. each surviving message emits its slot (if `emits_item`) immediately
 ///    followed by its tool group (if it owns one), marking that group attached,
 /// 4. the pending turn,
-/// 5. the overlay before orphan groups when it owns a still-running,
-///    unmaterialized tool turn,
-/// 6. orphan tool groups — those attached to no surviving message — in sequence
-///    order,
+/// 5. orphan tool groups — those attached to no surviving message — in sequence
+///    order, inserting the overlay immediately before the specifically targeted
+///    active group when it owns a still-running, unmaterialized tool turn,
 /// 7. otherwise the overlay at the tail, iff present and not a duplicate of the
 ///    trailing assistant.
 pub fn build_timeline_order(
@@ -164,18 +171,22 @@ pub fn build_timeline_order(
     });
     orphans.dedup();
     let show_overlay = overlay.is_some_and(|overlay| !overlay.matches_trailing_assistant);
-    let overlay_before_orphans =
-        show_overlay && overlay.is_some_and(|overlay| overlay.before_orphans);
-    if overlay_before_orphans {
-        slots.push(TimelineSlot::Overlay);
-    }
+    let target_orphan = overlay.and_then(|overlay| match overlay.placement {
+        OverlayPlacement::Tail => None,
+        OverlayPlacement::BeforeOrphan { message_sequence } => Some(message_sequence),
+    });
+    let mut overlay_placed = false;
     for sequence in orphans {
+        if show_overlay && !overlay_placed && target_orphan == Some(sequence) {
+            slots.push(TimelineSlot::Overlay);
+            overlay_placed = true;
+        }
         slots.push(TimelineSlot::ToolGroup {
             message_sequence: sequence,
         });
     }
 
-    if show_overlay && !overlay_before_orphans {
+    if show_overlay && !overlay_placed {
         slots.push(TimelineSlot::Overlay);
     }
 
@@ -258,7 +269,7 @@ mod tests {
             true,
             Some(OverlayInput {
                 matches_trailing_assistant: false,
-                before_orphans: false,
+                placement: OverlayPlacement::Tail,
             }),
         );
         assert_eq!(
@@ -273,7 +284,7 @@ mod tests {
             true,
             Some(OverlayInput {
                 matches_trailing_assistant: true,
-                before_orphans: false,
+                placement: OverlayPlacement::Tail,
             }),
         );
         assert!(
@@ -295,7 +306,9 @@ mod tests {
             true,
             Some(OverlayInput {
                 matches_trailing_assistant: false,
-                before_orphans: true,
+                placement: OverlayPlacement::BeforeOrphan {
+                    message_sequence: Some(1),
+                },
             }),
         );
 
@@ -321,6 +334,43 @@ mod tests {
     }
 
     #[test]
+    fn overlay_preserves_earlier_terminal_orphans_before_active_target() {
+        let messages = vec![msg("user", 0, TimelineRole::User)];
+        let groups = vec![Some(1), Some(2)];
+        let slots = build_timeline_order(
+            &messages,
+            &groups,
+            true,
+            Some(OverlayInput {
+                matches_trailing_assistant: false,
+                placement: OverlayPlacement::BeforeOrphan {
+                    message_sequence: Some(2),
+                },
+            }),
+        );
+
+        assert_eq!(
+            slots,
+            vec![
+                TimelineSlot::Message {
+                    key: "user".to_string(),
+                    sequence: Some(0),
+                    role: TimelineRole::User,
+                },
+                TimelineSlot::Pending,
+                TimelineSlot::ToolGroup {
+                    message_sequence: Some(1),
+                },
+                TimelineSlot::Overlay,
+                TimelineSlot::ToolGroup {
+                    message_sequence: Some(2),
+                },
+            ],
+            "historical orphan tools must stay before live reasoning"
+        );
+    }
+
+    #[test]
     fn overlay_follows_terminal_orphan_groups() {
         let messages = vec![msg("user", 0, TimelineRole::User)];
         let groups = vec![Some(1)];
@@ -330,7 +380,7 @@ mod tests {
             true,
             Some(OverlayInput {
                 matches_trailing_assistant: false,
-                before_orphans: false,
+                placement: OverlayPlacement::Tail,
             }),
         );
 

@@ -100,6 +100,35 @@ fn overlay_hidden_when_response_tail_is_empty() {
 }
 
 #[test]
+fn legacy_wake_is_filtered_from_latest_turn_projection() {
+    let mut rows = make_streaming_store_with_response_content("").to_rows();
+    rows.requests[0].status = Some("completed".to_string());
+    rows.requests[0].lifecycle_state = Some("completed".to_string());
+    rows.responses.clear();
+    let mut wake = rows.requests[0].clone();
+    wake.request_id = "legacy-wake".to_string();
+    wake.content = Some("legacy wake".to_string());
+    wake.status = Some("pending".to_string());
+    wake.lifecycle_state = Some("pending".to_string());
+    wake.execution_origin = Some("scheduled".to_string());
+    wake.metadata = Some(
+        r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"child-1","queued_after_request_id":null}}"#
+            .to_string(),
+    );
+    wake.created_at = Some("2026-04-21T12:02:00Z".to_string());
+    rows.requests.push(wake);
+    rows.conversations[0].latest_request_id = Some("legacy-wake".to_string());
+
+    let store = ClientStore::from_rows(rows);
+    let snapshot =
+        build_session_snapshot_from_store(&store, "sess-1", Some("legacy-wake")).expect("snapshot");
+
+    assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-1"));
+    assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
+    assert!(snapshot.pending_turn.is_none());
+}
+
+#[test]
 fn session_snapshot_deduplicates_persisted_rows_from_multiple_sources() {
     let mut rows = make_streaming_store_with_response_content("").to_rows();
     rows.responses.clear();
@@ -320,42 +349,80 @@ fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
             completed_at: None,
             interrupted_at: None,
         }],
-        tool_calls: vec![gents_protocol::row::AgentToolCallRow {
-            partial_output_tail: None,
-            partial_output_seq: None,
-            tool_call_key: "tool-1".to_string(),
-            session_id: Some("session-1".to_string()),
-            request_id: Some("req-2".to_string()),
-            requester_did: None,
-            message_sequence: None,
-            tool_name: Some("glob".to_string()),
-            tool_call_id: Some("call-1".to_string()),
-            args: Some("{\"pattern\":\"**/*.rs\"}".to_string()),
-            result: None,
-            status: Some("running".to_string()),
-            lifecycle_state: None,
-            child_request_id: None,
-            await_mode: None,
-            cancel_policy: None,
-            workflow_group_id: None,
-            workflow_role: None,
-            started_at: Some("2026-04-21T12:01:02Z".to_string()),
-            deadline_at: None,
-            completed_at: None,
-            selected_service_id: None,
-            selected_tool_name: None,
-            tool_failure_class: None,
-            denial_reason: None,
-            denied_argv: None,
-            denied_command: None,
-            denied_argument: None,
-            denied_subcommand: None,
-            denied_prefix: None,
-            policy_mode: None,
-            policy_network: None,
-            cancel_cause: None,
-            latency_ms: None,
-        }],
+        tool_calls: vec![
+            gents_protocol::row::AgentToolCallRow {
+                partial_output_tail: None,
+                partial_output_seq: None,
+                tool_call_key: "historical-tool".to_string(),
+                session_id: Some("session-1".to_string()),
+                request_id: Some("req-1".to_string()),
+                requester_did: None,
+                message_sequence: Some(2),
+                tool_name: Some("read".to_string()),
+                tool_call_id: Some("call-0".to_string()),
+                args: Some("{\"path\":\"README.md\"}".to_string()),
+                result: Some("done".to_string()),
+                status: Some("completed".to_string()),
+                lifecycle_state: Some("completed".to_string()),
+                child_request_id: None,
+                await_mode: None,
+                cancel_policy: None,
+                workflow_group_id: None,
+                workflow_role: None,
+                started_at: Some("2026-04-21T12:00:02Z".to_string()),
+                deadline_at: None,
+                completed_at: Some("2026-04-21T12:00:03Z".to_string()),
+                selected_service_id: None,
+                selected_tool_name: None,
+                tool_failure_class: None,
+                denial_reason: None,
+                denied_argv: None,
+                denied_command: None,
+                denied_argument: None,
+                denied_subcommand: None,
+                denied_prefix: None,
+                policy_mode: None,
+                policy_network: None,
+                cancel_cause: None,
+                latency_ms: None,
+            },
+            gents_protocol::row::AgentToolCallRow {
+                partial_output_tail: None,
+                partial_output_seq: None,
+                tool_call_key: "tool-1".to_string(),
+                session_id: Some("session-1".to_string()),
+                request_id: Some("req-2".to_string()),
+                requester_did: None,
+                message_sequence: Some(3),
+                tool_name: Some("glob".to_string()),
+                tool_call_id: Some("call-1".to_string()),
+                args: Some("{\"pattern\":\"**/*.rs\"}".to_string()),
+                result: None,
+                status: Some("running".to_string()),
+                lifecycle_state: None,
+                child_request_id: None,
+                await_mode: None,
+                cancel_policy: None,
+                workflow_group_id: None,
+                workflow_role: None,
+                started_at: Some("2026-04-21T12:01:02Z".to_string()),
+                deadline_at: None,
+                completed_at: None,
+                selected_service_id: None,
+                selected_tool_name: None,
+                tool_failure_class: None,
+                denial_reason: None,
+                denied_argv: None,
+                denied_command: None,
+                denied_argument: None,
+                denied_subcommand: None,
+                denied_prefix: None,
+                policy_mode: None,
+                policy_network: None,
+                cancel_cause: None,
+                latency_ms: None,
+            },
+        ],
         ..ClientStoreRows::default()
     });
 
@@ -372,7 +439,11 @@ fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
             RenderedTimelineItem::LiveAssistant { .. } => "live",
         })
         .collect::<Vec<_>>();
-    assert_eq!(kinds, vec!["user", "pending", "live", "tools"]);
+    assert_eq!(
+        kinds,
+        vec!["user", "pending", "tools", "live", "tools"],
+        "historical orphan tools stay before live reasoning, which targets the active group"
+    );
 }
 
 #[test]

@@ -612,10 +612,24 @@ impl ClientStore {
             .iter()
             .find(|row| row.session_id == session_id)
             .and_then(|row| clean_string(row.latest_request_id.as_deref()))
+            .filter(|request_id| {
+                self.request_index_by_id
+                    .get(request_id)
+                    .map(|index| &self.requests[*index])
+                    .is_some_and(|request| {
+                        request.session_id.as_deref() == Some(session_id)
+                            && !is_deprecated_background_completion_request(request)
+                    })
+            })
             .or_else(|| {
                 self.requests_by_session_id
                     .get(session_id)
-                    .and_then(|indexes| indexes.last().copied())
+                    .and_then(|indexes| {
+                        indexes.iter().rev().find(|index| {
+                            !is_deprecated_background_completion_request(&self.requests[**index])
+                        })
+                    })
+                    .copied()
                     .map(|index| self.requests[index].request_id.clone())
             })
     }
@@ -629,6 +643,16 @@ impl ClientStore {
             .iter()
             .find(|row| row.session_id == session_id && row.agent_did.as_deref() == Some(agent_did))
             .and_then(|row| clean_string(row.latest_request_id.as_deref()))
+            .filter(|request_id| {
+                self.request_index_by_id
+                    .get(request_id)
+                    .map(|index| &self.requests[*index])
+                    .is_some_and(|request| {
+                        request.session_id.as_deref() == Some(session_id)
+                            && row_agent_matches(request.agent_did.as_deref(), agent_did)
+                            && !is_deprecated_background_completion_request(request)
+                    })
+            })
             .or_else(|| {
                 self.requests_by_session_id
                     .get(session_id)
@@ -637,6 +661,8 @@ impl ClientStore {
                             row_agent_matches(
                                 self.requests[**index].agent_did.as_deref(),
                                 agent_did,
+                            ) && !is_deprecated_background_completion_request(
+                                &self.requests[**index],
                             )
                         })
                     })
@@ -735,6 +761,13 @@ pub type SharedClientStore = Arc<ClientStore>;
 
 fn row_agent_matches(row_agent_did: Option<&str>, agent_did: &str) -> bool {
     row_agent_did.is_none_or(|row_agent_did| row_agent_did == agent_did)
+}
+
+pub fn is_deprecated_background_completion_request(request: &AgentRequestRow) -> bool {
+    gents::lifecycle::is_deprecated_background_completion_request(
+        request.execution_origin.as_deref(),
+        request.metadata.as_deref(),
+    )
 }
 
 fn source_agent_matches(sources: &[Option<String>], row_index: usize, agent_did: &str) -> bool {
@@ -1050,6 +1083,85 @@ mod tests {
             created_at: None,
             updated_at: None,
         }
+    }
+
+    fn request_row(
+        request_id: &str,
+        created_at: &str,
+        lifecycle_state: &str,
+        execution_origin: &str,
+        metadata: Option<String>,
+    ) -> AgentRequestRow {
+        serde_json::from_value(serde_json::json!({
+            "request_id": request_id,
+            "agent_did": "did:agent:1",
+            "behavior_id": "default",
+            "session_id": "session-1",
+            "content": "turn",
+            "status": lifecycle_state,
+            "lifecycle_state": lifecycle_state,
+            "execution_origin": execution_origin,
+            "metadata": metadata,
+            "created_at": created_at
+        }))
+        .expect("request row")
+    }
+
+    #[test]
+    fn legacy_wake_is_not_authoritative_latest_request() {
+        let metadata = background_wake_metadata();
+        let store = ClientStore::from_rows(ClientStoreRows {
+            conversations: vec![AgentConversationRow {
+                session_id: "session-1".to_string(),
+                agent_name: None,
+                agent_did: Some("did:agent:1".to_string()),
+                requester_did: None,
+                behavior_id: Some("default".to_string()),
+                title: None,
+                title_source: None,
+                preview_text: None,
+                status: Some("active".to_string()),
+                created_at: None,
+                updated_at: None,
+                latest_request_id: Some("legacy-wake".to_string()),
+            }],
+            requests: vec![
+                request_row(
+                    "interactive",
+                    "2026-07-01T00:00:00Z",
+                    "completed",
+                    "interactive",
+                    None,
+                ),
+                request_row(
+                    "legacy-wake",
+                    "2026-07-01T00:00:01Z",
+                    "pending",
+                    "scheduled",
+                    Some(metadata),
+                ),
+            ],
+            ..ClientStoreRows::default()
+        });
+
+        assert_eq!(
+            store.latest_request_id_for_session("session-1").as_deref(),
+            Some("interactive")
+        );
+        assert_eq!(
+            store
+                .latest_request_id_for_session_for_agent("session-1", "did:agent:1")
+                .as_deref(),
+            Some("interactive")
+        );
+        assert_eq!(
+            store.derive_turn("session-1"),
+            Some(ClientTurnState::Completed)
+        );
+    }
+
+    fn background_wake_metadata() -> String {
+        r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"child-1","queued_after_request_id":null}}"#.to_string()
     }
 
     #[test]

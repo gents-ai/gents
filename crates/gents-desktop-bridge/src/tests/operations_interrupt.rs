@@ -1,4 +1,7 @@
-use crate::cascade::{build_cascade_preview, interrupt_request, latch_root_interrupt};
+use crate::cascade::{
+    build_cascade_preview, interrupt_request, latch_cascade_descendant_interrupt,
+    latch_root_interrupt,
+};
 use crate::tests::support::{fetch_request_row, seed_cascade_fixture, seed_standalone_fixture};
 use crate::types::{DesktopInterruptRequest, DesktopPreviewInterruptCascadeRequest};
 
@@ -31,6 +34,57 @@ async fn latch_is_noop_when_already_interrupted() {
         .await
         .expect("second latch");
     assert!(!second.was_first);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn descendant_latch_is_idempotent_and_preserves_first_timestamp() {
+    let (core, _tmp) = seed_cascade_fixture().await;
+    let first = latch_cascade_descendant_interrupt(&core, "req_b91")
+        .await
+        .expect("first descendant latch")
+        .expect("active descendant");
+    let second = latch_cascade_descendant_interrupt(&core, "req_b91")
+        .await
+        .expect("second descendant latch")
+        .expect("latched descendant");
+
+    assert!(first.was_first);
+    assert!(!second.was_first);
+    assert_eq!(second.interrupt_requested_at, first.interrupt_requested_at);
+    let stored = fetch_request_row(&core, "req_b91").await;
+    assert_eq!(
+        stored.interrupt_requested_at.as_deref(),
+        Some(first.interrupt_requested_at.as_str())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn descendant_that_terminalized_after_preview_is_not_latched() {
+    let (core, _tmp) = seed_cascade_fixture().await;
+    let terminalize = r#"mutation {
+        update_AgentRequest(
+            filter: { request_id: { _eq: "req_b91" } },
+            input: { status: "completed", lifecycle_state: "completed" }
+        ) { _docID }
+    }"#;
+    let response = core.node().execute(terminalize).await;
+    assert!(
+        !response.has_errors(),
+        "terminalize child fixture failed: {:?}",
+        response.errors
+    );
+
+    let latched = latch_cascade_descendant_interrupt(&core, "req_b91")
+        .await
+        .expect("terminal descendant is a stale-preview no-op");
+    assert!(latched.is_none());
+    assert!(
+        fetch_request_row(&core, "req_b91")
+            .await
+            .interrupt_requested_at
+            .is_none(),
+        "terminal descendant must not receive a stale interrupt timestamp"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

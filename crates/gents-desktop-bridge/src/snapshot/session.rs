@@ -30,6 +30,13 @@ fn message_is_runtime_control(
         })
 }
 
+fn request_is_deprecated_background_completion(request: &AgentRequestRow) -> bool {
+    gents::lifecycle::is_deprecated_background_completion_request(
+        request.execution_origin.as_deref(),
+        request.metadata.as_deref(),
+    )
+}
+
 fn command_denial_from_row(row: &AgentToolCallRow) -> Option<CommandDenialView> {
     let rule_id = normalize_optional(row.denial_reason.as_deref())?;
     let (category, category_label, reason_line) = command_denial_presentation(&rule_id);
@@ -170,7 +177,11 @@ pub fn build_session_snapshot_from_store_for_agent(
         |agent_did| store.transcript_for_agent(session_id, agent_did),
     );
     let latest_request_id = preferred_request_id
-        .filter(|request_id| requests.iter().any(|row| row.request_id == *request_id))
+        .filter(|request_id| {
+            requests.iter().any(|row| {
+                row.request_id == *request_id && !request_is_deprecated_background_completion(row)
+            })
+        })
         .map(str::to_owned)
         .or_else(|| {
             agent_did.map_or_else(
@@ -186,7 +197,13 @@ pub fn build_session_snapshot_from_store_for_agent(
                 .find(|row| row.request_id == request_id)
                 .copied()
         })
-        .or_else(|| requests.last().copied());
+        .or_else(|| {
+            requests
+                .iter()
+                .rev()
+                .find(|request| !request_is_deprecated_background_completion(request))
+                .copied()
+        });
     let turn_state = latest_request_id
         .as_deref()
         .and_then(|request_id| store.derive_turn_for_request(request_id))
