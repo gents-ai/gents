@@ -56,6 +56,9 @@ impl DefraWatcher {
         let Some(row) = active_runtime_rows(resp.data.as_ref())?.into_iter().next() else {
             return Ok(None);
         };
+        if row.is_deprecated_background_completion_wakeup() {
+            return Ok(None);
+        }
         if !self.row_is_claimable(&row).await? {
             return Ok(None);
         }
@@ -120,6 +123,8 @@ impl DefraWatcher {
                     request_id
                     status
                     lifecycle_state
+                    execution_origin
+                    metadata
                     created_at
                 }}
             }}"#,
@@ -140,6 +145,7 @@ impl DefraWatcher {
 
         let active_blocker = rows
             .iter()
+            .filter(|candidate| !candidate.is_deprecated_background_completion_wakeup())
             .any(|candidate| candidate.doc_id != row.doc_id && candidate.is_active_non_pending());
         if active_blocker {
             return Ok(false);
@@ -147,6 +153,7 @@ impl DefraWatcher {
 
         Ok(rows
             .iter()
+            .filter(|candidate| !candidate.is_deprecated_background_completion_wakeup())
             .find(|candidate| candidate.is_pending())
             .is_some_and(|candidate| candidate.doc_id == row.doc_id))
     }
@@ -172,6 +179,9 @@ fn claimable_pending_rows(
     let mut claimable = Vec::new();
 
     for row in rows {
+        if row.is_deprecated_background_completion_wakeup() {
+            continue;
+        }
         let is_pending = row.is_pending();
         let is_preclaim_terminal = row.has_preclaim_terminal_signal();
         let pending_session_seen = seen_pending_sessions.contains(&row.session_id);
@@ -229,6 +239,8 @@ struct SessionQueueRow {
     doc_id: String,
     status: String,
     lifecycle_state: Option<String>,
+    execution_origin: Option<String>,
+    metadata: Option<String>,
 }
 
 impl SessionQueueRow {
@@ -238,6 +250,13 @@ impl SessionQueueRow {
 
     fn is_active_non_pending(&self) -> bool {
         !self.is_pending()
+    }
+
+    fn is_deprecated_background_completion_wakeup(&self) -> bool {
+        crate::lifecycle::queue::is_deprecated_background_completion_wakeup(
+            self.execution_origin.as_deref(),
+            self.metadata.as_deref(),
+        )
     }
 }
 
@@ -259,6 +278,13 @@ impl AgentRequestRow {
                 .map(|dt| chrono::Utc::now() > dt.with_timezone(&chrono::Utc))
                 .unwrap_or(false)
         })
+    }
+
+    fn is_deprecated_background_completion_wakeup(&self) -> bool {
+        crate::lifecycle::queue::is_deprecated_background_completion_wakeup(
+            self.execution_origin.as_deref(),
+            self.metadata.as_deref(),
+        )
     }
 
     fn into_agent_request(self) -> anyhow::Result<AgentRequest> {

@@ -541,7 +541,7 @@ async fn pending_requests_include_interrupted_queued_rows_for_terminalization() 
 }
 
 #[tokio::test]
-async fn next_request_retires_legacy_completion_wake_and_returns_user_request() {
+async fn next_request_ignores_legacy_completion_wake_without_mutating_it() {
     let node = test_node().await;
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
@@ -572,18 +572,15 @@ async fn next_request_retires_legacy_completion_wake_and_returns_user_request() 
     let mut watcher = DefraWatcher::new(node.clone(), agent_did);
     let request = tokio::time::timeout(Duration::from_secs(2), watcher.next_request())
         .await
-        .expect("watcher should not wait on a retired legacy wake")
+        .expect("watcher should not wait on an ignored legacy wake")
         .expect("watcher should remain open")
         .expect("user request should load");
     assert_eq!(request.request_id, "req-user");
 
-    let retired = request_terminal_fields(node.as_ref(), "req-legacy-completion-wake").await;
-    assert_eq!(retired["status"], "interrupted");
-    assert_eq!(retired["lifecycle_state"], "interrupted");
-    assert_eq!(
-        retired["failure_reason"],
-        "deprecated_background_completion_wakeup"
-    );
+    let unchanged = request_terminal_fields(node.as_ref(), "req-legacy-completion-wake").await;
+    assert_eq!(unchanged["status"], "pending");
+    assert_eq!(unchanged["lifecycle_state"], "pending");
+    assert!(unchanged["failure_reason"].is_null());
 }
 
 #[tokio::test]

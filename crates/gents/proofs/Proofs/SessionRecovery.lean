@@ -57,6 +57,7 @@ def CanReissue (pre : SessionState) (failedId newId : RequestId) : Prop :=
     newId ∉ pre.requestIds ∧
     (pre.ctx failedId).state = .failed ∧
     (pre.ctx failedId).admission = .released ∧
+    (pre.ctx failedId).origin = .interactive ∧
     (pre.ctx failedId).retryCount < (pre.ctx failedId).maxRetries ∧
     ¬ (pre.ctx failedId).deadlineExceeded ∧
     (pre.ctx failedId).isLatest = true
@@ -269,9 +270,25 @@ theorem reissue_latest_origin_preserved
     (post.ctx post.latest).origin = (pre.ctx pre.latest).origin := by
   cases h_trans with
   | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _⟩
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _, _⟩
       rw [h_latest, h_ctx, h_failed_latest]
       simp [reissuedContext]
+
+theorem reissue_source_interactive
+    {pre post : SessionState}
+    (h_trans : Transition pre post) :
+    (pre.ctx pre.latest).origin = .interactive := by
+  cases h_trans with
+  | reissue_failed _ _ h_can _ _ _ _ _ =>
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, h_interactive, _, _, _⟩
+      simpa [h_failed_latest] using h_interactive
+
+theorem reissue_latest_interactive
+    {pre post : SessionState}
+    (h_trans : Transition pre post) :
+    (post.ctx post.latest).origin = .interactive := by
+  rw [reissue_latest_origin_preserved h_trans]
+  exact reissue_source_interactive h_trans
 
 theorem reissue_latest_backend_preserved
     {pre post : SessionState}
@@ -279,7 +296,7 @@ theorem reissue_latest_backend_preserved
     (post.ctx post.latest).backend = (pre.ctx pre.latest).backend := by
   cases h_trans with
   | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _⟩
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _, _⟩
       rw [h_latest, h_ctx, h_failed_latest]
       simp [reissuedContext]
 
@@ -289,7 +306,7 @@ theorem reissue_latest_retryCount_succ
     (post.ctx post.latest).retryCount = (pre.ctx pre.latest).retryCount + 1 := by
   cases h_trans with
   | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _⟩
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _, _⟩
       rw [h_latest, h_ctx, h_failed_latest]
       simp [reissuedContext]
 
@@ -299,7 +316,7 @@ theorem reissue_latest_retryBound
     (post.ctx post.latest).retryCount ≤ (post.ctx post.latest).maxRetries := by
   cases h_trans with
   | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, h_budget, _, _⟩
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, h_budget, _, _⟩
       have h_budget_latest : (pre.ctx pre.latest).retryCount < (pre.ctx pre.latest).maxRetries := by
         simpa [← h_failed_latest] using h_budget
       rw [h_latest, h_ctx, h_failed_latest]
@@ -311,7 +328,7 @@ theorem reissue_source_deadline_open
     ¬ (pre.ctx pre.latest).deadlineExceeded := by
   cases h_trans with
   | reissue_failed _ _ h_can _ _ _ _ _ =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, h_deadline, _⟩
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, h_deadline, _⟩
       rw [h_failed_latest] at h_deadline
       exact h_deadline
 
@@ -330,7 +347,7 @@ theorem reissue_demotes_previous_latest
     (post.ctx pre.latest).isLatest = false := by
   cases h_trans with
   | reissue_failed failedId newId h_can _ _ _ _ h_ctx =>
-      rcases h_can with ⟨h_failed_latest, h_failed_mem, h_new, _, _, _, _, _⟩
+      rcases h_can with ⟨h_failed_latest, h_failed_mem, h_new, _, _, _, _, _, _⟩
       have h_distinct : newId ≠ pre.latest := by
         intro h_eq
         have h_latest_mem : pre.latest ∈ pre.requestIds := by
@@ -350,7 +367,7 @@ theorem reissue_preserves_latestFlagInvariant
   cases h_trans with
   | reissue_failed failedId newId h_can _ _ h_requestIds h_latest h_ctx =>
       rcases h_pre with ⟨h_pre_latest_mem, h_pre_latest_flag, h_pre_others⟩
-      rcases h_can with ⟨h_failed_latest, h_failed_mem, h_new, _, _, _, _, _⟩
+      rcases h_can with ⟨h_failed_latest, h_failed_mem, h_new, _, _, _, _, _, _⟩
       constructor
       · rw [h_latest, h_requestIds]
         exact Finset.mem_insert_self _ _

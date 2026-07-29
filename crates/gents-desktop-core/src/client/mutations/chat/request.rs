@@ -294,17 +294,14 @@ async fn retry_request_with_request_id(
         .max_retries
         .unwrap_or(i64::from(DEFAULT_REQUEST_MAX_RETRIES));
     let backend_id = normalize_optional_string(parent.backend_id.as_deref()).unwrap_or("");
-    let execution_origin = match normalize_optional_string(parent.execution_origin.as_deref()) {
-        Some(origin) => origin,
-        None => {
-            tracing::debug!(
-                request_id = %parent_request_id,
-                "retry parent request missing execution_origin; defaulting retry origin to interactive"
-            );
-            "interactive"
-        }
-    };
-    ensure_retry_parent_eligible(parent, retry_count - 1, max_retries)?;
+    let execution_origin = normalize_required(
+        "execution_origin",
+        parent
+            .execution_origin
+            .as_deref()
+            .context("retry parent request must have an execution_origin")?,
+    )?;
+    ensure_retry_parent_eligible(parent, retry_count - 1, max_retries, execution_origin)?;
     ensure_retry_parent_request_exists(node, parent_request_id).await?;
     // Lean checks `isLatest` inside one session-state transition. The desktop
     // GraphQL API does not expose a transactional conditional create+update
@@ -379,6 +376,7 @@ fn ensure_retry_parent_eligible(
     parent: &AgentRequestRow,
     parent_retry_count: i64,
     max_retries: i64,
+    execution_origin: &str,
 ) -> Result<()> {
     let lifecycle_state = normalize_required(
         "lifecycle_state",
@@ -398,6 +396,11 @@ fn ensure_retry_parent_eligible(
     if lifecycle_state != "failed" || status != "error" {
         bail!(
             "retry parent request must be failed/error, got lifecycle_state={lifecycle_state} status={status}"
+        );
+    }
+    if execution_origin != "interactive" {
+        bail!(
+            "client retry parent request must be interactive, got execution_origin={execution_origin}"
         );
     }
     if parent_retry_count >= max_retries {
@@ -893,7 +896,7 @@ mod tests {
         let illegal_count = cases.len() - legal_count;
         assert_eq!(
             (legal_count, illegal_count),
-            (3, 15),
+            (2, 16),
             "Lean SessionRecovery case split changed; update this desktop driver before bumping"
         );
 
@@ -1449,6 +1452,8 @@ mod tests {
             "not found"
         } else if case.pre_failed_state != "failed" || case.pre_failed_admission != "released" {
             "failed/error"
+        } else if case.pre_origin != "interactive" {
+            "must be interactive"
         } else if case.pre_retry_count >= case.max_retries {
             "exhausted retry budget"
         } else if case.pre_deadline_exceeded {
