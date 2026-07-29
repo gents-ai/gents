@@ -44,12 +44,14 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let lens_target_dir = out_dir.join("lens-target");
 
+    // Match DefraDB's integration harness: lens_sdk 0.8 transport buffers are
+    // corrupted by optimized WASM builds, producing null or invalid type IDs.
+    // Tracked upstream: https://github.com/sourcenetwork/lens/issues/166
     let status = Command::new("cargo")
         .args([
             "build",
             "-p",
             pkg,
-            "--release",
             "--target",
             "wasm32-unknown-unknown",
             "--target-dir",
@@ -72,17 +74,14 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
     // cdylib artifact name uses underscores from the package name.
     let artifact = lens_target_dir
         .join("wasm32-unknown-unknown")
-        .join("release")
+        .join("debug")
         .join(artifact_name);
 
     // cargo may emit lib{name}.wasm depending on crate name mangling
     let alt = lens_target_dir
         .join("wasm32-unknown-unknown")
-        .join("release")
-        .join(format!(
-            "{}.wasm",
-            pkg.replace('-', "_")
-        ));
+        .join("debug")
+        .join(format!("{}.wasm", pkg.replace('-', "_")));
 
     let path = if artifact.exists() {
         artifact
@@ -90,9 +89,7 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
         alt
     } else {
         // list dir for diagnostics
-        let dir = lens_target_dir
-            .join("wasm32-unknown-unknown")
-            .join("release");
+        let dir = lens_target_dir.join("wasm32-unknown-unknown").join("debug");
         let listing = std::fs::read_dir(&dir)
             .map(|rd| {
                 rd.filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))

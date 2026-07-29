@@ -5,14 +5,11 @@
 pub struct MaterializationStats {
     /// Collections for which materialization was attempted.
     pub collections_attempted: usize,
-    /// Documents seen / restamped.
-    ///
-    /// Until upstream write-back lands this is the count of documents
-    /// observed by the read-through scan (not durable restamps).
+    /// Documents durably advanced to their active collection version.
     pub documents_materialized: usize,
-    /// True when the upstream `materialize_collection` API was unavailable.
+    /// Legacy compatibility flag; false with the pinned DefraDB materializer.
     pub skipped_upstream_missing: bool,
-    /// Collections successfully scanned via GraphQL read-through.
+    /// Legacy read-through count; zero with eager datastore materialization.
     pub read_through_scans: usize,
 }
 

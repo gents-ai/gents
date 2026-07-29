@@ -7,6 +7,8 @@
 //! - a module in this binary (`conformance/<file>.rs`) — one model per
 //!   module, except where two models are genuinely exercised by one harness
 //!   (the sharing is then documented inline at the table entry);
+//! - a workspace test outside this binary when the modeled subsystem lives in
+//!   another crate;
 //! - `Boundary` — the model is intentionally documented-only (see
 //!   `Proofs/Conformance/Boundaries.lean`);
 //! - `Gap` — known-missing, with the tracking issue. Gaps are allowed but
@@ -21,6 +23,8 @@ use std::path::Path;
 enum Home {
     /// Fenced by a module of this binary (path relative to tests/).
     Module(&'static str),
+    /// Fenced by a workspace test (path relative to the repository root).
+    WorkspaceTest(&'static str),
     /// Intentionally documented-only (Boundaries.lean).
     Boundary(&'static str),
     /// Known gap, tracked by an issue.
@@ -59,6 +63,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("InferenceCall", Module("conformance/inference_call.rs")),
         ("ManagedExec", Module("conformance/managed_exec.rs")),
         ("MCPHealth", Module("conformance/mcp_health.rs")),
+        (
+            "Migration",
+            WorkspaceTest("crates/gents-migration/tests/phase_b_steps.rs"),
+        ),
         // PairingReconcile and ReversePairingHandlers deliberately share one
         // home: both models are exercised by the same two-node scenario
         // harness (tests/support/pairing_conformance/), where the handlers
@@ -184,6 +192,12 @@ fn every_lean_model_has_a_declared_conformance_home() {
                         assert!(
                             root.join("crates/gents/tests").join(path).exists(),
                             "{model}: declared conformance module {path} does not exist"
+                        );
+                    }
+                    Home::WorkspaceTest(path) => {
+                        assert!(
+                            root.join(path).exists(),
+                            "{model}: declared workspace conformance test {path} does not exist"
                         );
                     }
                     Home::Boundary(rationale) => {

@@ -204,6 +204,9 @@ async fn patch_versioned_with_fixture_lens_registers_transform() {
         .await
         .expect("lens step");
     assert_eq!(report.steps_applied, 1, "{report:?}");
+    assert_eq!(report.materialization.collections_attempted, 1);
+    assert!(!report.materialization.skipped_upstream_missing);
+    assert_eq!(report.materialization.read_through_scans, 0);
 
     let active = node
         .get_collection("FixtureDoc")
@@ -220,19 +223,19 @@ async fn patch_versioned_with_fixture_lens_registers_transform() {
         "transform pin must match content-derived id"
     );
 
-    // Read documents — lens should supply label (lazy path).
+    // The activation reindex and eager materializer persist the transformed row.
     let q = r#"{ FixtureDoc { name label } }"#;
     let resp = node.execute(q).await;
-    if resp.has_errors() {
-        // Unknown-version / lens runtime issues are upstream; surface but do not
-        // hard-fail the step registration which already succeeded.
-        eprintln!("lens read errors (upstream-sensitive): {:?}", resp.errors);
-    } else if let Some(rows) = resp.data.as_ref().and_then(|d| d.get("FixtureDoc")).and_then(|v| v.as_array()) {
-        if let Some(row) = rows.first() {
-            eprintln!("lens read sample: {row}");
-            // If lens ran, label is ALICE; if only schema defaulted, may be null.
-        }
-    }
+    assert!(!resp.has_errors(), "lens read: {:?}", resp.errors);
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("FixtureDoc"))
+        .and_then(|value| value.as_array())
+        .expect("FixtureDoc rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], serde_json::json!("alice"));
+    assert_eq!(rows[0]["label"], serde_json::json!("ALICE"));
 
     // Idempotent re-run.
     let report2 = ensure_migrations_dynamic(node.as_ref(), &registry)
@@ -320,9 +323,9 @@ async fn chain_replay_prints_baseline_pins_for_authoring() {
         );
     }
 
-    // Materialize path reports upstream missing + read-through scans.
-    assert!(report.materialization.skipped_upstream_missing);
-    assert!(report.materialization.read_through_scans > 0);
+    // The pinned DefraDB surface performs eager datastore materialization.
+    assert!(!report.materialization.skipped_upstream_missing);
+    assert_eq!(report.materialization.read_through_scans, 0);
 
     node.shutdown().await;
 }

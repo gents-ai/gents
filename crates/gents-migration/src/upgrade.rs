@@ -1,25 +1,22 @@
 //! Rolling-upgrade / mixed-version fleet policy (Phase D).
 //!
-//! Until defradb.rs passes unknown document versions through unchanged
-//! ([defradb.rs#1231](https://github.com/sourcenetwork/defradb.rs/issues/1231);
-//! design §7.2; Go does, Rust pin errors), a node running an *older* binary
-//! can hard-fail reads when a newer peer replicates docs stamped past its
-//! known chain.
+//! The pinned DefraDB passes unknown document versions through unchanged,
+//! matching Go query behavior while preserving the foreign version marker.
 //!
 //! Gents policy:
 //! 1. Promote older nodes promptly during rolling upgrades.
 //! 2. Schema DAG foreign versions are still rejected at `ensure_migrations`
 //!    (no silent limping).
-//! 3. Document-level unknown-version errors from the database surface as
+//! 3. Document-level unknown-version errors from legacy database pins remain
 //!    operator-visible failures — we do not swallow them.
 
 /// Operator-facing guidance string for mixed-binary fleets.
 pub const ROLLING_UPGRADE_GUIDANCE: &str = "\
 Rolling upgrade policy (lens-first migrations): \
 promote every node to the newest binary before relying on cross-version \
-document replication. Older Rust DefraDB pins error on documents whose \
-stored collection version is unknown to the local history (Go passes them \
-through). Schema DAGs with foreign versions are rejected at ensure_migrations \
+document replication. The pinned Rust DefraDB passes documents whose stored \
+collection version is unknown to the local history through without restamping. \
+Schema DAGs with foreign versions are rejected at ensure_migrations \
 with UnknownLineage/ForeignVersion — export/import is required for \
 pre-baseline stores.";
 
