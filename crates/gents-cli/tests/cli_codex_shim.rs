@@ -8015,17 +8015,18 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
 
 /// Real-world round-trip (#340 slice 5): import the NousResearch/hermes-agent
 /// skill tree (~177 SKILL.md files), export it back to SKILL.md, and re-import
-/// the export. Gated on the hermes skills directory existing (override with
-/// HERMES_SKILLS_DIR); skipped otherwise so CI stays green without that checkout.
+/// the export. Ignored by default; set HERMES_SKILLS_DIR to the external skill
+/// tree and pass `--ignored` to run it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "external fixture: set HERMES_SKILLS_DIR and pass --ignored"]
 async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
-    let hermes_dir = std::env::var("HERMES_SKILLS_DIR").unwrap_or_else(|_| {
-        "/Users/johnzampolin/go/src/github.com/NousResearch/hermes-agent/skills".to_string()
-    });
-    if !std::path::Path::new(&hermes_dir).is_dir() {
-        eprintln!("skipping config_skill_import_export_roundtrip_hermes: {hermes_dir} not found");
-        return Ok(());
-    }
+    let hermes_dir = std::env::var("HERMES_SKILLS_DIR").context(
+        "set HERMES_SKILLS_DIR to the NousResearch/hermes-agent skills directory and pass --ignored",
+    )?;
+    anyhow::ensure!(
+        std::path::Path::new(&hermes_dir).is_dir(),
+        "HERMES_SKILLS_DIR must point to an existing Hermes skills directory: {hermes_dir}"
+    );
 
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
