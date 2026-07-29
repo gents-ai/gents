@@ -116,54 +116,41 @@ pub mod crash {
             let Some(crashed) = curr.crashed_node.as_deref() else {
                 continue;
             };
-            match crashed {
-                "A" => {
-                    for bridge in &prev.a_bridge_rows {
-                        assert!(
-                            curr.a_bridge_rows
-                                .iter()
-                                .any(|b| b.tool_call_id == bridge.tool_call_id
-                                    && b.lifecycle_state == bridge.lifecycle_state
-                                    && b.child_request_id == bridge.child_request_id),
-                            "Crash(A) lost durable bridge {}",
-                            bridge.tool_call_id
-                        );
-                    }
-                    for child in &prev.a_child_requests {
-                        assert!(
-                            curr.a_child_requests
-                                .iter()
-                                .any(|c| c.request_id == child.request_id
-                                    && c.lifecycle_state == child.lifecycle_state),
-                            "Crash(A) lost durable child request {}",
-                            child.request_id
-                        );
-                    }
-                }
-                "B" => {
-                    for bridge in &prev.b_bridge_rows {
-                        assert!(
-                            curr.b_bridge_rows
-                                .iter()
-                                .any(|b| b.tool_call_id == bridge.tool_call_id
-                                    && b.lifecycle_state == bridge.lifecycle_state
-                                    && b.child_request_id == bridge.child_request_id),
-                            "Crash(B) lost durable bridge {}",
-                            bridge.tool_call_id
-                        );
-                    }
-                    for child in &prev.b_child_requests {
-                        assert!(
-                            curr.b_child_requests
-                                .iter()
-                                .any(|c| c.request_id == child.request_id
-                                    && c.lifecycle_state == child.lifecycle_state),
-                            "Crash(B) lost durable child request {}",
-                            child.request_id
-                        );
-                    }
-                }
+            let (prev_bridges, curr_bridges, prev_children, curr_children) = match crashed {
+                "A" => (
+                    &prev.a_bridge_rows,
+                    &curr.a_bridge_rows,
+                    &prev.a_child_requests,
+                    &curr.a_child_requests,
+                ),
+                "B" => (
+                    &prev.b_bridge_rows,
+                    &curr.b_bridge_rows,
+                    &prev.b_child_requests,
+                    &curr.b_child_requests,
+                ),
                 other => panic!("unknown crashed node {other}"),
+            };
+            for bridge in prev_bridges {
+                assert!(
+                    curr_bridges
+                        .iter()
+                        .any(|b| b.tool_call_id == bridge.tool_call_id
+                            && b.lifecycle_state == bridge.lifecycle_state
+                            && b.child_request_id == bridge.child_request_id),
+                    "Crash({crashed}) lost durable bridge {}",
+                    bridge.tool_call_id
+                );
+            }
+            for child in prev_children {
+                assert!(
+                    curr_children
+                        .iter()
+                        .any(|c| c.request_id == child.request_id
+                            && c.lifecycle_state == child.lifecycle_state),
+                    "Crash({crashed}) lost durable child request {}",
+                    child.request_id
+                );
             }
         }
     }

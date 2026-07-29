@@ -43,7 +43,7 @@ pub struct Observation {
     /// Process-identity generation of node B (bumped by honest Crash).
     pub b_process_generation: u64,
     /// Node id that just crashed for this snapshot, if the preceding action
-    /// was `Crash`. Empty when the snapshot is not post-crash.
+    /// was `Crash`. `None` when the snapshot is not post-crash.
     pub crashed_node: Option<NodeId>,
 }
 
@@ -583,7 +583,13 @@ async fn import_tool_call(node: &HarnessNode, row: &serde_json::Value) -> Result
     let tool_call_id = str_field(row, "tool_call_id")?;
     let tool_call_key = str_field(row, "tool_call_key")?;
     let request_id = str_field(row, "request_id")?;
-    let agent_did = opt_str_field(row, "agent_did").unwrap_or(NODE_A_DID);
+    // Prefer the exported owner; if absent, scope to the destination node
+    // (same rule as write_parent_tool_call) rather than always NODE_A.
+    let agent_did = opt_str_field(row, "agent_did").unwrap_or(if node.id == "B" {
+        NODE_B_DID
+    } else {
+        NODE_A_DID
+    });
     let args = escape_graphql_string(str_field(row, "args")?);
     let result = escape_graphql_string(opt_str_field(row, "result").unwrap_or(""));
     let child_request_id =

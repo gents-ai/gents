@@ -47,84 +47,80 @@ impl TestDb {
     ///
     /// Fails if outstanding `Arc` clones prevent exclusive drop of the old
     /// node — that would leave the crash non-falsifiable.
+    ///
+    /// Implementation notes (soundness):
+    /// - Fully safe Rust: `mem::replace` with a short-lived ephemeral node so
+    ///   `self.node` is never left uninitialized under cancel/panic.
+    /// - Process identity is `process_generation`, not pointer inequality
+    ///   (allocator reuse would flake a pointer check).
     pub async fn simulate_process_crash(&mut self) -> anyhow::Result<()> {
         let data_path = self.tempdir.path().to_path_buf();
         let before = self.process_generation;
 
-        // Move the Arc out without requiring `Default` for `EmbeddedNode`.
-        // On every exit path below we either restore `self.node` or write a
-        // reopened handle so the field is never left uninitialized.
-        let old = unsafe { std::ptr::read(&self.node) };
-        let old_ptr = Arc::as_ptr(&old) as usize;
-        old.shutdown().await;
+        // Require exclusive ownership *before* shutdown so a shared handle is
+        // still usable if we bail (callers can still query/tear down cleanly).
+        let strong = Arc::strong_count(&self.node);
+        if strong != 1 {
+            anyhow::bail!(
+                "simulate_process_crash: cannot exclusively drop EmbeddedNode \
+                 (strong_count={strong}); crash boundary would not clear process state"
+            );
+        }
 
-        let owned = match Arc::try_unwrap(old) {
-            Ok(owned) => owned,
+        self.node.shutdown().await;
+
+        // Ephemeral stand-in keeps `self.node` defined across the exclusive
+        // drop + durable reopen. Dropped as soon as reopen succeeds.
+        // (Option<Arc<_>> + accessor would also work, but `pub node: Arc<_>` is
+        // part of the test harness surface used by ~1700 call sites.)
+        let stand_in = Arc::new(
+            EmbeddedNode::builder()
+                .build()
+                .await
+                .map_err(|e| anyhow::anyhow!("simulate_process_crash: stand-in node: {e}"))?,
+        );
+        let old = std::mem::replace(&mut self.node, stand_in);
+
+        // strong_count was 1 before replace; `old` is now the unique owner.
+        match Arc::try_unwrap(old) {
+            Ok(owned) => drop(owned),
             Err(shared) => {
+                // Another clone appeared between the check and replace (or the
+                // count check was racy with external clones). Restore the
+                // shut-down handle so Drop is well-defined, then fail loudly.
                 let count = Arc::strong_count(&shared);
-                unsafe {
-                    std::ptr::write(&mut self.node, shared);
-                }
+                self.node = shared;
                 anyhow::bail!(
                     "simulate_process_crash: cannot exclusively drop EmbeddedNode \
-                     (strong_count={count}); crash boundary would not clear process state"
+                     (strong_count={count} after replace); restored handle is shut \
+                     down and unusable — fix outstanding Arc clones before Crash"
                 );
             }
-        };
-        drop(owned);
+        }
 
-        let reopened = match EmbeddedNode::builder().data_path(&data_path).build().await {
-            Ok(node) => Arc::new(node),
-            Err(error) => {
-                // Store is closed; reconstruct best-effort so Drop still runs.
-                match EmbeddedNode::builder().data_path(&data_path).build().await {
-                    Ok(node) => unsafe {
-                        std::ptr::write(&mut self.node, Arc::new(node));
-                    },
-                    Err(rebuild_error) => {
-                        // Last resort: ephemeral node so `self.node` is valid.
-                        let fallback = EmbeddedNode::builder().build().await.map_err(|e| {
-                            anyhow::anyhow!(
-                                "simulate_process_crash: reopen failed ({error}); \
-                                     fallback rebuild failed ({rebuild_error}); \
-                                     ephemeral fallback failed ({e})"
-                            )
-                        })?;
-                        unsafe {
-                            std::ptr::write(&mut self.node, Arc::new(fallback));
-                        }
-                    }
-                }
-                anyhow::bail!(
-                    "simulate_process_crash: reopen durable store at {} failed: {error}",
+        // Durable path is free. Reopen once; on failure leave the ephemeral
+        // stand-in in place (defined, empty) and surface the error.
+        let reopened = EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "simulate_process_crash: reopen durable store at {} failed: {e}",
                     data_path.display()
-                );
-            }
-        };
+                )
+            })?;
+        // Install the durable handle before schema ensure so a schema error
+        // still leaves `self.node` pointing at the reopened store (not the
+        // empty stand-in).
+        self.node = Arc::new(reopened);
 
         // Schemas already exist on the durable path; ensure is idempotent.
-        if let Err(error) = ensure_runtime_schemas(&reopened).await {
-            unsafe {
-                std::ptr::write(&mut self.node, reopened);
-            }
-            anyhow::bail!("simulate_process_crash: ensure schemas: {error}");
-        }
+        ensure_runtime_schemas(&self.node)
+            .await
+            .map_err(|e| anyhow::anyhow!("simulate_process_crash: ensure schemas: {e}"))?;
 
-        let after_ptr = Arc::as_ptr(&reopened) as usize;
-        if after_ptr == old_ptr {
-            unsafe {
-                std::ptr::write(&mut self.node, reopened);
-            }
-            anyhow::bail!("simulate_process_crash: reopened node pointer equals pre-crash pointer");
-        }
-
-        let after = before
-            .checked_add(1)
-            .ok_or_else(|| anyhow::anyhow!("process_generation overflow"))?;
-        unsafe {
-            std::ptr::write(&mut self.node, reopened);
-        }
-        self.process_generation = after;
+        self.process_generation = before + 1;
         Ok(())
     }
 }
