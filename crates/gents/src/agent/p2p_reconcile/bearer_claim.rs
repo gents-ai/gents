@@ -23,7 +23,7 @@
 //! inert forever, so operator deletions after the window can never be
 //! resurrected by a lingering claim row.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
@@ -101,6 +101,9 @@ pub fn decide_bearer_claim(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedBearerClaim {
     pub nonce: String,
+    /// Authority-signed token issuance time. Together with the nonce this is
+    /// the stable total order used when a claimant has multiple fresh claims.
+    pub issued_at: String,
     pub network_id: String,
     pub template: String,
     pub claimant_did: String,
@@ -129,8 +132,19 @@ pub trait BearerClaimStore: Send + Sync {
     /// Author the admin-signed membership IF ABSENT. A row in any status
     /// (including operator-revoked) is left untouched.
     async fn ensure_membership(&self, network_id: &str, member_did: &str) -> Result<()>;
-    /// Record the reciprocal conversation intent IF ABSENT.
-    async fn ensure_conversation_intent(&self, member_did: &str) -> Result<()>;
+    /// Record the reciprocal conversation intent IF ABSENT, or overwrite its
+    /// template when it differs from the preferred authority-signed claim.
+    /// Preference is deterministic by `(issued_at, nonce)`, so unordered
+    /// DefraDB reads cannot oscillate a claimant between templates.
+    async fn ensure_conversation_intent(&self, member_did: &str, template: &str) -> Result<()>;
+}
+
+fn claim_priority(claim: &PreparedBearerClaim) -> (i64, &str) {
+    let issued_at = chrono::DateTime::parse_from_rfc3339(claim.issued_at.trim())
+        .ok()
+        .and_then(|value| value.timestamp_nanos_opt())
+        .unwrap_or(i64::MIN);
+    (issued_at, claim.nonce.as_str())
 }
 
 pub async fn reconcile_bearer_claim_tick(
@@ -143,6 +157,7 @@ pub async fn reconcile_bearer_claim_tick(
         .context("load prepared bearer claims")?;
 
     let mut outcome = BearerClaimTickOutcome::default();
+    let mut preferred_intents: BTreeMap<String, PreparedBearerClaim> = BTreeMap::new();
     for claim in claims {
         let binding = store
             .nonce_binding(&claim.nonce, &claim.claimant_did)
@@ -190,16 +205,13 @@ pub async fn reconcile_bearer_claim_tick(
                     claim.claimant_did
                 )
             })?;
-        if claim.template == BEARER_CONVERSATION_TEMPLATE {
-            store
-                .ensure_conversation_intent(&claim.claimant_did)
-                .await
-                .with_context(|| {
-                    format!(
-                        "ensure conversation intent for bearer claimant {}",
-                        claim.claimant_did
-                    )
-                })?;
+        if super::templates::conversation_like(&claim.template) {
+            let replace = preferred_intents
+                .get(&claim.claimant_did)
+                .is_none_or(|current| claim_priority(&claim) > claim_priority(current));
+            if replace {
+                preferred_intents.insert(claim.claimant_did.clone(), claim.clone());
+            }
         }
 
         if newly_admitted {
@@ -207,6 +219,17 @@ pub async fn reconcile_bearer_claim_tick(
         } else {
             outcome.repaired.insert(claim.claimant_did.clone());
         }
+    }
+    for claim in preferred_intents.into_values() {
+        store
+            .ensure_conversation_intent(&claim.claimant_did, &claim.template)
+            .await
+            .with_context(|| {
+                format!(
+                    "ensure conversation intent for bearer claimant {}",
+                    claim.claimant_did
+                )
+            })?;
     }
     Ok(outcome)
 }
@@ -385,6 +408,7 @@ impl BearerClaimStore for GraphqlBearerClaimStore {
 
             prepared.push(PreparedBearerClaim {
                 nonce: token.nonce.trim().to_string(),
+                issued_at: token.issued_at.trim().to_string(),
                 network_id: token.network_id.trim().to_string(),
                 template: token.template.trim().to_string(),
                 claimant_did: claimant_did.to_string(),
@@ -482,12 +506,13 @@ impl BearerClaimStore for GraphqlBearerClaimStore {
         ensure_no_errors(&response, "create NetworkMembership for bearer claim")
     }
 
-    async fn ensure_conversation_intent(&self, member_did: &str) -> Result<()> {
+    async fn ensure_conversation_intent(&self, member_did: &str, template: &str) -> Result<()> {
         let escaped = escape_graphql_string(member_did);
         let query = format!(
             r#"{{
                 ReciprocalConversationIntent(filter: {{ member_did: {{ _eq: "{escaped}" }} }}, limit: 1) {{
                     member_did
+                    template
                 }}
             }}"#
         );
@@ -496,16 +521,21 @@ impl BearerClaimStore for GraphqlBearerClaimStore {
             &response,
             "query ReciprocalConversationIntent for bearer claim",
         )?;
-        if first_row::<IntentKeyRow>(&response, "ReciprocalConversationIntent")?.is_some() {
-            return Ok(());
+        if let Some(existing) =
+            first_row::<IntentKeyRow>(&response, "ReciprocalConversationIntent")?
+        {
+            if existing.template.as_deref().map(str::trim) == Some(template.trim()) {
+                // Already recorded with this exact template: nothing to do.
+                return Ok(());
+            }
         }
 
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-        let mutation = bearer_intent_create_mutation(member_did, &now);
+        let mutation = bearer_intent_upsert_mutation(member_did, template, &now);
         let response = self.node.execute(&mutation).await;
         ensure_no_errors(
             &response,
-            "create ReciprocalConversationIntent for bearer claim",
+            "upsert ReciprocalConversationIntent for bearer claim",
         )
     }
 }
@@ -555,17 +585,25 @@ fn bearer_membership_create_mutation(membership_key: &str, record: &MembershipRe
     )
 }
 
-fn bearer_intent_create_mutation(member_did: &str, now: &str) -> String {
+fn bearer_intent_upsert_mutation(member_did: &str, template: &str, now: &str) -> String {
     let member_did = escape_graphql_string(member_did);
+    let template = escape_graphql_string(template);
     let now = escape_graphql_string(now);
     format!(
         r#"mutation {{
-            create_ReciprocalConversationIntent(input: {{
-                member_did: "{member_did}",
-                template: "conversation",
-                created_at: "{now}",
-                updated_at: "{now}"
-            }}) {{ _docID }}
+            upsert_ReciprocalConversationIntent(
+                filter: {{ member_did: {{ _eq: "{member_did}" }} }},
+                add: {{
+                    member_did: "{member_did}",
+                    template: "{template}",
+                    created_at: "{now}",
+                    updated_at: "{now}"
+                }},
+                update: {{
+                    template: "{template}",
+                    updated_at: "{now}"
+                }}
+            ) {{ _docID }}
         }}"#
     )
 }
@@ -614,6 +652,7 @@ struct MembershipKeyRow {
 struct IntentKeyRow {
     #[allow(dead_code)]
     member_did: Option<String>,
+    template: Option<String>,
 }
 
 #[cfg(test)]
@@ -668,9 +707,9 @@ mod tests {
         /// nonce -> claimant it is bound to
         bindings: Mutex<BTreeMap<String, String>>,
         memberships: Mutex<BTreeSet<(String, String)>>,
-        intents: Mutex<BTreeSet<String>>,
+        intents: Mutex<BTreeMap<String, String>>,
         membership_writes: Mutex<Vec<(String, String)>>,
-        intent_writes: Mutex<Vec<String>>,
+        intent_writes: Mutex<Vec<(String, String)>>,
     }
 
     #[async_trait]
@@ -709,12 +748,14 @@ mod tests {
             Ok(())
         }
 
-        async fn ensure_conversation_intent(&self, member_did: &str) -> Result<()> {
-            if self.intents.lock().unwrap().insert(member_did.to_string()) {
+        async fn ensure_conversation_intent(&self, member_did: &str, template: &str) -> Result<()> {
+            let mut intents = self.intents.lock().unwrap();
+            if intents.get(member_did).map(String::as_str) != Some(template) {
+                intents.insert(member_did.to_string(), template.to_string());
                 self.intent_writes
                     .lock()
                     .unwrap()
-                    .push(member_did.to_string());
+                    .push((member_did.to_string(), template.to_string()));
             }
             Ok(())
         }
@@ -728,6 +769,7 @@ mod tests {
     ) -> PreparedBearerClaim {
         PreparedBearerClaim {
             nonce: nonce.to_string(),
+            issued_at: "2026-07-28T00:00:00Z".to_string(),
             network_id: "default".to_string(),
             template: template.to_string(),
             claimant_did: claimant.to_string(),
@@ -766,7 +808,7 @@ mod tests {
         );
         assert_eq!(
             *store.intent_writes.lock().unwrap(),
-            vec!["did:key:phone".to_string()]
+            vec![("did:key:phone".to_string(), "conversation".to_string())]
         );
     }
 
@@ -788,6 +830,88 @@ mod tests {
 
         assert!(store.intent_writes.lock().unwrap().is_empty());
         assert_eq!(store.membership_writes.lock().unwrap().len(), 1);
+    }
+
+    /// Mirrors Lean `claimStep_intent_iff_conversation_like`: `machine` is
+    /// conversation-like and must mint the reciprocal intent too.
+    #[tokio::test]
+    async fn machine_claim_creates_conversation_intent() {
+        let store = MockBearerStore {
+            claims: vec![claim(
+                "nonce-a",
+                "did:key:laptop",
+                "machine",
+                verdicts(true, true, true),
+            )],
+            ..Default::default()
+        };
+
+        reconcile_bearer_claim_tick(&store, "did:key:server")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *store.intent_writes.lock().unwrap(),
+            vec![("did:key:laptop".to_string(), "machine".to_string())]
+        );
+        assert_eq!(store.membership_writes.lock().unwrap().len(), 1);
+    }
+
+    /// Mirrors Lean `preferredClaim_newer_wins`: DefraDB query order must not
+    /// decide whether a claimant ends up on `conversation` or `machine`.
+    #[tokio::test]
+    async fn newest_authority_signed_claim_deterministically_selects_template() {
+        for reverse in [false, true] {
+            let mut older = claim(
+                "nonce-older",
+                "did:key:phone",
+                "conversation",
+                verdicts(true, true, true),
+            );
+            older.issued_at = "2026-07-28T00:00:00Z".to_string();
+            let mut newer = claim(
+                "nonce-newer",
+                "did:key:phone",
+                "machine",
+                verdicts(true, true, true),
+            );
+            newer.issued_at = "2026-07-28T00:01:00Z".to_string();
+            let claims = if reverse {
+                vec![newer, older]
+            } else {
+                vec![older, newer]
+            };
+            let store = MockBearerStore {
+                claims,
+                ..Default::default()
+            };
+
+            reconcile_bearer_claim_tick(&store, "did:key:server")
+                .await
+                .unwrap();
+            assert_eq!(
+                store
+                    .intents
+                    .lock()
+                    .unwrap()
+                    .get("did:key:phone")
+                    .map(String::as_str),
+                Some("machine")
+            );
+            assert_eq!(
+                *store.intent_writes.lock().unwrap(),
+                vec![("did:key:phone".to_string(), "machine".to_string())]
+            );
+
+            reconcile_bearer_claim_tick(&store, "did:key:server")
+                .await
+                .unwrap();
+            assert_eq!(
+                store.intent_writes.lock().unwrap().len(),
+                1,
+                "a settled sweep must not oscillate the template"
+            );
+        }
     }
 
     #[tokio::test]

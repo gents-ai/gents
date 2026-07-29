@@ -2118,7 +2118,7 @@ the reconciler is the suspect component, and intentionally ad-hoc topologies \
         about = "Inspect the built-in scope-template catalog",
         after_help = "\
 Scope templates are named pairing intents that bundle a fixed collection set, \
-a per-peer scoping policy (agent_did equality or unscoped), and a delivery \
+a per-collection scoping policy, and a delivery \
 mode (push or replicate).  Use them as the --template argument when creating \
 PeerPairingDesired rows."
     )]

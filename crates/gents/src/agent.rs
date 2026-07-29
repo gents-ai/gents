@@ -25,6 +25,7 @@ use crate::trigger_engine::manual_source::ManualTriggerHandle;
 mod builder;
 pub mod completion_retry;
 mod daemon;
+pub mod directory_projection;
 mod document_view;
 pub(crate) mod loop_stream;
 pub mod p2p_reconcile;

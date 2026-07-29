@@ -21,8 +21,8 @@ fn one_filter(collection: &str, field: &str, value: &str) -> PairingFilters {
     filters
 }
 
-fn conversation_desired(claimant_did: &str, address: &str) -> PairingDesired {
-    let template = resolve_template("conversation").expect("conversation template");
+fn bearer_desired(template_id: &str, claimant_did: &str, address: &str) -> PairingDesired {
+    let template = resolve_template(template_id).expect("bearer template");
     PairingDesired {
         replicator_addresses: set(&[address]),
         replicator_collections: template
@@ -36,14 +36,14 @@ fn conversation_desired(claimant_did: &str, address: &str) -> PairingDesired {
             claimant_did,
             "did:key:issuer",
         ),
-        template_ids: set(&["conversation"]),
+        template_ids: set(&[template_id]),
         ..Default::default()
     }
 }
 
 #[test]
 fn bearer_readiness_requires_exact_applied_conversation_replicator() {
-    let desired = conversation_desired("did:key:claimant", "iroh-ticket");
+    let desired = bearer_desired("conversation", "did:key:claimant", "iroh-ticket");
     let pending = PairingApplied::default();
     assert_eq!(
         earned_bearer_readiness(Some(&desired), &pending, "did:key:issuer"),
@@ -57,7 +57,11 @@ fn bearer_readiness_requires_exact_applied_conversation_replicator() {
     };
     assert_eq!(
         earned_bearer_readiness(Some(&desired), &applied, "did:key:issuer"),
-        Some(("did:key:claimant".to_string(), "iroh-ticket".to_string()))
+        Some((
+            "did:key:claimant".to_string(),
+            "iroh-ticket".to_string(),
+            "conversation".to_string()
+        ))
     );
 
     let mut wrong_filter = applied;
@@ -1907,4 +1911,125 @@ async fn add_replicator_records_filters_at_seam() {
     let pred = recorded.get("AgentRequest").expect("AgentRequest filter");
     assert_eq!(pred.field, "agent_did");
     assert_eq!(pred.value, "did:key:alice");
+}
+
+#[test]
+fn bearer_readiness_accepts_exact_applied_machine_replicator() {
+    let mut desired = bearer_desired("machine", "did:key:claimant", "iroh-ticket");
+    desired.template_ids.insert("conversation".to_string());
+    let applied = PairingApplied {
+        replicator_addresses: desired.replicator_addresses.clone(),
+        replicator_filter: desired.replicator_filter.clone(),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        earned_bearer_readiness(Some(&desired), &applied, "did:key:issuer"),
+        Some((
+            "did:key:claimant".to_string(),
+            "iroh-ticket".to_string(),
+            "machine".to_string()
+        ))
+    );
+}
+
+/// #714 C1 regression: the `machine` template's conversation collections
+/// must scope to the same requester DID `conversation` uses on the data
+/// plane, while `AgentDirectoryEntry` is restricted to this issuer's
+/// source-owned projection.
+#[test]
+fn data_plane_desired_machine_scopes_conversation_and_owned_directory() {
+    let signed_endpoint = NetworkEndpointEntry {
+        peer_id: "peer-b".to_string(),
+        agent_did: "did:key:peer-b".to_string(),
+        address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+    };
+    let desired = data_plane_desired_from_pairing_row(
+        PairingStateRow {
+            agent_did: None,
+            collections: None,
+            replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
+            template: Some("machine".to_string()),
+            replicator_filter: None,
+        },
+        &signed_endpoint,
+        "did:key:self",
+    )
+    .expect("data-plane desired")
+    .expect("some data-plane layer");
+
+    assert!(desired
+        .replicator_collections
+        .contains(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION));
+    for col in [
+        "AgentRequest",
+        "AgentResponse",
+        "AgentMessage",
+        "AgentToolCall",
+        "AgentToolResult",
+        "AgentSession",
+        "AgentConversation",
+        "CompactionEntry",
+    ] {
+        assert_eq!(
+            desired
+                .replicator_filter
+                .get(col)
+                .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            Some(("requester_did", "did:key:peer-b")),
+            "conversation collection {col} must be requester-scoped exactly like `conversation`"
+        );
+    }
+    assert_eq!(
+        desired
+            .replicator_filter
+            .get(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION)
+            .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+        Some(("source_did", "did:key:self"))
+    );
+}
+
+/// #714 C1 regression: on the control plane, `machine`'s conversation
+/// collections must resolve to the peer DID exactly like `conversation`
+/// does, while `AgentDirectoryEntry` selects only this issuer's rows.
+#[test]
+fn control_plane_desired_machine_scopes_conversation_and_owned_directory() {
+    let desired = desired_from_pairing_row(
+        desired_row(Some("machine"), Some("did:key:phone")),
+        "did:key:server",
+    )
+    .expect("template resolves")
+    .expect("some desired layer");
+
+    assert!(
+        desired.collections.is_empty(),
+        "Push templates must not subscribe"
+    );
+    assert!(desired
+        .replicator_collections
+        .contains(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION));
+    for col in [
+        "AgentRequest",
+        "AgentResponse",
+        "AgentMessage",
+        "AgentToolCall",
+        "AgentToolResult",
+        "AgentSession",
+        "AgentConversation",
+        "CompactionEntry",
+    ] {
+        let pred = desired
+            .replicator_filter
+            .get(col)
+            .unwrap_or_else(|| panic!("missing filter for conversation collection {col}"));
+        assert_eq!(pred.field, "requester_did");
+        assert_eq!(pred.value, "did:key:phone");
+    }
+    assert_eq!(
+        desired
+            .replicator_filter
+            .get(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION)
+            .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+        Some(("source_did", "did:key:server"))
+    );
 }

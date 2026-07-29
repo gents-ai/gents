@@ -922,6 +922,7 @@ impl GraphqlPairingStateStore {
         peer_id: &str,
         claimant_did: &str,
         address: &str,
+        template: &str,
     ) -> Result<()> {
         let readiness_key = derive_bearer_readiness_key(self.identity.did(), claimant_did);
         let mut record = BearerPairingReadyRecord {
@@ -929,7 +930,7 @@ impl GraphqlPairingStateStore {
             claimant_did: claimant_did.to_string(),
             peer_id: peer_id.to_string(),
             address: address.to_string(),
-            template: "conversation".to_string(),
+            template: template.to_string(),
             acknowledged_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
             sig: Vec::new(),
         };
@@ -1126,12 +1127,12 @@ impl PairingStateStore for GraphqlPairingStateStore {
         desired: Option<&PairingDesired>,
         applied: &PairingApplied,
     ) -> Result<()> {
-        let Some((claimant_did, address)) =
+        let Some((claimant_did, address, template)) =
             earned_bearer_readiness(desired, applied, self.identity.did())
         else {
             return self.delete_bearer_readiness_for_peer(peer_id).await;
         };
-        self.upsert_bearer_readiness(peer_id, &claimant_did, &address)
+        self.upsert_bearer_readiness(peer_id, &claimant_did, &address, &template)
             .await
     }
 
@@ -1456,6 +1457,7 @@ fn data_plane_scope_filter(
                 let value = match rule.source {
                     DidSource::LocalDid => local_did,
                     DidSource::PeerDid => signed_peer_did,
+                    DidSource::HomeDid => local_did,
                 };
                 (
                     rule.collection.to_string(),
@@ -1516,16 +1518,23 @@ fn earned_bearer_readiness(
     desired: Option<&PairingDesired>,
     applied: &PairingApplied,
     local_did: &str,
-) -> Option<(String, String)> {
+) -> Option<(String, String, String)> {
     let desired = desired?;
-    if !desired.template_ids.contains("conversation")
-        || desired.replicator_addresses.len() != 1
+    let template_id = desired
+        .template_ids
+        .iter()
+        .filter(|id| super::templates::conversation_like(id))
+        // A layered desired state can temporarily carry both ids while an
+        // operator/base edge coexists with the bearer data-plane edge.
+        // Prefer the wider machine acknowledgement in that case.
+        .max()?;
+    if desired.replicator_addresses.len() != 1
         || applied.replicator_addresses != desired.replicator_addresses
         || applied.replicator_filter != desired.replicator_filter
     {
         return None;
     }
-    let template = resolve_template("conversation")?;
+    let template = resolve_template(template_id)?;
     if !template
         .collections
         .iter()
@@ -1559,7 +1568,7 @@ fn earned_bearer_readiness(
         .next()?
         .trim()
         .to_string();
-    (!address.is_empty()).then(|| (claimant_did.to_string(), address))
+    (!address.is_empty()).then(|| (claimant_did.to_string(), address, template.id.to_string()))
 }
 
 fn bearer_pairing_ready_record(

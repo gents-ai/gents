@@ -197,8 +197,8 @@ P2P state directly; normal pairing should go through `p2p pairings`
 ## Scope templates
 
 Scope templates are named pairing intents that bundle a fixed collection set, a
-per-peer scoping policy (agent_did equality or unscoped), and a delivery mode
-(push or replicate). Use `--template` on `p2p pairings invite`, `join`, and
+per-collection scoping policy and a delivery mode (push or replicate). Use
+`--template` on `p2p pairings invite`, `join`, and
 `pairings set` instead of hand-authoring collection lists.
 
 ```bash
@@ -209,11 +209,12 @@ Built-in templates:
 
 | Template | Collections | Scope | Delivery |
 |---|---|---|---|
-| `conversation` (default) | Requests, responses, messages, tool calls/results, sessions, conversations, compaction | `agent_did` equality | Push |
+| `conversation` (default) | Requests, responses, messages, tool calls/results, sessions, conversations, compaction, pairing readiness | `requester_did` (readiness: `claimant_did`) | Push |
 | `agent-config` | Behaviors, tool selections, backends, profiles, tool services, skills | Unscoped | Replicate |
 | `backup` | Same collection set as `conversation` | Unscoped (all docs) | Replicate |
 | `discovery` | Network membership + agent config bootstrap docs | Unscoped | Replicate |
 | `network-control` | Network root, membership, endpoints, join requests | Unscoped | Replicate |
+| `machine` | Conversation collections + agent directory (fleet discovery) | Conversation scope + directory `source_did` equal to the home issuer | Push |
 
 Use `network-control` for signed fleet enrollment and `conversation` for
 application data-plane rows:
@@ -228,6 +229,34 @@ AMY_INVITE=$(
 gents p2p pairings join --home /tmp/coding "$AMY_INVITE"
 # join reads the template from the token; pass --template only to override
 ```
+
+## Bearer pairing and fleet discovery
+
+The examples above use `--member-did` for node-to-node enrollment. For
+audience-unbound, issuer-signed bearer pairing (for example via QR code), use
+`--bearer`:
+
+```bash
+gents p2p pairings invite --bearer --qr --template conversation
+gents p2p pairings invite --bearer --qr --template machine
+```
+
+### Fleet discovery (machine pairing)
+
+Mint the invite with the `machine` template to attach a client to the whole
+home rather than a single conversation:
+
+    gents p2p pairings invite --bearer --qr --template machine
+
+A machine claim behaves exactly like a conversation claim (membership +
+reciprocal conversation plane) and additionally replicates
+`AgentDirectoryEntry` — a live, read-only index of every enabled agent
+principal and enabled behavior on the home (display name, DID, behaviors,
+runtime state), including agents created after pairing. Rows are stamped with
+the home issuer DID, and replication selects only that source-owned partition.
+Clients render an agent picker from it and address
+`AgentRequest`s to the picked `agent_did`. Existing `conversation` pairings
+are unchanged; re-pair with a machine QR to opt in.
 
 ## Admin filtered replication
 

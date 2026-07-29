@@ -37,6 +37,7 @@ inductive Delivery where
 inductive DidSource where
   | localDid
   | peerDid
+  | homeDid
   deriving DecidableEq, Repr
 
 /-- One per-collection filter rule. -/
@@ -48,7 +49,8 @@ structure CollectionRule where
 
 /-- Scoping policy. `PeerDid f` filters each collection on field `f` equal to the
 peer's DID; `Unscoped` applies no filter; `PerCollection` carries exact
-collection/field/source rules for directional pairings. -/
+collection/field/source rules for directional pairings. `homeDid` identifies
+the issuer-owned projection (the local DID on the runtime side). -/
 inductive Scope where
   | peerDid (field : String)
   | unscoped
@@ -90,6 +92,9 @@ def conversationCollections : List String :=
    "AgentToolResult", "AgentSession", "AgentConversation", "CompactionEntry",
    "BearerPairingReady"]
 
+def machineCollections : List String :=
+  conversationCollections ++ ["AgentDirectoryEntry"]
+
 def agentConfigCollections : List String :=
   ["AgentBehavior", "ToolSelection", "InferenceBackend", "InferenceProfile",
    "ToolServiceRegistry", "Skill"]
@@ -116,6 +121,10 @@ def conversationRules : List CollectionRule :=
   , { collection := "CompactionEntry",   field := "requester_did", source := .peerDid }
   , { collection := "BearerPairingReady", field := "claimant_did", source := .peerDid } ]
 
+def machineRules : List CollectionRule :=
+  conversationRules ++
+    [ { collection := "AgentDirectoryEntry", field := "source_did", source := .homeDid } ]
+
 def subagentCoordinatorRules : List CollectionRule :=
   [ { collection := "AgentToolCall", field := "spawn_target_did", source := .peerDid } ]
 
@@ -129,6 +138,12 @@ def conversationTemplate : Template :=
   { id := "conversation"
   , collections := conversationCollections.toFinset
   , scope := .perCollection conversationRules
+  , delivery := .push }
+
+def machineTemplate : Template :=
+  { id := "machine"
+  , collections := machineCollections.toFinset
+  , scope := .perCollection machineRules
   , delivery := .push }
 
 def agentConfigTemplate : Template :=
@@ -178,6 +193,7 @@ def appCollectionsTemplate : Template :=
 /-- Concrete catalog mirroring Rust `BUILTIN_TEMPLATES`. -/
 def builtinCatalog : Catalog :=
   [ conversationTemplate
+  , machineTemplate
   , agentConfigTemplate
   , backupTemplate
   , discoveryTemplate

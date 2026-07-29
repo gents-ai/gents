@@ -50,6 +50,12 @@ pub enum DidSource {
     LocalDid,
     /// Use the paired peer's agent DID.
     PeerDid,
+    /// Use the DID that owns the pairing's authoritative projection.
+    ///
+    /// This is the local DID on the issuer/runtime side and the remote issuer
+    /// DID on a bearer client. It lets both directions select the same
+    /// issuer-owned rows without replicating another runtime's projection.
+    HomeDid,
 }
 
 /// One exact per-collection filter rule.
@@ -165,6 +171,79 @@ const CONVERSATION_RULES: &[CollectionRule] = &[
     },
 ];
 
+/// The fleet-discovery directory collection replicated by the `machine`
+/// template (issue #714). Registered in `gents-schemas`; named here as a
+/// literal because the catalog is deliberately dependency-free strings.
+pub const AGENT_DIRECTORY_COLLECTION: &str = "AgentDirectoryEntry";
+
+/// Machine template collections: the conversation plane plus the agent
+/// directory. Order mirrors CONVERSATION_COLLECTIONS + the directory.
+const MACHINE_COLLECTIONS: &[&str] = &[
+    "AgentRequest",
+    "AgentResponse",
+    "AgentMessage",
+    "AgentToolCall",
+    "AgentToolResult",
+    "AgentSession",
+    "AgentConversation",
+    "CompactionEntry",
+    "BearerPairingReady",
+    AGENT_DIRECTORY_COLLECTION,
+];
+
+const MACHINE_RULES: &[CollectionRule] = &[
+    CollectionRule {
+        collection: "AgentRequest",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentResponse",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentMessage",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentToolCall",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentToolResult",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentSession",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentConversation",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "CompactionEntry",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "BearerPairingReady",
+        field: "claimant_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: AGENT_DIRECTORY_COLLECTION,
+        field: "source_did",
+        source: DidSource::HomeDid,
+    },
+];
+
 /// Agent-config collections: behavior + tool configuration.  Unscoped because
 /// the operator wants the full config set replicated, not per-peer slices.
 const AGENT_CONFIG_COLLECTIONS: &[&str] = &[
@@ -252,12 +331,19 @@ pub const NETWORK_CONTROL_TEMPLATE: &str = "network-control";
 pub const SUBAGENT_COORDINATOR_TEMPLATE: &str = "subagent-coordinator";
 pub const SUBAGENT_HOST_TEMPLATE: &str = "subagent-host";
 pub const APP_COLLECTIONS_TEMPLATE: &str = "app-collections";
+pub const MACHINE_TEMPLATE: &str = "machine";
 
 static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     ScopeTemplate {
         id: "conversation",
         collections: CONVERSATION_COLLECTIONS,
         scope: Scope::PerCollection(CONVERSATION_RULES),
+        delivery: Delivery::Push,
+    },
+    ScopeTemplate {
+        id: MACHINE_TEMPLATE,
+        collections: MACHINE_COLLECTIONS,
+        scope: Scope::PerCollection(MACHINE_RULES),
         delivery: Delivery::Push,
     },
     ScopeTemplate {
@@ -353,6 +439,7 @@ pub fn scope_filter(
                 let value = match rule.source {
                     DidSource::LocalDid => local_did,
                     DidSource::PeerDid => peer_did,
+                    DidSource::HomeDid => local_did,
                 };
                 (
                     rule.collection.to_string(),
@@ -364,6 +451,16 @@ pub fn scope_filter(
             })
             .collect(),
     }
+}
+
+/// Templates whose bearer/dapair claims mint a reciprocal conversation
+/// intent (mirrors Lean `conversationLike` in BearerClaim.lean).
+pub fn conversation_like(id: &str) -> bool {
+    // Rust trims incoming ids before applying the model's exact-equality
+    // predicate: normalization happens at this boundary, not in the model —
+    // Lean `conversationLike` is exact string equality with no trimming.
+    let id = id.trim();
+    id == "conversation" || id == MACHINE_TEMPLATE
 }
 
 // ---------------------------------------------------------------------------
@@ -446,8 +543,8 @@ mod tests {
     }
 
     #[test]
-    fn builtin_template_count_is_eight() {
-        assert_eq!(builtin_templates().len(), 8);
+    fn builtin_template_count_is_nine() {
+        assert_eq!(builtin_templates().len(), 9);
     }
 
     #[test]
@@ -545,5 +642,42 @@ mod tests {
             assert!(!t.collections.contains(&local_collection));
             assert!(!f.contains_key(local_collection));
         }
+    }
+
+    #[test]
+    fn machine_template_scopes_conversation_and_issuer_owned_directory() {
+        let t = resolve_template("machine").expect("machine template registered");
+        assert_eq!(t.delivery, Delivery::Push);
+        assert_eq!(t.collections.len(), 10);
+        assert!(t.collections.contains(&AGENT_DIRECTORY_COLLECTION));
+        let filters = scope_filter(&t.scope, t.collections, "did:key:phone", "did:key:server");
+        // Conversation collections stay member-scoped exactly like `conversation`.
+        for col in CONVERSATION_COLLECTIONS {
+            let predicate = filters.get(*col).expect("conversation collection filtered");
+            let expected_field = if *col == "BearerPairingReady" {
+                "claimant_did"
+            } else {
+                "requester_did"
+            };
+            assert_eq!(predicate.field, expected_field);
+            assert_eq!(predicate.value, "did:key:phone");
+        }
+        assert_eq!(
+            filters.get(AGENT_DIRECTORY_COLLECTION),
+            Some(&FilterPredicate {
+                field: "source_did".to_string(),
+                value: "did:key:server".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn conversation_like_accepts_exactly_the_intent_minting_templates() {
+        assert!(conversation_like("conversation"));
+        assert!(conversation_like("machine"));
+        assert!(conversation_like(" machine "));
+        assert!(!conversation_like("network-control"));
+        assert!(!conversation_like("discovery"));
+        assert!(!conversation_like(""));
     }
 }

@@ -102,6 +102,8 @@ mod completion_retry;
 mod composed_invariants;
 #[path = "conformance/coverage.rs"]
 mod coverage;
+#[path = "conformance/directory_projection.rs"]
+mod directory_projection;
 #[path = "conformance/event_delivery.rs"]
 mod event_delivery;
 #[path = "conformance/fleet.rs"]

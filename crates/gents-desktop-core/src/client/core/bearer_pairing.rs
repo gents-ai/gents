@@ -15,7 +15,8 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use defra_node::{EmbeddedNode, QueryResponse};
 use defra_p2p_adapter::{P2POperations as P2POps, ReplicationFilter, ReplicationFilters};
 use gents::agent::p2p_reconcile::{
-    peer_endpoint_upsert_mutation, resolve_template, scope_filter, DidSource, Scope,
+    conversation_like, peer_endpoint_upsert_mutation, resolve_template, scope_filter, DidSource,
+    Scope, AGENT_DIRECTORY_COLLECTION,
 };
 use gents::graphql::escape_graphql_string;
 use gents::identity::AgentIdentity;
@@ -149,6 +150,7 @@ impl ClientCore {
                     &token.ticket,
                     &token.issuer_did,
                     &token.network_id,
+                    &token.template,
                     token.default_behavior_id.as_deref(),
                 )
                 .await?
@@ -165,12 +167,20 @@ impl ClientCore {
         for address in &replicator_addresses {
             remove_incompatible_replicators(&self.p2p, address).await?;
         }
-        install_bearer_replicator(&self.p2p, &token.ticket, self.principal.did()).await?;
+        install_bearer_replicator(
+            &self.p2p,
+            &token.ticket,
+            self.principal.did(),
+            &token.issuer_did,
+            &token.template,
+        )
+        .await?;
         wait_for_bearer_readiness(
             self.node.as_ref(),
             &self.principal,
             &token.issuer_did,
             &token.network_id,
+            &token.template,
             &local_endpoint,
             BEARER_GRANT_TIMEOUT,
         )
@@ -228,13 +238,21 @@ async fn wait_for_bearer_readiness(
     identity: &dyn AgentIdentity,
     issuer_did: &str,
     network_id: &str,
+    template: &str,
     local_endpoint: &EndpointRecord,
     wait_timeout: Duration,
 ) -> Result<()> {
     let deadline = Instant::now() + wait_timeout;
     loop {
-        if observe_bearer_pairing_readiness(node, identity, issuer_did, network_id, local_endpoint)
-            .await?
+        if observe_bearer_pairing_readiness(
+            node,
+            identity,
+            issuer_did,
+            network_id,
+            template,
+            local_endpoint,
+        )
+        .await?
         {
             return Ok(());
         }
@@ -257,6 +275,7 @@ pub(super) async fn observe_bearer_pairing_readiness(
     identity: &dyn AgentIdentity,
     issuer_did: &str,
     network_id: &str,
+    template: &str,
     local_endpoint: &EndpointRecord,
 ) -> Result<bool> {
     let escaped_network_id = escape_graphql_string(network_id);
@@ -328,6 +347,7 @@ pub(super) async fn observe_bearer_pairing_readiness(
         identity,
         issuer_did,
         identity.did(),
+        template,
         local_endpoint,
         readiness,
     )
@@ -339,6 +359,7 @@ async fn verify_bearer_pairing_ready_row(
     identity: &dyn AgentIdentity,
     issuer_did: &str,
     claimant_did: &str,
+    expected_template: &str,
     local_endpoint: &EndpointRecord,
     row: &BearerPairingReadyObservationRow,
 ) -> Result<()> {
@@ -372,7 +393,7 @@ async fn verify_bearer_pairing_ready_row(
         || record.claimant_did != claimant_did
         || record.peer_id != local_endpoint.node_id
         || record.address != local_endpoint.address
-        || record.template != "conversation"
+        || record.template != expected_template
     {
         bail!(
             "bearer readiness acknowledgement does not match issuer, claimant, or the current signed endpoint; pairing rejected"
@@ -475,7 +496,7 @@ struct MembershipObservationRow {
     admin_sig: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct BearerPairingReadyObservationRow {
     issuer_did: Option<String>,
     claimant_did: Option<String>,
@@ -497,9 +518,14 @@ async fn remove_incompatible_replicators(p2p: &Arc<dyn P2POps>, address: &str) -
     )
     .await
     .with_context(|| format!("removing legacy unfiltered replicator for {address}"))?;
-    p2p_remove_replicator(p2p, bearer_replicator_collections(), address)
-        .await
-        .with_context(|| format!("replacing prior signed bearer replicator for {address}"))
+    for template in ["conversation", "machine"] {
+        p2p_remove_replicator(p2p, bearer_replicator_collections(template), address)
+            .await
+            .with_context(|| {
+                format!("replacing prior {template} signed bearer replicator for {address}")
+            })?;
+    }
+    Ok(())
 }
 
 async fn verify_bearer_invite(
@@ -569,16 +595,14 @@ async fn verify_bearer_invite(
 
     let template = resolve_template(&token.template)
         .with_context(|| format!("unknown bearer pairing template {}", token.template))?;
-    if token.template != "conversation" {
+    if !conversation_like(&token.template) {
         bail!(
-            "desktop chat pairing requires the conversation template; invite uses {}",
+            "desktop chat pairing requires a conversation-like template; invite uses {}",
             token.template
         );
     }
-    if !conversation_template_is_requester_scoped(template) {
-        bail!(
-            "conversation pairing template has an unexpected scope; re-issue with a compatible gents"
-        );
+    if !bearer_template_is_safely_scoped(template) {
+        bail!("bearer pairing template has an unexpected scope; re-issue with a compatible gents");
     }
     if token
         .default_behavior_id
@@ -608,23 +632,23 @@ async fn verify_bearer_invite(
     })
 }
 
-fn conversation_template_is_requester_scoped(
-    template: &gents::agent::p2p_reconcile::ScopeTemplate,
-) -> bool {
+fn bearer_template_is_safely_scoped(template: &gents::agent::p2p_reconcile::ScopeTemplate) -> bool {
     let Scope::PerCollection(rules) = &template.scope else {
         return false;
     };
     rules.len() == template.collections.len()
         && template.collections.iter().all(|collection| {
-            let expected_field = if *collection == "BearerPairingReady" {
-                "claimant_did"
+            let (expected_field, expected_source) = if *collection == "BearerPairingReady" {
+                ("claimant_did", DidSource::PeerDid)
+            } else if *collection == AGENT_DIRECTORY_COLLECTION {
+                ("source_did", DidSource::HomeDid)
             } else {
-                "requester_did"
+                ("requester_did", DidSource::PeerDid)
             };
             rules.iter().any(|rule| {
                 rule.collection == *collection
                     && rule.field == expected_field
-                    && rule.source == DidSource::PeerDid
+                    && rule.source == expected_source
             })
         })
 }
@@ -633,9 +657,11 @@ pub(super) fn is_bearer_peer(record: &PeerRecord) -> bool {
     record.is_bearer_pairing()
 }
 
-pub(super) fn bearer_replicator_collections() -> Vec<String> {
-    let mut collections = resolve_template("conversation")
-        .expect("built-in conversation template")
+pub(super) fn bearer_replicator_collections(template_id: &str) -> Vec<String> {
+    let template = resolve_template(template_id)
+        .filter(|template| conversation_like(template.id))
+        .unwrap_or_else(|| resolve_template("conversation").expect("conversation template"));
+    let mut collections = template
         .collections
         .iter()
         .map(|value| (*value).to_string())
@@ -657,16 +683,26 @@ pub(super) async fn install_bearer_replicator_for_record(
     // clear both the legacy and bearer collection shapes first so bootstrap
     // and repair can never silently preserve an old unfiltered policy.
     remove_incompatible_replicators(p2p, &record.addr).await?;
-    install_bearer_replicator(p2p, &record.addr, requester_did).await
+    let template = record.pairing_template.as_deref().unwrap_or("conversation");
+    install_bearer_replicator(
+        p2p,
+        &record.addr,
+        requester_did,
+        &record.agent_did,
+        template,
+    )
+    .await
 }
 
 async fn install_bearer_replicator(
     p2p: &Arc<dyn P2POps>,
     address: &str,
     requester_did: &str,
+    issuer_did: &str,
+    template_id: &str,
 ) -> Result<()> {
-    let filters = bearer_replicator_filters(requester_did);
-    let collections = bearer_replicator_collections();
+    let filters = bearer_replicator_filters(template_id, requester_did, issuer_did);
+    let collections = bearer_replicator_collections(template_id);
 
     match timeout(
         P2P_OPERATION_TIMEOUT,
@@ -681,13 +717,19 @@ async fn install_bearer_replicator(
     }
 }
 
-fn bearer_replicator_filters(requester_did: &str) -> ReplicationFilters {
-    let template = resolve_template("conversation").expect("built-in conversation template");
+fn bearer_replicator_filters(
+    template_id: &str,
+    requester_did: &str,
+    issuer_did: &str,
+) -> ReplicationFilters {
+    let template = resolve_template(template_id)
+        .filter(|template| conversation_like(template.id))
+        .unwrap_or_else(|| resolve_template("conversation").expect("conversation template"));
     let mut filters = scope_filter(
         &template.scope,
         template.collections,
         requester_did,
-        requester_did,
+        issuer_did,
     )
     .into_iter()
     .map(|(collection, predicate)| {
@@ -979,6 +1021,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preview_accepts_machine_bearer_invite_with_owned_directory_scope() {
+        let now = Utc::now();
+        let (_temp, identity, encoded) = signed_token(now).await;
+        let mut token = decode_bearer(&encoded).expect("decode");
+        token.template = "machine".to_string();
+        token.sig = identity
+            .sign(&bearer_signing_payload(&token))
+            .expect("sign machine invite");
+        let encoded = encode_bearer(&token).expect("encode");
+
+        let verified = verify_bearer_invite(&identity, &encoded, now)
+            .await
+            .expect("valid machine token");
+
+        assert_eq!(verified.preview().template, "machine");
+    }
+
+    #[tokio::test]
     async fn preview_rejects_expired_bearer_invite() {
         let issued_at = Utc::now() - chrono::Duration::minutes(10);
         let (_temp, identity, encoded) = signed_token(issued_at).await;
@@ -1120,9 +1180,37 @@ mod tests {
             issuer_sig: Some(bs58::encode(&record.sig).into_string()),
         };
 
-        verify_bearer_pairing_ready_row(&identity, identity.did(), &endpoint.did, &endpoint, &row)
-            .await
-            .expect("valid readiness acknowledgement");
+        verify_bearer_pairing_ready_row(
+            &identity,
+            identity.did(),
+            &endpoint.did,
+            "conversation",
+            &endpoint,
+            &row,
+        )
+        .await
+        .expect("valid readiness acknowledgement");
+
+        let mut machine_record = record.clone();
+        machine_record.template = "machine".to_string();
+        machine_record.sig = identity
+            .sign(&machine_record.signing_payload())
+            .expect("sign machine readiness");
+        let machine_row = BearerPairingReadyObservationRow {
+            template: Some(machine_record.template.clone()),
+            issuer_sig: Some(bs58::encode(&machine_record.sig).into_string()),
+            ..row.clone()
+        };
+        verify_bearer_pairing_ready_row(
+            &identity,
+            identity.did(),
+            &endpoint.did,
+            "machine",
+            &endpoint,
+            &machine_row,
+        )
+        .await
+        .expect("valid machine readiness acknowledgement");
 
         let mut rotated_endpoint = endpoint;
         rotated_endpoint.address = "rotated-ticket".into();
@@ -1130,6 +1218,7 @@ mod tests {
             &identity,
             identity.did(),
             &rotated_endpoint.did,
+            "conversation",
             &rotated_endpoint,
             &row,
         )
@@ -1140,8 +1229,8 @@ mod tests {
 
     #[test]
     fn combined_replicator_contains_scoped_conversation_and_claim_control_plane() {
-        let collections = bearer_replicator_collections();
-        let filters = bearer_replicator_filters("did:key:phone");
+        let collections = bearer_replicator_collections("conversation");
+        let filters = bearer_replicator_filters("conversation", "did:key:phone", "did:key:issuer");
         assert!(collections.contains(&"AgentRequest".to_string()));
         assert!(collections.contains(&"AgentResponse".to_string()));
         assert!(!collections.contains(&"AgentBehavior".to_string()));
@@ -1185,6 +1274,35 @@ mod tests {
             filters.get("AgentRequest"),
             Some(&ReplicationFilter::eq(
                 "requester_did",
+                serde_json::json!("did:key:phone")
+            ))
+        );
+    }
+
+    #[test]
+    fn machine_replicator_adds_only_issuer_owned_directory_rows() {
+        let collections = bearer_replicator_collections("machine");
+        let filters = bearer_replicator_filters("machine", "did:key:phone", "did:key:issuer");
+
+        assert!(collections.contains(&AGENT_DIRECTORY_COLLECTION.to_string()));
+        assert_eq!(
+            filters.get(AGENT_DIRECTORY_COLLECTION),
+            Some(&ReplicationFilter::eq(
+                "source_did",
+                serde_json::json!("did:key:issuer")
+            ))
+        );
+        assert_eq!(
+            filters.get("AgentRequest"),
+            Some(&ReplicationFilter::eq(
+                "requester_did",
+                serde_json::json!("did:key:phone")
+            ))
+        );
+        assert_eq!(
+            filters.get("BearerPairingReady"),
+            Some(&ReplicationFilter::eq(
+                "claimant_did",
                 serde_json::json!("did:key:phone")
             ))
         );

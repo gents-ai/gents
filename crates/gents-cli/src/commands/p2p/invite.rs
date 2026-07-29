@@ -429,7 +429,7 @@ async fn record_reciprocal_conversation_intent(
     member_did: &str,
     template: &str,
 ) -> Result<()> {
-    if template != "conversation" {
+    if !gents::agent::p2p_reconcile::templates::conversation_like(template) {
         return Ok(());
     }
 

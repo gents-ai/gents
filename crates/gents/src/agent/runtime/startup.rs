@@ -39,6 +39,7 @@ enum BackgroundTaskResult {
     ReciprocalReconcile(Result<()>),
     BearerClaimReconcile(Result<()>),
     DiscoveryReconcile(Result<()>),
+    DirectoryProjection(Result<()>),
 }
 
 /// Startup demotion policy (#559): demote a behavior only while the startup
@@ -525,6 +526,20 @@ pub(in crate::agent) async fn run_agent(
         )
     });
 
+    let directory_node = agent.node.clone();
+    let directory_source_did = agent.agent_did().to_string();
+    let directory_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::DirectoryProjection(
+            crate::agent::directory_projection::run_directory_projection(
+                directory_node,
+                directory_source_did,
+                directory_cancel,
+            )
+            .await,
+        )
+    });
+
     // Discovery reconciler: materializes registry-owned PeerPairingDesired rows
     // from PeerRegistry. Idles unless `discovery_auto_pair` is enabled (default
     // OFF, gated by GENTS_DISCOVERY_AUTO_PAIR) — the registry still
@@ -644,6 +659,7 @@ pub(in crate::agent) async fn run_agent(
             Ok(BackgroundTaskResult::ReciprocalReconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::BearerClaimReconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::DiscoveryReconcile(result)) => (result, false),
+            Ok(BackgroundTaskResult::DirectoryProjection(result)) => (result, false),
             Err(error) => (Err(anyhow!("background task join failed: {error}")), false),
         },
         else => (Ok(()), false),

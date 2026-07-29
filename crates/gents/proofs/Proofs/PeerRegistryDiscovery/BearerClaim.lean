@@ -16,9 +16,9 @@ The authority (the invite issuer's node) processes claims. Admission requires
 BOTH signatures (the issuer's over the token and the claimant's over the
 claim), token freshness, and that the nonce is not already bound to a
 *different* claimant. An admitted claim atomically — in one step — binds the
-nonce to the claimant, mints the membership, and (for `conversation` tokens
-only) records the reciprocal conversation intent consumed by the
-`ReciprocalConversation` derivation.
+nonce to the claimant, mints the membership, and (for conversation-like
+tokens — `conversation` or `machine`) records the reciprocal conversation
+intent consumed by the `ReciprocalConversation` derivation.
 
 Key differences from the v5 DID-bound join (`Transition.lean`,
 `NetworkMembership.lean`):
@@ -49,6 +49,10 @@ the bearer freshness window and hands the model the verdicts. -/
 structure BearerToken where
   nonce : Nonce
   template : String
+  /-- Deterministic authority-signed issue order. The Rust seam derives this
+  from `(issued_at, nonce)`, so distinct tokens have a total order even when
+  their wall-clock timestamps tie. -/
+  priority : Nat
   /-- The issuer's signature over the token verifies under the authority DID. -/
   authoritySigned : Bool
   /-- `issued_at` is within the bearer replay window at claim-processing time. -/
@@ -98,16 +102,43 @@ instance (s : ClaimState) (c : Claim) : Decidable (admits s c) := by
   unfold admits
   infer_instance
 
+/-- Template class whose claims record a reciprocal conversation intent.
+`conversation` is the 1:1 chat pairing; `machine` is the fleet-discovery
+pairing (issue #714) — identical claim consequences, wider replicated
+collection set (decided below the model's abstraction). Bool, not Prop, so
+`claimStep` stays a plain `if` and existing case splits keep working. -/
+def conversationLike (template : String) : Bool :=
+  template = "conversation" || template = "machine"
+
+/-- Pick the authoritative claim when more than one still-fresh claim exists
+for the same claimant. Only a strictly newer authority-signed token replaces
+the current candidate; query/iteration order is irrelevant at the Rust seam. -/
+def preferredClaim (current candidate : Claim) : Claim :=
+  if current.token.priority < candidate.token.priority then candidate else current
+
+/-- A strictly newer authority-signed claim wins template selection. -/
+theorem preferredClaim_newer {current candidate : Claim}
+    (h : current.token.priority < candidate.token.priority) :
+    preferredClaim current candidate = candidate := by
+  simp [preferredClaim, h]
+
+/-- An older or equal-priority claim cannot overwrite the selected claim. -/
+theorem preferredClaim_older_or_equal {current candidate : Claim}
+    (h : candidate.token.priority ≤ current.token.priority) :
+    preferredClaim current candidate = current := by
+  simp [preferredClaim, Nat.not_lt.mpr h]
+
 /-- Atomic claim processing: an admitted claim binds the nonce, mints the
 membership, and records the conversation intent when (and only when) the token
-template is `conversation`. A rejected claim changes nothing. -/
+template is conversation-like (`conversation` or `machine`). A rejected claim
+changes nothing. -/
 def claimStep (s : ClaimState) (c : Claim) : ClaimState :=
   if admits s c then
     { s with
         consumed := insert (c.token.nonce, c.claimant) s.consumed,
         memberships := insert c.claimant s.memberships,
         intents :=
-          if c.token.template = "conversation" then insert c.claimant s.intents
+          if conversationLike c.token.template then insert c.claimant s.intents
           else s.intents }
   else s
 
@@ -193,7 +224,7 @@ theorem claimStep_idempotent (s : ClaimState) (c : Claim) :
     unfold claimStep
     rw [if_pos h]
     rw [if_pos] <;> [skip; exact (by unfold claimStep at h'; rwa [if_pos h] at h')]
-    by_cases htmpl : c.token.template = "conversation" <;>
+    by_cases htmpl : conversationLike c.token.template = true <;>
       simp [htmpl, Finset.insert_idem]
   · unfold claimStep
     rw [if_neg h, if_neg h]
@@ -209,15 +240,31 @@ theorem claimStep_binding_sound {s : ClaimState} {c : Claim} (h : admits s c) :
   rw [if_pos h]
 
 /-- The conversation intent is recorded iff the token's template is
-`conversation` — a bearer network-control claim never creates a conversation
-edge (fleet no-crosswise invariant holds through the bearer path). -/
-theorem claimStep_intent_iff_conversation {s : ClaimState} {c : Claim}
+conversation-like (`conversation` or `machine`) — a bearer network-control
+claim never creates a conversation edge (fleet no-crosswise invariant holds
+through the bearer path). -/
+theorem claimStep_intent_iff_conversation_like {s : ClaimState} {c : Claim}
     (h : admits s c) :
     (claimStep s c).intents =
-      (if c.token.template = "conversation" then insert c.claimant s.intents
+      (if conversationLike c.token.template then insert c.claimant s.intents
        else s.intents) := by
   unfold claimStep
   rw [if_pos h]
+
+/-- A machine-template claim records the intent (fleet discovery pairing). -/
+theorem machine_claim_records_intent {s : ClaimState} {c : Claim}
+    (hadm : admits s c) (htmpl : c.token.template = "machine") :
+    c.claimant ∈ (claimStep s c).intents := by
+  unfold claimStep
+  simp [hadm, htmpl, conversationLike]
+
+/-- A network-control claim still never wires a conversation edge. -/
+theorem network_control_claim_records_no_intent {s : ClaimState} {c : Claim}
+    (htmpl : c.token.template = "network-control")
+    (hni : c.claimant ∉ s.intents) :
+    c.claimant ∉ (claimStep s c).intents := by
+  unfold claimStep
+  by_cases hadm : admits s c <;> simp [hadm, htmpl, conversationLike, hni]
 
 /-! ## (5) Ownership safety -/
 

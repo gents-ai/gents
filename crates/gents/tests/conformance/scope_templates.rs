@@ -7,6 +7,7 @@
 
 use gents::agent::p2p_reconcile::templates::{
     builtin_templates, resolve_template, scope_filter, Delivery, FilterPredicate, Scope,
+    AGENT_DIRECTORY_COLLECTION,
 };
 
 /// Mirrors Lean `resolveTemplate_isSome_iff` / `resolveTemplate_id_eq`: every
@@ -65,6 +66,42 @@ fn conversation_scope_excludes_another_requester_on_the_same_agent() {
     assert_eq!(predicate.field, "requester_did");
     assert_eq!(phone_request.1, Some(predicate.value.as_str()));
     assert_ne!(classifier_request.1, Some(predicate.value.as_str()));
+}
+
+/// Mirrors Lean `machine_filter_eq`,
+/// `machine_filters_declared_collections`, and
+/// `machine_directory_crossing_is_home_scoped`.
+#[test]
+fn machine_scope_covers_conversation_and_home_owned_directory() {
+    let template = resolve_template("machine").expect("machine in catalog");
+    let filters = scope_filter(
+        &template.scope,
+        template.collections,
+        "did:key:phone",
+        "did:key:issuer",
+    );
+
+    assert_eq!(filters.len(), template.collections.len());
+    for collection in resolve_template("conversation")
+        .expect("conversation in catalog")
+        .collections
+    {
+        let predicate = filters.get(*collection).expect("conversation filter");
+        let expected_field = if *collection == "BearerPairingReady" {
+            "claimant_did"
+        } else {
+            "requester_did"
+        };
+        assert_eq!(predicate.field, expected_field);
+        assert_eq!(predicate.value, "did:key:phone");
+    }
+    assert_eq!(
+        filters.get(AGENT_DIRECTORY_COLLECTION),
+        Some(&FilterPredicate {
+            field: "source_did".to_string(),
+            value: "did:key:issuer".to_string(),
+        })
+    );
 }
 
 /// Mirrors Lean `scopeFilter_unscoped` + `scopeFilter_isSome_iff`: an `Unscoped`

@@ -165,6 +165,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/ToolExecution.lean` | MCP/tool preflight and retry eligibility boundary model |
 | `Proofs/ManagedExec.lean` | Barrel for managed native executor state, executable transitions, liveness properties, and tool composition |
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
+| `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
 | `Proofs/Properties/Liveness.lean` | Request/process liveness properties L1-L3 |
 | `Proofs/Properties/SchedulingSafety.lean` | Scheduler/fleet safety properties S7-S9 |

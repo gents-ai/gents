@@ -29,6 +29,7 @@ fn verdicts(token: bool, fresh: bool, claim: bool) -> BearerClaimVerdicts {
 fn claim(nonce: &str, claimant: &str, template: &str) -> PreparedBearerClaim {
     PreparedBearerClaim {
         nonce: nonce.to_string(),
+        issued_at: "2026-07-28T00:00:00Z".to_string(),
         network_id: "default".to_string(),
         template: template.to_string(),
         claimant_did: claimant.to_string(),
@@ -44,6 +45,10 @@ struct ClaimPartitionStore {
     bindings: Mutex<BTreeMap<String, String>>,
     claim_minted: Mutex<BTreeSet<String>>,
     intents: Mutex<BTreeSet<String>>,
+    /// member_did -> template recorded on its intent row (mirrors the
+    /// upgrade-in-place semantics of the real store: a re-claim with a
+    /// different conversation-like template overwrites the template here).
+    intent_templates: Mutex<BTreeMap<String, String>>,
     operator_minted: BTreeSet<String>,
     operator_touched: Mutex<bool>,
 }
@@ -82,8 +87,12 @@ impl BearerClaimStore for ClaimPartitionStore {
         Ok(())
     }
 
-    async fn ensure_conversation_intent(&self, member_did: &str) -> Result<()> {
+    async fn ensure_conversation_intent(&self, member_did: &str, template: &str) -> Result<()> {
         self.intents.lock().unwrap().insert(member_did.to_string());
+        self.intent_templates
+            .lock()
+            .unwrap()
+            .insert(member_did.to_string(), template.to_string());
         Ok(())
     }
 }
@@ -193,16 +202,17 @@ async fn reprocessing_is_idempotent_convergence() {
     );
 }
 
-/// Mirrors Lean `claimStep_binding_sound` + `claimStep_intent_iff_conversation`:
+/// Mirrors Lean `claimStep_binding_sound` + `claimStep_intent_iff_conversation_like`:
 /// an admitted claim mints for exactly the presented claimant, and the intent
-/// exists iff the token template is `conversation` (the fleet no-crosswise
-/// invariant holds through the bearer path).
+/// exists iff the token template is conversation-like (`conversation` or
+/// `machine`) — the fleet no-crosswise invariant holds through the bearer path.
 #[tokio::test]
 async fn binding_is_exact_and_intent_iff_conversation() {
     let store = ClaimPartitionStore {
         claims: vec![
             claim("n1", "did:key:phone", "conversation"),
             claim("n2", "did:key:fleet", "network-control"),
+            claim("n3", "did:key:laptop", "machine"),
         ],
         ..Default::default()
     };
@@ -213,13 +223,115 @@ async fn binding_is_exact_and_intent_iff_conversation() {
 
     assert_eq!(
         *store.claim_minted.lock().unwrap(),
-        BTreeSet::from(["did:key:phone".to_string(), "did:key:fleet".to_string()])
+        BTreeSet::from([
+            "did:key:phone".to_string(),
+            "did:key:fleet".to_string(),
+            "did:key:laptop".to_string(),
+        ])
     );
     assert_eq!(
         *store.intents.lock().unwrap(),
-        BTreeSet::from(["did:key:phone".to_string()]),
-        "conversation claim records an intent; network-control claim must not"
+        BTreeSet::from(["did:key:phone".to_string(), "did:key:laptop".to_string()]),
+        "conversationLike claims (conversation, machine) record an intent; network-control must not"
     );
+}
+
+/// Mirrors the intent-upgrade half of `claimStep_intent_iff_conversation_like`:
+/// a member who previously recorded a `conversation` intent and later
+/// re-claims with a `machine` bearer token must have the intent row upgraded
+/// in place, not left stuck on the narrower template (Task 6's drift test
+/// depends on this).
+#[tokio::test]
+async fn machine_reclaim_upgrades_existing_conversation_intent_template() {
+    let store = ClaimPartitionStore {
+        claims: vec![claim("n1", "did:key:phone", "machine")],
+        ..Default::default()
+    };
+    store
+        .intents
+        .lock()
+        .unwrap()
+        .insert("did:key:phone".to_string());
+    store
+        .intent_templates
+        .lock()
+        .unwrap()
+        .insert("did:key:phone".to_string(), "conversation".to_string());
+
+    reconcile_bearer_claim_tick(&store, "did:key:server")
+        .await
+        .expect("tick");
+
+    assert_eq!(
+        store.intent_templates.lock().unwrap().get("did:key:phone"),
+        Some(&"machine".to_string()),
+        "conversation->machine re-claim must upgrade the intent template in place"
+    );
+}
+
+/// A newer claim in the other direction (I2, #714): a member previously
+/// recorded on the wider `machine` template who re-claims with a narrower
+/// `conversation` bearer token must have the intent row narrowed in place.
+/// This is deliberate, not a bug: re-pairing with a QR is an explicit
+/// operator action, and the operator minted that QR — upgrade-only
+/// semantics would make narrowing impossible without manual row surgery.
+#[tokio::test]
+async fn conversation_reclaim_narrows_machine_intent_template() {
+    let store = ClaimPartitionStore {
+        claims: vec![claim("n1", "did:key:phone", "conversation")],
+        ..Default::default()
+    };
+    store
+        .intents
+        .lock()
+        .unwrap()
+        .insert("did:key:phone".to_string());
+    store
+        .intent_templates
+        .lock()
+        .unwrap()
+        .insert("did:key:phone".to_string(), "machine".to_string());
+
+    reconcile_bearer_claim_tick(&store, "did:key:server")
+        .await
+        .expect("tick");
+
+    assert_eq!(
+        store.intent_templates.lock().unwrap().get("did:key:phone"),
+        Some(&"conversation".to_string()),
+        "machine->conversation re-claim must narrow the intent template in place"
+    );
+}
+
+/// Mirrors Lean `preferredClaim_newer_wins` and
+/// `preferredClaim_older_or_equal_cannot_overwrite`: all fresh claim rows may
+/// remain replicated, so their read order cannot determine the final intent.
+#[tokio::test]
+async fn preferred_claim_is_stable_across_input_order() {
+    for reverse in [false, true] {
+        let mut older = claim("nonce-older", "did:key:phone", "conversation");
+        older.issued_at = "2026-07-28T00:00:00Z".to_string();
+        let mut newer = claim("nonce-newer", "did:key:phone", "machine");
+        newer.issued_at = "2026-07-28T00:01:00Z".to_string();
+        let claims = if reverse {
+            vec![newer, older]
+        } else {
+            vec![older, newer]
+        };
+        let store = ClaimPartitionStore {
+            claims,
+            ..Default::default()
+        };
+
+        reconcile_bearer_claim_tick(&store, "did:key:server")
+            .await
+            .expect("tick");
+
+        assert_eq!(
+            store.intent_templates.lock().unwrap().get("did:key:phone"),
+            Some(&"machine".to_string())
+        );
+    }
 }
 
 /// Mirrors Lean `claimStep_ownership_safe`: claim processing never mutates

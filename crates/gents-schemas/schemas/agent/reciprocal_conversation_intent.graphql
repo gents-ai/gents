@@ -1,16 +1,18 @@
 # Reciprocal conversation pairing intent: the server's declaration that it will
 # push its own conversation documents back to a dapair-invited member DID once
 # that member's signed PeerEndpoint appears. Distinct from fleet network-control
-# membership: only a `conversation` invite creates one, so the reconciler never
-# auto-wires conversation edges for mesh subagents (fleet no-crosswise invariant).
+# membership: only a conversation-like invite (`conversation` or `machine`)
+# creates one, so the reconciler never auto-wires conversation edges for mesh
+# subagents (fleet no-crosswise invariant).
 #
 # TRUST BASIS — this record is unsigned. An intent row authorizes pushing the
 # server's entire conversation slice to whatever address the member's
 # self-signed PeerEndpoint advertises, so the reconciler's safety rests on the
 # standing control-plane assumption that these rows are only ever written
-# locally (by the invite CLI against this node): remote peers must never gain a
-# replication path into this collection. This is the same assumption the
-# pairing engine already makes for PeerPairingDesired/DataPlanePairingDesired.
+# locally (by the invite CLI or by the issuer-side reconciler after verifying a
+# signed bearer claim): remote peers must never gain a replication path into
+# this collection. This is the same assumption the pairing engine already
+# makes for PeerPairingDesired/DataPlanePairingDesired.
 # If that assumption ever weakens (e.g. broader inbound collection admission),
 # intent rows must become server-signed and verified on read.
 type ReciprocalConversationIntent {

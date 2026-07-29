@@ -180,6 +180,7 @@ mod tests {
             ids,
             vec![
                 "conversation",
+                "machine",
                 "agent-config",
                 "backup",
                 "discovery",
@@ -201,6 +202,18 @@ mod tests {
         // BearerPairingReady to the replicated conversation collections.
         assert_eq!(row.scope, "per-collection");
         assert_eq!(row.collections.split(',').count(), 9);
+    }
+
+    #[test]
+    fn machine_row_adds_directory_to_complete_conversation_projection() {
+        let rows = template_rows();
+        let row = rows.iter().find(|r| r.id == "machine").unwrap();
+        assert_eq!(row.delivery, "push");
+        assert_eq!(row.scope, "per-collection");
+        let collections = row.collections.split(',').collect::<Vec<_>>();
+        assert_eq!(collections.len(), 10);
+        assert!(collections.contains(&"BearerPairingReady"));
+        assert!(collections.contains(&"AgentDirectoryEntry"));
     }
 
     #[test]
