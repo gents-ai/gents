@@ -2138,7 +2138,7 @@ async fn write_file_and_edit_file_serialize_on_the_same_lock() {
         );
         let (re, rw) = tokio::join!(edit, write);
         rw.unwrap();
-        let _ = re; // edit may legitimately fail if it reads mid-transition
+        re.unwrap();
         let text = std::fs::read_to_string(&file).unwrap();
         let legal = text == "alpha: 1\nbeta: 1\n" // write then edit
             || text == "alpha: 0\nbeta: 1\n"; // edit then write (write wins)
