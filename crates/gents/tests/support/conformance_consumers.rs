@@ -163,7 +163,8 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "config_import::lean_apply_write_boundary_tests::generated_apply_reconcile_cases_fence_production_apply_write_boundary",
             package: "gents-cli",
-            source_path: "crates/gents-cli/src/config_import.rs",
+            source_path:
+                "crates/gents-cli/src/config_import/lean_apply_write_boundary_tests.rs",
             module_path: "config_import::lean_apply_write_boundary_tests",
             function: "generated_apply_reconcile_cases_fence_production_apply_write_boundary",
         },
