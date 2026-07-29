@@ -58,10 +58,12 @@ async fn wait_for_goal_child(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "live: set GENTS_D4F_LIVE=1 and pass --ignored"]
 async fn durable_goal_continues_with_real_inference_until_model_completes() {
-    if std::env::var("GENTS_D4F_LIVE").as_deref() != Ok("1") {
-        return;
-    }
+    assert!(
+        std::env::var("GENTS_D4F_LIVE").as_deref() == Ok("1"),
+        "set GENTS_D4F_LIVE=1 and pass --ignored to run the durable-goal live qualification"
+    );
 
     let db = test_db("durable-goal-real-inference").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("durable-goal-real-inference"));
