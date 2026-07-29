@@ -27,7 +27,6 @@ codex-app-server-protocol.workspace = true
 codex-arg0 = { workspace = true, optional = true }
 codex-config = { workspace = true, optional = true }
 codex-login.workspace = true
-codex-model-provider-info.workspace = true
 codex-protocol.workspace = true
 codex-tui = { workspace = true, optional = true }
 codex-utils-absolute-path.workspace = true
@@ -46,7 +45,6 @@ opentelemetry-otlp.workspace = true
 opentelemetry_sdk.workspace = true
 p2p.workspace = true
 reqwest.workspace = true
-rig-core.workspace = true
 rmcp = { version = "1.2.0", features = [
     "server",
     "transport-streamable-http-server",
