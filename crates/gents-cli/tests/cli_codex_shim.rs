@@ -4116,6 +4116,7 @@ async fn codex_shim_model_list_enumerates_backend_models() -> Result<()> {
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     let create_extra_backend = format!(
         r#"mutation {{
@@ -4268,6 +4269,7 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     let switch_behavior = format!(
         r#"mutation {{
@@ -4361,6 +4363,7 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     let create_alt_backend = format!(
         r#"mutation {{
@@ -4854,6 +4857,7 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     // Add a principal-scoped skill via the CLI management command.
     let added = run_cli_json(
@@ -5307,6 +5311,7 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     // A BEHAVIOR-scoped skill, enabled, but NOT referenced by the bound behavior
     // (skill_refs is empty by default) -> not in its effective set.
@@ -5641,6 +5646,8 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
 
     let mut serve = spawn_server_with_env(&home_dir, server_port, &[], &[])?;
     wait_for_port(server_port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     run_cli_json(
         &home_dir,
@@ -5851,6 +5858,7 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
     let mut serve = spawn_server_with_env(&home_dir, server_port, &[], &[])?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     // Import the hermes skill tree.
     let imported = run_cli_json(
@@ -6008,6 +6016,7 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
     wait_for_port(server_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
     wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
+    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     // The runtime is up and healthy, but the shim has nothing to serve yet.
     assert!(
