@@ -4,6 +4,7 @@ use anyhow::{anyhow, Context as _};
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
+use crate::graphql::escape_graphql_string;
 use crate::health_checker::{HealthStatus, ServiceHealth, ServiceHealthMap};
 use crate::mcp_pool::resolve_mcp_url;
 use crate::mcp_pool::McpPool;
@@ -208,15 +209,6 @@ impl StructuredToolError {
     }
 }
 
-pub(super) fn escape_graphql(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
-}
-
 #[derive(Debug, Clone, Deserialize)]
 struct RegistryServiceEntry {
     #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
@@ -246,7 +238,7 @@ impl ResolvedMcpService {
 }
 
 pub(super) fn lookup_service_query(service_id: &str) -> String {
-    let sid = escape_graphql(service_id);
+    let sid = escape_graphql_string(service_id);
     format!(
         r#"{{
   ToolServiceRegistry(
