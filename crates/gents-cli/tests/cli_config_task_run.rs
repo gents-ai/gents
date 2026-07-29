@@ -8,7 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
-#[path = "../../gents/src/lean_vocab_test.rs"]
+#[path = "../../gents/src/lean_vocab_test/support.rs"]
 mod lean_vocab_test;
 
 /// End-to-end test for `gents config task run --task-id --args`.

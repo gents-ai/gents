@@ -8,7 +8,7 @@
 //! depends on the full state survival to render the K-model badge and the
 //! evicted-vs-reconnecting distinction.
 
-#[path = "../../../../../crates/gents/src/lean_vocab_test.rs"]
+#[path = "../../../../../crates/gents/src/lean_vocab_test/support.rs"]
 mod lean_vocab_test;
 
 use gents_protocol::row::ToolServiceHealthStateRow;
