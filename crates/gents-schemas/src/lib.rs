@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn all_contains_every_agent_schema() {
-        assert_eq!(ALL.len(), 32);
+        assert_eq!(ALL.len(), 33);
     }
 
     #[test]
