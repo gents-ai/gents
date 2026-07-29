@@ -474,22 +474,24 @@ New coverage:
 - Gate with `cargo test -p gents -p gents-migration` and
   `cargo check --workspace --all-targets` per CLAUDE.md.
 
-## 7. Upstream defradb.rs issues to file
+## 7. Upstream defradb.rs issues
 
 Grounded by the 2026-07-29 verification; first two block full functionality,
-the rest are correctness hazards gents designs around:
+the rest are correctness hazards gents designs around. **Filed 2026-07-29:**
 
-1. **Lens write-back / materialization parity with Go** (§3): port
-   `updateDataStore` (datastore-only persistence of migrated values + doc
+1. **Lens write-back / materialization parity with Go** (§3) —
+   [defradb.rs#1230](https://github.com/sourcenetwork/defradb.rs/issues/1230):
+   port `updateDataStore` (datastore-only persistence of migrated values + doc
    version key) and expose `materialize_collection`, including identity
    (version-key-only) materialization for transform-less paths, which neither
    implementation performs today. Includes fixing reindex
    leaving datastore and index values disagreeing, and removing the stub that
    writes malformed keys under the real `/v/` prefix
    (`lensed_fetcher/migration.rs:437-445`).
-2. **Unknown-version reads error instead of passing through**: Go emits docs
-   of unknown versions unchanged (`internal/lens/lens.go:139-149`); Rust
-   fails the whole query (`lensed_auto_commit_fetcher/migration.rs:287-292`).
+2. **Unknown-version reads error instead of passing through** —
+   [defradb.rs#1231](https://github.com/sourcenetwork/defradb.rs/issues/1231):
+   Go emits docs of unknown versions unchanged (`internal/lens/lens.go:139-149`);
+   Rust fails the whole query (`lensed_auto_commit_fetcher/migration.rs:287-292`).
    P2P docs from newer peers can brick reads on older nodes.
 3. **Migration cache never invalidated on `set_migration`**
    (`lensed_auto_commit_fetcher/migration.rs:34-51`): a read in the

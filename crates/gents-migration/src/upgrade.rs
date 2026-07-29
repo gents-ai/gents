@@ -1,7 +1,8 @@
 //! Rolling-upgrade / mixed-version fleet policy (Phase D).
 //!
 //! Until defradb.rs passes unknown document versions through unchanged
-//! (design §7.2; Go does, Rust pin errors), a node running an *older* binary
+//! ([defradb.rs#1231](https://github.com/sourcenetwork/defradb.rs/issues/1231);
+//! design §7.2; Go does, Rust pin errors), a node running an *older* binary
 //! can hard-fail reads when a newer peer replicates docs stamped past its
 //! known chain.
 //!

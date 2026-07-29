@@ -1,7 +1,9 @@
 //! Eager materialization driver.
 //!
 //! Design §3: the real primitive is an upstream defradb.rs port of Go's
-//! datastore-only write-back. Until that lands we:
+//! datastore-only write-back
+//! ([defradb.rs#1230](https://github.com/sourcenetwork/defradb.rs/issues/1230)).
+//! Until that lands we:
 //! 1. Probe for a future `materialize_collection` surface (none today).
 //! 2. Force a collection scan via GraphQL **read** so lazy lenses run (does
 //!    not advance stored version keys without write-back — still the correct
