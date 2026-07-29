@@ -37,7 +37,7 @@ fn test_load_history_deserializes_legacy_assistant_content() {
         Message::Assistant { content, .. }
             if content.len() == 2
                 && matches!(first_content(&content), AssistantContent::Reasoning(reasoning) if reasoning.id.as_deref() == Some("rs_1"))
-                && matches!(content.iter().nth(1), Some(AssistantContent::Text(Text { text })) if text == "Done")
+                && matches!(content.get(1), Some(AssistantContent::Text(Text { text })) if text == "Done")
     ));
 }
 

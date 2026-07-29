@@ -704,17 +704,17 @@ async fn completion_call_persists_context_once_before_prompt() {
     assert!(matches!(
         &history[0],
         Message::User { content }
-            if matches!(first_content(&content), UserContent::Text(Text { text }) if text.starts_with("<context>"))
+            if matches!(first_content(content), UserContent::Text(Text { text }) if text.starts_with("<context>"))
     ));
     assert!(matches!(
         &history[1],
         Message::User { content }
-            if matches!(first_content(&content), UserContent::Text(Text { text }) if text == "First request")
+            if matches!(first_content(content), UserContent::Text(Text { text }) if text == "First request")
     ));
     assert!(matches!(
         &history[2],
         Message::User { content }
-            if matches!(first_content(&content), UserContent::Text(Text { text }) if text == "Second turn")
+            if matches!(first_content(content), UserContent::Text(Text { text }) if text == "Second turn")
     ));
 
     let _ = std::fs::remove_dir_all(&data_path);
@@ -1476,27 +1476,27 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     assert!(matches!(
         &history[0],
         Message::User { content }
-            if matches!(first_content(&content), UserContent::Text(Text { text }) if text == "Inspect /tmp/main.rs")
+            if matches!(first_content(content), UserContent::Text(Text { text }) if text == "Inspect /tmp/main.rs")
     ));
     assert!(matches!(
         &history[1],
         Message::Assistant { content, .. }
             if content.len() == 3
-                && matches!(first_content(&content), AssistantContent::Reasoning(reasoning) if reasoning.id.as_deref() == Some("rs_1"))
-                && matches!(content.iter().nth(1), Some(AssistantContent::ToolCall(tool_call)) if tool_call.call_id.as_deref() == Some("call-1"))
-                && matches!(content.iter().nth(2), Some(AssistantContent::Text(Text { text })) if text == "I'm reading the file now.")
+                && matches!(first_content(content), AssistantContent::Reasoning(reasoning) if reasoning.id.as_deref() == Some("rs_1"))
+                && matches!(content.get(1), Some(AssistantContent::ToolCall(tool_call)) if tool_call.call_id.as_deref() == Some("call-1"))
+                && matches!(content.get(2), Some(AssistantContent::Text(Text { text })) if text == "I'm reading the file now.")
     ));
     assert!(matches!(
         &history[2],
         Message::User { content }
-            if matches!(first_content(&content), UserContent::ToolResult(tool_result)
+            if matches!(first_content(content), UserContent::ToolResult(tool_result)
                 if tool_result.call_id.as_deref() == Some("call-1")
                     && matches!(first_content(&tool_result.content), ToolResultContent::Text(Text { text }) if text == "fn main() {}\n"))
     ));
     assert!(matches!(
         &history[3],
         Message::Assistant { content, .. }
-            if matches!(first_content(&content), AssistantContent::Text(Text { text }) if text == "The file looks healthy.")
+            if matches!(first_content(content), AssistantContent::Text(Text { text }) if text == "The file looks healthy.")
     ));
 
     let resp = node
@@ -1749,7 +1749,7 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
     let Message::User { content } = &history[2] else {
         panic!("expected tool result message");
     };
-    let UserContent::ToolResult(tool_result) = first_content(&content) else {
+    let UserContent::ToolResult(tool_result) = first_content(content) else {
         panic!("expected tool result content");
     };
     assert_eq!(tool_result.call_id.as_deref(), Some("call-read"));
@@ -1873,7 +1873,7 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
     let tool_results = history
         .iter()
         .filter_map(|message| match message {
-            Message::User { content } => match first_content(&content) {
+            Message::User { content } => match first_content(content) {
                 UserContent::ToolResult(tool_result) => Some(tool_result),
                 _ => None,
             },
@@ -1978,7 +1978,7 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
     let tool_results = history
         .iter()
         .filter_map(|message| match message {
-            Message::User { content } => match first_content(&content) {
+            Message::User { content } => match first_content(content) {
                 UserContent::ToolResult(tool_result) => Some(tool_result.id.as_str()),
                 _ => None,
             },
@@ -2136,13 +2136,13 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
     assert!(matches!(
         &history[2],
         Message::Assistant { content, .. }
-            if matches!(first_content(&content), AssistantContent::ToolCall(tool_call)
+            if matches!(first_content(content), AssistantContent::ToolCall(tool_call)
                 if tool_call.id == "call-2")
     ));
     assert!(matches!(
         &history[3],
         Message::User { content }
-            if matches!(first_content(&content), UserContent::ToolResult(tool_result)
+            if matches!(first_content(content), UserContent::ToolResult(tool_result)
                 if tool_result.id == "call-2"
                     && matches!(first_content(&tool_result.content), ToolResultContent::Text(Text { text }) if text == "second result"))
     ));

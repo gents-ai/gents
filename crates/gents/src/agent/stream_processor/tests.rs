@@ -118,9 +118,9 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         Message::Assistant { content, .. }
             if content.len() == 2
                 // Order is text, then reasoning (rig's threading/persist order).
-                && matches!(first_content(&content), AssistantContent::Text(Text { text })
+                && matches!(first_content(content), AssistantContent::Text(Text { text })
                     if text == "I started by checking the repo layout.")
-                && matches!(content.iter().nth(1), Some(AssistantContent::Reasoning(reasoning))
+                && matches!(content.get(1), Some(AssistantContent::Reasoning(reasoning))
                     if reasoning.id.as_deref() == Some("rs_partial"))
     ));
 
@@ -452,7 +452,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     let tool_results = history
         .iter()
         .filter_map(|message| match message {
-            Message::User { content } => match first_content(&content) {
+            Message::User { content } => match first_content(content) {
                 UserContent::ToolResult(tool_result) => Some(tool_result),
                 _ => None,
             },
@@ -914,7 +914,7 @@ async fn count_tool_result_messages(node: &defra_node::EmbeddedNode, session_id:
         .iter()
         .filter(|message| {
             matches!(message, Message::User { content }
-                if matches!(first_content(&content), UserContent::ToolResult(_)))
+                if matches!(first_content(content), UserContent::ToolResult(_)))
         })
         .count()
 }
