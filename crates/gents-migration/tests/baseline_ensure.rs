@@ -48,7 +48,11 @@ async fn ensure_migrations_registers_baseline_and_is_idempotent() {
             .expect("get_collection")
             .unwrap_or_else(|| panic!("missing collection {}", entry.name));
         assert!(cv.is_active, "{} should be active", entry.name);
-        assert!(!cv.is_placeholder, "{} should not be placeholder", entry.name);
+        assert!(
+            !cv.is_placeholder,
+            "{} should not be placeholder",
+            entry.name
+        );
     }
 
     node.shutdown().await;

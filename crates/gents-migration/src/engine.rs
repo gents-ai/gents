@@ -187,7 +187,10 @@ async fn apply_add_collection(
 
     // If a pin is present, locate and verify the active version by scanning.
     if let Some(pin) = expected_version {
-        let versions = node.get_all_collection_versions().await.map_err(Error::Node)?;
+        let versions = node
+            .get_all_collection_versions()
+            .await
+            .map_err(Error::Node)?;
         let Some(active) = versions
             .iter()
             .find(|v| v.version_id == pin && !v.is_placeholder)
@@ -255,7 +258,10 @@ async fn apply_patch_versioned(
     }
 
     // Locate destination state among all versions.
-    let all = node.get_all_collection_versions().await.map_err(Error::Node)?;
+    let all = node
+        .get_all_collection_versions()
+        .await
+        .map_err(Error::Node)?;
     let dest = all.iter().find(|v| v.version_id == pin);
 
     match dest {
@@ -263,11 +269,13 @@ async fn apply_patch_versioned(
             // destination absent → attach (if lens), then patch inactive.
             if let Some(spec) = lens_spec {
                 let cfg = lens::lens_config(&spec, &active.version_id, pin);
-                node.set_migration(cfg).await.map_err(|e| Error::StepFailed {
-                    step: id.to_string(),
-                    collection: collection.to_string(),
-                    source: e,
-                })?;
+                node.set_migration(cfg)
+                    .await
+                    .map_err(|e| Error::StepFailed {
+                        step: id.to_string(),
+                        collection: collection.to_string(),
+                        source: e,
+                    })?;
             }
             let patched = node
                 .patch_collection(collection, patch)
@@ -481,18 +489,17 @@ async fn repair_transform_if_needed(
         });
     };
     let cfg = lens::lens_config(&spec, source, dest);
-    node.set_migration(cfg).await.map_err(|e| Error::StepFailed {
-        step: id.to_string(),
-        collection: collection.to_string(),
-        source: e,
-    })?;
+    node.set_migration(cfg)
+        .await
+        .map_err(|e| Error::StepFailed {
+            step: id.to_string(),
+            collection: collection.to_string(),
+            source: e,
+        })?;
     report.edges_repaired += 1;
     info!(
         step = id,
-        collection,
-        source,
-        dest,
-        "repaired missing migration edge transform"
+        collection, source, dest, "repaired missing migration edge transform"
     );
     Ok(())
 }
@@ -545,7 +552,10 @@ async fn verify_managed_lineages(
     registry: &Registry<'_>,
     _report: &mut MigrationReport,
 ) -> Result<()> {
-    let all_versions = node.get_all_collection_versions().await.map_err(Error::Node)?;
+    let all_versions = node
+        .get_all_collection_versions()
+        .await
+        .map_err(Error::Node)?;
 
     // Group non-placeholder versions by collection name.
     let mut by_name: HashMap<String, Vec<&CollectionVersion>> = HashMap::new();
@@ -646,14 +656,13 @@ fn verify_one_collection(
     known_pins: &HashSet<String>,
     target_active: &HashMap<String, String>,
 ) -> Result<()> {
-    let versions = by_name.get(entry.name).ok_or_else(|| Error::CollectionMissing {
-        collection: entry.name.to_string(),
-    })?;
+    let versions = by_name
+        .get(entry.name)
+        .ok_or_else(|| Error::CollectionMissing {
+            collection: entry.name.to_string(),
+        })?;
 
-    let non_ph: Vec<&&CollectionVersion> = versions
-        .iter()
-        .filter(|v| !v.is_placeholder)
-        .collect();
+    let non_ph: Vec<&&CollectionVersion> = versions.iter().filter(|v| !v.is_placeholder).collect();
 
     if non_ph.is_empty() {
         return Err(Error::CollectionMissing {
@@ -702,8 +711,13 @@ fn verify_one_collection(
             return Err(Error::VersionPinMismatch {
                 collection: entry.name.to_string(),
                 expected: root.to_string(),
-                actual: format!("root missing; versions={:?}",
-                    non_ph.iter().map(|v| v.version_id.as_str()).collect::<Vec<_>>()),
+                actual: format!(
+                    "root missing; versions={:?}",
+                    non_ph
+                        .iter()
+                        .map(|v| v.version_id.as_str())
+                        .collect::<Vec<_>>()
+                ),
             });
         }
     }
