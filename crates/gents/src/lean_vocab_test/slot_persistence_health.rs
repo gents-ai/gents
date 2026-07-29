@@ -122,6 +122,19 @@ pub(crate) struct LeanPairingReconcileShutdownBoundaryCase {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct LeanPairingReconcileSweepRetryBoundaryCase {
+    pub(crate) name: String,
+    pub(crate) supervisor: String,
+    pub(crate) work_class: String,
+    pub(crate) boundary: String,
+    pub(crate) failure_scope: String,
+    pub(crate) failure_terminal: bool,
+    pub(crate) retry_trigger: String,
+    pub(crate) cancellation_prioritized: bool,
+    pub(crate) convergence_retried: bool,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct LeanPairingReconcileSweepSchedulingCase {
     pub(crate) name: String,
     pub(crate) supervisor: String,

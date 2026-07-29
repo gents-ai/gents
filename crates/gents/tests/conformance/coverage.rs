@@ -600,6 +600,15 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "PairingReconcileShutdownBoundaryCases".to_string(),
         ));
     }
+    if !snapshot
+        .pairing_reconcile_sweep_retry_boundary_cases
+        .is_empty()
+    {
+        emitted.insert((
+            "pairing_reconcile_cases".to_string(),
+            "PairingReconcileSweepRetryBoundaryCases".to_string(),
+        ));
+    }
     if !snapshot.pairing_reconcile_sweep_scheduling_cases.is_empty() {
         emitted.insert((
             "pairing_reconcile_cases".to_string(),
