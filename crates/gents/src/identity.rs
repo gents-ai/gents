@@ -352,7 +352,7 @@ fn load_or_create_macos_keychain_raw_identity(
             let private_key = crypto::generate_ed25519().map_err(anyhow::Error::from)?;
             let bytes = private_key.raw();
             keychain
-                .set_generic_password(MACOS_KEYCHAIN_SERVICE, label, &bytes)
+                .set_generic_password(MACOS_KEYCHAIN_SERVICE, label, bytes)
                 .with_context(|| format!("storing macOS keychain identity {label}"))?;
             RawIdentity::from_private_key(private_key)
                 .map_err(anyhow::Error::from)
