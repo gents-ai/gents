@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
@@ -16,7 +16,7 @@ use crate::lean_vocab_test::{lean_r5_cross_deployment_cases, LeanR5CrossDeployme
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::p2p::{wait_for_connected_peer, wait_for_listen_addr};
+use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
 use crate::support::{first_optional_row, test_db, test_p2p_db, TestDb};
 
 const PARENT_AGENT_DID: &str = "did:test:r5-lean-parent";

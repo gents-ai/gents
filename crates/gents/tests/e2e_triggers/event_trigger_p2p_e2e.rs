@@ -27,7 +27,7 @@
 //! `wait_for_listen_addr`, `wait_for_connected_peer`).
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
@@ -37,7 +37,7 @@ use serde_json::Value;
 
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::p2p::{wait_for_connected_peer, wait_for_listen_addr};
+use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
 use crate::support::test_p2p_db;
 

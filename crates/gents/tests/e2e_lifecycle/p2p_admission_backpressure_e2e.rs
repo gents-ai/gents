@@ -18,7 +18,7 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use serde::Deserialize;
 
-use crate::support::p2p::{wait_for_connected_peer, wait_for_listen_addr};
+use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
 use crate::support::{test_p2p_db_with_admission, TestP2pAdmission};
 
 const OWNER_DID: &str = "did:test:admission-p2p-owner";

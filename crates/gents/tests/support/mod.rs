@@ -15,7 +15,7 @@ pub(crate) mod identity_stubs;
 pub mod interrupt;
 pub mod mock_endpoint;
 pub mod mock_subscription;
-pub mod p2p;
+pub mod p2p_waits;
 pub mod pairing_conformance;
 pub mod r5_conformance;
 pub mod snapshots;
