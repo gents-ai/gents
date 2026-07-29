@@ -38,6 +38,13 @@ pub struct Observation {
     pub b_child_requests: Vec<RequestObservation>,
     pub subagent_notifications: Vec<String>,
     pub background_wakeup_keys: Vec<String>,
+    /// Process-identity generation of node A (bumped by honest Crash).
+    pub a_process_generation: u64,
+    /// Process-identity generation of node B (bumped by honest Crash).
+    pub b_process_generation: u64,
+    /// Node id that just crashed for this snapshot, if the preceding action
+    /// was `Crash`. Empty when the snapshot is not post-crash.
+    pub crashed_node: Option<NodeId>,
 }
 
 impl Observation {
@@ -103,8 +110,12 @@ impl Harness {
     pub async fn run(&mut self, scenario: &Scenario) -> Result<()> {
         let _ = &scenario.name;
         for action in &scenario.actions {
+            let crashed = match action {
+                Action::Crash { node } => Some(node.clone()),
+                _ => None,
+            };
             self.apply_action(action).await?;
-            self.record_observation().await?;
+            self.record_observation_after(crashed).await?;
         }
         Ok(())
     }
@@ -198,7 +209,14 @@ impl Harness {
                 let _ =
                     RequestLifecycle::recover_all(self.node(node)?.db.node.as_ref(), did).await?;
             }
-            Action::Crash { node: _ } => {}
+            Action::Crash { node } => {
+                // TLA lead (`SubagentCompletion` CrashA/CrashB,
+                // `SubagentCancelPropagation` Crash): clear process-local
+                // state while retaining durable intent/rows. The R5 harness
+                // owns only the embedded store, so the honest boundary is
+                // shutdown + exclusive drop + reopen on the same data path.
+                self.crash_node(node).await?;
+            }
             Action::AdvanceClockOn { node, seconds } => {
                 advance_r5_clock_effects(self.node(node)?, *seconds).await?;
             }
@@ -226,7 +244,42 @@ impl Harness {
         }
     }
 
+    fn node_mut(&mut self, id: &NodeId) -> Result<&mut HarnessNode> {
+        if id == &self.a.id {
+            Ok(&mut self.a)
+        } else if id == &self.b.id {
+            Ok(&mut self.b)
+        } else {
+            bail!("unknown node {id}")
+        }
+    }
+
+    async fn crash_node(&mut self, id: &NodeId) -> Result<()> {
+        let node = self.node_mut(id)?;
+        let before = node.db.process_generation;
+        node.db
+            .simulate_process_crash()
+            .await
+            .map_err(|e| anyhow::anyhow!("Crash({id}) failed: {e}"))?;
+        if node.db.process_generation != before + 1 {
+            bail!(
+                "Crash({id}): process_generation did not advance ({before} -> {})",
+                node.db.process_generation
+            );
+        }
+        tracing::info!(
+            node = %id,
+            process_generation = node.db.process_generation,
+            "R5 harness process crash/reopen completed"
+        );
+        Ok(())
+    }
+
     async fn record_observation(&mut self) -> Result<()> {
+        self.record_observation_after(None).await
+    }
+
+    async fn record_observation_after(&mut self, crashed_node: Option<NodeId>) -> Result<()> {
         self.history.push(Observation {
             a_bridge_rows: load_bridge_rows(&self.a).await?,
             b_bridge_rows: load_bridge_rows(&self.b).await?,
@@ -234,6 +287,9 @@ impl Harness {
             b_child_requests: load_child_requests(&self.b).await?,
             subagent_notifications: load_subagent_notifications(&self.a).await?,
             background_wakeup_keys: load_background_wakeup_keys(&self.a).await?,
+            a_process_generation: self.a.db.process_generation,
+            b_process_generation: self.b.db.process_generation,
+            crashed_node,
         });
         Ok(())
     }
@@ -360,10 +416,25 @@ async fn write_parent_tool_call(
     behavior_id: &str,
     unclaimed_deadline_at: Option<&str>,
 ) -> Result<()> {
+    // Stamp immutable agent_did so startup recovery scopes match production
+    // (`load_running_tool_call_rows_for_agent`). Without it, Crash →
+    // RunRecoverySweepOn cannot see the bridge.
+    let agent_did = load_request(node, parent_request_id)
+        .await
+        .map(|row| row.agent_did)
+        .unwrap_or_else(|_| {
+            if node.id == "A" {
+                NODE_A_DID.to_string()
+            } else {
+                NODE_B_DID.to_string()
+            }
+        });
+    let session_id_raw = format!("{parent_request_id}-session");
     let parent_request_id = escape_graphql_string(parent_request_id);
     let parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
     let child_request_id = escape_graphql_string(child_request_id);
-    let session_id = escape_graphql_string(&format!("{parent_request_id}-session"));
+    let agent_did = escape_graphql_string(&agent_did);
+    let session_id = escape_graphql_string(&session_id_raw);
     let args = escape_graphql_string(
         &json!({
             "behavior_id": behavior_id,
@@ -390,6 +461,7 @@ async fn write_parent_tool_call(
                     tool_call_key: "{session_id}:{parent_tool_call_id}",
                     request_id: "{parent_request_id}",
                     session_id: "{session_id}",
+                    agent_did: "{agent_did}",
                     message_sequence: 1,
                     tool_name: "spawn_subagent",
                     tool_call_id: "{parent_tool_call_id}",
@@ -453,7 +525,7 @@ async fn export_doc(
             "request_id agent_did behavior_id session_id status lifecycle_state caused_by_parent_request_id caused_by_parent_tool_call_id caused_by_trigger_id caused_by_trigger_kind interrupt_requested_at"
         }
         "AgentToolCall" => {
-            "tool_call_key request_id session_id message_sequence tool_name tool_call_id args result status lifecycle_state started_at deadline_at completed_at tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network cancel_cause latency_ms await_mode cancel_policy child_request_id unclaimed_deadline_at cancel_cascade_intent_at cancel_pending_remote_ack stuck_since"
+            "tool_call_key request_id session_id agent_did message_sequence tool_name tool_call_id args result status lifecycle_state started_at deadline_at completed_at tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network cancel_cause latency_ms await_mode cancel_policy child_request_id unclaimed_deadline_at cancel_cascade_intent_at cancel_pending_remote_ack stuck_since"
         }
         "AgentResponse" => {
             "response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at"
@@ -511,6 +583,7 @@ async fn import_tool_call(node: &HarnessNode, row: &serde_json::Value) -> Result
     let tool_call_id = str_field(row, "tool_call_id")?;
     let tool_call_key = str_field(row, "tool_call_key")?;
     let request_id = str_field(row, "request_id")?;
+    let agent_did = opt_str_field(row, "agent_did").unwrap_or(NODE_A_DID);
     let args = escape_graphql_string(str_field(row, "args")?);
     let result = escape_graphql_string(opt_str_field(row, "result").unwrap_or(""));
     let child_request_id =
@@ -530,6 +603,7 @@ async fn import_tool_call(node: &HarnessNode, row: &serde_json::Value) -> Result
                     tool_call_key: "{}",
                     request_id: "{}",
                     session_id: "{}",
+                    agent_did: "{}",
                     message_sequence: {},
                     tool_name: "{}",
                     tool_call_id: "{}",
@@ -561,6 +635,7 @@ async fn import_tool_call(node: &HarnessNode, row: &serde_json::Value) -> Result
         escape_graphql_string(tool_call_key),
         escape_graphql_string(request_id),
         escape_graphql_string(session_id),
+        escape_graphql_string(agent_did),
         row.get("message_sequence")
             .and_then(|v| v.as_i64())
             .unwrap_or(1),

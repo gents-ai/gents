@@ -29,7 +29,104 @@ pub const DEADLINE_SECS: u64 = 300;
 
 pub struct TestDb {
     pub node: Arc<EmbeddedNode>,
-    _tempdir: TempDir,
+    /// Monotonic process-identity counter. Bumped by
+    /// [`TestDb::simulate_process_crash`]; starts at 0 for a fresh process.
+    pub process_generation: u64,
+    tempdir: TempDir,
+}
+
+impl TestDb {
+    /// Honest crash/restart boundary for embedded-node harnesses.
+    ///
+    /// Mirrors the production restart seam (and defra-node's own restart tests):
+    /// shutdown the live process, exclusively drop it so store locks release,
+    /// reopen the same durable data path, and advance `process_generation`.
+    /// Durable documents remain; process-local workers, registries, and
+    /// subscriptions do not (they are not owned by `TestDb` and therefore
+    /// cannot survive this boundary).
+    ///
+    /// Fails if outstanding `Arc` clones prevent exclusive drop of the old
+    /// node — that would leave the crash non-falsifiable.
+    pub async fn simulate_process_crash(&mut self) -> anyhow::Result<()> {
+        let data_path = self.tempdir.path().to_path_buf();
+        let before = self.process_generation;
+
+        // Move the Arc out without requiring `Default` for `EmbeddedNode`.
+        // On every exit path below we either restore `self.node` or write a
+        // reopened handle so the field is never left uninitialized.
+        let old = unsafe { std::ptr::read(&self.node) };
+        let old_ptr = Arc::as_ptr(&old) as usize;
+        old.shutdown().await;
+
+        let owned = match Arc::try_unwrap(old) {
+            Ok(owned) => owned,
+            Err(shared) => {
+                let count = Arc::strong_count(&shared);
+                unsafe {
+                    std::ptr::write(&mut self.node, shared);
+                }
+                anyhow::bail!(
+                    "simulate_process_crash: cannot exclusively drop EmbeddedNode \
+                     (strong_count={count}); crash boundary would not clear process state"
+                );
+            }
+        };
+        drop(owned);
+
+        let reopened = match EmbeddedNode::builder().data_path(&data_path).build().await {
+            Ok(node) => Arc::new(node),
+            Err(error) => {
+                // Store is closed; reconstruct best-effort so Drop still runs.
+                match EmbeddedNode::builder().data_path(&data_path).build().await {
+                    Ok(node) => unsafe {
+                        std::ptr::write(&mut self.node, Arc::new(node));
+                    },
+                    Err(rebuild_error) => {
+                        // Last resort: ephemeral node so `self.node` is valid.
+                        let fallback = EmbeddedNode::builder().build().await.map_err(|e| {
+                            anyhow::anyhow!(
+                                "simulate_process_crash: reopen failed ({error}); \
+                                     fallback rebuild failed ({rebuild_error}); \
+                                     ephemeral fallback failed ({e})"
+                            )
+                        })?;
+                        unsafe {
+                            std::ptr::write(&mut self.node, Arc::new(fallback));
+                        }
+                    }
+                }
+                anyhow::bail!(
+                    "simulate_process_crash: reopen durable store at {} failed: {error}",
+                    data_path.display()
+                );
+            }
+        };
+
+        // Schemas already exist on the durable path; ensure is idempotent.
+        if let Err(error) = ensure_runtime_schemas(&reopened).await {
+            unsafe {
+                std::ptr::write(&mut self.node, reopened);
+            }
+            anyhow::bail!("simulate_process_crash: ensure schemas: {error}");
+        }
+
+        let after_ptr = Arc::as_ptr(&reopened) as usize;
+        if after_ptr == old_ptr {
+            unsafe {
+                std::ptr::write(&mut self.node, reopened);
+            }
+            anyhow::bail!("simulate_process_crash: reopened node pointer equals pre-crash pointer");
+        }
+
+        let after = before
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("process_generation overflow"))?;
+        unsafe {
+            std::ptr::write(&mut self.node, reopened);
+        }
+        self.process_generation = after;
+        Ok(())
+    }
 }
 
 pub async fn test_db(name: &str) -> TestDb {
@@ -49,7 +146,8 @@ pub async fn test_db(name: &str) -> TestDb {
         .expect("runtime schemas");
     TestDb {
         node,
-        _tempdir: tempdir,
+        process_generation: 0,
+        tempdir,
     }
 }
 
@@ -106,7 +204,8 @@ pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb
         .expect("runtime schemas");
     TestDb {
         node,
-        _tempdir: tempdir,
+        process_generation: 0,
+        tempdir,
     }
 }
 
@@ -271,7 +370,8 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
         .expect("runtime schemas");
     TestDb {
         node,
-        _tempdir: tempdir,
+        process_generation: 0,
+        tempdir,
     }
 }
 

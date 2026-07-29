@@ -8,6 +8,7 @@ pub fn assert_all_safety(o: &Observation) {
     completion::wakeup_coalesced(o);
     cancel_propagation::cancel_intent_durable(o);
     cancel_propagation::cascade_interrupts_only_running(o);
+    crash::process_generation_advances_on_crash(o);
 }
 
 pub fn assert_liveness_after_convergence(history: &[Observation]) {
@@ -32,6 +33,137 @@ pub fn assert_liveness_after_convergence(history: &[Observation]) {
                     "cancel intent {} did not interrupt or absorb into terminal child",
                     bridge.tool_call_id
                 );
+            }
+        }
+    }
+}
+
+/// Crash/restart boundary checks. These bind the harness `Crash` action to an
+/// observable process-identity change (TLA `crashCount` / CrashA/CrashB) while
+/// durable bridge and child rows remain loadable from the reopened store.
+pub fn assert_crash_boundary(history: &[Observation]) {
+    crash::assert_crashes_observed(history);
+    crash::assert_durable_rows_survive_crash(history);
+}
+
+pub mod crash {
+    use super::Observation;
+
+    /// Per-snapshot: if this observation followed a Crash action, that node's
+    /// process generation must be strictly positive. A no-op Crash leaves
+    /// generation at 0 and fails this check once any crash action is claimed.
+    pub fn process_generation_advances_on_crash(o: &Observation) {
+        let Some(crashed) = o.crashed_node.as_deref() else {
+            return;
+        };
+        match crashed {
+            "A" => assert!(
+                o.a_process_generation > 0,
+                "Crash(A) left a_process_generation at 0 (no-op crash)"
+            ),
+            "B" => assert!(
+                o.b_process_generation > 0,
+                "Crash(B) left b_process_generation at 0 (no-op crash)"
+            ),
+            other => panic!("unknown crashed node {other}"),
+        }
+    }
+
+    /// History-level: every Crash action must advance that node's generation
+    /// relative to the immediately preceding observation. Deleting the Crash
+    /// arm or restoring a no-op fails this.
+    pub fn assert_crashes_observed(history: &[Observation]) {
+        let mut crash_count = 0usize;
+        for window in history.windows(2) {
+            let prev = &window[0];
+            let curr = &window[1];
+            let Some(crashed) = curr.crashed_node.as_deref() else {
+                continue;
+            };
+            crash_count += 1;
+            match crashed {
+                "A" => assert!(
+                    curr.a_process_generation > prev.a_process_generation,
+                    "Crash(A) did not advance process generation ({} -> {}); \
+                     false-green no-op Crash is not allowed",
+                    prev.a_process_generation,
+                    curr.a_process_generation
+                ),
+                "B" => assert!(
+                    curr.b_process_generation > prev.b_process_generation,
+                    "Crash(B) did not advance process generation ({} -> {}); \
+                     false-green no-op Crash is not allowed",
+                    prev.b_process_generation,
+                    curr.b_process_generation
+                ),
+                other => panic!("unknown crashed node {other}"),
+            }
+        }
+        assert!(
+            crash_count > 0,
+            "crash scenario history has no Crash observations; fixture must cross the crash boundary"
+        );
+    }
+
+    /// Durable AgentToolCall bridges and child AgentRequest rows present just
+    /// before a Crash must still be loadable immediately after reopen. This is
+    /// the durable-vs-volatile split: process identity changes, rows do not
+    /// disappear with the process.
+    pub fn assert_durable_rows_survive_crash(history: &[Observation]) {
+        for window in history.windows(2) {
+            let prev = &window[0];
+            let curr = &window[1];
+            let Some(crashed) = curr.crashed_node.as_deref() else {
+                continue;
+            };
+            match crashed {
+                "A" => {
+                    for bridge in &prev.a_bridge_rows {
+                        assert!(
+                            curr.a_bridge_rows
+                                .iter()
+                                .any(|b| b.tool_call_id == bridge.tool_call_id
+                                    && b.lifecycle_state == bridge.lifecycle_state
+                                    && b.child_request_id == bridge.child_request_id),
+                            "Crash(A) lost durable bridge {}",
+                            bridge.tool_call_id
+                        );
+                    }
+                    for child in &prev.a_child_requests {
+                        assert!(
+                            curr.a_child_requests
+                                .iter()
+                                .any(|c| c.request_id == child.request_id
+                                    && c.lifecycle_state == child.lifecycle_state),
+                            "Crash(A) lost durable child request {}",
+                            child.request_id
+                        );
+                    }
+                }
+                "B" => {
+                    for bridge in &prev.b_bridge_rows {
+                        assert!(
+                            curr.b_bridge_rows
+                                .iter()
+                                .any(|b| b.tool_call_id == bridge.tool_call_id
+                                    && b.lifecycle_state == bridge.lifecycle_state
+                                    && b.child_request_id == bridge.child_request_id),
+                            "Crash(B) lost durable bridge {}",
+                            bridge.tool_call_id
+                        );
+                    }
+                    for child in &prev.b_child_requests {
+                        assert!(
+                            curr.b_child_requests
+                                .iter()
+                                .any(|c| c.request_id == child.request_id
+                                    && c.lifecycle_state == child.lifecycle_state),
+                            "Crash(B) lost durable child request {}",
+                            child.request_id
+                        );
+                    }
+                }
+                other => panic!("unknown crashed node {other}"),
             }
         }
     }
