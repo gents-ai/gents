@@ -30,16 +30,19 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use defra_node::{EmbeddedNode, EventName, QueryResponse};
+use defra_node::{EmbeddedNode, EventName};
 use tokio_util::sync::CancellationToken;
 
 use serde::Deserialize;
 
 use crate::graphql::escape_graphql_string;
 
+use super::graphql_helpers::{
+    ensure_no_errors, graphql_nullable_string_literal, graphql_string_list_literal, rows,
+};
 use super::registry::REGISTRY_HEARTBEAT_INTERVAL;
 use super::templates::{resolve_template, ScopeTemplate};
 
@@ -736,29 +739,6 @@ pub fn upsert_registry_desired_mutation(
     )
 }
 
-/// Render a GraphQL string-list literal, emitting `null` for an empty list
-/// (never `[]`, which types as `JsonArray` and corrupts nillable array columns).
-fn graphql_string_list_literal<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
-    let items: Vec<String> = values
-        .into_iter()
-        .map(|v| format!(r#""{}""#, escape_graphql_string(v)))
-        .collect();
-    if items.is_empty() {
-        "null".to_string()
-    } else {
-        format!("[{}]", items.join(", "))
-    }
-}
-
-/// Render a nullable GraphQL string literal, emitting `null` for absent/blank.
-fn graphql_nullable_string_literal(value: Option<&str>) -> String {
-    value
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(|v| format!(r#""{}""#, escape_graphql_string(v)))
-        .unwrap_or_else(|| "null".to_string())
-}
-
 /// Delete the registry-owned `PeerPairingDesired` row for `peer_id`. The
 /// `source = "registry"` predicate guarantees an operator-owned row for the same
 /// peer is never deleted (mirrors Lean `retraction_sound`).
@@ -772,23 +752,6 @@ pub fn delete_registry_desired_mutation(peer_id: &str) -> String {
             ) {{ _docID }}
         }}"#
     )
-}
-
-fn ensure_no_errors(response: &QueryResponse, label: &str) -> Result<()> {
-    if response.has_errors() {
-        bail!("{label} failed: {:?}", response.errors);
-    }
-    Ok(())
-}
-
-fn rows<T>(response: &QueryResponse, field: &str) -> Result<Vec<T>>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
-        return Ok(Vec::new());
-    };
-    serde_json::from_value(value.clone()).with_context(|| format!("decode {field} rows"))
 }
 
 #[derive(Deserialize)]
