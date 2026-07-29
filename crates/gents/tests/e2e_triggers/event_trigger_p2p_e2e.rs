@@ -37,6 +37,7 @@ use serde_json::Value;
 
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::mock_endpoint::MockModelEndpoint;
+use crate::support::p2p::{wait_for_connected_peer, wait_for_listen_addr};
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
 use crate::support::test_p2p_db;
 
@@ -355,44 +356,6 @@ async fn install_one_way_replicator(
         )
         .await
         .expect("install sender to receiver replicator");
-}
-
-async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let addrs = node
-            .p2p()
-            .expect("p2p should be enabled")
-            .listen_addresses()
-            .await
-            .expect("listen addresses");
-        if let Some(addr) = addrs.first() {
-            return addr.clone();
-        }
-        if Instant::now() >= deadline {
-            panic!("node never exposed a P2P listen address; last_addrs={addrs:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-async fn wait_for_connected_peer(node: &EmbeddedNode) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let peers = node
-            .p2p()
-            .expect("p2p should be enabled")
-            .connected_peers()
-            .await
-            .expect("connected peers");
-        if !peers.is_empty() {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("node never reported a connected peer; last_peers={peers:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
 }
 
 /// Two-node P2P: a `ReplicatedEvent` doc written on node A replicates to node B

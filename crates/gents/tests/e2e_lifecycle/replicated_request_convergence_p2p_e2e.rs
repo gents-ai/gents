@@ -34,6 +34,7 @@ use gents::graphql::escape_graphql_string;
 use gents::{RequestLifecycle, TERMINAL_REDRIVE_CAP};
 use serde::Deserialize;
 
+use crate::support::p2p::{wait_for_connected_peer, wait_for_listen_addr};
 use crate::support::test_p2p_db;
 
 const OWNER_DID: &str = "did:test:convergence-p2p-owner";
@@ -105,44 +106,6 @@ async fn install_one_way_replicator(
         .add_replicator(&[receiver_addr], &collection_names, &filters)
         .await
         .expect("install sender to receiver replicator");
-}
-
-async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let addrs = node
-            .p2p()
-            .expect("p2p should be enabled")
-            .listen_addresses()
-            .await
-            .expect("listen addresses");
-        if let Some(addr) = addrs.first() {
-            return addr.clone();
-        }
-        if Instant::now() >= deadline {
-            panic!("node never exposed a P2P listen address; last_addrs={addrs:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-async fn wait_for_connected_peer(node: &EmbeddedNode) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let peers = node
-            .p2p()
-            .expect("p2p should be enabled")
-            .connected_peers()
-            .await
-            .expect("connected peers");
-        if !peers.is_empty() {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("node never reported a connected peer; last_peers={peers:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
 }
 
 async fn push_backlog_status(node: &EmbeddedNode) -> serde_json::Value {
