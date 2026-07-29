@@ -1125,7 +1125,7 @@ mod tx_tests {
             retry_backoff: std::time::Duration::from_millis(50),
         };
 
-        execute_graphql_async_with_tx(&endpoint, "{ __typename }", options.clone(), Some("42"))
+        execute_graphql_async_with_tx(&endpoint, "{ __typename }", options, Some("42"))
             .await
             .unwrap();
         assert_eq!(state.last_tx_header.lock().unwrap().as_deref(), Some("42"));
