@@ -10,11 +10,11 @@ use gents::config::{
 };
 use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    default_tool_selection_id_for_behavior, ensure_config_bootstrap_schemas, load_agent_behavior,
-    load_agent_principal, load_or_create_macos_keychain_identity,
-    load_or_create_macos_secure_enclave_identity, upsert_agent_principal, upsert_inference_profile,
-    wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
-    AgentBehaviorDocument, AgentIdentity, InferenceProfile, KeyIdentity, ToolSelectionDocument,
+    default_tool_selection_id_for_behavior, load_agent_behavior, load_agent_principal,
+    load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
+    upsert_agent_principal, upsert_inference_profile, wide_open_tool_selection_document,
+    wide_open_tool_selection_id_for_agent, AgentBehaviorDocument, AgentIdentity, InferenceProfile,
+    KeyIdentity, ToolSelectionDocument,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -157,12 +157,8 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
             .await
             .context("building embedded DefraDB node for init")?,
     );
-    ensure_config_bootstrap_schemas(node_arc.as_ref()).await?;
-    // Single sanctioned migration entry point: run the FULL set BEFORE the first
-    // load_agent_behavior call below. On an upgraded DB (e.g. created before
-    // #377, or before the conversation scope key), bootstrap schema-adds silently
-    // skip patching existing collections; without the full migration set,
-    // re-running init against such a DB crashes with "unknown field" errors.
+    // Full baseline via the shared engine (partial CONFIG_BOOTSTRAP registration
+    // was removed — it forked the version lineage).
     gents::migration::ensure_all_runtime_migrations(node_arc.clone()).await?;
     let node = std::sync::Arc::try_unwrap(node_arc).unwrap_or_else(|_| {
         unreachable!("node_arc had exactly one strong reference at this point")

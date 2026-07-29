@@ -1,36 +1,25 @@
+//! Desktop schema helpers — registration routes through the shared
+//! `gents-migration` engine so desktop and runtime share one lineage.
+
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::schemas::{
-    ALL, ALL_COLLECTION_NAMES, BRANCHABLE_COLLECTION_NAMES, RUNTIME_ALL, RUNTIME_COLLECTION_NAMES,
+    ALL_COLLECTION_NAMES, BRANCHABLE_COLLECTION_NAMES, RUNTIME_COLLECTION_NAMES,
 };
 
-async fn ensure_schema_set(node: &EmbeddedNode, schemas: &[&str]) -> Result<()> {
-    for sdl in schemas {
-        match node.add_schema(sdl).await {
-            Ok(()) => {}
-            Err(error) => {
-                if error.to_string().contains("already exists") {
-                    tracing::debug!(
-                        schema = %sdl.lines().next().unwrap_or(""),
-                        "schema already exists"
-                    );
-                } else {
-                    return Err(error);
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
+/// Register baseline + verify lineage (same entry point as the runtime).
 pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
-    ensure_schema_set(node, RUNTIME_ALL).await?;
-    ensure_schemas(node).await
+    gents_migration::ensure_migrations(node)
+        .await
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("ensure_migrations")
 }
 
+/// Alias — full baseline only (no partial registration).
+#[allow(dead_code)] // public test/bootstrap alias
 pub async fn ensure_schemas(node: &EmbeddedNode) -> Result<()> {
-    ensure_schema_set(node, ALL).await
+    ensure_runtime_schemas(node).await
 }
 
 pub async fn subscribe_all_collections(node: &EmbeddedNode) -> Result<()> {

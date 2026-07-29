@@ -10,9 +10,11 @@ members = [
     "crates/gents-desktop-bridge",
     "crates/gents-desktop-core",
     "crates/gents-lean-contract",
-    "crates/gents-lenses/agent_tool_call_lifecycle_v1_to_v2",
-    "crates/gents-lenses/agent_subagent_v2_to_v3",
+    "crates/gents-migration",
+    "crates/gents-lenses/fixture_add_label",
     "crates/gents-fs-runner",
+    "crates/gents-migration",
+    "crates/gents-lenses/fixture_add_label",
     "crates/gents-protocol",
     "crates/gents-schemas",
 ]
@@ -23,12 +25,6 @@ exclude = [
     "third_party/noq",
     "third_party/noq-proto",
 ]
-# Exclude the WASM lens crate from default workspace builds. Its cdylib target
-# relies on `lens_sdk::define!` which imports an `extern "C" fn next()` only
-# resolvable at WASM-load time by the lens host runtime. Build it explicitly
-# via `cargo build -p agent-tool-call-lifecycle-v1-to-v2-lens --target
-# wasm32-unknown-unknown`. The rlib target (used by tests via the
-# default-features=false dev-dep) is unaffected.
 default-members = [
     "apps/fixture-host/src-tauri",
     "apps/gents-desktop/src-tauri",
@@ -38,6 +34,7 @@ default-members = [
     "crates/gents-desktop",
     "crates/gents-desktop-bridge",
     "crates/gents-desktop-core",
+    "crates/gents-migration",
     "crates/gents-protocol",
     "crates/gents-schemas",
 ]
@@ -65,20 +62,20 @@ codex-tui = { git = "https://github.com/openai/codex", rev = "c4e53d103c102f8d52
 codex-utils-absolute-path = { git = "https://github.com/openai/codex", rev = "c4e53d103c102f8d5201247adbc60bbddd47c88d" }
 # defradb.rs v0.17.1. Its iterative parent-DAG replay remains required on iOS:
 # a deep collection history otherwise exhausts even a 32 MiB Tokio worker stack.
-acp = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "8eba3d5eea0d1d4c08cc1f464038bb3fd0b2f195" }
-crypto = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "8eba3d5eea0d1d4c08cc1f464038bb3fd0b2f195" }
-defra-core = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "8eba3d5eea0d1d4c08cc1f464038bb3fd0b2f195" }
+acp = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "e201d77c5b20eb76ae6f20de1db3e61cbc2e1cb4" }
+crypto = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "e201d77c5b20eb76ae6f20de1db3e61cbc2e1cb4" }
+defra-core = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "e201d77c5b20eb76ae6f20de1db3e61cbc2e1cb4" }
 gents-protocol = { path = "crates/gents-protocol" }
 gents-schemas = { path = "crates/gents-schemas" }
 gents-desktop-core = { path = "crates/gents-desktop-core" }
 gents-desktop-bridge = { path = "crates/gents-desktop-bridge" }
 gents-lean-contract = { path = "crates/gents-lean-contract" }
-defra-node = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "8eba3d5eea0d1d4c08cc1f464038bb3fd0b2f195" }
-defra-p2p-adapter = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "8eba3d5eea0d1d4c08cc1f464038bb3fd0b2f195" }
+defra-node = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "e201d77c5b20eb76ae6f20de1db3e61cbc2e1cb4" }
+defra-p2p-adapter = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "e201d77c5b20eb76ae6f20de1db3e61cbc2e1cb4" }
 dirs = "5"
-events = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "8eba3d5eea0d1d4c08cc1f464038bb3fd0b2f195" }
+events = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "e201d77c5b20eb76ae6f20de1db3e61cbc2e1cb4" }
 hostname = "0.4"
-identity = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "8eba3d5eea0d1d4c08cc1f464038bb3fd0b2f195" }
+identity = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "e201d77c5b20eb76ae6f20de1db3e61cbc2e1cb4" }
 # Must stay version-aligned with the iroh used by the defradb.rs `p2p` crate;
 # the CLI uses it to inspect the default relay set at startup (#588).
 iroh = "1"
@@ -86,8 +83,8 @@ minijinja = { version = "2", default-features = false, features = ["builtins", "
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
-p2p = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "8eba3d5eea0d1d4c08cc1f464038bb3fd0b2f195" }
-query = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "8eba3d5eea0d1d4c08cc1f464038bb3fd0b2f195" }
+p2p = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "e201d77c5b20eb76ae6f20de1db3e61cbc2e1cb4" }
+query = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "e201d77c5b20eb76ae6f20de1db3e61cbc2e1cb4" }
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rig-core = "0.35.0"

@@ -27,6 +27,7 @@ defra-core.workspace = true
 defra-p2p-adapter.workspace = true
 gents-fs-runner = { path = "../gents-fs-runner" }
 gents-protocol.workspace = true
+gents-migration = { path = "../gents-migration" }
 defra-node.workspace = true
 dirs.workspace = true
 events.workspace = true
@@ -74,6 +75,5 @@ axum = "0.8"
 proptest = "1"
 tar = "0.4"
 zstd = "0.13"
-agent-tool-call-lifecycle-v1-to-v2-lens = { path = "../gents-lenses/agent_tool_call_lifecycle_v1_to_v2", default-features = false }
 gents-lean-contract.workspace = true
 jsonschema = { version = "0.46.5", default-features = false }
