@@ -11,9 +11,8 @@
 //!   serde-attribute coverage for our existing view models.
 //!
 //! Every production bridge-visible request, response, and event payload is
-//! exported. Generated files land in both
-//! `crates/gents-desktop-bridge/bindings/` and
-//! `@source-inc/gents-desktop-client/src/generated/` (both committed).
+//! exported. Generated files land in the committed
+//! `@source-inc/gents-desktop-client/src/generated/` directory.
 
 use std::path::{Path, PathBuf};
 
@@ -30,10 +29,6 @@ use crate::tauri_commands::workspace::WorkspaceListingView;
 use crate::types::*;
 
 fn bindings_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bindings")
-}
-
-fn package_bindings_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../packages/gents-desktop-client/src/generated")
 }
@@ -371,44 +366,42 @@ fn committed_bindings_match_regeneration() {
     export_all(tmp.path()).expect("export");
 
     let expected_files = list_ts_files(tmp.path()).expect("list generated");
-    for committed in [bindings_dir(), package_bindings_dir()] {
-        let actual_files = list_ts_files(&committed).unwrap_or_default();
+    let committed = bindings_dir();
+    let actual_files = list_ts_files(&committed).unwrap_or_default();
+    assert_eq!(
+        actual_files, expected_files,
+        "bindings file set drifted under {}. Regenerate with:\n  cargo test -p gents-desktop-bridge write_bindings -- --ignored",
+        committed.display()
+    );
+
+    for name in &expected_files {
+        let expected = std::fs::read_to_string(tmp.path().join(name)).expect("read generated");
+        let actual = std::fs::read_to_string(committed.join(name)).unwrap_or_else(|_| {
+            panic!("missing committed binding {name}; regenerate with write_bindings")
+        });
         assert_eq!(
-            actual_files, expected_files,
-            "bindings file set drifted under {}. Regenerate with:\n  cargo test -p gents-desktop-bridge write_bindings -- --ignored",
+            actual,
+            expected,
+            "binding {name} drifted under {}. Regenerate with:\n  cargo test -p gents-desktop-bridge write_bindings -- --ignored",
             committed.display()
         );
-
-        for name in &expected_files {
-            let expected = std::fs::read_to_string(tmp.path().join(name)).expect("read generated");
-            let actual = std::fs::read_to_string(committed.join(name)).unwrap_or_else(|_| {
-                panic!("missing committed binding {name}; regenerate with write_bindings")
-            });
-            assert_eq!(
-                actual,
-                expected,
-                "binding {name} drifted under {}. Regenerate with:\n  cargo test -p gents-desktop-bridge write_bindings -- --ignored",
-                committed.display()
-            );
-        }
     }
 }
 
 #[test]
-#[ignore = "run explicitly to regenerate crates/gents-desktop-bridge/bindings/"]
+#[ignore = "run explicitly to regenerate packages/gents-desktop-client/src/generated/"]
 fn write_bindings() {
-    for dir in [bindings_dir(), package_bindings_dir()] {
-        // Clear prior exports so renames don't leave stale files.
-        if dir.exists() {
-            for entry in std::fs::read_dir(&dir).expect("read bindings") {
-                let entry = entry.expect("entry");
-                let path = entry.path();
-                if path.extension().and_then(|s| s.to_str()) == Some("ts") {
-                    let _ = std::fs::remove_file(path);
-                }
+    let dir = bindings_dir();
+    // Clear prior exports so renames don't leave stale files.
+    if dir.exists() {
+        for entry in std::fs::read_dir(&dir).expect("read bindings") {
+            let entry = entry.expect("entry");
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("ts") {
+                let _ = std::fs::remove_file(path);
             }
         }
-        export_all(&dir).expect("export bindings");
-        eprintln!("wrote bindings to {}", dir.display());
     }
+    export_all(&dir).expect("export bindings");
+    eprintln!("wrote bindings to {}", dir.display());
 }
