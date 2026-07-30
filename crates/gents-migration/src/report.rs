@@ -7,9 +7,14 @@ pub struct MaterializationStats {
     pub collections_attempted: usize,
     /// Documents durably advanced to their active collection version.
     pub documents_materialized: usize,
-    /// Legacy compatibility flag; false with the pinned DefraDB materializer.
+    /// Collections that failed materialization (always 0 when
+    /// [`crate::ensure_migrations`] returns `Ok`).
+    pub collections_failed: usize,
+    /// Always `false` on pins that include `materialize_collection`
+    /// (defradb.rs ≥ #1232). Kept for report compatibility.
     pub skipped_upstream_missing: bool,
-    /// Legacy read-through count; zero with eager datastore materialization.
+    /// Always `0` with eager datastore materialization. Kept for report
+    /// compatibility with the pre-#1232 GraphQL read-through path.
     pub read_through_scans: usize,
 }
 

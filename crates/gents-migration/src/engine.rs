@@ -42,7 +42,7 @@ pub async fn ensure_migrations_with_registry(
     apply_steps(node, registry, &mut report).await?;
     verify_managed_lineages(node, registry, &mut report).await?;
 
-    report.materialization = materialize::materialize_all(node, registry).await;
+    report.materialization = materialize::materialize_all(node, registry).await?;
 
     info!(
         baseline_registered = report.baseline_registered,
@@ -50,7 +50,7 @@ pub async fn ensure_migrations_with_registry(
         steps_applied = report.steps_applied,
         steps_already_current = report.steps_already_current,
         edges_repaired = report.edges_repaired,
-        materialize_skipped = report.materialization.skipped_upstream_missing,
+        documents_materialized = report.materialization.documents_materialized,
         "ensure_migrations complete"
     );
 
