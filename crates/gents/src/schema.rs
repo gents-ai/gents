@@ -34,7 +34,9 @@ pub use gents_protocol::schemas::{
 /// Replaced by the full baseline. Kept as a name alias so docs/tests that
 /// still mention the six-collection init subset compile; calling
 /// [`ensure_config_bootstrap_schemas`] registers the **full** baseline.
-#[deprecated(note = "partial bootstrap forks lineage; use ensure_migrations / ensure_runtime_schemas")]
+#[deprecated(
+    note = "partial bootstrap forks lineage; use ensure_migrations / ensure_runtime_schemas"
+)]
 pub const CONFIG_BOOTSTRAP: &[&str] = &[
     AGENT_PRINCIPAL_SCHEMA,
     AGENT_BEHAVIOR_SCHEMA,

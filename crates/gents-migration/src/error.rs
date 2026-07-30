@@ -67,6 +67,10 @@ pub enum Error {
         source: anyhow::Error,
     },
 
+    /// Eager materialization failed for one or more managed collections.
+    #[error("eager materialization failed: {detail}")]
+    MaterializeFailed { detail: String },
+
     /// Node introspection failed (get_collection / list versions).
     #[error("defra node error: {0}")]
     Node(#[from] anyhow::Error),

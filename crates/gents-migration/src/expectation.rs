@@ -122,8 +122,8 @@ pub fn descriptor_digest(version: &CollectionVersion) -> String {
     //
     // Prefer a real sha2 when pins are authored in Phase B; for now the digest
     // is only compared when `descriptor_digest: Some(...)` is set.
-    let bytes = serde_json::to_vec(&normalize_descriptor(version))
-        .unwrap_or_else(|_| b"{}".to_vec());
+    let bytes =
+        serde_json::to_vec(&normalize_descriptor(version)).unwrap_or_else(|_| b"{}".to_vec());
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
     format!("{:016x}", hasher.finish())

@@ -1,14 +1,13 @@
 # Lens-first migration system
 
-**Date:** 2026-07-28 (revised 2026-07-29 after design review)
-**Status:** Phases A–D scaffolding landed on the cutover branch.
-  - **A:** engine + baseline + zero production steps + legacy deleted
-  - **B:** fixture lens, dynamic registry, inactive+fields lock, PatchVersioned e2e,
-    crash-resume, chain-replay pin authoring helper
-  - **C:** materialize driver with upstream probe + GraphQL read-through scan
-    (durable write-back still gated on defradb.rs §7.1)
-  - **D:** rolling-upgrade guidance + unknown-version error classifier
-    (pass-through still gated on defradb.rs §7.2)
+**Date:** 2026-07-28 (revised 2026-07-29; upstream closed 2026-07-29)
+**Status:** **Shipped.** Gents PR #931 + materialize follow-up; DefraDB
+  [PR #1232](https://github.com/sourcenetwork/defradb.rs/pull/1232) merged
+  (`e201d77c`, closes #1230/#1231). Pin includes durable `materialize_collection`
+  and unknown-version pass-through.
+  - **A–B:** engine, baseline (zero production steps at cutover), fixture lens e2e
+  - **C:** `ensure_migrations` calls `EmbeddedNode::materialize_collection` per managed collection
+  - **D:** pass-through on foreign *document* versions; schema DAG still rejects foreign lineage
 **Replaces:** `crates/gents/src/migration.rs` (5,161 lines) and both legacy lens crates
 
 ## Problem
@@ -587,10 +586,11 @@ avoids that window. §7.3 still wants invalidation on `set_migration`.
 
 ### 8.6 Inverse lenses and rolling upgrades
 
-Forward transforms are required on every lens step. Inverse is optional in
-Phase A–B. Until §7.2 (unknown-version pass-through) lands, rolling upgrades
-must promote older nodes promptly — documents stamped beyond a node's known
-chain hard-error on Rust reads.
+Forward transforms are required on every lens step. Inverse is optional.
+Unknown *document* versions pass through without restamping (defradb.rs#1231).
+Schema DAGs with foreign versions still hard-fail at `ensure_migrations`.
+Promote nodes promptly during rolling upgrades so the local chain covers
+replicated stamps.
 
 ### 8.7 Cross-collection / relation ordering
 
@@ -601,19 +601,18 @@ accordingly.
 
 ### 8.8 Post-activation repair
 
-Activation commits before reindex. Repair phase on the next `ensure` pass:
-re-call `set_active_collection_version(pin)` (idempotent; re-triggers
-reindex) and/or `materialize_collection` once upstream. No gents-side reindex
-implementation.
+Activation commits before reindex. On the next `ensure` pass the engine
+re-calls `set_active_collection_version(pin)` when needed and always runs
+`materialize_collection` for managed collections after the chain is current.
 
 ### 8.9 Ship matrix
 
-| Phase | Ships | Upstream gate | Status |
+| Phase | Ships | Upstream | Status |
 | --- | --- | --- | --- |
-| **A** | `gents-migration` crate; baseline registry (zero production steps); unbypassable `ensure_migrations`; delete legacy; Lean model + conformance; multi-version → hard error | none | **done** |
-| **B** | Fixture lens crate + build embedding; `DynamicRegistry`; inactive+fields lock; lensless + fixture-lens `PatchVersioned` e2e; crash-resume; chain-replay pin printer | inactive field-add locked in-tree | **done** (production step chain still empty until a real schema change) |
-| **C** | Materialize driver: probe for `materialize_collection`, else GraphQL read-through scan + stats | §7.1 durable write-back / identity restamp | **driver done; durable restamp blocked upstream** |
-| **D** | `ROLLING_UPGRADE_GUIDANCE` + `is_unknown_version_read_error` classifier | §7.2 unknown-version pass-through in defradb.rs | **policy done; pass-through blocked upstream** |
+| **A** | `gents-migration`; baseline (zero production steps); unbypassable `ensure_migrations`; delete legacy; Lean + conformance | — | **done** (#931) |
+| **B** | Fixture lens; `DynamicRegistry`; inactive+fields; PatchVersioned e2e; crash-resume | — | **done** (#931) |
+| **C** | Eager `materialize_collection` driver (hard-fail on collection error) | [defradb.rs#1230](https://github.com/sourcenetwork/defradb.rs/issues/1230) via [#1232](https://github.com/sourcenetwork/defradb.rs/pull/1232) | **done** |
+| **D** | Unknown *document* version pass-through + rolling-upgrade guidance | [defradb.rs#1231](https://github.com/sourcenetwork/defradb.rs/issues/1231) via [#1232](https://github.com/sourcenetwork/defradb.rs/pull/1232) | **done** |
 
 ### 8.10 Feature-invariant baseline
 

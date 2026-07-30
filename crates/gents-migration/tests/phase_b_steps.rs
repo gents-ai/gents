@@ -145,7 +145,9 @@ async fn patch_versioned_with_fixture_lens_registers_transform() {
     let wasm = fixture_lens_wasm();
     // Stub wasm is 8 bytes — skip full lens path if build was stubbed.
     if wasm.len() <= 16 {
-        eprintln!("skipping fixture lens e2e: stub wasm (set wasm target / unset GENTS_SKIP_LENS_BUILD)");
+        eprintln!(
+            "skipping fixture lens e2e: stub wasm (set wasm target / unset GENTS_SKIP_LENS_BUILD)"
+        );
         return;
     }
 
