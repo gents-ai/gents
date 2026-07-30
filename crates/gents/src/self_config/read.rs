@@ -1,8 +1,8 @@
 //! Effective-config read assembly for `get_my_config` (#654).
 //!
-//! Reads the durable documents (behavior + tool selection + profile + backend
-//! + owned skills/automation) inside one identity-scoped transaction, so the
-//! projection is a consistent snapshot and DefraDB ACP governs visibility.
+//! Reads the durable documents for behavior, tool selection, profile, backend,
+//! owned skills, and automation inside one identity-scoped transaction, so
+//! the projection is a consistent snapshot and DefraDB ACP governs visibility.
 //! Documents are the truth being reported; the running slot may still be on
 //! the previous generation (see [`super::core::EFFECT_TIMING_NOTE`]).
 //!
