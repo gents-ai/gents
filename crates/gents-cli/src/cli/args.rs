@@ -304,12 +304,6 @@ pub(crate) struct GrokLoginArgs {
     pub(crate) agent_did: Option<String>,
     #[arg(long, default_value = "xai-oauth")]
     pub(crate) provider: String,
-    #[arg(
-        long,
-        default_value_t = true,
-        help = "Use xAI device-code login (default; SSH/VPS safe)"
-    )]
-    pub(crate) device_auth: bool,
 }
 
 #[derive(clap::Args)]

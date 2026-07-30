@@ -22,7 +22,8 @@ use crate::contract::BridgeContract;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::tauri_commands::chat::{RequestResendResultView, SessionForkResultView};
 use crate::tauri_commands::inference_setup::{
-    CodexLoginRequest, CodexLoginResult, CodexLoginUrl, InferenceProbeRequest, InferenceProbeResult,
+    CodexLoginRequest, CodexLoginResult, CodexLoginUrl, GrokLoginRequest, GrokLoginResult,
+    GrokLoginUrl, InferenceProbeRequest, InferenceProbeResult,
 };
 use crate::tauri_commands::lifecycle::DesktopObserverMetrics;
 use crate::tauri_commands::workspace::WorkspaceListingView;
@@ -212,6 +213,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         DesktopProbeMcpServiceRequest,
         InferenceProbeRequest,
         CodexLoginRequest,
+        GrokLoginRequest,
     );
 
     export_types!(
@@ -246,6 +248,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         InferenceProbeResult,
         CodexLoginResult,
         CodexLoginUrl,
+        GrokLoginResult,
+        GrokLoginUrl,
     );
 
     normalize_generated_types(dir)?;
@@ -338,6 +342,9 @@ fn all_bridge_visible_contract_roots_are_generated() {
         "CodexLoginRequest.ts",
         "CodexLoginResult.ts",
         "CodexLoginUrl.ts",
+        "GrokLoginRequest.ts",
+        "GrokLoginResult.ts",
+        "GrokLoginUrl.ts",
     ] {
         assert!(
             files.contains(inference_wire_type),

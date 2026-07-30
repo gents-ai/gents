@@ -7,8 +7,6 @@ use crate::{print_json, resolve_agent_did, resolve_config_access};
 
 pub(crate) struct GrokLoginOptions {
     pub(crate) provider: String,
-    /// When true (default for remote-friendly UX), run device-code login.
-    pub(crate) device_auth: bool,
 }
 
 pub(crate) struct GrokLoginOutcome {
@@ -25,7 +23,6 @@ pub(crate) async fn grok_login(args: GrokLoginArgs) -> Result<()> {
         &agent_did,
         &GrokLoginOptions {
             provider: args.provider,
-            device_auth: args.device_auth,
         },
     )
     .await?;
@@ -41,14 +38,7 @@ pub(crate) async fn run_grok_login(
     let provider = gents::xai_grok_oauth::normalize_provider(&opts.provider);
     let http = reqwest::Client::new();
 
-    // v1: device-code is the supported login path (SSH/VPS safe; no loopback).
-    // `--device-auth` is accepted for Codex CLI parity; non-device is still device-code.
-    if !opts.device_auth {
-        eprintln!(
-            "note: Grok OAuth uses device-code login (no loopback callback); continuing with device flow"
-        );
-    }
-
+    // v1: device-code is the only login path (SSH/VPS safe; no loopback).
     let tokens = gents::xai_oauth_login::run_device_code_login(&http, true)
         .await
         .context("Grok / xAI device-code login failed")?;

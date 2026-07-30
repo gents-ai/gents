@@ -3,11 +3,4 @@
 /**
  * Redacted credential metadata for the webview (tokens never cross the bridge).
  */
-export type GrokLoginResult = {
-  docId: string;
-  credentialId: string;
-  agentDid: string;
-  provider: string;
-  accessTokenExpiresAt: string;
-  enabled: boolean;
-};
+export type GrokLoginResult = { docId: string, credentialId: string, agentDid: string, provider: string, accessTokenExpiresAt: string, enabled: boolean, };

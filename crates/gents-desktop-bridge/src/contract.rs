@@ -3,7 +3,7 @@ use ts_rs::TS;
 
 use crate::error::BridgeErrorCode;
 
-pub const CONTRACT_VERSION: &str = "0.5";
+pub const CONTRACT_VERSION: &str = "0.6";
 
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -37,6 +37,8 @@ pub struct PermissionSetContract {
 pub const CLIENT_UPDATED_EVENT: &str = "desktop://client-updated";
 
 pub const CODEX_LOGIN_URL_EVENT: &str = "desktop://codex-login-url";
+
+pub const GROK_LOGIN_URL_EVENT: &str = "desktop://grok-login-url";
 
 pub const EVENT_REASONS: &[&str] = &["store", "health", "lifecycle", "config"];
 
@@ -174,6 +176,7 @@ pub fn current_contract() -> BridgeContract {
         events: vec![
             CLIENT_UPDATED_EVENT.to_string(),
             CODEX_LOGIN_URL_EVENT.to_string(),
+            GROK_LOGIN_URL_EVENT.to_string(),
         ],
         event_reasons: EVENT_REASONS.iter().map(|s| (*s).to_string()).collect(),
         error_codes: error_code_inventory(),

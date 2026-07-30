@@ -102,8 +102,12 @@ fn bearer_rejection_status(error: &http_client::Error) -> Option<u16> {
     }
 }
 
+// 403 is deliberately NOT a bearer rejection here (unlike Codex): the proxy
+// uses it for the NotEntitled tier gate, which no refresh fixes — and with
+// rotating refresh tokens a force-refresh loop would burn a rotation per
+// request.
 fn is_bearer_rejection(error: &http_client::Error) -> bool {
-    matches!(bearer_rejection_status(error), Some(401) | Some(403))
+    matches!(bearer_rejection_status(error), Some(401))
 }
 
 /// HTTP client that injects a fresh OAuth bearer and lightly shapes Responses bodies.
@@ -171,21 +175,27 @@ impl<S: BearerSource, H> XaiGrokOAuthHttpClient<S, H> {
             .map_err(|error| http_client::Error::Instance(anyhow::Error::from(error).into()))
     }
 
-    async fn prepare(&self, req: Request<Bytes>) -> http_client::Result<Request<Bytes>> {
-        let req = Self::patch_responses_body(req);
+    /// Inject the bearer plus the Grok-CLI identity headers the proxy's auth
+    /// middleware and version gate expect on every request, regardless of wire
+    /// API or body shape. Callers (e.g. the Responses client builder) may
+    /// pre-set identity headers; those are never overwritten.
+    async fn apply_auth_and_identity(&self, headers: &mut HeaderMap) -> http_client::Result<()> {
         let value = self.fresh_auth_header().await?;
-        let (mut parts, body) = req.into_parts();
-        parts.headers.insert("authorization", value);
-        // The proxy's auth middleware and version gate expect the Grok-CLI
-        // identity headers on every request, regardless of wire API. Callers
-        // (e.g. the Responses client builder) may pre-set them; never overwrite.
+        headers.insert("authorization", value);
         let identity = build_xai_grok_oauth_headers()
             .map_err(|error| http_client::Error::Instance(error.into()))?;
         for (name, header_value) in identity.iter() {
-            if !parts.headers.contains_key(name) {
-                parts.headers.insert(name, header_value.clone());
+            if !headers.contains_key(name) {
+                headers.insert(name, header_value.clone());
             }
         }
+        Ok(())
+    }
+
+    async fn prepare(&self, req: Request<Bytes>) -> http_client::Result<Request<Bytes>> {
+        let req = Self::patch_responses_body(req);
+        let (mut parts, body) = req.into_parts();
+        self.apply_auth_and_identity(&mut parts.headers).await?;
         Ok(Request::from_parts(parts, body))
     }
 
@@ -255,9 +265,8 @@ where
         let inner = self.inner.clone();
         let this = self.clone();
         async move {
-            let value = this.fresh_auth_header().await?;
             let (mut parts, body) = req.into_parts();
-            parts.headers.insert("authorization", value);
+            this.apply_auth_and_identity(&mut parts.headers).await?;
             let req = Request::from_parts(parts, body);
             let result = HttpClientExt::send_multipart(&inner, req).await;
             if let Some(bearer) = this.bearer_to_invalidate(&result) {
@@ -449,6 +458,95 @@ mod tests {
         );
         let body: Value = serde_json::from_slice(prepared.body()).unwrap();
         assert_eq!(body.get("store").and_then(Value::as_bool), Some(false));
+    }
+
+    #[test]
+    fn only_401_invalidates_bearer_403_is_a_tier_gate() {
+        // 401 = expired/revoked grant: refresh may fix it. 403 = NotEntitled
+        // tier gate: refresh never fixes it, and with rotating refresh tokens
+        // a force-refresh loop would burn a rotation per request.
+        let unauthorized =
+            http_client::Error::InvalidStatusCode("401".parse().expect("valid status"));
+        let forbidden =
+            http_client::Error::InvalidStatusCode("403".parse().expect("valid status"));
+        assert!(is_bearer_rejection(&unauthorized));
+        assert!(!is_bearer_rejection(&forbidden));
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct HeaderCapturingInner {
+        headers: Arc<std::sync::Mutex<Option<HeaderMap>>>,
+    }
+
+    impl HttpClientExt for HeaderCapturingInner {
+        fn send<T, U>(
+            &self,
+            _req: Request<T>,
+        ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
+        where
+            T: Into<Bytes> + WasmCompatSend,
+            U: From<Bytes> + WasmCompatSend + 'static,
+        {
+            std::future::ready(Err(http_client::Error::InvalidStatusCode(
+                "501".parse().expect("valid status"),
+            )))
+        }
+
+        fn send_multipart<U>(
+            &self,
+            req: Request<MultipartForm>,
+        ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
+        where
+            U: From<Bytes> + WasmCompatSend + 'static,
+        {
+            *self.headers.lock().expect("capture lock") = Some(req.headers().clone());
+            std::future::ready(Err(http_client::Error::InvalidStatusCode(
+                "501".parse().expect("valid status"),
+            )))
+        }
+
+        fn send_streaming<T>(
+            &self,
+            _req: Request<T>,
+        ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
+        where
+            T: Into<Bytes>,
+        {
+            std::future::ready(Err(http_client::Error::InvalidStatusCode(
+                "501".parse().expect("valid status"),
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn send_multipart_carries_auth_and_identity_headers() {
+        let inner = HeaderCapturingInner::default();
+        let captured = inner.headers.clone();
+        let client = XaiGrokOAuthHttpClient::with_inner(CountingBearer::new("tok-mp"), inner);
+        let req = Request::builder()
+            .method("POST")
+            .uri("https://cli-chat-proxy.grok.com/v1/files")
+            .body(MultipartForm::default())
+            .unwrap();
+        let _ = HttpClientExt::send_multipart::<Bytes>(&client, req).await;
+        let headers = captured
+            .lock()
+            .expect("capture lock")
+            .clone()
+            .expect("multipart request reached inner client");
+        assert_eq!(
+            headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer tok-mp")
+        );
+        assert_eq!(
+            headers
+                .get("x-xai-token-auth")
+                .and_then(|value| value.to_str().ok()),
+            Some("xai-grok-cli"),
+            "multipart requests must carry the Grok-CLI identity headers too"
+        );
     }
 
     #[test]

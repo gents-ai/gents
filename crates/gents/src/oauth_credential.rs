@@ -25,18 +25,23 @@ pub struct OAuthProduct {
     pub name: &'static str,
     pub backend_label: &'static str,
     pub login_command: &'static str,
+    /// What to do about a valid-grant-but-tier-gated account (HTTP 403).
+    pub not_entitled_guidance: &'static str,
 }
 
 pub const CHATGPT_OAUTH_PRODUCT: OAuthProduct = OAuthProduct {
     name: "ChatGPT",
     backend_label: "ChatGPT subscription backend",
     login_command: "codex-login",
+    not_entitled_guidance: "Use an API-key backend, or check the ChatGPT plan's Codex eligibility.",
 };
 
 pub const XAI_OAUTH_PRODUCT: OAuthProduct = OAuthProduct {
     name: "Grok",
     backend_label: "Grok subscription backend",
     login_command: "grok-login",
+    not_entitled_guidance: "Use an API key with an OpenAI-compatible backend against \
+                            https://api.x.ai/v1, or check SuperGrok / X Premium+ eligibility.",
 };
 
 /// Which token endpoint / claim mapping to use when rotating credentials.
@@ -90,9 +95,9 @@ pub fn classify_oauth_auth_error(
         OAuthAuthProblem::NotEntitled => format!(
             "{name} OAuth credential for agent {agent_did} and provider {provider} is valid, \
              but this account is not entitled to subscription OAuth inference (HTTP 403 tier gate).\n\
-             Re-login will not fix this. Use an API key with an OpenAI-compatible backend against \
-             https://api.x.ai/v1, or check SuperGrok / X Premium+ eligibility.",
+             Re-login will not fix this. {guidance}",
             name = product.name,
+            guidance = product.not_entitled_guidance,
         ),
         OAuthAuthProblem::Other(detail) => {
             format!(
@@ -902,6 +907,21 @@ mod tests {
             add_block.contains("agent_did:") && add_block.contains("credential_id:"),
             "add block must set agent_did and credential_id: {add_block}"
         );
+    }
+
+    #[test]
+    fn not_entitled_copy_is_product_specific() {
+        let msg = classify_oauth_auth_error(
+            &CHATGPT_OAUTH_PRODUCT,
+            "did:key:zAgent",
+            "chatgpt-codex",
+            &OAuthAuthProblem::NotEntitled,
+        );
+        assert!(
+            !msg.contains("api.x.ai") && !msg.contains("SuperGrok"),
+            "ChatGPT tier-gate copy must not carry xAI guidance: {msg}"
+        );
+        assert!(msg.contains("ChatGPT"), "{msg}");
     }
 
     #[test]

@@ -333,7 +333,7 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
         CODEX_LOGIN_TIMEOUT,
         run_device_code_login_with_url_callback(&http, Some(cancel.clone()), move |url| {
             let _ = app_for_url.emit(
-                "desktop://grok-login-url",
+                crate::contract::GROK_LOGIN_URL_EVENT,
                 GrokLoginUrl {
                     url: url.to_string(),
                 },

@@ -304,10 +304,7 @@ async fn maybe_inline_grok_login(
     match crate::commands::grok_login::run_grok_login(
         access,
         agent_did,
-        &crate::commands::grok_login::GrokLoginOptions {
-            provider,
-            device_auth: true,
-        },
+        &crate::commands::grok_login::GrokLoginOptions { provider },
     )
     .await
     {
